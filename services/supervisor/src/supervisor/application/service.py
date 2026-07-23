@@ -5871,6 +5871,8 @@ class SupervisorService:
             evidence_refs.extend(control.evidenceRefs)
 
         for packet in authoritative_packets:
+            projection_packet_id = self._safe_pipeline_projection_packet_id(packet.packetId)
+            packet_identity_is_safe = projection_packet_id == packet.packetId
             packet_lineage = authoritative_lineage.get(packet.packetId, {})
             canonical_contract = packet.canonicalContract
             product_mode_mapping = self._product_mode_mapping(canonical_contract, generated_at)
@@ -5965,7 +5967,7 @@ class SupervisorService:
             stage_source_labels.setdefault(packet.currentStage, []).append(packet_source_label)
             dashboard_packets.append(
                 PipelineDashboardWorkPacketV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     title=packet.title,
                     currentStage=packet.currentStage,
                     status=packet.status,
@@ -5988,7 +5990,7 @@ class SupervisorService:
             )
             selected_packet_details.append(
                 PipelineSelectedPacketDetailV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     sourceRefs=[packet.sourceRef],
                     canonicalContract=canonical_contract,
                     productModeMapping=product_mode_mapping,
@@ -6004,7 +6006,7 @@ class SupervisorService:
                     recentTransitionEventRefs=recent_transition_event_refs,
                     latestMovementSummary=latest_movement_summary,
                     canSatisfyLiveMovementProof=can_satisfy_live_movement_proof,
-                    parentPacketId=packet.parentPacketId,
+                    parentPacketId=self._safe_pipeline_projection_packet_id(packet.parentPacketId) if packet.parentPacketId else None,
                     lineageKind=packet.lineageKind or "root",
                     operatorTestState=packet.operatorTestState or "not_ready",
                     operatorTestNote=packet.operatorTestNote,
@@ -6012,10 +6014,10 @@ class SupervisorService:
                     queueLease=packet_lineage.get("queueLease"),
                     executionAttempts=packet_lineage.get("executionAttempts", []),
                     correlationIds=packet_lineage.get("correlationIds", []),
-                    actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=mutation_access),
-                    actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]],
-                    actionCapabilitiesV1=v1_packet_capabilities_by_packet.get(packet.packetId, []),
-                    actionResultsV1=[self._operational_action_result_view_v1(item, replayed=False) for item in action_results_v1_by_packet.get(packet.packetId, [])[-12:]],
+                    actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=mutation_access) if packet_identity_is_safe else [],
+                    actionResults=[self._operational_action_result_view(item) for item in action_results_by_packet.get(packet.packetId, [])[-12:]] if packet_identity_is_safe else [],
+                    actionCapabilitiesV1=v1_packet_capabilities_by_packet.get(packet.packetId, []) if packet_identity_is_safe else [],
+                    actionResultsV1=[self._operational_action_result_view_v1(item, replayed=False) for item in action_results_v1_by_packet.get(packet.packetId, [])[-12:]] if packet_identity_is_safe else [],
                     reviewRoute=review_route_by_packet.get(packet.packetId, self._unavailable_pipeline_review_route(packet.packetId)),
                     workGraph=work_graph_by_packet.get(packet.packetId, self._unavailable_pipeline_work_graph(packet.packetId)),
                     metadataOnly=True,
@@ -6023,6 +6025,7 @@ class SupervisorService:
             )
 
         for packet in legacy_projection_packets:
+            projection_packet_id = self._safe_pipeline_projection_packet_id(packet.packetId)
             packet_lineage = legacy_lineage.get(packet.packetId, {})
             current_stage = self._legacy_pipeline_projection_stage(packet.currentStage)
             stage_counts[current_stage] = stage_counts.get(current_stage, 0) + 1
@@ -6124,7 +6127,7 @@ class SupervisorService:
             )
             dashboard_packets.append(
                 PipelineDashboardWorkPacketV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     title=packet.title,
                     currentStage=current_stage,
                     status=packet.status,
@@ -6145,7 +6148,7 @@ class SupervisorService:
             )
             selected_packet_details.append(
                 PipelineSelectedPacketDetailV0View(
-                    packetId=packet.packetId,
+                    packetId=projection_packet_id,
                     sourceRefs=[],
                     evidenceRefs=packet_evidence,
                     currentStage=current_stage,
@@ -6925,7 +6928,7 @@ class SupervisorService:
 
     def _unavailable_pipeline_work_graph(self, packet_id: str) -> PipelineWorkGraphEvidenceV0View:
         """Return a truthful fallback without reflecting unsafe persisted identities."""
-        safe_packet_id = packet_id if _is_safe_review_route_packet_id(packet_id) else "unavailable-work-graph-packet"
+        safe_packet_id = self._safe_pipeline_projection_packet_id(packet_id)
         return PipelineWorkGraphEvidenceV0View(
             availability="unavailable",
             sourceSchemaVersion="parallel-execution-graph-reservation/v1",
@@ -6954,7 +6957,7 @@ class SupervisorService:
 
     def _unavailable_pipeline_review_route(self, packet_id: str) -> PipelineReviewRouteEvidenceV0View:
         """Return a truthful fallback without reflecting unsafe persisted identities."""
-        safe_packet_id = packet_id if _is_safe_review_route_packet_id(packet_id) else "unavailable-review-route-packet"
+        safe_packet_id = self._safe_pipeline_projection_packet_id(packet_id)
         return PipelineReviewRouteEvidenceV0View(
             availability="unavailable",
             packetId=safe_packet_id,
@@ -6972,6 +6975,13 @@ class SupervisorService:
             rawPayloadRetained=False,
             retention="metadata_only_evidence_references",
         )
+
+    @staticmethod
+    def _safe_pipeline_projection_packet_id(packet_id: str) -> str:
+        """Return an opaque stable identity for any unsafe historical packet ID."""
+        if _is_safe_review_route_packet_id(packet_id):
+            return packet_id
+        return f"unavailable:packet:{hashlib.sha256(packet_id.encode('utf8')).hexdigest()}"
 
     async def _pipeline_review_route_by_packet(
         self,
@@ -7084,10 +7094,10 @@ class SupervisorService:
                 generated_at=generated_at,
                 stale_after_seconds=stale_after_seconds,
             )
-            if projection is None:
+            if projection is None or projection.packetId != self._safe_pipeline_projection_packet_id(event.packet_id):
                 projections[event.packet_id] = self._unavailable_pipeline_work_graph(event.packet_id)
                 continue
-            projections[projection.packetId] = projection
+            projections[event.packet_id] = projection
         return projections
 
     def _is_manager_source_intake_actor(self, actor: object) -> bool:

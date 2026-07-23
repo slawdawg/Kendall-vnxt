@@ -2987,6 +2987,16 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             "correlationId": "manager-source:review-route-non-manager-like-id",
         }
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=non_manager_manager_like).status_code == 400
+        reserved_projection_packet_id = "unavailable:packet:" + "a" * 64
+        reserved_projection_identity = {
+            **request,
+            "packetId": reserved_projection_packet_id,
+            "parallelWorkGraphEvidence": {**graph, "packetId": reserved_projection_packet_id},
+            "reviewRouteEvidence": {**review_route, "packetId": reserved_projection_packet_id},
+            "idempotencyKey": "manager-source-intake:review-route-reserved-projection-identity",
+            "correlationId": "manager-source:review-route-reserved-projection-identity",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=reserved_projection_identity).status_code == 422
         for issuance_state in ("expired", "revoked", "cancelled", "unavailable"):
             non_active_issuance = {
                 **request,
@@ -3092,28 +3102,49 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
         )
         assert unavailable_detail["reviewRoute"]["availability"] == "unavailable"
         assert unavailable_detail["reviewRoute"]["routeState"] == "unavailable"
-        unsafe_historical_packet_id = "packet-" + "a1" * 20
+        unsafe_historical_packet_id = "unavailable:packet:" + "a1" * 20
         with sqlite3.connect(_db_path(tmp_path, db_name)) as connection:
             connection.execute(
-                "UPDATE authoritative_work_packet_lifecycle_events SET packet_id = ? WHERE packet_id = ?",
-                (unsafe_historical_packet_id, packet_id),
+                "UPDATE authoritative_work_packet_lifecycle_events SET packet_id = ?, parallel_work_graph_json = ? WHERE packet_id = ?",
+                (
+                    unsafe_historical_packet_id,
+                    json.dumps(
+                        {
+                            "schemaVersion": "manager-source-packet-evidence/v1",
+                            "workGraph": {**graph, "packetId": unsafe_historical_packet_id},
+                            "reviewRoute": {**review_route, "packetId": unsafe_historical_packet_id},
+                        }
+                    ),
+                    packet_id,
+                ),
             )
             connection.execute(
-                "UPDATE authoritative_work_packets SET id = ? WHERE id = ?",
-                (unsafe_historical_packet_id, packet_id),
+                "UPDATE authoritative_work_packets SET id = ?, parent_packet_id = ? WHERE id = ?",
+                (unsafe_historical_packet_id, unsafe_historical_packet_id, packet_id),
             )
             connection.commit()
         unsafe_projection = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
         assert unsafe_projection.status_code == 200
+        safe_projection_packet_id = "unavailable:packet:" + hashlib.sha256(unsafe_historical_packet_id.encode("utf8")).hexdigest()
         unsafe_detail = next(
             item
             for item in unsafe_projection.json()["data"]["selectedPacketDetails"]
-            if item["packetId"] == unsafe_historical_packet_id
+            if item["packetId"] == safe_projection_packet_id
         )
         assert unsafe_detail["reviewRoute"]["availability"] == "unavailable"
-        assert unsafe_detail["reviewRoute"]["packetId"] == "unavailable-review-route-packet"
+        assert unsafe_detail["reviewRoute"]["packetId"] == safe_projection_packet_id
         assert unsafe_detail["workGraph"]["availability"] == "unavailable"
-        assert unsafe_detail["workGraph"]["packetId"] == "unavailable-work-graph-packet"
+        assert unsafe_detail["workGraph"]["packetId"] == safe_projection_packet_id
+        assert unsafe_detail["parentPacketId"] == safe_projection_packet_id
+        assert unsafe_historical_packet_id not in json.dumps(unsafe_detail)
+        assert unsafe_detail["actionCapabilities"] == []
+        assert unsafe_detail["actionCapabilitiesV1"] == []
+        assert unsafe_detail["actionResults"] == []
+        assert unsafe_detail["actionResultsV1"] == []
+        assert any(
+            packet["packetId"] == safe_projection_packet_id
+            for packet in unsafe_projection.json()["data"]["workPackets"]
+        )
 
 
 def test_parallel_work_graph_refresh_keeps_newer_concurrent_evidence_current(tmp_path, monkeypatch) -> None:

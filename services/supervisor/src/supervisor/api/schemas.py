@@ -78,6 +78,7 @@ UNSAFE_AUTHORITATIVE_METADATA_TEXT_RE = re.compile(
 REVIEW_ROUTE_EVIDENCE_REF_RE = re.compile(r"^review-evidence:sha256:[a-f0-9]{64}$")
 REVIEW_ROUTE_PACKET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 MANAGER_SOURCE_PACKET_ID_RE = re.compile(r"^manager-source-[a-f0-9]{40}$")
+UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE = re.compile(r"^unavailable:packet:[a-f0-9]{64}$")
 REVIEW_ROUTE_TEXT_BY_REASON_CODE = {
     "report_only": (
         "A bounded report-only review is available.",
@@ -168,6 +169,8 @@ def _is_safe_review_route_packet_id(value: str) -> bool:
     return (
         ref == value
         and bool(REVIEW_ROUTE_PACKET_ID_RE.fullmatch(ref))
+        and not ref.lower().startswith("unavailable:packet:")
+        and not UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE.fullmatch(ref)
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
         # The generic token heuristic sees ``source-<hex>`` as token-like.
         # The private manager-source intake verifies actor and packet binding
@@ -177,6 +180,11 @@ def _is_safe_review_route_packet_id(value: str) -> bool:
         and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(ref)
         and not re.search(r"(?:prompt|completion|transcript|reasoning|provider|secret|credential|token)", ref, re.IGNORECASE)
     )
+
+
+def _is_safe_pipeline_projection_packet_id(value: str) -> bool:
+    """Allow the output-only unavailable identity in otherwise strict detail views."""
+    return bool(UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE.fullmatch(value)) or _is_safe_review_route_packet_id(value)
 
 
 def _is_safe_pipeline_control_text(value: str) -> bool:
@@ -2621,6 +2629,13 @@ class AuthoritativeWorkPacketCreateRequest(BaseModel):
             raise ValueError("value must not be blank")
         return stripped
 
+    @field_validator("packetId")
+    @classmethod
+    def _packet_id_must_not_use_projection_unavailable_identity(cls, value: str | None) -> str | None:
+        if value is not None and UNAVAILABLE_PIPELINE_PROJECTION_PACKET_ID_RE.fullmatch(value):
+            raise ValueError("Authoritative packetId cannot use the reserved unavailable projection identity.")
+        return value
+
     @field_validator("title")
     @classmethod
     def _packet_title_must_be_safe_metadata(cls, value: str) -> str:
@@ -3933,7 +3948,7 @@ class PipelineReviewRouteEvidenceV0View(BaseModel):
     @field_validator("packetId")
     @classmethod
     def packet_id_is_safe(cls, value: str) -> str:
-        if not _is_safe_review_route_packet_id(value):
+        if not _is_safe_pipeline_projection_packet_id(value):
             raise ValueError("Review-route packet identity must use the opaque safe identifier grammar.")
         return value
 
