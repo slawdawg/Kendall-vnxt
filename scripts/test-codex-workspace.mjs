@@ -7624,12 +7624,40 @@ try {
       assert(manifest.status === "closed", `manifest status is ${manifest.status}`);
       assert(manifest.supersession_closeout_evidence?.githubNoPr?.status === "matched", "live GitHub proof was not retained as metadata");
       assert(manifest.supersession_closeout_evidence?.finalRemoteAbsence?.state === "absent", "final remote absence re-probe was not retained");
+      assert(manifest.supersession_closeout_evidence?.finalGithubNoPr?.status === "matched", "final live GitHub no-PR proof was not retained");
       assert(manifest.events.some((event) => event.type === "cleanup_journal_started"), "strict cleanup journal was not persisted");
       assert(manifest.events.some((event) => event.type === "assignment_closeout_planned"), "assignment closeout plan was not retained");
       assert(manifest.supersession_closeout_evidence?.assignmentCloseout?.status === "closed", "locked assignment closure was not persisted before local deletion");
       assert(manifest.events.some((event) => event.type === "source_remote_absent_revalidated"), "final remote absence re-probe event was not retained");
       assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
       assert(assignment.events.some((event) => event.type === "closed" && event.message.includes("locked exact-tree closeout")), "linked assignment was not closed by the locked explicit closeout action");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated exact-tree closeout fails closed when a PR appears after the initial live proof", () => {
+    const prEvidence = { number: 100, state: "OPEN", mergedAt: null, headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789" };
+    const fixture = createIntegratedCleanupFixture({
+      taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+      baseBranch: "dev",
+      remoteBranch: false,
+      prListSequence: [[], [], [prEvidence]],
+    });
+    try {
+      const result = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--apply"]);
+      assert(result.code !== 0, "strict closeout closed after a post-initial-proof PR appeared");
+      assert(result.stderr.includes("final live GitHub no-PR proof failed"), result.stderr || result.stdout);
+      assert(!existsSync(fixture.worktree), "final GitHub proof race unexpectedly rewound local worktree deletion");
+      assert(!branchExists(fixture.root, fixture.branch), "final GitHub proof race unexpectedly rewound local branch deletion");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+      assert(manifest.status === "cleanup_partial", `manifest status is ${manifest.status}`);
+      assert(manifest.supersession_closeout_evidence?.finalRemoteAbsence?.state === "absent", "final remote absence was not retained before the final GitHub proof");
+      assert(manifest.supersession_closeout_evidence?.finalGithubNoPr?.status === "mismatch", "post-initial PR evidence was not retained as a metadata mismatch");
+      assert(manifest.supersession_closeout_evidence?.finalGithubNoPr?.count === 1, "post-initial PR metadata count is incorrect");
+      assert(manifest.supersession_closeout_evidence?.finalGithubNoPr?.rawPayloadRetained === false, "post-initial PR proof retained raw provider output");
+      assert(manifest.events.some((event) => event.type === "source_github_no_pr_revalidated"), "final GitHub revalidation event was not recorded");
+      assert(!manifest.events.some((event) => event.type === "closed"), "strict closeout recorded closed after final GitHub proof failed");
     } finally {
       cleanupIntegratedCleanupFixture(fixture);
     }
@@ -9187,9 +9215,22 @@ function createIntegratedCleanupFixture(options = {}) {
     fakeGh,
     [
       "#!/usr/bin/env node",
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
-      "if (args[0] === 'pr' && args[1] === 'list') { console.log(process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON || '[]'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'list') {",
+      "  const sequenceJson = process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_SEQUENCE_JSON || '';",
+      "  if (sequenceJson) {",
+      "    const counterPath = process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_COUNTER_PATH;",
+      "    const index = counterPath && existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+      "    if (counterPath) writeFileSync(counterPath, String(index + 1));",
+      "    const sequence = JSON.parse(sequenceJson);",
+      "    console.log(JSON.stringify(sequence[Math.min(index, sequence.length - 1)] ?? []));",
+      "    process.exit(0);",
+      "  }",
+      "  console.log(process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON || '[]');",
+      "  process.exit(0);",
+      "}",
       "console.error(`unexpected gh command: ${args.join(' ')}`);",
       "process.exit(1);",
       "",
@@ -9270,7 +9311,12 @@ function createIntegratedCleanupFixture(options = {}) {
     branch,
     worktree,
     script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
-    env: { ...env, CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON: options.prListJson || "[]" },
+    env: {
+      ...env,
+      CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON: options.prListJson || "[]",
+      CODEX_WORKSPACE_TEST_GH_PR_LIST_SEQUENCE_JSON: options.prListSequence ? JSON.stringify(options.prListSequence) : "",
+      CODEX_WORKSPACE_TEST_GH_PR_LIST_COUNTER_PATH: join(fakeBin, "gh-pr-list-count"),
+    },
   };
 }
 

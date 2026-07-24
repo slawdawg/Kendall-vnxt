@@ -4422,7 +4422,7 @@ function strictGithubNoPrProof(manifest, cleanupCwd) {
     return {
       status: "unavailable",
       branch: manifest.branch,
-      reason: `live GitHub no-PR proof is unavailable: ${result.stderr || result.stdout || "gh pr list failed"}`,
+      reason: `live GitHub no-PR proof is unavailable: gh pr list exited ${result.code}`,
       metadataOnly: true,
       rawPayloadRetained: false,
     };
@@ -4659,6 +4659,12 @@ function applyCleanupIntegrated(state, plan, options) {
         const finalRemoteAbsence = assertStrictExactTreeRemoteAbsent(manifest, freshPlan.cleanupCwd);
         manifest.supersession_closeout_evidence.finalRemoteAbsence = finalRemoteAbsence;
         appendTaskEvent(manifest, "source_remote_absent_revalidated", manifest.branch);
+        const finalGithubNoPr = strictGithubNoPrProof(manifest, freshPlan.cleanupCwd);
+        manifest.supersession_closeout_evidence.finalGithubNoPr = finalGithubNoPr;
+        appendTaskEvent(manifest, "source_github_no_pr_revalidated", `${finalGithubNoPr.status}:${finalGithubNoPr.count ?? "unavailable"}`);
+        if (finalGithubNoPr.status !== "matched") {
+          throw new Error(`final live GitHub no-PR proof failed: ${finalGithubNoPr.reason}`);
+        }
       }
 
       manifest.status = "closed";
