@@ -85,10 +85,32 @@
     database file` while pnpm prepares managed store state. Treat that as the
     known managed-worktree pnpm filesystem boundary; request approval to rerun
     the exact same read-only verification command outside the sandbox.
+  - `pnpm install` or a workspace test that needs pnpm-managed temp state from
+    a managed worktree may fail with `[EROFS]` while opening the worktree's
+    `_tmp_*` file. Treat it as the same managed-worktree filesystem boundary;
+    do not alter the lockfile or install scope, and request approval to rerun
+    the exact command outside the sandbox.
   - `git fetch origin dev` (and other fetches that update `.git/FETCH_HEAD`)
     may fail with a read-only `.git` boundary in the Codex sandbox. Do not
     retry with a different fetch shape or mutate the checkout to work around
     it; request approval for the exact read-only fetch outside the sandbox.
+  - Dashboard bridge integration tests that create Unix-domain sockets may
+    fail with `listen EPERM` in the sandbox even when the test uses a private
+    temporary path. Treat that as a sandbox process/socket boundary; request
+    approval to rerun the exact test command outside the sandbox.
+  - `ss -ltnp '( sport = :3000 )'` may fail with `Cannot open netlink socket:
+    Operation not permitted` in the sandbox. Treat this as a socket-table
+    visibility boundary; request approval for the exact read-only command
+    outside the sandbox rather than inferring that no dashboard listener exists.
+  - `tailscale ip -4` or `tailscale status --json` may fail to access
+    `/var/run/tailscale/tailscaled.sock` with `connect: operation not
+    permitted` in the sandbox. Treat this as a Tailscale LocalAPI visibility
+    boundary; request approval for the exact read-only status command outside
+    the sandbox rather than treating the daemon as stopped.
+  - Local `curl` listener probes may fail with `failed to open socket:
+    Operation not permitted` in the sandbox. Treat this as a local-network
+    socket boundary; request approval for the exact read-only probe outside
+    the sandbox rather than treating the target service as unreachable.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying

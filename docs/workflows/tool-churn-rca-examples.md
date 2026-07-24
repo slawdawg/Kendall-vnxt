@@ -215,3 +215,16 @@ Tool Churn RCA Packet
 - One next safe action: Use the opt-in `CODEX_WORKSPACE_TEST_FILTER=<bounded name> node ./scripts/test-codex-workspace.mjs` route, then preserve the exact focused result with the full-suite duration boundary.
 - Durable fix recommendation: Keep the filter opt-in so default full-suite coverage is unchanged, and add focused contracts whenever a new expensive workspace lifecycle path is introduced.
 ```
+
+## Dashboard Auth/Projection Nested Server Tests In Sandbox
+
+```text
+Tool Churn RCA Packet
+- What failed: Dashboard auth/proxy and pipeline fixture Node test files reported only a top-level `test failed` result inside the sandbox; the same tests passed outside the sandbox.
+- Failure class: sandbox.
+- Most likely cause: The tests start nested local HTTP/UDS servers and child processes that the sandbox runner suppresses or blocks before assertion details are emitted.
+- Evidence: `node --test` produced TAP `not ok` summaries with no assertion detail; the exact auth/proxy suite passed 16/16 when rerun outside the sandbox.
+- Retry stop line: Do not retry these nested server test commands inside the sandbox or interpret the summary as a product regression.
+- One next safe action: Request approval to run the exact read-only test command outside the sandbox and retain only pass/fail evidence.
+- Durable fix recommendation: Add a preflight classifier for nested dashboard server tests so they route directly to the approved outside-sandbox verification path.
+```

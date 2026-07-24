@@ -157,9 +157,12 @@ cannot be completed without expanded party-mode authority.
    If merge is blocked after checks are green, inspect thread-aware review
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
-   thread-aware review-thread check before merge. Resolve only threads whose
-   feedback has been addressed by the current diff, test evidence, or explicit
-   operator decision.
+   thread-aware review-thread check before merge. As part of this delivery
+   gate, the delegated worker may resolve only threads whose feedback has been
+   addressed by the current diff, test evidence, or explicit operator
+   decision. Record each resolved thread ID and its supporting evidence, then
+   rerun the thread-aware check; any unaddressed or ambiguous thread remains a
+   hold.
    Use exact-head merge protection for GitHub CLI merges, such as
    `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
