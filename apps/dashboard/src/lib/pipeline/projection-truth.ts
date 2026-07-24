@@ -22,6 +22,37 @@ export function projectionHasRenderableBackendPackets(projection: PipelineDashbo
   return Boolean(projection && projection.workPackets.length > 0);
 }
 
+/**
+ * Resolve the labels the UI may use for an action decision from the projection's
+ * timestamp, not just its last self-reported flags.  A previously-live response
+ * becomes stale after its own bounded freshness window even when no later fetch
+ * has yet changed ``sourceLabel`` or ``freshnessState``.
+ */
+export function projectionEffectiveLabels(
+  projection: PipelineDashboardProjectionV0 | null,
+  now = Date.now()
+): {
+  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"];
+  freshnessState: PipelineDashboardProjectionV0["freshnessState"];
+} {
+  if (!projection) {
+    return { sourceLabel: "unavailable", freshnessState: "unavailable" };
+  }
+  const sourceUpdatedAt = Date.parse(projection.sourceUpdatedAt);
+  const staleAfterMilliseconds = projection.staleAfterSeconds * 1000;
+  const timestampIsStale = !Number.isFinite(sourceUpdatedAt)
+    || !Number.isFinite(projection.staleAfterSeconds)
+    || projection.staleAfterSeconds <= 0
+    || now - sourceUpdatedAt > staleAfterMilliseconds;
+  if (!timestampIsStale) {
+    return { sourceLabel: projection.sourceLabel, freshnessState: projection.freshnessState };
+  }
+  return {
+    sourceLabel: projection.sourceLabel === "live" ? "stale" : projection.sourceLabel,
+    freshnessState: projection.freshnessState === "live" ? "stale" : projection.freshnessState,
+  };
+}
+
 export function projectionLiveProofState(
   projection: PipelineDashboardProjectionV0 | null,
   sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
@@ -69,6 +100,19 @@ export function projectionLiveProofState(
     failureReasons,
     primaryReason: failureReasons[0] ?? null,
   };
+}
+
+/**
+ * Re-evaluate whether a projection still permits an operational action at the
+ * instant it is requested.  This deliberately derives labels from Date.now()
+ * instead of trusting a render-time live-proof result retained by an open tab.
+ */
+export function currentProjectionAllowsOperationalActions(
+  projection: PipelineDashboardProjectionV0 | null,
+  now = Date.now()
+) {
+  const labels = projectionEffectiveLabels(projection, now);
+  return projectionLiveProofState(projection, labels.sourceLabel, labels.freshnessState).canSatisfyLiveProof;
 }
 
 export function projectionDisplayLabels(

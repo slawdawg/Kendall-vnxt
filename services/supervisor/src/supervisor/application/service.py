@@ -1758,6 +1758,7 @@ class SupervisorService:
         *,
         reject_pending_retry: bool = True,
         require_running_runtime: bool = False,
+        allow_active_execution_attempt: bool = False,
     ) -> WorkItem | None:
         """Lock one WorkItem and honor the durable external-launch fence."""
 
@@ -1771,7 +1772,7 @@ class SupervisorService:
         if reject_pending_retry:
             await self._reject_pending_verification_retry_admission(session, work_item_id)
         active_attempt = await self._active_execution_attempt(session, work_item_id, lock=True)
-        if active_attempt:
+        if active_attempt and not allow_active_execution_attempt:
             raise ValueError(
                 f"Work item mutation rejected while external launch attempt {active_attempt.id} is active."
             )
@@ -5922,10 +5923,7 @@ class SupervisorService:
             and candidate.status not in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}
         )
         source_updated_at = max(source_timestamps, default=generated_at)
-        projected_stage_statuses = [(packet.currentStage, packet.status) for packet in authoritative_packets]
-        projected_stage_statuses.extend((packet.currentStage, packet.status) for packet in legacy_projection_packets)
-        has_open_packet = any(status in {"active", "waiting", "blocked", "failed"} for _stage, status in projected_stage_statuses)
-        is_stale = (generated_at - source_updated_at).total_seconds() > stale_after_seconds and not has_open_packet
+        is_stale = (generated_at - source_updated_at).total_seconds() > stale_after_seconds
         freshness_state = "stale" if is_stale else "live"
         source_label = "stale" if is_stale else "live"
         projected_packet_count = len(authoritative_packets) + len(legacy_projection_packets)
@@ -29188,7 +29186,11 @@ class SupervisorService:
         actor_id: str | None = None,
         actor_label: str | None = None,
     ) -> WorkItem | None:
-        item = await self._lock_work_item_mutation_admission(session, work_item_id)
+        item = await self._lock_work_item_mutation_admission(
+            session,
+            work_item_id,
+            allow_active_execution_attempt=action == WorkflowAction.OPERATOR_OWNED_EXIT,
+        )
         if not item:
             return None
 
@@ -30037,6 +30039,71 @@ class SupervisorService:
             )
             return
 
+    async def _revoke_active_execution_for_operator_owned_exit(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        *,
+        reason: str,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> None:
+        """Cancel active worker authority before handing a packet back to its operator.
+
+        ``apply_action`` keeps this mutation and the following workflow transition in
+        one database transaction.  Locking the authoritative rows also prevents a
+        concurrent lease heartbeat or attempt transition from reviving work after
+        the operator-owned stop line has been accepted.
+        """
+        now = datetime.now(timezone.utc)
+        attempts_result = await session.execute(
+            select(ExecutionAttempt)
+            .where(
+                ExecutionAttempt.work_item_id == item.id,
+                ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES),
+            )
+            .with_for_update()
+        )
+        active_attempts = list(attempts_result.scalars())
+        leases_result = await session.execute(
+            select(QueueLease)
+            .where(
+                QueueLease.work_item_id == item.id,
+                QueueLease.active.is_(True),
+            )
+            .with_for_update()
+        )
+        active_leases = list(leases_result.scalars())
+
+        for attempt in active_attempts:
+            previous_status = attempt.status
+            attempt.status = ExecutionAttemptStatus.CANCELLED.value
+            attempt.revision += 1
+            attempt.cancel_requested_at = attempt.cancel_requested_at or now
+            attempt.cancel_reason = reason
+            attempt.completed_at = now
+            attempt.updated_at = now
+            event = await self._record_execution_attempt_transition_event(
+                session,
+                item,
+                attempt,
+                previous_status=previous_status,
+                reason=reason,
+                actor_id=actor_id,
+                actor_label=actor_label,
+            )
+            event_refs = list(attempt.event_refs_json or [])
+            event_refs.append({"eventId": event.id, "eventType": event.event_type})
+            attempt.event_refs_json = event_refs
+
+        for lease in active_leases:
+            # Bump the fence as well as deactivating/expiring the row, so a stale
+            # holder cannot use a previously valid lease after operator exit.
+            lease.active = False
+            lease.fencing_token += 1
+            lease.heartbeat_at = now
+            lease.lease_expires_at = now
+
     async def _apply_action_to_item(
         self,
         session: AsyncSession,
@@ -30324,12 +30391,20 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.OPERATOR_OWNED_EXIT and current in {
+            WorkflowState.IMPLEMENTING,
             WorkflowState.NEEDS_REWORK,
             WorkflowState.BLOCKED,
             WorkflowState.REVIEWING,
             WorkflowState.AWAITING_AUDIT,
             WorkflowState.VALIDATING,
         }:
+            await self._revoke_active_execution_for_operator_owned_exit(
+                session,
+                item,
+                reason=clean_note or default_status_summary(WorkflowState.OPERATOR_OWNED),
+                actor_id=actor_id,
+                actor_label=actor_label,
+            )
             item.blocked_reason = clean_note
             await self._transition(
                 session,

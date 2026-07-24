@@ -308,10 +308,7 @@ function hasFixtureOnlyRefs(value: unknown): boolean {
     return isSyntheticRuntimeIdentity(typedRef.refId) ||
       isSyntheticRuntimeIdentity(typedRef.sourceRef) ||
       isSyntheticRuntimeIdentity(typedRef.pathOrUrl) ||
-      isSyntheticRuntimeIdentity(typedRef.artifactPath) ||
-      typedRef.evidenceType === "fixture" ||
-      typedRef.retentionClass === "fixture" ||
-      typedRef.artifactType === "fixture";
+      isSyntheticRuntimeIdentity(typedRef.artifactPath);
   });
 }
 
@@ -1090,10 +1087,7 @@ function isFixtureDiscriminator(fieldName: string, value: unknown): boolean {
   return normalizedFieldName === "fixtureid" ||
     normalizedFieldName === "fixturekind" ||
     normalizedFieldName === "fixturelabel" ||
-    (normalizedFieldName === "sourcekind" && normalizedValue === "demo-fixture") ||
-    (normalizedFieldName === "evidencetype" && normalizedValue === "fixture") ||
-    (normalizedFieldName === "retentionclass" && normalizedValue === "fixture") ||
-    (normalizedFieldName === "artifacttype" && normalizedValue === "fixture");
+    (normalizedFieldName === "sourcekind" && normalizedValue === "demo-fixture");
 }
 
 function isReferenceBearingField(fieldName: string): boolean {
