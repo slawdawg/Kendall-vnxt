@@ -28,7 +28,7 @@ import { ReviewResourcePolicyReportPanel } from "../../components/review-resourc
 import { RunnerAssignmentStatusReportPanel } from "../../components/runner-assignment-status-report-panel";
 import { RemoteCleanupSyncReadinessReportPanel } from "../../components/remote-cleanup-sync-readiness-report-panel";
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
-import { Shell } from "../../components/shell";
+import { ServerShell as Shell } from "../../components/server-shell";
 import { SupervisorReportCatalogPanel } from "../../components/supervisor-report-catalog-panel";
 import { TrustedDeliveryEligibilityReportPanel } from "../../components/trusted-delivery-eligibility-report-panel";
 import { TrustedAutonomyReadinessReportPanel } from "../../components/trusted-autonomy-readiness-report-panel";

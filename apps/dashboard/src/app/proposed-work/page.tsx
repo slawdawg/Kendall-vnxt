@@ -1,6 +1,6 @@
 import { PageIntro } from "../../components/page-intro";
 import { ProposedWorkBoard } from "../../components/proposed-work-board";
-import { Shell } from "../../components/shell";
+import { ServerShell as Shell } from "../../components/server-shell";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getCandidateWork, getWorkItems } from "../../lib/supervisor";
 

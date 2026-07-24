@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { Shell } from "../../../../components/shell";
+import { ServerShell as Shell } from "../../../../components/server-shell";
 import { PacketDetailPage } from "../../../../components/pipeline/packet-detail-page";
 import { LanPacketDetailPage } from "../../../../components/pipeline/lan-packet-detail-page";
 import { loadPipelineCockpitPacket } from "../../../../lib/pipeline-packet-loader";
@@ -19,7 +19,7 @@ export default async function PipelinePacketPage({
     notFound();
   }
   if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
-    return <LanPacketDetailPage packetId={decodedPacketId} />;
+    return <LanPacketDetailPage lanAuthEnabled packetId={decodedPacketId} />;
   }
   const { fixtureMode, packet, workGraph } = await loadPipelineCockpitPacket(decodedPacketId);
 

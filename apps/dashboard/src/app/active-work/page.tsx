@@ -1,7 +1,7 @@
 import { ActiveWorkBrowser } from "../../components/active-work-browser";
 import { PageIntro } from "../../components/page-intro";
 import { RouteBrief } from "../../components/route-brief";
-import { Shell } from "../../components/shell";
+import { ServerShell as Shell } from "../../components/server-shell";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
 
@@ -32,4 +32,3 @@ export default async function ActiveWorkPage() {
     </Shell>
   );
 }
-

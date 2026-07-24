@@ -5,20 +5,23 @@ import { OperationalNav } from "./operational-nav";
 import { RealtimeRefresh } from "./realtime-refresh";
 import { LogoutButton } from "./logout-button";
 
-export function Shell({
-  children,
-  compactHeader = false,
-  navStats,
-  realtimeRefresh = true,
-  wide = false,
-}: {
+export type ShellProps = {
   children: ReactNode;
   compactHeader?: boolean;
+  lanAuthEnabled: boolean;
   navStats?: NavStats;
   realtimeRefresh?: boolean;
   wide?: boolean;
-}) {
-  const lanAuthEnabled = process.env.KENDALL_LAN_AUTH_ENABLED === "true";
+};
+
+export function Shell({
+  children,
+  compactHeader = false,
+  lanAuthEnabled,
+  navStats,
+  realtimeRefresh = true,
+  wide = false,
+}: ShellProps) {
   return (
     <div className="relative isolate min-h-screen overflow-hidden bg-[var(--background)]">
       <DashboardGraphBackground />

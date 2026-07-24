@@ -1,5 +1,5 @@
 import { PageIntro } from "../../components/page-intro";
-import { Shell } from "../../components/shell";
+import { ServerShell as Shell } from "../../components/server-shell";
 import { QueueBrowser } from "../../components/queue-browser";
 import { RouteBrief } from "../../components/route-brief";
 import { buildNavStats } from "../../lib/nav-stats";
@@ -28,4 +28,3 @@ export default async function QueuePage() {
     </Shell>
   );
 }
-

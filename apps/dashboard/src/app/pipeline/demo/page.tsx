@@ -1,4 +1,4 @@
-import { Shell } from "../../../components/shell";
+import { ServerShell as Shell } from "../../../components/server-shell";
 import { PipelineCockpit } from "../../../components/pipeline/pipeline-cockpit";
 import { selectedManagerExecutionLaneSummary } from "../../../lib/pipeline/manager-execution-lane-summary";
 import { pipelineCockpitPackets } from "../../../lib/pipeline-fixtures";
