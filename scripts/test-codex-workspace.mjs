@@ -7503,6 +7503,147 @@ try {
     }
   });
 
+  test("cleanup-integrated exact-tree closeout previews only the named local Tailnet persistence lane", () => {
+    const fixture = createIntegratedCleanupFixture({
+      taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+      baseBranch: "dev",
+      remoteBranch: false,
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [...exactTreeCloseoutArgs(fixture), "--summary-json"],
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.mode === "cleanup-integrated", `mode is ${summary.mode}`);
+      assert(summary.counts.cleanupReady === 1, result.stdout || result.stderr);
+      const [cleanup] = summary.results;
+      assert(cleanup.status === "ready", cleanup.reason);
+      assert(cleanup.exactTreeCloseout === true, "strict closeout marker is missing");
+      assert(cleanup.proof.tree.status === "matched", "exact tree equality was not proven");
+      assert(cleanup.proof.remoteBranch.state === "absent", "source remote absence was not proven");
+      assert(cleanup.proof.evidence.status === "matched", "closeout evidence was not accepted");
+      assert(cleanup.remoteBranchSha === null, "strict closeout must not retain a source remote branch");
+      assert(!JSON.stringify(cleanup).includes("git push"), "strict closeout summary must not plan remote mutation");
+      assert(existsSync(fixture.worktree), "preview removed the exact lane worktree");
+      assert(branchExists(fixture.root, fixture.branch), "preview deleted the exact lane local branch");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated exact-tree closeout fails closed for tree, worktree, remote, and PR evidence gates", () => {
+    const scenarios = [
+      {
+        name: "tree drift",
+        mutate(fixture) {
+          commitFile(fixture.worktree, "drift.txt", "drift\n", "tree drift");
+        },
+        expected: "tree does not exactly equal origin/dev",
+      },
+      {
+        name: "dirty worktree",
+        mutate(fixture) {
+          writeFileSync(join(fixture.worktree, "dirty.txt"), "dirty\n");
+        },
+        expected: "worktree is not clean",
+      },
+      {
+        name: "present remote branch",
+        fixtureOptions: { remoteBranch: true },
+        expected: "source remote branch is present",
+      },
+      {
+        name: "unavailable remote probe",
+        mutate(fixture) {
+          runGit(fixture.root, ["remote", "set-url", "origin", join(fixture.root, "missing-origin.git")]);
+        },
+        expected: "source remote branch evidence is unavailable",
+      },
+      {
+        name: "PR evidence",
+        mutate(fixture) {
+          const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
+          const manifest = readJson(manifestPath);
+          manifest.pr_url = "https://example.test/pull/1";
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "source workspace has PR or cleanup evidence",
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createIntegratedCleanupFixture({
+        taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+        baseBranch: "dev",
+        remoteBranch: false,
+        ...scenario.fixtureOptions,
+      });
+      try {
+        scenario.mutate?.(fixture);
+        const result = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--summary-json"]);
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const [cleanup] = JSON.parse(result.stdout).results;
+        assert(cleanup.status === "skipped", `${scenario.name}: ${cleanup.status}`);
+        assert(cleanup.reason.includes(scenario.expected), `${scenario.name}: ${cleanup.reason}`);
+        assert(existsSync(fixture.worktree), `${scenario.name}: worktree was removed`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name}: local branch was deleted`);
+      } finally {
+        cleanupIntegratedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-integrated exact-tree closeout rejects missing evidence and unsafe invocation before planning", () => {
+    const fixture = createIntegratedCleanupFixture({
+      taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+      baseBranch: "dev",
+      remoteBranch: false,
+    });
+    try {
+      const missingEvidence = runFixtureScript(fixture, [
+        "cleanup-integrated",
+        fixture.taskId,
+        "--exact-tree-closeout",
+        "--base",
+        "origin/dev",
+        "--closeout-reason",
+        "operator approved exact local closeout after supersession",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(missingEvidence.code !== 0, "missing provenance unexpectedly planned strict cleanup");
+      assert(missingEvidence.stderr.includes("--supersession-provenance"), missingEvidence.stderr || missingEvidence.stdout);
+
+      const nonCanonicalBase = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--base", "origin/main", "--summary-json"]);
+      assert(nonCanonicalBase.code !== 0, "noncanonical base unexpectedly planned strict cleanup");
+      assert(nonCanonicalBase.stderr.includes("--base origin/dev"), nonCanonicalBase.stderr || nonCanonicalBase.stdout);
+
+      const broadInvocation = runFixtureScript(fixture, [
+        "cleanup-integrated",
+        "--exact-tree-closeout",
+        "--base",
+        "origin/dev",
+        "--supersession-provenance",
+        "Tailnet persistence source is exactly retained by origin/dev",
+        "--closeout-reason",
+        "operator approved exact local closeout after supersession",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(broadInvocation.code !== 0, "broad strict cleanup invocation unexpectedly planned");
+      assert(broadInvocation.stderr.includes("exactly one explicit task"), broadInvocation.stderr || broadInvocation.stdout);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-superseded source keeps a separate, fail-closed supersession proof path", () => {
     const source = readFileSync(scriptPath, "utf8");
     const match = source.match(/function cleanupSuperseded[\s\S]*?function cleanupRepositoryRoot/);
@@ -8916,6 +9057,9 @@ function createIntegratedCleanupFixture(options = {}) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-integrated-cleanup-"));
   const remoteRoot = `${fixtureRoot}-remote.git`;
   const stateRootFixture = join(fixtureRoot, "state");
+  const taskId = options.taskId || "integrated-task";
+  const baseBranch = options.baseBranch || "main";
+  const remoteBranch = options.remoteBranch !== false;
   const branch = "codex/integrated-cleanup";
   const worktree = join(stateRootFixture, "worktrees", "integrated-task");
   const manifestOwner = options.manifestOwner || "runner-a";
@@ -8927,34 +9071,34 @@ function createIntegratedCleanupFixture(options = {}) {
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   commitFile(fixtureRoot, "base.txt", "base\n", "base");
   commitFile(fixtureRoot, ".gitignore", "_bmad-output/\n", "ignore local bmad output");
-  runGit(fixtureRoot, ["branch", "-M", "main"]);
+  runGit(fixtureRoot, ["branch", "-M", baseBranch]);
   mkdirSync(remoteRoot, { recursive: true });
   runGit(remoteRoot, ["init", "--bare", "-q"]);
   runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
-  runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
-  runGit(fixtureRoot, ["branch", branch, "main"]);
+  runGit(fixtureRoot, ["push", "-q", "-u", "origin", baseBranch]);
+  runGit(fixtureRoot, ["branch", branch, baseBranch]);
   if (options.diverged) {
     runGit(fixtureRoot, ["switch", "-q", branch]);
     commitFile(fixtureRoot, "diverged.txt", "not integrated\n", "diverged work");
-    runGit(fixtureRoot, ["switch", "-q", "main"]);
+    runGit(fixtureRoot, ["switch", "-q", baseBranch]);
   }
-  runGit(fixtureRoot, ["push", "-q", "-u", "origin", branch]);
+  if (remoteBranch) runGit(fixtureRoot, ["push", "-q", "-u", "origin", branch]);
   mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
   runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
 
   mkdirSync(join(stateRootFixture, "tasks"), { recursive: true });
   writeFileSync(
-    join(stateRootFixture, "tasks", "integrated-task.json"),
+    join(stateRootFixture, "tasks", `${taskId}.json`),
     `${JSON.stringify({
       schema_version: 1,
-      task_id: "integrated-task",
+      task_id: taskId,
       title: "Integrated task",
       description: "integrated task",
       repo_name: "fixture",
       repo_root: worktree,
       state_root: stateRootFixture,
-      base_branch: "main",
-      base_ref: "origin/main",
+      base_branch: baseBranch,
+      base_ref: `origin/${baseBranch}`,
       branch,
       worktree_path: worktree,
       status: "active",
@@ -8970,8 +9114,8 @@ function createIntegratedCleanupFixture(options = {}) {
     `${JSON.stringify({
       schema_version: 1,
       assignment_id: "integrated-assignment",
-      task_id: "integrated-task",
-      lane_slug: "integrated-task",
+      task_id: taskId,
+      lane_slug: taskId,
       branch,
       worktree_path: worktree,
       status: "claimed",
@@ -8980,7 +9124,7 @@ function createIntegratedCleanupFixture(options = {}) {
       runner_kind: "codex-cli",
       events: [],
       source_backlog_item: {
-        item_id: "integrated-task",
+        item_id: taskId,
         branch_name: branch,
       },
     }, null, 2)}\n`,
@@ -8990,10 +9134,30 @@ function createIntegratedCleanupFixture(options = {}) {
     root: fixtureRoot,
     remoteRoot,
     stateRoot: stateRootFixture,
+    taskId,
+    baseBranch,
     branch,
     worktree,
     script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
   };
+}
+
+function exactTreeCloseoutArgs(fixture) {
+  return [
+    "cleanup-integrated",
+    fixture.taskId,
+    "--exact-tree-closeout",
+    "--base",
+    "origin/dev",
+    "--supersession-provenance",
+    "Tailnet persistence source is exactly retained by origin/dev",
+    "--closeout-reason",
+    "operator approved exact local closeout after supersession",
+    "--owner",
+    "runner-a",
+    "--state-root",
+    fixture.stateRoot,
+  ];
 }
 
 function cleanupIntegratedCleanupFixture(fixture) {
