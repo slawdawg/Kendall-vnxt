@@ -110,6 +110,10 @@ class WorkflowAction(StrEnum):
 
 
 class ExecutionAttemptStatus(StrEnum):
+    # A persisted, supervisor-owned dispatch record.  It is intentionally not
+    # an active execution attempt: the per-route reservation below it owns the
+    # actual external-side-effect fence.
+    PREPARED = "prepared"
     PLANNED = "planned"
     APPROVED = "approved"
     STARTING = "starting"

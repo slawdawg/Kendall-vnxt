@@ -15,9 +15,11 @@ import type {
 import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
 import {
   projectionDisplayLabels,
+  projectionEffectiveLabels,
   projectionHasRenderableBackendPackets,
   projectionLiveProofLabel,
   projectionLiveProofState,
+  currentProjectionAllowsOperationalActions,
 } from "../../lib/pipeline/projection-truth";
 import {
   buildPipelineActiveBoardViewModel,
@@ -126,6 +128,7 @@ export function PipelineCockpit({
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [usageVisibility, setUsageVisibility] = useState({ claude: true, codex: true });
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [projectionTruthClock, setProjectionTruthClock] = useState(() => Date.now());
   const currentProjection = projection ?? null;
   const currentProjectionError = projectionError ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -187,7 +190,15 @@ export function PipelineCockpit({
   const selectedContextualActionStrip = selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
     : null;
-  const runtimeActionStrip = currentProjection && fixtureMode.kind === "runtime"
+  const effectiveProjectionLabels = currentProjection ? projectionEffectiveLabels(currentProjection, projectionTruthClock) : null;
+  const projectionSupportsOperationalActions = currentProjection
+    ? projectionLiveProofState(
+        currentProjection,
+        effectiveProjectionLabels?.sourceLabel ?? "unavailable",
+        effectiveProjectionLabels?.freshnessState ?? "unavailable"
+      ).canSatisfyLiveProof
+    : false;
+  const runtimeActionStrip = currentProjection && fixtureMode.kind === "runtime" && projectionSupportsOperationalActions
     ? buildRuntimeOperationalActionStrip(currentProjection)
     : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
@@ -239,6 +250,10 @@ export function PipelineCockpit({
       setActionFeedback("Operational actions are unavailable outside supervisor runtime mode.");
       return;
     }
+    if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+      setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
+      return;
+    }
     if (action.v1Capability) {
       const capability = action.v1Capability;
       if (
@@ -267,6 +282,10 @@ export function PipelineCockpit({
         rawPayloadRetained: false,
       } as PipelineOperationalActionApprovalRequestV1;
       try {
+        if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+          setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
+          return;
+        }
         const approval = await requestPipelineOperationalApprovalV1(approvalRequest);
         const request = {
           schemaVersion: approval.schemaVersion,
@@ -286,6 +305,10 @@ export function PipelineCockpit({
           metadataOnly: true,
           rawPayloadRetained: false,
         } as PipelineOperationalActionRequestV1;
+        if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+          setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
+          return;
+        }
         const result = await applyPipelineOperationalActionV1(request);
         setActionFeedback(`${result.actionId}: ${result.outcome}; ${result.typedReason ?? "state updated"}; correlation ${result.correlationId}`);
         window.setTimeout(() => window.location.reload(), 250);
@@ -316,6 +339,10 @@ export function PipelineCockpit({
       rawPayloadRetained: false,
     };
     try {
+      if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+        setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
+        return;
+      }
       const approval = await requestPipelineOperationalApproval(approvalRequest);
       const request: PipelineOperationalActionRequestV0 = {
         schemaVersion: "pipeline-operational-action/v0",
@@ -335,13 +362,17 @@ export function PipelineCockpit({
         metadataOnly: true,
         rawPayloadRetained: false,
       };
+      if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+        setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
+        return;
+      }
       const result = await applyPipelineOperationalAction(request);
       setActionFeedback(`${result.actionId}: ${result.outcome}; ${result.typedReason ?? "state updated"}; correlation ${result.correlationId}`);
       window.setTimeout(() => window.location.reload(), 250);
     } catch (error) {
       setActionFeedback(error instanceof Error ? error.message : "Operational action failed.");
     }
-  }, [fixtureMode.kind]);
+  }, [currentProjection, fixtureMode.kind]);
   const registerPacketButton = useCallback((packetId: string, node: HTMLButtonElement | null) => {
     if (node) {
       packetButtonRefs.current.set(packetId, node);
@@ -481,6 +512,27 @@ export function PipelineCockpit({
     document.addEventListener("keydown", handleDocumentKeyDown);
     return () => document.removeEventListener("keydown", handleDocumentKeyDown);
   }, [focusSearchFromShortcut]);
+
+  useEffect(() => {
+    setProjectionTruthClock(Date.now());
+    if (!currentProjection) {
+      return;
+    }
+    const sourceUpdatedAt = Date.parse(currentProjection.sourceUpdatedAt);
+    const expiresAt = sourceUpdatedAt + currentProjection.staleAfterSeconds * 1000;
+    if (!Number.isFinite(expiresAt)) {
+      return;
+    }
+    const delay = expiresAt - Date.now();
+    if (delay <= 0) {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setProjectionTruthClock(Date.now()),
+      Math.min(delay + 1, 2_147_483_647)
+    );
+    return () => window.clearTimeout(timer);
+  }, [currentProjection]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 720px)");
@@ -999,7 +1051,7 @@ function projectionToCockpitPackets(
   activeBoardViewModel: PipelineActiveBoardViewModel | null,
   sourceState: PipelineRuntimeSourceState
 ) {
-  if (sourceState.kind !== "runtime") {
+  if (sourceState.kind !== "runtime" && sourceState.kind !== "stale") {
     return sourceState.kind === "demo" ? runtimePackets : [];
   }
   if (!projection) {
@@ -1168,8 +1220,8 @@ function projectionToCockpitPackets(
 
 function cockpitNonRuntimeSourceKind(
   sourceState: PipelineRuntimeSourceState
-): Extract<PipelineRuntimeSourceState["kind"], "demo" | "empty" | "invalid"> | null {
-  return sourceState.kind === "demo" || sourceState.kind === "empty" || sourceState.kind === "invalid"
+): Extract<PipelineRuntimeSourceState["kind"], "demo" | "empty" | "invalid" | "stale"> | null {
+  return sourceState.kind === "demo" || sourceState.kind === "empty" || sourceState.kind === "invalid" || sourceState.kind === "stale"
     ? sourceState.kind
     : null;
 }

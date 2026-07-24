@@ -6,6 +6,11 @@ const route = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta
 const detailRoute = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
 const pipelineClient = new URL("../apps/dashboard/src/components/pipeline/lan-pipeline-page.tsx", import.meta.url);
 const detailClient = new URL("../apps/dashboard/src/components/pipeline/lan-packet-detail-page.tsx", import.meta.url);
+const packetLoader = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
+const runtime = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
+const transport = new URL("../apps/dashboard/src/lib/dashboard-supervisor-transport.ts", import.meta.url);
+const supervisorProxy = new URL("../apps/dashboard/scripts/dashboard-supervisor-proxy.mjs", import.meta.url);
+const cockpit = new URL("../apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", import.meta.url);
 
 test("LAN pipeline route avoids server-side supervisor reads", async () => {
   const source = await readFile(route, "utf8");
@@ -13,6 +18,28 @@ test("LAN pipeline route avoids server-side supervisor reads", async () => {
   assert.match(source, /LanPipelinePage/);
   assert.match(source, /loadPipelineCockpitPackets/);
   assert.match(await readFile(pipelineClient, "utf8"), /loadPipelineCockpitPackets/);
+});
+
+test("LAN pipeline browser reads stay out of the Node UDS module and use the authenticated supervisor proxy", async () => {
+  const [client, loader, runtimeSource, transportSource, proxySource, cockpitSource] = await Promise.all([
+    readFile(pipelineClient, "utf8"),
+    readFile(packetLoader, "utf8"),
+    readFile(runtime, "utf8"),
+    readFile(transport, "utf8"),
+    readFile(supervisorProxy, "utf8"),
+    readFile(cockpit, "utf8"),
+  ]);
+  assert.match(client, /loadPipelineCockpitPackets/);
+  assert.doesNotMatch(loader, /pipeline-supervisor-uds|node:http/);
+  assert.match(runtimeSource, /requestSupervisorJson/);
+  assert.match(transportSource, /\$\{window\.location\.origin\}\/api\/supervisor/);
+  assert.match(proxySource, /READ_ONLY_SUPERVISOR_PATHS/);
+  assert.match(proxySource, /projection\|work-packets/);
+  assert.match(proxySource, /\/work-packets/);
+  assert.match(proxySource, /requestSupervisor\(supervisorUdsPath, "\/auth\/session"/);
+  assert.match(cockpitSource, /projectionSupportsOperationalActions/);
+  assert.match(cockpitSource, /until the supervisor projection is current live truth/);
+  assert.match(cockpitSource, /sourceState\.kind !== "runtime" && sourceState\.kind !== "stale"/);
 });
 
 test("LAN Packet Detail uses the authenticated mediator with explicit expiry and unavailable states", async () => {

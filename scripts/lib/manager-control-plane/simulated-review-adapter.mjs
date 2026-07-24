@@ -4,6 +4,7 @@ import {
   REVIEW_ROUTE_DECISION_SCHEMA_VERSION,
   SIMULATED_REVIEW_ADAPTER_ID,
   disclosurePacketCanonicalDigest,
+  isSafeReviewRouteIdentifier,
   validateDisclosurePacket,
 } from "./review-route.mjs";
 
@@ -16,11 +17,10 @@ const PACKET_FIELDS = Object.freeze(["schemaVersion", "disclosurePacketId", "imm
 const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
 const AUTHORITY_FIELDS = Object.freeze(["issuerId", "authorityRef", "valid"]);
 const ISSUANCE_FIELDS = Object.freeze(["issuedAt", "expiresAt", "revocationState", "cancellationState", "singleUse"]);
-const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs"]);
+const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs", "pathScope"]);
 const FINDING_FIELDS = Object.freeze(["schemaVersion", "findingId", "rule", "severity", "pathOrRef", "lineOrRange", "summary", "remediation", "reviewedHead", "digest"]);
 const SEVERITIES = Object.freeze(["info", "low", "medium", "high"]);
 const FALLBACKS = Object.freeze(["none", "timeout"]);
-const SAFE_ID = /^[A-Za-z][A-Za-z0-9._:/-]{1,180}$/;
 const EXACT_HEAD = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const LINE_OR_RANGE = /^[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?$/;
@@ -303,8 +303,12 @@ function copyDisclosurePacket(value) {
   const adapterAllowlist = copyStrictArray(packet.adapterAllowlist);
   const toolAllowlist = copyStrictArray(packet.toolAllowlist);
   const evidenceRefs = scope ? copyStrictArray(scope.evidenceRefs) : null;
+  const pathScope = scope ? copyStrictArray(scope.pathScope) : null;
+  // The fixture remains strictly metadata-only. It recognizes the canonical
+  // empty path scope but never becomes an execution path for private diffs.
   return immutableReview && authority && issuance && scope && routeAllowlist && adapterAllowlist && toolAllowlist && evidenceRefs
-    ? { ...packet, immutableReview, authority, issuance, scope: { ...scope, evidenceRefs }, routeAllowlist, adapterAllowlist, toolAllowlist }
+    && pathScope && ownDataValue(scope, "dataClass") === "metadata_only" && pathScope.length === 0
+    ? { ...packet, immutableReview, authority, issuance, scope: { ...scope, evidenceRefs, pathScope }, routeAllowlist, adapterAllowlist, toolAllowlist }
     : null;
 }
 
@@ -343,7 +347,7 @@ function ownDataValue(value, key) {
 }
 
 function safeId(value) {
-  return typeof value === "string" && SAFE_ID.test(value) && !FORBIDDEN_TEXT.test(value);
+  return isSafeReviewRouteIdentifier(value);
 }
 
 function safeText(value) {

@@ -298,3 +298,52 @@ SAN using the procedure above, then restart the dedicated target:
 ```bash
 pnpm run lan-cockpit:restart
 ```
+
+### Tailnet address rotation and controlled recovery
+
+Treat a Tailnet address change as a paired supervisor/dashboard restart. On
+each start the supervisor records the exact HTTPS origin it derived from
+`tailscale ip -4`; after the private-UDS startup gate succeeds, the dashboard
+requires that same origin before it listens. This state contains only the
+numeric HTTPS origin, never a password, session, certificate key, or packet
+data. A mismatch fails closed rather than serving a dashboard paired to a
+different Tailnet address.
+
+When Tailscale reports a new address, do not repeatedly restart the dashboard
+or edit its unit file. Use this recovery sequence:
+
+```bash
+cd "$HOME/Kendall_Nxt"
+tailscale ip -4
+# Reissue $AUTH_DIR/dashboard.crt with that exact numeric address in its SAN.
+pnpm run lan-cockpit:restart
+pnpm run lan-cockpit:status
+```
+
+Then verify the trusted HTTPS path and the private supervisor boundary. Replace
+the address below with the current `tailscale ip -4` result; do not pass
+`--insecure` in routine checks:
+
+```bash
+export TAILNET_IP="100.86.154.99" # replace with the current Tailnet address
+curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" "https://${TAILNET_IP}:3000/" >/dev/null
+curl --fail --silent --show-error --unix-socket "$AUTH_DIR/supervisor.sock" http://localhost/internal/lan-auth/startup-gate
+```
+
+If the certificate SAN, Tailnet origin marker, or private-UDS startup gate is
+rejected, keep the Tailnet dashboard stopped while investigating:
+
+```bash
+systemctl --user stop kendall-lan-cockpit.target
+```
+
+The generated supervisor and dashboard units are part of that target, so this
+single stop propagates to both services before a local-only recovery begins.
+
+For a temporary, host-only recovery, first confirm the Tailnet target is
+stopped, then reinstall the loopback cockpit with `pnpm run cockpit:install`.
+That recovery is intentionally local-only: it must not expose the supervisor
+or dashboard to LAN or Tailnet clients. Reinstall the dedicated Tailnet target
+only after the certificate SAN and `tailscale ip -4` agree. Do not delete or
+hand-edit `tailnet-origin.json`; `lan-cockpit:restart` recreates it as part of
+the paired start.

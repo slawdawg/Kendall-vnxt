@@ -37,9 +37,9 @@ Performance preference:
 
 ## Claude Read-Only Review Policy
 
-Claude Code CLI may be used as a durable read-only review lane when the operator
-asks for Claude review or an active end-to-end lane explicitly calls for
-independent Claude critique.
+Claude Code CLI is the durable read-only primary review lane for every review
+workflow. A typed Claude stop may fall through to the exact approved Ollama
+route, then bounded BMAD review.
 
 The approved default command shape is non-interactive and bounded:
 
@@ -48,9 +48,9 @@ The approved default command shape is non-interactive and bounded:
 - no edit, shell, GitHub mutation, browser, credential, cleanup, or filesystem
   mutation tools
 - bounded prompt scope naming files, a diff, or an artifact packet
-- `--max-budget-usd 1` unless the operator approves more
+- no repository `--max-budget-usd` cap; provider-account controls still apply
 - retained evidence limited to summarized findings, paths, line references,
-  command metadata, budget cap, and follow-up decisions
+  command metadata, route/fallback result, and follow-up decisions
 
 This is a repo-level authority contract. It does not override system, tenant,
 provider, or sandbox policy if a higher layer vetoes external review.

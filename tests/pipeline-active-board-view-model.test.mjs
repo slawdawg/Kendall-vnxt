@@ -631,8 +631,21 @@ test("local paused or draining runtime exposes only server-projected runtime con
       actionCapabilitiesV1: [runtimeCapabilityFixture("resume")],
     }),
   });
+  const staleProjection = projectionFixture({
+    sourceLabel: "stale",
+    freshnessState: "stale",
+    truthSummary: {
+      ...truthSummaryFixture(),
+      label: "stale",
+      stale: true,
+    },
+    runtimeReadiness: runtimeReadinessFixture({
+      operationalMode: "bounded_write",
+      actionCapabilitiesV1: [runtimeCapabilityFixture("resume")],
+    }),
+  });
 
-  for (const projection of [remoteReadOnly, fixtureProjection, unavailableProjection]) {
+  for (const projection of [remoteReadOnly, fixtureProjection, unavailableProjection, staleProjection]) {
     assert.equal(isLocalPausedOrDrainingSupervisorRuntime(projection), false);
     assert.equal(buildRuntimeOperationalActionStrip(projection), null);
   }

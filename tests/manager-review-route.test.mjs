@@ -11,13 +11,28 @@ import {
   evaluateReviewRoute,
   evaluateSimulatedReview,
   isDisclosurePacketSizeAllowed,
+  selectCanonicalReviewFallback,
   validateDisclosurePacket,
 } from "../scripts/lib/manager-control-plane/core.mjs";
+import {
+  APPROVED_OLLAMA_ENDPOINT_REF,
+  APPROVED_OLLAMA_MODEL_REF,
+  CLAUDE_READONLY_ARGV,
+  createReviewExecutionLedger,
+  executeInjectedReview,
+} from "../scripts/lib/manager-control-plane/review-executor.mjs";
 
 const NOW = "2026-07-22T12:00:00.000Z";
 const EXACT_HEAD = "a".repeat(40);
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const EVIDENCE_REF = `evidence:sha256:${"c".repeat(64)}`;
+const REVIEW_PATH = "packages/contracts/src/manager-control-plane/review-route.ts";
+const REVIEW_TEXT = "sanitized transient diff body";
+const REVIEW_DIFF_DIGEST = `sha256:${createHash("sha256").update(REVIEW_TEXT).digest("hex")}`;
+
+function transientFiles(text = REVIEW_TEXT) {
+  return [{ path: REVIEW_PATH, text }];
+}
 
 function validInput(overrides = {}) {
   return {
@@ -65,6 +80,298 @@ test("review route produces canonical report-only decision and metadata-only dis
   assert.equal(result.packet.metadataOnly, true);
   assert.equal(result.packet.rawPayloadRetained, false);
   assert.deepEqual(validateDisclosurePacket(result.packet, { now: NOW, routePolicy: validInput().routePolicy }), { ok: true, reasons: [] });
+});
+
+test("sanitized path-scoped private-diff packets retain only paths and digests", () => {
+  const input = validInput({
+    disclosure: {
+      ...validInput().disclosure,
+      dataClass: "sanitized_path_scoped_private_diff",
+      pathScope: [{ path: "services/supervisor/src/supervisor/application/service.py", diffDigest: `sha256:${"d".repeat(64)}` }],
+    },
+  });
+  const result = evaluateReviewRoute(input);
+  assert.equal(result.ok, true);
+  assert.equal(result.packet.scope.dataClass, "sanitized_path_scoped_private_diff");
+  assert.deepEqual(result.packet.scope.pathScope, input.disclosure.pathScope);
+  assert.equal(result.packet.metadataOnly, true);
+  assert.equal(result.packet.rawPayloadRetained, false);
+
+  for (const pathScope of [
+    [],
+    [{ path: "../outside.patch", diffDigest: `sha256:${"d".repeat(64)}` }],
+    [{ path: ".env", diffDigest: `sha256:${"d".repeat(64)}` }],
+    [{ path: "services/.env.production", diffDigest: `sha256:${"d".repeat(64)}` }],
+    [{ path: "fixtures/.git/config", diffDigest: `sha256:${"d".repeat(64)}` }],
+    [{ path: "docs/safe.md", diffDigest: "diff body must never be retained" }],
+  ]) {
+    const rejected = evaluateReviewRoute(validInput({ disclosure: { ...input.disclosure, pathScope } }));
+    assert.equal(rejected.ok, false);
+  }
+});
+
+test("canonical review fallback selects Claude, exact Ollama, then bounded BMAD without execution", () => {
+  const ready = { claude: { state: "ready" }, ollama: { state: "ready", exactApprovedGate: true, reviewApproval: true }, bmad: { state: "ready", boundedScope: true } };
+  const claude = selectCanonicalReviewFallback(ready);
+  assert.equal(claude.selectedRouteId, "claude_readonly");
+  assert.equal(claude.execution, "none");
+
+  const ollama = selectCanonicalReviewFallback({ ...ready, claude: { state: "tenant_policy_vetoed" } });
+  assert.equal(ollama.selectedRouteId, "ollama_exact");
+  assert.deepEqual(ollama.skippedRouteIds, ["claude_readonly"]);
+  assert.equal(ollama.execution, "none");
+
+  const bmad = selectCanonicalReviewFallback({ ...ready, claude: { state: "unavailable" }, ollama: { state: "review_dispatch_not_implemented", exactApprovedGate: true, reviewApproval: false } });
+  assert.equal(bmad.selectedRouteId, "bmad_local");
+  assert.equal(bmad.execution, "none");
+
+  const blocked = selectCanonicalReviewFallback({ ...ready, claude: { state: "tenant_policy_vetoed" }, ollama: { state: "approval_missing", exactApprovedGate: true, reviewApproval: false }, bmad: { state: "unavailable", boundedScope: false } });
+  assert.equal(blocked.state, "blocked");
+  assert.equal(blocked.controllingReason.code, "review_unsatisfied");
+});
+
+function injectedExecutionInput(routeId, overrides = {}) {
+  const base = validInput();
+  const adapterId = routeId === "claude_readonly" ? "claude-readonly-injected/v1" : "ollama-exact-injected/v1";
+  const toolAllowlist = routeId === "claude_readonly" ? ["Read", "Grep"] : ["none"];
+  const packet = buildDisclosurePacket({
+    ...base,
+    disclosure: {
+      ...base.disclosure,
+      disclosurePacketId: `disclosure-packet:${routeId}-35-1`,
+      routeAllowlist: [routeId],
+      adapterAllowlist: [adapterId],
+      toolAllowlist,
+      dataClass: "sanitized_path_scoped_private_diff",
+      pathScope: [{ path: REVIEW_PATH, diffDigest: REVIEW_DIFF_DIGEST }],
+    },
+  });
+  return {
+    now: NOW,
+    routePolicy: { ...base.routePolicy, routeAllowlist: [routeId], adapterAllowlist: [adapterId], toolAllowlist },
+    packet,
+    fallbackDecision: selectCanonicalReviewFallback(routeId === "claude_readonly"
+      ? { claude: { state: "ready" }, ollama: { state: "ready", exactApprovedGate: true, reviewApproval: true }, bmad: { state: "ready", boundedScope: true } }
+      : { claude: { state: "tenant_policy_vetoed" }, ollama: { state: "ready", exactApprovedGate: true, reviewApproval: true }, bmad: { state: "ready", boundedScope: true } }),
+    currentImmutableReview: base.immutableReview,
+    ledger: createReviewExecutionLedger(),
+    approval: {
+      status: "accepted",
+      authorityRef: base.authority.authorityRef,
+      disclosurePacketId: packet.disclosurePacketId,
+      exactHead: EXACT_HEAD,
+      reviewScope: "sanitized_path_scoped_private_diff",
+      ...(routeId === "claude_readonly" ? { tenantPolicy: "approved" } : {}),
+    },
+    ollamaExactGate: { enabled: true, endpointApproved: true, modelApproved: true, endpointRef: APPROVED_OLLAMA_ENDPOINT_REF, modelRef: APPROVED_OLLAMA_MODEL_REF },
+    ...overrides,
+  };
+}
+
+test("injected Claude executor uses fixed argv-only Read/Grep scope and retains no transient diff", async () => {
+  let invocation = null;
+  const privateBody = REVIEW_TEXT;
+  const result = await executeInjectedReview(injectedExecutionInput("claude_readonly", {
+    transientDiffMaterializer: async () => transientFiles(privateBody),
+    adapter: {
+      adapterId: "claude-readonly-injected/v1",
+      execute: async (received) => {
+        invocation = received;
+        assert.equal(received.transientDiff[0].text, privateBody);
+        return { status: "completed", findingCount: 2 };
+      },
+    },
+  }));
+
+  assert.deepEqual(invocation.argv, CLAUDE_READONLY_ARGV);
+  assert.deepEqual(invocation.allowedTools, ["Read", "Grep"]);
+  assert.equal(invocation.argv.includes("--max-budget-usd"), false);
+  assert.equal(Object.hasOwn(invocation, "shell"), false);
+  assert.deepEqual(invocation.transientScope.pathScope, [{ path: REVIEW_PATH, diffDigest: REVIEW_DIFF_DIGEST }]);
+  assert.equal(result.terminal.state, "review_satisfied");
+  assert.equal(result.terminal.rawPayloadRetained, false);
+  assert.equal(result.terminal.deliveryEvidenceEligible, false);
+  assert.equal(result.ledger.revision, 1);
+  assert.equal(result.ledger.records[0].consumed, true);
+  assert.equal(JSON.stringify(result).includes(privateBody), false);
+  assert.deepEqual(result.atomicCommit, { expectedRevision: 0, nextRevision: 1 });
+});
+
+test("injected exact Ollama fallback binds review approval and compact exact gate facts", async () => {
+  const selection = selectCanonicalReviewFallback({
+    claude: { state: "tenant_policy_vetoed" },
+    ollama: { state: "ready", exactApprovedGate: true, reviewApproval: true },
+    bmad: { state: "ready", boundedScope: true },
+  });
+  let invocation = null;
+  const result = await executeInjectedReview(injectedExecutionInput("ollama_exact", {
+    fallbackDecision: selection,
+    transientDiffMaterializer: async () => transientFiles(),
+    adapter: {
+      adapterId: "ollama-exact-injected/v1",
+      execute: async (received) => {
+        invocation = received;
+        return { status: "completed", findingCount: 0 };
+      },
+    },
+  }));
+
+  assert.equal(result.terminal.state, "review_satisfied");
+  assert.equal(invocation.argv, null);
+  assert.deepEqual(invocation.allowedTools, []);
+  assert.deepEqual(invocation.exactGate, { endpointRef: APPROVED_OLLAMA_ENDPOINT_REF, modelRef: APPROVED_OLLAMA_MODEL_REF });
+  assert.equal(result.ledger.records[0].adapterId, "ollama-exact-injected/v1");
+
+  const rejected = await executeInjectedReview(injectedExecutionInput("ollama_exact", {
+    fallbackDecision: selection,
+    approval: { ...injectedExecutionInput("ollama_exact").approval, disclosurePacketId: "disclosure-packet:other" },
+    transientDiffMaterializer: async () => transientFiles(),
+    adapter: { adapterId: "ollama-exact-injected/v1", execute: async () => ({ status: "completed", findingCount: 0 }) },
+  }));
+  assert.equal(rejected.terminal.state, "review_unsatisfied");
+  assert.equal(rejected.terminal.code, "ollama_review_gate_invalid");
+
+  const forged = await executeInjectedReview(injectedExecutionInput("ollama_exact", {
+    fallbackDecision: { ...selection, skippedRouteIds: [], controllingReason: { ...selection.controllingReason } },
+    transientDiffMaterializer: async () => transientFiles(),
+    adapter: { adapterId: "ollama-exact-injected/v1", execute: async () => ({ status: "completed", findingCount: 0 }) },
+  }));
+  assert.equal(forged.terminal.code, "fallback_decision_invalid");
+
+  const unpinned = await executeInjectedReview(injectedExecutionInput("ollama_exact", {
+    fallbackDecision: selection,
+    ollamaExactGate: { enabled: true, endpointApproved: true, modelApproved: true, endpointRef: "ollama-endpoint:other", modelRef: APPROVED_OLLAMA_MODEL_REF },
+    transientDiffMaterializer: async () => transientFiles(),
+    adapter: { adapterId: "ollama-exact-injected/v1", execute: async () => ({ status: "completed", findingCount: 0 }) },
+  }));
+  assert.equal(unpinned.terminal.code, "ollama_review_gate_invalid");
+});
+
+test("injected executor atomically records stale, failed, and inconclusive outcomes as non-deliverable", async () => {
+  let staleCalls = 0;
+  const stale = await executeInjectedReview(injectedExecutionInput("claude_readonly", {
+    currentImmutableReview: { executionJobId: "execution-job:review-35-1", exactHead: "e".repeat(40), digest: DIGEST },
+    transientDiffMaterializer: async () => transientFiles(),
+    adapter: { adapterId: "claude-readonly-injected/v1", execute: async () => { staleCalls += 1; return { status: "completed", findingCount: 0 }; } },
+  }));
+  assert.equal(stale.terminal.state, "stale");
+  assert.equal(stale.ledger.records[0].consumed, false);
+  assert.equal(staleCalls, 0);
+
+  for (const status of ["failed", "inconclusive"]) {
+    const result = await executeInjectedReview(injectedExecutionInput("claude_readonly", {
+      transientDiffMaterializer: async () => transientFiles(),
+      adapter: { adapterId: "claude-readonly-injected/v1", execute: async () => ({ status, findingCount: 0 }) },
+    }));
+    assert.equal(result.terminal.state, "review_unsatisfied");
+    assert.equal(result.terminal.deliveryEvidenceEligible, false);
+    assert.equal(result.terminal.rawPayloadRetained, false);
+    assert.equal(result.ledger.records[0].consumed, true);
+  }
+
+  const staleLedger = createReviewExecutionLedger();
+  const revisionConflict = await executeInjectedReview(injectedExecutionInput("claude_readonly", {
+    ledger: staleLedger,
+    expectedLedgerRevision: 1,
+    transientDiffMaterializer: async () => transientFiles(),
+    adapter: { adapterId: "claude-readonly-injected/v1", execute: async () => ({ status: "completed", findingCount: 0 }) },
+  }));
+  assert.equal(revisionConflict.terminal.code, "ledger_revision_stale");
+  assert.equal(revisionConflict.ledger, null);
+});
+
+test("injected executor rejects a transient body that is not digest-bound to its packet", async () => {
+  const result = await executeInjectedReview(injectedExecutionInput("claude_readonly", {
+    transientDiffMaterializer: async () => transientFiles("different body"),
+    adapter: { adapterId: "claude-readonly-injected/v1", execute: async () => ({ status: "completed", findingCount: 0 }) },
+  }));
+  assert.equal(result.terminal.code, "transient_scope_invalid");
+  assert.equal(result.terminal.state, "review_unsatisfied");
+});
+
+test("injected executor remains an unbound gateway with no live provider import", async () => {
+  const source = await readFile(new URL("../scripts/lib/manager-control-plane/review-executor.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /^import .*node:(?:child_process|http|https|net|tls)/m);
+  assert.doesNotMatch(source, /^import .*supervisor/m);
+  assert.doesNotMatch(source, /^import .*dashboard/m);
+  assert.match(source, /injected review adapter/);
+  assert.match(source, /atomically replace the returned/);
+});
+
+test("review route accepts bounded source-bearing metadata IDs while still rejecting credential-like IDs", () => {
+  const base = validInput();
+  const sourceMetadata = validInput({
+    immutableReview: { ...base.immutableReview, executionJobId: "execution-job:source-work-eligible" },
+    authority: { ...base.authority, authorityRef: "authority:source-work-eligible" },
+    disclosure: { ...base.disclosure, disclosurePacketId: "disclosure-packet:source-work-eligible" },
+  });
+  const result = evaluateReviewRoute(sourceMetadata);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.packet.disclosurePacketId, "disclosure-packet:source-work-eligible");
+  assert.deepEqual(validateDisclosurePacket(result.packet, { now: NOW, routePolicy: sourceMetadata.routePolicy }), { ok: true, reasons: [] });
+
+  const credentialLike = evaluateReviewRoute(validInput({
+    immutableReview: { ...base.immutableReview, executionJobId: "execution-job:ghp-abcdefghijklmnop" },
+  }));
+  assert.equal(credentialLike.ok, false);
+  assert.equal(credentialLike.decision.controllingReason.code, "forbidden_content");
+
+  for (const sensitiveMetadata of [
+    validInput({ immutableReview: { ...base.immutableReview, executionJobId: "execution-job:prompt-work-eligible" } }),
+    validInput({ authority: { ...base.authority, authorityRef: "authority:secret-work-eligible" } }),
+    validInput({ disclosure: { ...base.disclosure, disclosurePacketId: "disclosure-packet:customer-work-eligible" } }),
+  ]) {
+    const sensitiveResult = evaluateReviewRoute(sensitiveMetadata);
+    assert.equal(sensitiveResult.ok, false);
+    assert.equal(sensitiveResult.decision.controllingReason.code, "forbidden_content");
+  }
+});
+
+test("simulated route preserves the same narrow source metadata identifier contract", () => {
+  const base = validInput();
+  const sourceMetadata = validInput({
+    requestedState: "simulated",
+    immutableReview: { ...base.immutableReview, executionJobId: "execution-job:source-work-eligible" },
+    authority: { ...base.authority, authorityRef: "authority:source-work-eligible" },
+    routePolicy: { ...base.routePolicy, adapterAllowlist: ["none", "simulated-review-fixture/v1"] },
+    disclosure: {
+      ...base.disclosure,
+      disclosurePacketId: "disclosure-packet:source-work-eligible",
+      routeAllowlist: ["simulated"],
+      adapterAllowlist: ["simulated-review-fixture/v1"],
+    },
+  });
+  const preparation = evaluateReviewRoute(sourceMetadata);
+  assert.equal(preparation.ok, true);
+
+  const result = evaluateSimulatedReview({
+    packet: preparation.packet,
+    decision: preparation.decision,
+    now: NOW,
+    routePolicy: sourceMetadata.routePolicy,
+    currentImmutableReview: sourceMetadata.immutableReview,
+  });
+  assert.equal(result.state, "completed");
+  assert.equal(result.reviewedHead, EXACT_HEAD);
+  assert.equal(result.execution, "none");
+});
+
+test("direct packet builder requires explicit issuance state before validation", () => {
+  const base = validInput();
+  const incompleteDisclosure = { ...base.disclosure };
+  delete incompleteDisclosure.revocationState;
+  delete incompleteDisclosure.cancellationState;
+  delete incompleteDisclosure.singleUse;
+
+  const packet = buildDisclosurePacket({ ...base, disclosure: incompleteDisclosure });
+  assert.equal(packet.issuance.revocationState, undefined);
+  assert.equal(packet.issuance.cancellationState, undefined);
+  assert.equal(packet.issuance.singleUse, undefined);
+  const validation = validateDisclosurePacket(packet, { now: NOW, routePolicy: base.routePolicy });
+  assert.equal(validation.ok, false);
+  assert.ok(validation.reasons.includes("issuance_invalid"));
+  assert.ok(validation.reasons.includes("single_use_required"));
 });
 
 test("review route is deterministic and simulated stays non-executing", () => {

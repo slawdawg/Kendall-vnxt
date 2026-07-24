@@ -43,19 +43,21 @@ Stop lines:
 
 Status: explicitly approved bounded exception; non-activating
 
-Approved source classes are `private-operator-evidence` and
-`work-item-evidence` only. Each packet must carry operator consent, a named
-provider allowlist, `taskType=review`, matching data classification, named
-scope, explicit authority evidence, redaction proof, bounded source references,
-a context limit of 1 MiB, metadata-only local retention, provider-memory
-disabled, an expiry no more than 24 hours ahead, and typed revocation/rollback
-references. The trusted caller supplies current time; a packet cannot set its
-own clock. The gate carries only a SHA-256 digest and byte count, never raw
-context, so digest recomputation belongs to the redaction boundary before
-packet construction.
+Approved source classes are `private-operator-evidence`, `work-item-evidence`,
+and sanitized path-scoped private diffs for review only. Each packet must carry
+operator consent, a named provider allowlist, `taskType=review`, matching data
+classification, named scope, explicit authority evidence, redaction proof,
+bounded source references, a context limit of 1 MiB, metadata-only local
+retention, provider-memory disabled, an expiry no more than 24 hours ahead, and
+typed revocation/rollback references. The trusted caller supplies current time;
+a packet cannot set its own clock. The persisted gate carries only a SHA-256
+digest, byte count, and allowlisted repository-relative paths; transient
+sanitized diff text is never retained locally after provider dispatch.
 
-Claude may receive a primary-review packet. Ollama may receive a packet only as
-the exact qwen3:14b backup after an approved Claude unavailable/empty/429 result.
+Claude is the default primary-review route for every review workflow and has no
+repository per-run dollar cap. Ollama may receive a packet only as the exact
+qwen3:14b backup after a typed Claude unavailable, vetoed, scope-rejected,
+empty, or bounded-failure result; internal BMAD is the final local fallback.
 Credentials, secrets, tokens, MFA/account-security data, excluded vault
 folders, customer/production data, broad repository/vault dumps, raw prompts,
 raw completions, and raw provider payloads remain forbidden.
@@ -167,30 +169,33 @@ Status: durable approved read-only review lane
 
 Authority family: `external-review-readonly`
 
-Operation candidate: one bounded Claude Code CLI review of local repo artifacts
-or a bounded diff/spec packet.
+Operation candidate: the default bounded Claude Code CLI review of local repo
+artifacts or one sanitized path-scoped private-diff packet.
 
-Allowed when the operator asks for Claude review, or an active end-to-end lane
-explicitly calls for independent Claude critique.
+Every review workflow prepares Claude first. This durable repository default
+does not require a per-review request for Claude, but it remains subject to
+system, tenant, provider, and sandbox vetoes.
 
 Required controls:
 
 - Use non-interactive review mode, such as `claude -p`.
 - Limit Claude tools to read/search only, such as `Read` and `Grep`.
-- Set a per-run spend cap with `--max-budget-usd`; default cap is `1` unless the
-  operator approves a larger cap.
+- Do not add a repository per-run dollar cap or pass `--max-budget-usd`.
+  Provider-account budget, rate, and platform controls remain in force.
 - Scope the prompt to named files, a named diff, or a named artifact packet.
 - Ask for findings and recommendations only.
 - Retain only summarized findings, file paths, line references, command
-  metadata, budget cap, verification results, and follow-up decisions.
+  metadata, route/fallback result, verification results, and follow-up decisions.
 - The bounded role is the primary review route for this approved lane. It may
   satisfy the governed review-model contract only after a valid PASS is
   returned; it never grants activation or mutation authority.
 - Use the normal authenticated Claude CLI session with `claude -p`, a named
-  evidence-only scope, `--max-budget-usd 1`, and only `Read`, `Grep`, and `Glob`.
-- If Claude is unavailable, empty, or rate-limited, the exact approved Ollama
-  `qwen3:14b` VM-to-host route is the sole backup. Unknown or malformed Claude
-  failures do not trigger fallback.
+  evidence-only scope, and only `Read` and `Grep`.
+- A typed Claude unavailability, tenant/provider veto, scope rejection, empty
+  result, or bounded failure may advance to the exact approved Ollama
+  `qwen3:14b` VM-to-host review route, only after its review approval and
+  endpoint/model gate pass. Internal BMAD is the final local fallback. Unknown
+  or malformed route state fails closed rather than triggering a workaround.
 
 Stop lines:
 

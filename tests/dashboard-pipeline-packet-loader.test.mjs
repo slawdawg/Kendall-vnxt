@@ -53,22 +53,22 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   assert.deepEqual(calls, ["projection", "list", "projection", `detail:${authoritativePacket.packetId}`]);
 });
 
-test("LAN-auth pipeline reads use the authenticated UDS boundary while local development keeps its direct runtime path", async () => {
+test("pipeline packet reads use the transport selected by the caller runtime", async () => {
   const fixtures = populatedFixtureCatalog();
   const authoritativePacket = authoritativeWorkPacket();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => { throw new Error("LAN auth must not use the direct projection runtime"); },
-    getWorkPackets: async () => { throw new Error("LAN auth must not use the direct work-packet runtime"); },
-    getWorkPacket: async () => { throw new Error("LAN auth must not use the direct detail runtime"); },
-  }, {
-    lanAuthEnabled: true,
-    requestPipelineSupervisorViaUds: async (path) => {
-      calls.push(path);
-      if (path === "/pipeline-control-plane/projection") return runtimeProjection([authoritativePacket.packetId]);
-      if (path === "/work-packets") return [authoritativePacket];
-      if (path === `/work-packets/${encodeURIComponent(authoritativePacket.packetId)}`) return authoritativePacket;
-      throw new Error(`Unexpected UDS path: ${path}`);
+    getPipelineDashboardProjection: async () => {
+      calls.push("projection");
+      return runtimeProjection([authoritativePacket.packetId]);
+    },
+    getWorkPackets: async () => {
+      calls.push("list");
+      return [authoritativePacket];
+    },
+    getWorkPacket: async (packetId) => {
+      calls.push(`detail:${packetId}`);
+      return authoritativePacket;
     },
   });
 
@@ -79,12 +79,7 @@ test("LAN-auth pipeline reads use the authenticated UDS boundary while local dev
   assert.equal(listed.packets[0].packetId, authoritativePacket.packetId);
   assert.equal(detailed.fixtureMode.kind, "runtime");
   assert.equal(detailed.packet.packetId, authoritativePacket.packetId);
-  assert.deepEqual(calls, [
-    "/pipeline-control-plane/projection",
-    "/work-packets",
-    "/pipeline-control-plane/projection",
-    `/work-packets/${encodeURIComponent(authoritativePacket.packetId)}`,
-  ]);
+  assert.deepEqual(calls, ["projection", "list", "projection", `detail:${authoritativePacket.packetId}`]);
 });
 
 test("empty, malformed, missing, and unavailable states fail closed without fixture substitution", async () => {
@@ -169,7 +164,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   });
 
   const stale = await staleLoader.loadPipelineCockpitPackets();
-  assert.equal(stale.fixtureMode.kind, "runtime");
+  assert.equal(stale.fixtureMode.kind, "stale");
   assert.equal(stale.fixtureMode.label, "Supervisor stale read-only");
   assert.equal(stale.packets.length, 1);
   assert.match(stale.fixtureMode.summary, /stale and read-only/i);
@@ -240,6 +235,34 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   assert.equal(fixturePrefixed.fixtureMode.kind, "invalid");
   assert.equal(fixturePrefixed.packets.length, 0);
   assert.match(fixturePrefixed.fixtureMode.summary, /fixture-shaped|fixture-only/i);
+});
+
+test("stale projections reconcile list identities and malformed nested truth fails closed", async () => {
+  const fixtures = populatedFixtureCatalog();
+  const staleProjection = runtimeProjection(["manager-source-authoritative-only"], {
+    generatedAt: new Date().toISOString(),
+    sourceUpdatedAt: new Date(Date.now() - 86_400_000).toISOString(),
+    sourceLabel: "stale",
+    freshnessState: "stale",
+    truthSummary: { label: "stale", stale: true, summary: "Stale supervisor projection." },
+  });
+  const staleIdentityMismatch = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => staleProjection,
+    getWorkPackets: async () => [{ ...authoritativeWorkPacket(), packetId: "different-runtime-packet" }],
+  });
+  const mismatch = await staleIdentityMismatch.loadPipelineCockpitPackets();
+  assert.equal(mismatch.fixtureMode.kind, "invalid");
+  assert.equal(mismatch.packets.length, 0);
+  assert.match(mismatch.projectionError, /omitted runtime packet identity|included runtime packet identity/);
+
+  const malformedNestedTruth = await loadPipelinePacketLoader(fixtures, {
+    getPipelineDashboardProjection: async () => ({ ...staleProjection, truthSummary: null }),
+    getWorkPackets: async () => [authoritativeWorkPacket()],
+  });
+  const malformed = await malformedNestedTruth.loadPipelineCockpitPackets();
+  assert.equal(malformed.fixtureMode.kind, "invalid");
+  assert.equal(malformed.packets.length, 0);
+  assert.match(malformed.projectionError, /missing or malformed/);
 });
 
 test("synthetic reference identities are rejected while fixture-classified evidence metadata remains readable", async () => {
@@ -856,7 +879,7 @@ test("detail lookup accepts canonical stale truth read-only and fails closed for
     },
   });
   const stale = await staleLoader.loadPipelineCockpitPacket("manager-source-authoritative-only");
-  assert.equal(stale.fixtureMode.kind, "runtime");
+  assert.equal(stale.fixtureMode.kind, "stale");
   assert.equal(stale.fixtureMode.label, "Supervisor stale read-only");
   assert.equal(stale.packet?.packetId, "manager-source-authoritative-only");
 

@@ -94,7 +94,7 @@ for (const serviceText of [
   "No-launch Claude review readiness report.",
   "This report does not approve Claude CLI process launch.",
   "reviewTaskExecutionApproved=False",
-  "scarceUseApproved=False",
+  "scarceUseApproved=True",
   "check_id=\"worker-source-mutation\"",
   "enabled=self.settings.allow_worker_source_mutation",
   "source_mutation_allowed=self.settings.allow_worker_source_mutation",

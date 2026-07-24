@@ -35,12 +35,12 @@ def _valid_report() -> dict[str, object]:
     return {
         "reportId": "claude-review-approval-report-v1",
         "generatedAt": "2026-07-20T19:30:00Z",
-        "summary": "Read-only approval packet for a future bounded Claude adversarial review.",
-        "approvalPrompt": "Approve one bounded Claude review-only attempt for one selected work item.",
+        "summary": "Read-only policy packet for the default bounded Claude-first review route.",
+        "approvalPrompt": "Prepare one bounded Claude-first review for one selected work item.",
         "authorityFamily": "claude_review",
-        "operation": "one_time_bounded_review_only_attempt",
+        "operation": "default_bounded_review_route",
         "triggerPolicy": [
-            _requirement("explicit-request", "Explicit request"),
+            _requirement("default-review", "Default review"),
             _requirement("high-risk-diff", "High-risk diff"),
             _requirement("codex-output-check", "Codex output check"),
             {
@@ -62,7 +62,7 @@ def _valid_report() -> dict[str, object]:
         "processLaunchApproved": False,
         "reviewTaskExecutionApproved": False,
         "sourceMutationApproved": False,
-        "scarceUseApproved": False,
+        "scarceUseApproved": True,
         "approvalBindingImplemented": False,
     }
 
