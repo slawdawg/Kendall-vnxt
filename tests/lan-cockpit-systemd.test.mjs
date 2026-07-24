@@ -7,10 +7,12 @@ import { renderLanCockpitUnits } from "../scripts/lan-cockpit-systemd.mjs";
 import { assertTailnetOriginState, tailnetOriginStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState } from "../scripts/lan-cockpit-runtime.mjs";
 
 test("renders private-UDS authenticated Tailnet cockpit units", () => {
-  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm" });
+  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv" });
   assert.match(units["kendall-lan-cockpit.target"], /WantedBy=default\.target/);
-  assert.match(units["kendall-lan-cockpit.target"], /Conflicts=kendall-cockpit\.target kendall-lan-auth\.target/);
+  assert.match(units["kendall-lan-cockpit.target"], /Conflicts=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
+  assert.match(units["kendall-lan-cockpit.target"], /Before=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_LAN_AUTH_DIR=%h\/kendall-lan-auth/);
+  assert.match(units["kendall-lan-supervisor.service"], /KENDALL_UV_PATH=\/home\/kendall\/\.local\/bin\/uv/);
   assert.match(units["kendall-lan-supervisor.service"], /PartOf=kendall-lan-cockpit\.target/);
   assert.match(units["kendall-lan-supervisor.service"], /lan-cockpit-runtime\.mjs supervisor/);
   assert.doesNotMatch(units["kendall-lan-supervisor.service"], /SUPERVISOR_PORT|0\.0\.0\.0/);
@@ -20,6 +22,23 @@ test("renders private-UDS authenticated Tailnet cockpit units", () => {
   assert.match(units["kendall-lan-dashboard.service"], /Requires=kendall-lan-supervisor\.service/);
   assert.match(units["kendall-lan-dashboard.service"], /BindsTo=kendall-lan-supervisor\.service/);
   assert.doesNotMatch(units["kendall-lan-dashboard.service"], /NEXT_PUBLIC_SUPERVISOR_URL|SUPERVISOR_INTERNAL_URL/);
+});
+
+test("Tailnet installer fences legacy port-3000 cockpit services and starts the supervisor through resolved uv", () => {
+  const installerSource = readFileSync(new URL("../scripts/lan-cockpit-systemd.mjs", import.meta.url), "utf8");
+  const runtimeSource = readFileSync(new URL("../scripts/lan-cockpit-runtime.mjs", import.meta.url), "utf8");
+  for (const legacyUnit of [
+    "kendall-cockpit-supervisor.service",
+    "kendall-cockpit-dashboard.service",
+    "kendall-lan-auth-supervisor.service",
+    "kendall-lan-auth-dashboard.service",
+  ]) {
+    assert.match(installerSource, new RegExp(`"${legacyUnit}"`));
+  }
+  assert.match(installerSource, /stopLegacyCockpitUnits\(\);/);
+  assert.match(installerSource, /if \(unitIsActive\(unit\)\) run\(\["stop", unit\]\);/);
+  assert.match(runtimeSource, /KENDALL_UV_PATH is required for the supervisor/);
+  assert.match(runtimeSource, /\["run", "--directory", "services\/supervisor", "supervisor"\]/);
 });
 
 test("waits for the private supervisor startup gate before launching the dashboard", async () => {

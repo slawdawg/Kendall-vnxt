@@ -3742,6 +3742,74 @@ def test_operator_owned_exit_reconciles_unowned_implementing_work_item_without_l
         assert packet["lifecycleState"]["providerCallsAllowed"] is False
 
 
+def test_operator_owned_exit_revokes_active_execution_attempt_and_queue_lease(tmp_path, monkeypatch) -> None:
+    db_name = "operator-owned-active-execution-revocation.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Operator exits active execution")
+        attempt_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts",
+            json={"taskKind": "path_scope_check", "actorLabel": "Operator"},
+        )
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        now = datetime.now(timezone.utc).isoformat()
+        lease_id = "operator-exit-active-lease"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                insert into queue_leases (
+                    id, work_item_id, attempt_count, heartbeat_at, lease_expires_at, fencing_token, active
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (lease_id, work_item["id"], 1, now, (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(), 7, 1),
+            )
+            conn.execute(
+                """
+                update execution_attempts
+                set status = ?, revision = ?, queue_lease_id = ?, queue_fencing_token = ?,
+                    launch_fence_token = ?, launch_claimed_at = ?, started_at = ?, heartbeat_at = ?
+                where id = ?
+                """,
+                ("running", 3, lease_id, 7, "operator-exit-launch-fence", now, now, now, attempt["attemptId"]),
+            )
+            conn.execute(
+                "update work_items set state = ?, lane = ? where id = ?",
+                ("implementing", "implementation", work_item["id"]),
+            )
+            conn.commit()
+
+        response = client.post(
+            f"/work-items/{work_item['id']}/actions",
+            json={
+                "action": "operator_owned_exit",
+                "note": "Stop this active execution; operator will replace the input.",
+                "actorLabel": "Operator",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["state"] == "operator_owned"
+
+        with sqlite3.connect(db_path) as conn:
+            cancelled = conn.execute(
+                "select status, cancel_reason, completed_at, launch_fence_token from execution_attempts where id = ?",
+                (attempt["attemptId"],),
+            ).fetchone()
+            revoked_lease = conn.execute(
+                "select active, fencing_token, lease_expires_at from queue_leases where id = ?",
+                (lease_id,),
+            ).fetchone()
+        assert cancelled is not None
+        assert cancelled[0] == "cancelled"
+        assert cancelled[1] == "Stop this active execution; operator will replace the input."
+        assert cancelled[2] is not None
+        assert cancelled[3] == "operator-exit-launch-fence"
+        assert revoked_lease is not None
+        assert revoked_lease[0] == 0
+        assert revoked_lease[1] == 8
+        assert datetime.fromisoformat(revoked_lease[2]).astimezone(timezone.utc) <= datetime.now(timezone.utc)
+
+
 def test_done_delivery_work_packet_outranks_historical_execution_attempts(tmp_path, monkeypatch) -> None:
     db_name = "done-delivery-attempt-precedence.db"
     db_path = _db_path(tmp_path, db_name)

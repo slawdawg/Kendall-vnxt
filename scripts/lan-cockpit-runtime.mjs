@@ -109,14 +109,20 @@ async function main() {
   const mode = process.argv[2];
   if (mode !== "supervisor" && mode !== "dashboard") fail("expected supervisor or dashboard mode.");
   const pnpmPath = process.env.KENDALL_PNPM_PATH;
-  if (!pnpmPath) fail("KENDALL_PNPM_PATH is required.");
+  const uvPath = process.env.KENDALL_UV_PATH;
+  if (mode === "dashboard" && !pnpmPath) fail("KENDALL_PNPM_PATH is required for the dashboard.");
+  if (mode === "supervisor" && !uvPath) fail("KENDALL_UV_PATH is required for the supervisor.");
   const environment = lanCockpitEnvironment();
   if (mode === "supervisor") writeTailnetOriginState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), environment.KENDALL_DASHBOARD_ORIGIN);
   if (mode === "dashboard") {
     await waitForPrivateSupervisorStartupGate(environment.KENDALL_SUPERVISOR_UDS_PATH);
     assertTailnetOriginState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), environment.KENDALL_DASHBOARD_ORIGIN);
   }
-  const child = spawn(pnpmPath, ["run", mode === "supervisor" ? "dev:supervisor" : "dev:dashboard"], {
+  const command = mode === "supervisor" ? uvPath : pnpmPath;
+  const args = mode === "supervisor"
+    ? ["run", "--directory", "services/supervisor", "supervisor"]
+    : ["run", "dev:dashboard"];
+  const child = spawn(command, args, {
     cwd: process.cwd(),
     env: environment,
     stdio: "inherit",

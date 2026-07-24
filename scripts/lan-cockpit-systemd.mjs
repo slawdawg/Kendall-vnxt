@@ -10,12 +10,21 @@ const unitNames = {
   supervisor: "kendall-lan-supervisor.service",
   dashboard: "kendall-lan-dashboard.service",
 };
+const legacyCockpitUnits = [
+  "kendall-cockpit.target",
+  "kendall-cockpit-supervisor.service",
+  "kendall-cockpit-dashboard.service",
+  "kendall-lan-auth.target",
+  "kendall-lan-auth-supervisor.service",
+  "kendall-lan-auth-dashboard.service",
+];
 
-export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath }) {
+export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath }) {
   const authDir = "%h/kendall-lan-auth";
-  const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}`;
+  const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}`;
+  const legacyUnitList = legacyCockpitUnits.join(" ");
   return {
-    [unitNames.target]: `[Unit]\nDescription=Kendall authenticated Tailnet cockpit\nWants=${unitNames.supervisor} ${unitNames.dashboard}\nAfter=network-online.target\nConflicts=kendall-cockpit.target kendall-lan-auth.target\n\n[Install]\nWantedBy=default.target\n`,
+    [unitNames.target]: `[Unit]\nDescription=Kendall authenticated Tailnet cockpit\nWants=${unitNames.supervisor} ${unitNames.dashboard}\nAfter=network-online.target\nConflicts=${legacyUnitList}\nBefore=${legacyUnitList}\n\n[Install]\nWantedBy=default.target\n`,
     [unitNames.supervisor]: `[Unit]\nDescription=Kendall authenticated Tailnet supervisor\nPartOf=${unitNames.target}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\n${common}\nExecStart=${nodePath} scripts/lan-cockpit-runtime.mjs supervisor\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=${unitNames.target}\n`,
     [unitNames.dashboard]: `[Unit]\nDescription=Kendall authenticated Tailnet dashboard\nPartOf=${unitNames.target}\nRequires=${unitNames.supervisor}\nBindsTo=${unitNames.supervisor}\nAfter=${unitNames.supervisor}\n\n[Service]\nType=simple\n${common}\nExecStart=${nodePath} scripts/lan-cockpit-runtime.mjs dashboard\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=${unitNames.target}\n`,
   };
@@ -36,10 +45,37 @@ function run(args) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+function unitIsActive(unit) {
+  const result = spawnSync("systemctl", ["--user", "is-active", unit], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return result.status === 0 && result.stdout.trim() === "active";
+}
+
+function unitIsEnabled(unit) {
+  const result = spawnSync("systemctl", ["--user", "is-enabled", unit], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return result.status === 0 && result.stdout.trim() === "enabled";
+}
+
+function stopLegacyCockpitUnits() {
+  for (const unit of legacyCockpitUnits) {
+    if (unitIsActive(unit)) run(["stop", unit]);
+  }
+  for (const target of ["kendall-cockpit.target", "kendall-lan-auth.target"]) {
+    if (unitIsEnabled(target)) run(["disable", target]);
+  }
+}
+
 function install() {
-  const units = renderLanCockpitUnits({ repoRoot: rootDir, nodePath: process.execPath, pnpmPath: commandPath("pnpm") });
+  const units = renderLanCockpitUnits({
+    repoRoot: rootDir,
+    nodePath: process.execPath,
+    pnpmPath: commandPath("pnpm"),
+    uvPath: commandPath("uv"),
+  });
   mkdirSync(systemdDir(), { recursive: true });
   for (const [name, contents] of Object.entries(units)) writeFileSync(join(systemdDir(), name), contents);
+  // A target conflict alone does not stop independently enabled child services.
+  // Fence those old cockpit units before the Tailnet dashboard claims port 3000.
+  stopLegacyCockpitUnits();
   run(["daemon-reload"]);
   run(["enable", "--now", unitNames.target]);
   console.log("Kendall authenticated Tailnet cockpit installed. Run: pnpm run lan-cockpit:status");
@@ -48,7 +84,12 @@ function install() {
 function main() {
   const command = process.argv[2] || "status";
   if (command === "print") {
-    const units = renderLanCockpitUnits({ repoRoot: rootDir, nodePath: process.execPath, pnpmPath: commandPath("pnpm") });
+    const units = renderLanCockpitUnits({
+      repoRoot: rootDir,
+      nodePath: process.execPath,
+      pnpmPath: commandPath("pnpm"),
+      uvPath: commandPath("uv"),
+    });
     for (const [name, contents] of Object.entries(units)) console.log(`\n# ${name}\n${contents}`);
     return;
   }

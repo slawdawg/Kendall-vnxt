@@ -1172,16 +1172,20 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   const activeBoardViewModelSource = await readFile(activeBoardViewModelPath, "utf8");
   const activeBoardViewModelModule = loadActiveBoardViewModelModule(activeBoardViewModelSource);
   const {
+    projectionEffectiveLabels,
     projectionDisplayLabels,
     projectionHasRenderableBackendPackets,
     projectionLiveProofLabel,
     projectionLiveProofState,
+    currentProjectionAllowsOperationalActions,
   } = loadProjectionTruthModule(projectionTruthSource);
   const { PipelineCockpit } = loadPipelineCockpitModule(cockpitSource, {
+    projectionEffectiveLabels,
     projectionDisplayLabels,
     projectionHasRenderableBackendPackets,
     projectionLiveProofLabel,
     projectionLiveProofState,
+    currentProjectionAllowsOperationalActions,
   }, activeBoardViewModelModule);
   const react = dashboardRequire("react");
   const reactDomServer = dashboardRequire("react-dom/server");
@@ -1249,6 +1253,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(contractSource, /canSatisfyLiveProof:\s*false;/);
   assert.match(cockpitSource, /projectionHasRenderableBackendPackets/);
   assert.match(cockpitSource, /projectionLiveProofState/);
+  assert.match(cockpitSource, /projectionEffectiveLabels\(currentProjection(?:, projectionTruthClock)?\)/);
   assert.match(cockpitSource, /projectionDisplayLabels/);
   assert.match(cockpitSource, /projectionLiveProofLabel/);
   assert.match(cockpitSource, /explicitNonRuntimeSource[\s\S]*\?\s*"unavailable"/);
@@ -1269,6 +1274,66 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   const liveDisplayLabels = projectionDisplayLabels(liveProjection, "live", "live", false, liveProof);
   assert.equal(liveDisplayLabels.sourceLabel, "live");
   assert.equal(liveDisplayLabels.freshnessState, "live");
+
+  const expiredLiveProjection = projectionFixture({
+    sourceUpdatedAt: "2026-07-02T15:00:00.000Z",
+    staleAfterSeconds: 15,
+  });
+  const expiredLiveLabels = projectionEffectiveLabels(expiredLiveProjection, Date.parse("2026-07-02T16:00:00.000Z"));
+  assert.equal(expiredLiveLabels.sourceLabel, "stale");
+  assert.equal(expiredLiveLabels.freshnessState, "stale");
+  const expiredLiveProof = projectionLiveProofState(
+    expiredLiveProjection,
+    projectionEffectiveLabels(expiredLiveProjection, Date.parse("2026-07-02T16:00:00.000Z")).sourceLabel,
+    projectionEffectiveLabels(expiredLiveProjection, Date.parse("2026-07-02T16:00:00.000Z")).freshnessState,
+  );
+  assert.equal(expiredLiveProof.canSatisfyLiveProof, false);
+  assert.equal(expiredLiveProof.primaryReason, "source_not_live");
+
+  const actionProjection = projectionFixture({
+    sourceUpdatedAt: "2026-07-02T15:59:50.000Z",
+    staleAfterSeconds: 15,
+  });
+  assert.equal(
+    currentProjectionAllowsOperationalActions(actionProjection, Date.parse("2026-07-02T16:00:00.000Z")),
+    true,
+    "a rendered-live projection may initially expose actions"
+  );
+  assert.equal(
+    currentProjectionAllowsOperationalActions(actionProjection, Date.parse("2026-07-02T16:00:06.000Z")),
+    false,
+    "an open tab must reject an action after the projection freshness window expires"
+  );
+  const actionGuardSource = sourceBetween(
+    cockpitSource,
+    "const handleOperationalAction = useCallback",
+    "const registerPacketButton"
+  );
+  assert.match(
+    actionGuardSource,
+    /currentProjectionAllowsOperationalActions\(currentProjection\)/,
+    "the action handler must recompute time-effective live proof before requesting approval"
+  );
+  assert.ok(
+    actionGuardSource.indexOf("currentProjectionAllowsOperationalActions(currentProjection)")
+      < actionGuardSource.indexOf("requestPipelineOperationalApprovalV1"),
+    "the stale-tab guard must run before a v1 approval request"
+  );
+  assert.ok(
+    actionGuardSource.indexOf("currentProjectionAllowsOperationalActions(currentProjection)")
+      < actionGuardSource.indexOf("requestPipelineOperationalApproval(approvalRequest)"),
+    "the stale-tab guard must run before a legacy approval request"
+  );
+  const v1ApplyGuard = actionGuardSource.lastIndexOf("currentProjectionAllowsOperationalActions(currentProjection)", actionGuardSource.indexOf("applyPipelineOperationalActionV1(request)"));
+  assert.ok(
+    v1ApplyGuard > actionGuardSource.indexOf("requestPipelineOperationalApprovalV1"),
+    "the stale-tab guard must run again after v1 approval and before applying the action"
+  );
+  const legacyApplyGuard = actionGuardSource.lastIndexOf("currentProjectionAllowsOperationalActions(currentProjection)", actionGuardSource.indexOf("applyPipelineOperationalAction(request)"));
+  assert.ok(
+    legacyApplyGuard > actionGuardSource.indexOf("requestPipelineOperationalApproval(approvalRequest)"),
+    "the stale-tab guard must run again after legacy approval and before applying the action"
+  );
 
   const emptyProjection = projectionFixture({
     generatedAt: "2099-01-01T00:00:00.000Z",
