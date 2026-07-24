@@ -7523,6 +7523,9 @@ try {
       assert(cleanup.exactTreeCloseout === true, "strict closeout marker is missing");
       assert(cleanup.proof.tree.status === "matched", "exact tree equality was not proven");
       assert(cleanup.proof.remoteBranch.state === "absent", "source remote absence was not proven");
+      assert(cleanup.proof.githubNoPr.status === "matched", "live GitHub no-PR proof was not proven");
+      assert(cleanup.proof.assignmentCloseout.status === "ready", "linked assignment closeout was not preflighted");
+      assert(cleanup.proof.assignmentCloseout.dryRunCommand.includes("close-assignments --ids integrated-assignment --summary-json"), "assignment closeout dry-run was not explicit");
       assert(cleanup.proof.evidence.status === "matched", "closeout evidence was not accepted");
       assert(cleanup.remoteBranchSha === null, "strict closeout must not retain a source remote branch");
       assert(!JSON.stringify(cleanup).includes("git push"), "strict closeout summary must not plan remote mutation");
@@ -7571,6 +7574,16 @@ try {
         },
         expected: "source workspace has PR or cleanup evidence",
       },
+      {
+        name: "live GitHub PR evidence",
+        fixtureOptions: { prListJson: JSON.stringify([{ number: 99, state: "CLOSED", mergedAt: null, headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789" }]) },
+        expected: "live GitHub no-PR proof found PR evidence",
+      },
+      {
+        name: "malformed live GitHub response",
+        fixtureOptions: { prListJson: JSON.stringify([{ number: 99, state: "CLOSED", mergedAt: null, headRefName: null, headRefOid: "0123456789012345678901234567890123456789" }]) },
+        expected: "live GitHub no-PR proof is unavailable",
+      },
     ];
     for (const scenario of scenarios) {
       const fixture = createIntegratedCleanupFixture({
@@ -7589,6 +7602,106 @@ try {
         assert(existsSync(fixture.worktree), `${scenario.name}: worktree was removed`);
         assert(branchExists(fixture.root, fixture.branch), `${scenario.name}: local branch was deleted`);
       } finally {
+        cleanupIntegratedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-integrated exact-tree closeout journals before local deletion, re-probes remote absence, and closes the linked assignment under lock", () => {
+    const fixture = createIntegratedCleanupFixture({
+      taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+      baseBranch: "dev",
+      remoteBranch: false,
+    });
+    try {
+      const result = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--apply"]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!existsSync(fixture.worktree), "strict closeout left the worktree behind");
+      assert(!branchExists(fixture.root, fixture.branch), "strict closeout left the local branch behind");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "strict closeout created or mutated the absent remote branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "integrated-assignment.json"));
+      assert(manifest.status === "closed", `manifest status is ${manifest.status}`);
+      assert(manifest.supersession_closeout_evidence?.githubNoPr?.status === "matched", "live GitHub proof was not retained as metadata");
+      assert(manifest.supersession_closeout_evidence?.finalRemoteAbsence?.state === "absent", "final remote absence re-probe was not retained");
+      assert(manifest.events.some((event) => event.type === "cleanup_journal_started"), "strict cleanup journal was not persisted");
+      assert(manifest.events.some((event) => event.type === "assignment_closeout_planned"), "assignment closeout plan was not retained");
+      assert(manifest.supersession_closeout_evidence?.assignmentCloseout?.status === "closed", "locked assignment closure was not persisted before local deletion");
+      assert(manifest.events.some((event) => event.type === "source_remote_absent_revalidated"), "final remote absence re-probe event was not retained");
+      assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
+      assert(assignment.events.some((event) => event.type === "closed" && event.message.includes("locked exact-tree closeout")), "linked assignment was not closed by the locked explicit closeout action");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated exact-tree closeout leaves a resumable journal when local deletion or the final remote re-probe fails", () => {
+    const scenarios = [
+      {
+        name: "local worktree removal",
+        install(fixture) {
+          return installFixtureGitProxy(
+            fixture,
+            `args[0] === 'worktree' && args[1] === 'remove' && args[2] === ${JSON.stringify(fixture.worktree)}`,
+            "simulated strict local worktree removal interruption",
+          );
+        },
+        expected: "simulated strict local worktree removal interruption",
+      },
+      {
+        name: "local branch deletion",
+        install(fixture) {
+          return installFixtureGitProxy(
+            fixture,
+            `args[0] === 'update-ref' && args[1] === '-d' && args[2] === 'refs/heads/${fixture.branch}'`,
+            "simulated strict local branch deletion interruption",
+          );
+        },
+        expected: "simulated strict local branch deletion interruption",
+        resumes: true,
+      },
+      {
+        name: "final remote absence re-probe",
+        install(fixture) {
+          const baseHead = runGit(fixture.root, ["rev-parse", "origin/dev"]).stdout;
+          return installFixtureGitPostSuccessHook(
+            fixture,
+            `args[0] === 'update-ref' && args[1] === '-d' && args[2] === 'refs/heads/${fixture.branch}'`,
+            ["push", "-q", "origin", `${baseHead}:refs/heads/${fixture.branch}`],
+          );
+        },
+        expected: "final source remote absence re-probe found",
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createIntegratedCleanupFixture({
+        taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+        baseBranch: "dev",
+        remoteBranch: false,
+      });
+      let fakeGit = null;
+      try {
+        fakeGit = scenario.install(fixture);
+        const result = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--apply"]);
+        assert(result.code !== 0, `${scenario.name} unexpectedly closed strict cleanup`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+        const assignment = readJson(join(fixture.stateRoot, "assignments", "integrated-assignment.json"));
+        assert(manifest.status === "cleanup_partial", `${scenario.name} status is ${manifest.status}`);
+        assert(manifest.supersession_closeout_evidence?.mode === "exact-tree-closeout/v1", `${scenario.name} lost exact-tree journal evidence`);
+        assert(manifest.events.some((event) => event.type === "cleanup_journal_started"), `${scenario.name} did not persist the journal before mutation`);
+        assert(manifest.cleanup_error.includes(scenario.expected), `${scenario.name} error is ${manifest.cleanup_error}`);
+        assert(assignment.status === "closed", `${scenario.name} did not complete the locked assignment closeout before local deletion`);
+        assert(manifest.supersession_closeout_evidence?.assignmentCloseout?.status === "closed", `${scenario.name} did not persist the pre-deletion assignment closure`);
+        if (scenario.resumes) {
+          rmSync(fakeGit, { force: true });
+          fakeGit = null;
+          const resumed = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--apply"]);
+          assert(resumed.code === 0, `${scenario.name} did not resume safely: ${resumed.stderr || resumed.stdout}`);
+          const closedManifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+          assert(closedManifest.status === "closed", `${scenario.name} did not close after resume`);
+        }
+      } finally {
+        if (fakeGit) rmSync(fakeGit, { force: true });
         cleanupIntegratedCleanupFixture(fixture);
       }
     }
@@ -9057,6 +9170,7 @@ function createIntegratedCleanupFixture(options = {}) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-integrated-cleanup-"));
   const remoteRoot = `${fixtureRoot}-remote.git`;
   const stateRootFixture = join(fixtureRoot, "state");
+  const fakeBin = join(fixtureRoot, "bin");
   const taskId = options.taskId || "integrated-task";
   const baseBranch = options.baseBranch || "main";
   const remoteBranch = options.remoteBranch !== false;
@@ -9064,8 +9178,24 @@ function createIntegratedCleanupFixture(options = {}) {
   const worktree = join(stateRootFixture, "worktrees", "integrated-task");
   const manifestOwner = options.manifestOwner || "runner-a";
   const assignmentOwner = options.assignmentOwner || manifestOwner;
+  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
 
   copyWorkspaceScriptFixture(fixtureRoot);
+  mkdirSync(fakeBin, { recursive: true });
+  const fakeGh = join(fakeBin, "gh");
+  writeFileSync(
+    fakeGh,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'list') { console.log(process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON || '[]'); process.exit(0); }",
+      "console.error(`unexpected gh command: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGh, 0o755);
   runGit(fixtureRoot, ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
@@ -9134,11 +9264,13 @@ function createIntegratedCleanupFixture(options = {}) {
     root: fixtureRoot,
     remoteRoot,
     stateRoot: stateRootFixture,
+    fakeBin,
     taskId,
     baseBranch,
     branch,
     worktree,
     script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
+    env: { ...env, CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON: options.prListJson || "[]" },
   };
 }
 
@@ -9687,7 +9819,7 @@ function runFixtureScript(fixture, args, options = {}) {
   const result = spawnSync(process.execPath, [fixture.script, ...args], {
     cwd: options.cwd || fixture.root,
     encoding: "utf8",
-    env: options.env || process.env,
+    env: options.env || fixture.env || process.env,
     stdio: "pipe",
   });
   return guardExpectedJsonResult(args, {

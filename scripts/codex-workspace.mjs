@@ -4317,7 +4317,7 @@ function cleanupIntegratedPlan(record, state, context) {
     worktree: null,
     manifestPath: record.path,
     exactTreeCloseout: Boolean(strict),
-    proof: strict ? { tree: { status: "unverified", source: null, base: null }, remoteBranch: { status: "unverified", state: null }, evidence: { status: "unverified" } } : null,
+    proof: strict ? { tree: { status: "unverified", source: null, base: null }, remoteBranch: { status: "unverified", state: null }, githubNoPr: { status: "unverified" }, assignmentCloseout: { status: "unverified" }, evidence: { status: "unverified" } } : null,
   };
 
   if (manifest.status === "closed") {
@@ -4379,6 +4379,14 @@ function cleanupIntegratedPlan(record, state, context) {
     }
     base.proof.remoteBranch = { status: remoteBranchSha ? "mismatch" : "matched", state: remoteBranchSha ? "present" : "absent", sha: remoteBranchSha };
     if (remoteBranchSha) return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha, reason: "source remote branch is present" };
+    base.proof.githubNoPr = strictGithubNoPrProof(manifest, cleanupCwd);
+    if (base.proof.githubNoPr.status !== "matched") {
+      return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha, reason: base.proof.githubNoPr.reason };
+    }
+    base.proof.assignmentCloseout = strictAssignmentCloseoutPlan(state, manifest, context.options);
+    if (base.proof.assignmentCloseout.status === "blocked") {
+      return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha, reason: base.proof.assignmentCloseout.reason };
+    }
     base.proof.worktree = { registered: strictRegistration.listed, clean: !worktreeStatus.dirty, branch: worktreeStatus.exists ? manifest.branch : "absent-after-partial" };
     base.proof.noPrCleanupEvidence = { status: "matched" };
     base.proof.evidence = { status: "matched", supersessionProvenance: strict.provenance, closeoutReason: strict.closeoutReason };
@@ -4406,6 +4414,95 @@ function cleanupIntegratedPlan(record, state, context) {
     expectedHeadSha: localBranchSha,
     remoteBranchSha: branchSha(`origin/${manifest.branch}`, cleanupCwd) || null,
   };
+}
+
+function strictGithubNoPrProof(manifest, cleanupCwd) {
+  const result = run("gh", ["pr", "list", "--head", manifest.branch, "--state", "all", "--json", "number,state,mergedAt,headRefName,headRefOid"], { cwd: cleanupCwd });
+  if (result.code !== 0) {
+    return {
+      status: "unavailable",
+      branch: manifest.branch,
+      reason: `live GitHub no-PR proof is unavailable: ${result.stderr || result.stdout || "gh pr list failed"}`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  let pullRequests;
+  try {
+    pullRequests = parseGhJson(result.stdout, "strict exact-tree no-PR proof");
+  } catch (error) {
+    return {
+      status: "unavailable",
+      branch: manifest.branch,
+      reason: `live GitHub no-PR proof is unavailable: ${error.message}`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (!Array.isArray(pullRequests)) {
+    return {
+      status: "unavailable",
+      branch: manifest.branch,
+      reason: "live GitHub no-PR proof is unavailable: gh pr list did not return an array",
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (pullRequests.some((pullRequest) => !pullRequest || typeof pullRequest !== "object" || typeof pullRequest.headRefName !== "string" || pullRequest.headRefName !== manifest.branch)) {
+    return {
+      status: "unavailable",
+      branch: manifest.branch,
+      reason: "live GitHub no-PR proof is unavailable: gh pr list returned a malformed or non-exact head branch record",
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (pullRequests.length > 0) {
+    return {
+      status: "mismatch",
+      branch: manifest.branch,
+      count: pullRequests.length,
+      reason: "live GitHub no-PR proof found PR evidence for the source branch",
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  return {
+    status: "matched",
+    branch: manifest.branch,
+    count: 0,
+    checkedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function strictAssignmentCloseoutPlan(state, manifest, options = {}) {
+  const assignmentId = String(manifest.source_assignment_id || "").trim();
+  if (!assignmentId) {
+    return { status: "not_required", assignmentId: null, reason: "no linked assignment record", metadataOnly: true };
+  }
+  assertSafeTaskId(assignmentId);
+  if (!existsSync(assignmentPath(state, assignmentId))) {
+    return { status: "blocked", assignmentId, reason: `linked assignment ${assignmentId} is missing`, metadataOnly: true };
+  }
+  try {
+    const preflight = preflightAssignmentClosureForCleanedManifest(state, manifest, {
+      ...options,
+      requireNoPrEvidence: true,
+      requireExactAssignmentIdentity: true,
+      requireKnownAssignmentOwner: true,
+    });
+    return {
+      status: preflight?.closeable ? "ready" : "already_closed",
+      assignmentId,
+      dryRunCommand: `node ./scripts/codex-workspace.mjs close-assignments --ids ${assignmentId} --summary-json`,
+      action: preflight?.closeable ? "locked_local_assignment_metadata_close_before_manifest_close" : "no_assignment_mutation_required",
+      metadataOnly: true,
+    };
+  } catch (error) {
+    return { status: "blocked", assignmentId, reason: `linked assignment closeout preflight failed: ${error.message}`, metadataOnly: true };
+  }
 }
 
 function gitTreeSha(ref, cwd) {
@@ -4439,7 +4536,7 @@ function cleanupIntegratedPlanLines(result) {
     `owner ${result.owner || "unowned"}`,
     `local branch ${result.branch} (${result.localBranchSha || "absent"})`,
     result.exactTreeCloseout ? `remote branch origin/${result.branch} (verified absent; no remote mutation)` : `remote branch origin/${result.branch} (${result.remoteBranchSha || "absent"}; not deleted by cleanup-integrated)`,
-    ...(result.exactTreeCloseout ? [`registered clean worktree proof: registered=${result.proof.worktree.registered}; clean=${result.proof.worktree.clean}; branch=${result.proof.worktree.branch}`, `no PR/cleanup evidence proof: ${result.proof.noPrCleanupEvidence.status}`, `exact tree ${result.proof.tree.source} equals ${result.proof.tree.base}`, `supersession evidence: ${result.proof.evidence.supersessionProvenance}`, `closeout reason: ${result.proof.evidence.closeoutReason}`] : []),
+    ...(result.exactTreeCloseout ? [`registered clean worktree proof: registered=${result.proof.worktree.registered}; clean=${result.proof.worktree.clean}; branch=${result.proof.worktree.branch}`, `no PR/cleanup evidence proof: ${result.proof.noPrCleanupEvidence.status}`, `live GitHub no-PR proof: ${result.proof.githubNoPr.status}`, `exact tree ${result.proof.tree.source} equals ${result.proof.tree.base}`, `supersession evidence: ${result.proof.evidence.supersessionProvenance}`, `closeout reason: ${result.proof.evidence.closeoutReason}`, ...(result.proof.assignmentCloseout.status === "ready" ? [`assignment closeout dry-run: ${result.proof.assignmentCloseout.dryRunCommand}`, `locked local assignment metadata close before manifest close: ${result.proof.assignmentCloseout.assignmentId}`] : [`assignment closeout: ${result.proof.assignmentCloseout.status}`])] : []),
     `clean generated artifacts under ${result.worktreePath}`,
     `git worktree remove ${result.worktreePath}`,
     `git update-ref -d refs/heads/${result.branch} ${result.expectedHeadSha}`,
@@ -4475,6 +4572,11 @@ function applyCleanupIntegrated(state, plan, options) {
     validateManifest(manifest, plan.manifestPath);
     assertLaneOwner(manifest, options);
     claimLaneOwner(manifest, options);
+    const assignmentId = plan.exactTreeCloseout ? String(manifest.source_assignment_id || "").trim() : "";
+    const runWithAssignmentLock = assignmentId
+      ? (callback) => withAssignmentLock(state, assignmentId, callback)
+      : (callback) => callback();
+    return runWithAssignmentLock(() => {
     const freshPlan = cleanupIntegratedPlan({ manifest, path: plan.manifestPath }, state, {
       baseRef: plan.baseRef,
       currentOwner: currentLaneOwner(options),
@@ -4483,6 +4585,14 @@ function applyCleanupIntegrated(state, plan, options) {
     });
     if (freshPlan.status !== "ready") {
       throw new Error(`${plan.taskId} is no longer cleanup-ready: ${freshPlan.reason}`);
+    }
+    if (freshPlan.exactTreeCloseout && freshPlan.proof.assignmentCloseout.status === "ready") {
+      preflightAssignmentClosureForCleanedManifest(state, manifest, {
+        ...options,
+        requireNoPrEvidence: true,
+        requireExactAssignmentIdentity: true,
+        requireKnownAssignmentOwner: true,
+      });
     }
 
     try {
@@ -4499,18 +4609,57 @@ function applyCleanupIntegrated(state, plan, options) {
       if (freshPlan.exactTreeCloseout) {
         manifest.supersession_closeout_evidence = {
           mode: "exact-tree-closeout/v1",
+          appliedAt: cleanupStartedAt,
           baseRef: freshPlan.baseRef,
           sourceTree: freshPlan.proof.tree.source,
           baseTree: freshPlan.proof.tree.base,
           remoteBranch: "absent",
+          githubNoPr: freshPlan.proof.githubNoPr,
+          assignmentCloseout: freshPlan.proof.assignmentCloseout,
           supersessionProvenance: freshPlan.proof.evidence.supersessionProvenance,
           closeoutReason: freshPlan.proof.evidence.closeoutReason,
+          metadataOnly: true,
+          rawPayloadRetained: false,
         };
         manifest.cleanup_remote_branch_policy = "verified-absent-no-remote-mutation-exact-tree-closeout";
+        manifest.status = "cleanup_partial";
+        manifest.cleanup_error = "exact-tree closeout journal persisted; resume only with the same locked proof after interruption";
+        manifest.updated_at = cleanupStartedAt;
+        appendTaskEvent(manifest, "cleanup_journal_started", "durable exact-tree closeout journal persisted before local target deletion");
+        appendTaskEvent(manifest, "assignment_closeout_planned", freshPlan.proof.assignmentCloseout.dryRunCommand || freshPlan.proof.assignmentCloseout.reason);
+        writeManifest(plan.manifestPath, manifest);
+
+        if (assignmentId && freshPlan.proof.assignmentCloseout.status === "ready") {
+          const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest, {
+            ...options,
+            assignmentLockHeld: true,
+            lastResult: `closed with exact-tree local cleanup of ${manifest.task_id}`,
+            eventMessage: `closed by locked exact-tree closeout of ${manifest.task_id} before local target deletion`,
+          });
+          if (assignmentClosure?.closed) {
+            manifest.source_assignment_closed_at = assignmentClosure.closedAt;
+            manifest.supersession_closeout_evidence.assignmentCloseout = {
+              ...freshPlan.proof.assignmentCloseout,
+              status: "closed",
+              closedAt: assignmentClosure.closedAt,
+              action: "locked_local_assignment_metadata_closed_before_local_target_deletion",
+            };
+            appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
+            writeManifest(plan.manifestPath, manifest);
+          }
+        }
       }
 
       removeWorktreeIfPresent(manifest, state, freshPlan.cleanupCwd);
+      if (freshPlan.exactTreeCloseout) writeManifest(plan.manifestPath, manifest);
       deleteLocalBranchIfPresent(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha);
+      if (freshPlan.exactTreeCloseout) writeManifest(plan.manifestPath, manifest);
+
+      if (freshPlan.exactTreeCloseout) {
+        const finalRemoteAbsence = assertStrictExactTreeRemoteAbsent(manifest, freshPlan.cleanupCwd);
+        manifest.supersession_closeout_evidence.finalRemoteAbsence = finalRemoteAbsence;
+        appendTaskEvent(manifest, "source_remote_absent_revalidated", manifest.branch);
+      }
 
       manifest.status = "closed";
       manifest.closed_at = new Date().toISOString();
@@ -4536,7 +4685,27 @@ function applyCleanupIntegrated(state, plan, options) {
       throw error;
     }
     writeManifest(plan.manifestPath, manifest);
+    });
   });
+}
+
+function assertStrictExactTreeRemoteAbsent(manifest, cleanupCwd) {
+  let remoteBranchSha;
+  try {
+    remoteBranchSha = originBranchSha(manifest.branch, cleanupCwd) || null;
+  } catch (error) {
+    throw new Error(`final source remote absence re-probe is unavailable: ${error.message}`);
+  }
+  if (remoteBranchSha) {
+    throw new Error(`final source remote absence re-probe found origin/${manifest.branch} at ${remoteBranchSha}`);
+  }
+  return {
+    state: "absent",
+    branch: manifest.branch,
+    checkedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function cleanupSuperseded(argv) {
