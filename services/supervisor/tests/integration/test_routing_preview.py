@@ -6290,7 +6290,7 @@ def test_claude_review_readiness_report_does_not_launch_claude(tmp_path, monkeyp
     assert report["processLaunchApproved"] is False
     assert report["reviewTaskExecutionApproved"] is False
     assert report["sourceMutationApproved"] is False
-    assert report["scarceUseApproved"] is False
+    assert report["scarceUseApproved"] is True
     assert {check["checkId"] for check in report["reviewPolicy"]} == {
         "cli-discovery",
         "auth-posture",
@@ -6306,7 +6306,7 @@ def test_claude_review_readiness_report_does_not_launch_claude(tmp_path, monkeyp
     assert next(check for check in report["reviewPolicy"] if check["checkId"] == "review-only")["status"] == "blocked"
     assert next(check for check in report["scarcityPolicy"] if check["checkId"] == "budget-record")["status"] == "not_implemented"
     assert any("does not approve Claude CLI process launch" in stop_line for stop_line in report["stopLines"])
-    assert any("scarce Claude subscription usage" in stop_line for stop_line in report["stopLines"])
+    assert any("provider-account, tenant, or platform controls" in stop_line for stop_line in report["stopLines"])
 
 
 def test_claude_review_approval_report_stays_review_only_and_non_executing(tmp_path, monkeypatch) -> None:
@@ -6331,14 +6331,14 @@ def test_claude_review_approval_report_stays_review_only_and_non_executing(tmp_p
     assert report["reportId"] == "claude-review-approval-report-v1"
     assert report["readOnly"] is True
     assert report["authorityFamily"] == "claude_review"
-    assert report["operation"] == "one_time_bounded_review_only_attempt"
+    assert report["operation"] == "default_bounded_review_route"
     assert report["processLaunchApproved"] is False
     assert report["reviewTaskExecutionApproved"] is False
     assert report["sourceMutationApproved"] is False
-    assert report["scarceUseApproved"] is False
+    assert report["scarceUseApproved"] is True
     assert report["approvalBindingImplemented"] is False
     assert {trigger["requirementId"] for trigger in report["triggerPolicy"]} == {
-        "explicit-request",
+        "default-review",
         "high-risk-diff",
         "codex-output-check",
         "routine-generation",
@@ -6347,7 +6347,7 @@ def test_claude_review_approval_report_stays_review_only_and_non_executing(tmp_p
     assert any("review-only non-interactive mode" in command for command in report["expectedCommandShape"])
     assert any("Credentials" in blocked_input for blocked_input in report["blockedInputs"])
     assert any("Risk-ranked findings" in output for output in report["outputContract"])
-    assert any("One Claude review attempt per approval" in control for control in report["scarcityControls"])
+    assert any("One bounded Claude attempt per immutable packet" in control for control in report["scarcityControls"])
     assert any("edit files" in stop_condition for stop_condition in report["stopConditions"])
 
 
@@ -6394,16 +6394,16 @@ def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_wi
     assert "bmad_subagent_review" in triggers["merge_readiness_uncertainty"]["recommendedRoutes"]
 
     routes = {route["routeId"]: route for route in report["routes"]}
-    assert set(routes) == {"bmad_party_mode", "bmad_subagent_review", "claude_readonly_review"}
+    assert set(routes) == {"bmad_party_mode", "bmad_subagent_review", "claude_readonly_review", "ollama_exact_review"}
     route_ids = set(routes)
     assert all(set(trigger["recommendedRoutes"]).issubset(route_ids) for trigger in report["triggers"])
     assert all(set(scenario["selectedRoutes"]).issubset(route_ids) for scenario in report["scenarios"])
     claude_route = routes["claude_readonly_review"]
     assert claude_route["authorityFamily"] == "external-review-readonly"
-    assert claude_route["budgetCap"] == "--max-budget-usd 1"
+    assert claude_route["budgetCap"] is None
     assert "claude -p" in claude_route["commandPolicy"]
-    assert "--max-budget-usd 1" in claude_route["commandPolicy"]
-    assert "--tools Read,Grep" in claude_route["commandPolicy"]
+    assert "no repository per-run --max-budget-usd" in claude_route["commandPolicy"]
+    assert "Read and Grep only" in claude_route["commandPolicy"]
     assert "GitHub mutation" in claude_route["blockedCapabilities"]
     assert "secret access" in claude_route["blockedCapabilities"]
     assert "filesystem mutation" in claude_route["blockedCapabilities"]
@@ -6412,10 +6412,16 @@ def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_wi
 
     scenarios = {scenario["scenarioId"]: scenario for scenario in report["scenarios"]}
     assert scenarios["authority-and-security-change"]["selectedRoutes"] == [
-        "bmad_party_mode",
         "claude_readonly_review",
+        "ollama_exact_review",
+        "bmad_party_mode",
+        "bmad_subagent_review",
     ]
-    assert scenarios["merge-thread-ambiguity"]["selectedRoutes"] == ["bmad_subagent_review"]
+    assert scenarios["merge-thread-ambiguity"]["selectedRoutes"] == [
+        "claude_readonly_review",
+        "ollama_exact_review",
+        "bmad_subagent_review",
+    ]
     assert scenarios["source-memory-boundary-change"]["retentionSummary"] == report["retentionPolicy"]
 
     packet_evaluations = {evaluation["packetId"]: evaluation for evaluation in report["packetEvaluations"]}
@@ -6424,7 +6430,12 @@ def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_wi
     assert all(set(evaluation["selectedRoutes"]).issubset(route_ids) for evaluation in packet_evaluations.values())
     authority_packet = packet_evaluations["sample-authority-security-packet"]
     assert authority_packet["triggerIds"] == ["authority_expansion", "security_sensitive_change"]
-    assert authority_packet["selectedRoutes"] == ["bmad_party_mode", "claude_readonly_review"]
+    assert authority_packet["selectedRoutes"] == [
+        "claude_readonly_review",
+        "ollama_exact_review",
+        "bmad_party_mode",
+        "bmad_subagent_review",
+    ]
     assert authority_packet["readOnly"] is True
     assert authority_packet["processLaunchApproved"] is False
     assert authority_packet["sourceMutationApproved"] is False
@@ -6433,13 +6444,13 @@ def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_wi
     assert authority_packet["rawReasoningRetained"] is False
     assert any("Do not launch Claude" in stop_line for stop_line in authority_packet["stopLines"])
 
-    assert report["claudeReadOnlyCommand"][:2] == ["claude -p", "--max-budget-usd 1"]
-    assert "--tools Read,Grep" in report["claudeReadOnlyCommand"]
+    assert report["claudeReadOnlyCommand"][:2] == ["claude -p", "Read and Grep only"]
+    assert "no repository per-run --max-budget-usd" in report["claudeReadOnlyCommand"]
     assert not any("--allowedTools" in command_part for command_part in report["claudeReadOnlyCommand"])
     assert not any("--disallowedTools" in command_part for command_part in report["claudeReadOnlyCommand"])
     assert any("Do not retain raw prompts" in stop_line for stop_line in report["stopLines"])
     assert any("does not approve Claude process launch" in stop_line for stop_line in report["stopLines"])
-    assert any("separate Claude review approval packet" in action for action in report["nextSafeActions"])
+    assert any("Validate the review packet and governing authority" in action for action in report["nextSafeActions"])
 
 
 def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_steps(tmp_path, monkeypatch) -> None:

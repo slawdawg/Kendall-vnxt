@@ -2934,20 +2934,20 @@ test.describe("dashboard workflow coverage", () => {
     await expect(claudeReviewPanel.getByRole("heading", { name: "No-launch review readiness" })).toBeVisible();
     await expect(claudeReviewPanel.getByRole("heading", { name: "CLI discovery" })).toBeVisible();
     await expect(claudeReviewPanel.getByRole("heading", { name: "Review-only posture" })).toBeVisible();
-    await expect(claudeReviewPanel.getByRole("heading", { name: "Scarce use" })).toBeVisible();
+    await expect(claudeReviewPanel.getByRole("heading", { name: "Default review route" })).toBeVisible();
     await expect(claudeReviewPanel.getByText("This report does not approve Claude CLI process launch.")).toBeVisible();
-    await expect(claudeReviewPanel.getByText("scarce Claude subscription usage")).toBeVisible();
+    await expect(claudeReviewPanel.getByText("provider-account, tenant, or platform controls")).toBeVisible();
     await expect(page.locator("#claude-review-readiness-report")).toBeVisible();
 
     const claudeApprovalPanel = page.locator("#claude-review-approval-report");
     await expect(claudeApprovalPanel.getByText("Claude review approval", { exact: true })).toBeVisible();
     await expect(claudeApprovalPanel.getByRole("heading", { name: "Review-only approval packet" })).toBeVisible();
-    await expect(claudeApprovalPanel.getByText("Approve one bounded Claude review-only attempt")).toBeVisible();
-    await expect(claudeApprovalPanel.getByRole("heading", { name: "Explicit request" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("Prepare one bounded Claude-first review")).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Default review" })).toBeVisible();
     await expect(claudeApprovalPanel.getByRole("heading", { name: "Routine generation" })).toBeVisible();
     await expect(claudeApprovalPanel.getByRole("heading", { name: "Blocked inputs" })).toBeVisible();
     await expect(claudeApprovalPanel.getByText("Risk-ranked findings")).toBeVisible();
-    await expect(claudeApprovalPanel.getByText("One Claude review attempt per approval")).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("One bounded Claude attempt per immutable packet")).toBeVisible();
     await expect(page.locator("#claude-review-approval-report")).toBeVisible();
 
     const reviewResourcePolicyPanel = page.locator("#review-resource-policy-report");
@@ -2958,9 +2958,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Claude read-only command" })).toBeVisible();
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-bmad_party_mode")).toContainText("BMAD party mode");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-claude_readonly_review")).toContainText("Claude read-only");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-ollama_exact_review")).toContainText("Ollama exact fallback");
     await expect(reviewResourcePolicyPanel.getByText("sample-authority-security-packet", { exact: true })).toBeVisible();
-    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("--tools Read,Grep");
-    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("--max-budget-usd 1");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("Read and Grep only");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).not.toContainText("--max-budget-usd 1");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-stop-lines")).toContainText("Do not retain raw prompts");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-processLaunchApproved")).toContainText("blocked");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-sourceMutationApproved")).toContainText("blocked");

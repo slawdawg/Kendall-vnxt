@@ -56,13 +56,15 @@ The initial implementation now produces a versioned `ReviewRouteDecision` and
 `blocked` are all non-executing states: no live packet is sent to any provider,
 adapter, endpoint, CLI, or tool.
 
-The packet is deliberately bounded to metadata-only evidence. It binds one
+The packet is deliberately bounded to metadata-only local retention. It binds one
 immutable exact head and digest, an issuer and authority reference, explicit
 route/adapter/tool allowlists, a single-use packet ID, and expiry, revocation,
 and cancellation state. It has a 16 KiB UTF-8 serialized limit. Unknown fields
-and source, diff, prompt, completion, raw payload, reasoning, secret,
-credential, token, excluded-vault, customer/production, and broad-dump content
-are rejected rather than redacted into a packet.
+and source, prompt, completion, raw payload, reasoning, secret, credential,
+token, excluded-vault, customer/production, and broad-dump content are rejected
+rather than redacted into a packet. The approved exception is a sanitized,
+path-scoped private-diff classification: it carries only allowlisted
+repository-relative paths and SHA-256 diff digests, never diff text.
 
 Static readiness or existing configuration can supply route facts, but cannot
 authorize execution. If a packet is stale, revoked, cancelled, expired, used,
@@ -87,8 +89,49 @@ packets similarly return typed non-executing no-findings results. Any live route
 or private-diff promotion remains out of scope for this simulated slice.
 
 This pure fixture does not persist a single-use consumption claim. Its completed
-result is therefore not delivery-evidence eligible: a future runtime slice must
-atomically record and verify consumption before any evidence decision can use it.
+result is therefore not delivery-evidence eligible. The supervisor-owned
+delegated runtime, not this fixture, reserves, claims, revalidates, and
+finalizes a durable attempt before a real route can use its result.
+
+## Canonical Report-Only Review Fallback
+
+Review preparation uses the ordered contract `claude_readonly → ollama_exact →
+bmad_local`. A Claude tenant-policy veto, unavailability, scope rejection,
+empty result, timeout, cancellation, or bounded failure is a typed stop, not a
+direct CLI workaround. Ollama can be
+prepared only after that typed skip, the existing exact endpoint/model gate, and
+a review-specific local-provider approval. The selector performs no process,
+network, tool, or provider action and retains no raw packet content. If neither
+provider candidate nor a bounded BMAD reviewer is eligible, it returns
+`review_unsatisfied`; delivery must stop.
+
+## Delegated Runtime Boundary
+
+The manager selector and injected executor remain pure preparation contracts.
+The supervisor-owned delegated runtime is the only runtime registration point
+for a valid authorized packet. It owns the constrained provider transport,
+fixed Claude adapter, exact-gated Ollama adapter, and named governed BMAD port.
+Manager and dashboard code do not import provider SDKs, process APIs, or
+provider endpoints. Tests use fake materializers/adapters and make no provider
+call.
+
+- Claude receives a fixed argv-only invocation with `Read,Grep` as the complete
+  tool allowlist. It has no shell string and no per-run dollar/budget flag.
+- Claude and Ollama both receive a sanitized transient diff scope; the packet
+  and terminal record retain only allowlisted paths and diff digests.
+- Ollama is admissible only after the typed Claude stop and a fresh supervisor
+  exact endpoint/model gate. Evidence explanation and review share the bounded
+  HTTP transport but retain separate task adapters and allowed data classes.
+- The runtime reserves and claims an `ExecutionAttempt` before materialization
+  and each route, rechecks identity/authority/revocation/cancellation before
+  send and after await, then finalizes only metadata receipts plus strictly
+  validated normalized findings. Stale, failed, cancelled, timed-out,
+  malformed, and inconclusive outcomes block delivery with a typed recovery
+  action.
+
+The BMAD runner is registered only at supervisor composition time through the
+existing governed local review boundary. If it is unavailable or inconclusive,
+the runtime blocks delivery; it never substitutes a shell/API workaround.
 
 ## Non-Goals
 
@@ -97,8 +140,8 @@ atomically record and verify consumption before any evidence decision can use it
 - Do not broaden tenant policy before the repo-owned gateway exists.
 - Do not retain raw prompts, completions, reasoning traces, provider payloads,
   secrets, or unnecessary source copies by default.
-- Do not make Claude a routine implementation lane; keep it a scarce review
-  lane unless future policy explicitly changes that.
+- Do not make Claude a routine implementation lane; it remains the default
+  bounded read-only review lane only.
 
 ## Roadmap Linkage
 

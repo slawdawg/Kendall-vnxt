@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 export const REVIEW_ROUTE_DECISION_SCHEMA_VERSION = "review-route-decision/v2";
 export const DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1";
 export const SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1";
+export const CLAUDE_READONLY_INJECTED_ADAPTER_ID = "claude-readonly-injected/v1";
+export const OLLAMA_EXACT_INJECTED_ADAPTER_ID = "ollama-exact-injected/v1";
+export const BMAD_GOVERNED_RUNNER_ADAPTER_ID = "bmad-governed-runner/v1";
 export const DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024;
+export const CANONICAL_REVIEW_FALLBACK_SCHEMA_VERSION = "canonical-review-fallback/v1";
+export const CANONICAL_REVIEW_FALLBACK_ORDER = Object.freeze(["claude_readonly", "ollama_exact", "bmad_local"]);
 
 export function disclosurePacketUtf8Bytes(value) {
   try {
@@ -36,16 +41,17 @@ const PACKET_FIELDS = Object.freeze([
 const IDENTITY_FIELDS = Object.freeze(["executionJobId", "exactHead", "digest"]);
 const AUTHORITY_FIELDS = Object.freeze(["issuerId", "authorityRef", "valid"]);
 const ISSUANCE_FIELDS = Object.freeze(["issuedAt", "expiresAt", "revocationState", "cancellationState", "singleUse"]);
-const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs"]);
-const DISCLOSURE_INPUT_FIELDS = Object.freeze(["disclosurePacketId", "issuedAt", "expiresAt", "routeAllowlist", "adapterAllowlist", "toolAllowlist", "evidenceRefs", "revocationState", "cancellationState", "singleUse"]);
-const DISCLOSURE_INPUT_REQUIRED_FIELDS = DISCLOSURE_INPUT_FIELDS;
+const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs", "pathScope"]);
+const DISCLOSURE_INPUT_FIELDS = Object.freeze(["disclosurePacketId", "issuedAt", "expiresAt", "routeAllowlist", "adapterAllowlist", "toolAllowlist", "evidenceRefs", "dataClass", "pathScope", "revocationState", "cancellationState", "singleUse"]);
+const DISCLOSURE_INPUT_REQUIRED_FIELDS = Object.freeze(["disclosurePacketId", "issuedAt", "expiresAt", "routeAllowlist", "adapterAllowlist", "toolAllowlist", "evidenceRefs", "revocationState", "cancellationState", "singleUse"]);
 const REVIEW_ROUTE_INPUT_FIELDS = Object.freeze(["now", "immutableReview", "authority", "routePolicy", "disclosure", "consumedDisclosurePacketIds", "requestedState"]);
 const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
-const ROUTE_ALLOWLIST_VALUES = Object.freeze(["report_only", "simulated"]);
-const ADAPTER_ALLOWLIST_VALUES = Object.freeze(["none", SIMULATED_REVIEW_ADAPTER_ID]);
-const NONE_ALLOWLIST_VALUES = Object.freeze(["none"]);
+const ROUTE_ALLOWLIST_VALUES = Object.freeze(["report_only", "simulated", "claude_readonly", "ollama_exact", "bmad_local"]);
+const ADAPTER_ALLOWLIST_VALUES = Object.freeze(["none", SIMULATED_REVIEW_ADAPTER_ID, CLAUDE_READONLY_INJECTED_ADAPTER_ID, OLLAMA_EXACT_INJECTED_ADAPTER_ID, BMAD_GOVERNED_RUNNER_ADAPTER_ID]);
+const TOOL_ALLOWLIST_VALUES = Object.freeze(["none", "Read", "Grep"]);
 const SAFE_ID = /^[A-Za-z][A-Za-z0-9._:/-]{1,180}$/;
 const SAFE_EVIDENCE_REF = /^evidence:sha256:[0-9a-f]{64}$/;
+const SAFE_SCOPED_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/;
 const EXACT_HEAD = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const FORBIDDEN_NAME = /(?:source|diff|prompt|completion|reasoning|secret|credential|token|vault|customer|production|dump|path|url|payload|transcript)/i;
@@ -77,8 +83,9 @@ export function buildDisclosurePacket(input = {}) {
       singleUse: disclosure.singleUse,
     },
     scope: {
-      dataClass: "metadata_only",
+      dataClass: disclosure.dataClass === undefined ? "metadata_only" : disclosure.dataClass,
       evidenceRefs: stableList(disclosure.evidenceRefs),
+      pathScope: stablePathScope(disclosure.pathScope),
     },
     metadataOnly: true,
     rawPayloadRetained: false,
@@ -89,13 +96,16 @@ export function validateDisclosurePacket(packet, options = {}) {
   try {
     const reasons = [];
     if (!isPlainObject(packet)) return invalid("packet_malformed");
-    inspectObjectFields(packet, PACKET_FIELDS, reasons);
+    inspectObjectKeys(packet, PACKET_FIELDS, reasons);
+    for (const [key, nested] of Object.entries(packet)) {
+      if (PACKET_FIELDS.includes(key) && key !== "scope" && containsForbiddenText(nested, new WeakSet(), IDENTIFIER_VALUE_FIELDS.has(key))) reasons.push("forbidden_content");
+    }
     if (packet.schemaVersion !== DISCLOSURE_PACKET_SCHEMA_VERSION) reasons.push("schema_version_invalid");
     if (!safeId(packet.disclosurePacketId)) reasons.push("packet_id_invalid");
     validateImmutableReview(packet.immutableReview, reasons, options.immutableReview);
     validateStringList(packet.routeAllowlist, "route", reasons, ROUTE_ALLOWLIST_VALUES);
     validateStringList(packet.adapterAllowlist, "adapter", reasons, ADAPTER_ALLOWLIST_VALUES);
-    validateStringList(packet.toolAllowlist, "tool", reasons, NONE_ALLOWLIST_VALUES);
+    validateStringList(packet.toolAllowlist, "tool", reasons, TOOL_ALLOWLIST_VALUES);
     validateSubset(packet.routeAllowlist, options.routePolicy?.routeAllowlist, "route", reasons);
     validateSubset(packet.adapterAllowlist, options.routePolicy?.adapterAllowlist, "adapter", reasons);
     validateSubset(packet.toolAllowlist, options.routePolicy?.toolAllowlist, "tool", reasons);
@@ -270,9 +280,10 @@ function validateIssuance(issuance, nowValue, reasons) {
 
 function validateScope(scope, reasons) {
   if (!isPlainObject(scope)) return reasons.push("scope_invalid");
-  inspectObjectFields(scope, SCOPE_FIELDS, reasons);
-  if (scope.dataClass !== "metadata_only") reasons.push("data_class_invalid");
+  inspectObjectKeys(scope, SCOPE_FIELDS, reasons);
+  if (!["metadata_only", "sanitized_path_scoped_private_diff"].includes(scope.dataClass)) reasons.push("data_class_invalid");
   validateEvidenceRefs(scope.evidenceRefs, reasons);
+  validatePathScope(scope.pathScope, scope.dataClass, reasons);
 }
 
 function validateStringList(values, label, reasons, fixedValues) {
@@ -284,7 +295,7 @@ function validateEvidenceRefs(values, reasons) {
 }
 
 function validateSubset(values, allowed, label, reasons) {
-  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : label === "adapter" ? ADAPTER_ALLOWLIST_VALUES : NONE_ALLOWLIST_VALUES;
+  const fixedValues = label === "route" ? ROUTE_ALLOWLIST_VALUES : label === "adapter" ? ADAPTER_ALLOWLIST_VALUES : TOOL_ALLOWLIST_VALUES;
   const copiedValues = copySafePlainArray(values);
   const copiedAllowed = copySafePlainArray(allowed);
   if (!copiedValues || !copiedAllowed || !isAllowedStringList(copiedAllowed, fixedValues) || copiedValues.some((value) => !copiedAllowed.includes(value))) reasons.push(`${label}_not_allowed`);
@@ -332,7 +343,7 @@ function normalizeRoutePolicy(value) {
     const resourceState = ownDataValue(value, "resourceState");
     const routeValid = isAllowedStringList(routeAllowlist, ROUTE_ALLOWLIST_VALUES) && routeAllowlist.includes("report_only");
     const adapterValid = isAllowedStringList(adapterAllowlist, ADAPTER_ALLOWLIST_VALUES) && adapterAllowlist.includes("none");
-    const toolValid = isAllowedStringList(toolAllowlist, NONE_ALLOWLIST_VALUES) && toolAllowlist.includes("none");
+    const toolValid = isAllowedStringList(toolAllowlist, TOOL_ALLOWLIST_VALUES) && toolAllowlist.includes("none");
     if (reasons.length > 0 || !routeValid || !adapterValid || !toolValid) return null;
     return {
       routeAllowlist,
@@ -351,21 +362,102 @@ function validateDisclosureInput(value) {
   try {
     if (!isPlainObject(value)) return invalid("packet_malformed");
     const reasons = [];
-    inspectObjectFields(value, DISCLOSURE_INPUT_FIELDS, reasons);
+    inspectObjectKeys(value, DISCLOSURE_INPUT_FIELDS, reasons);
+    for (const [key, nested] of Object.entries(value)) {
+      if (DISCLOSURE_INPUT_FIELDS.includes(key) && !["dataClass", "pathScope"].includes(key) && containsForbiddenText(nested, new WeakSet(), IDENTIFIER_VALUE_FIELDS.has(key))) reasons.push("forbidden_content");
+    }
     if (DISCLOSURE_INPUT_REQUIRED_FIELDS.some((field) => !Object.hasOwn(value, field))) reasons.push("packet_malformed");
     for (const field of ["disclosurePacketId", "issuedAt", "expiresAt", "revocationState", "cancellationState"]) {
       if (typeof value[field] !== "string") reasons.push("packet_malformed");
     }
     if (!isAllowedStringList(value.routeAllowlist, ROUTE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedStringList(value.adapterAllowlist, ADAPTER_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
-    if (!isAllowedStringList(value.toolAllowlist, NONE_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
+    if (!isAllowedStringList(value.toolAllowlist, TOOL_ALLOWLIST_VALUES)) reasons.push("packet_malformed");
     if (!isAllowedEvidenceRefs(value.evidenceRefs)) reasons.push("packet_malformed");
+    const dataClass = value.dataClass === undefined ? "metadata_only" : value.dataClass;
+    if (!["metadata_only", "sanitized_path_scoped_private_diff"].includes(dataClass)) reasons.push("data_class_invalid");
+    validatePathScope(value.pathScope === undefined ? [] : value.pathScope, dataClass, reasons);
     if (value.singleUse !== true) reasons.push("single_use_required");
     validateRouteAdapterPair(value.routeAllowlist, value.adapterAllowlist, reasons);
     return reasons.length === 0 ? { ok: true, reasons: [] } : invalid(reasons);
   } catch {
     return invalid("packet_malformed");
   }
+}
+
+function stablePathScope(value) {
+  const entries = copySafePlainArray(value === undefined ? [] : value);
+  if (!entries) return [];
+  return entries.map((entry) => isPlainObject(entry) ? { path: entry.path, diffDigest: entry.diffDigest } : entry)
+    .sort((left, right) => String(left?.path || "").localeCompare(String(right?.path || "")));
+}
+
+function validatePathScope(value, dataClass, reasons) {
+  const entries = copySafePlainArray(value);
+  if (!entries || entries.length > 32) return reasons.push("path_scope_invalid");
+  if (dataClass === "metadata_only" && entries.length !== 0) reasons.push("path_scope_not_allowed");
+  if (dataClass === "sanitized_path_scoped_private_diff" && entries.length === 0) reasons.push("path_scope_required");
+  const paths = new Set();
+  for (const entry of entries) {
+    if (!isPlainObject(entry)) { reasons.push("path_scope_invalid"); continue; }
+    const entryReasons = [];
+    inspectObjectKeys(entry, ["path", "diffDigest"], entryReasons);
+    if (entryReasons.length > 0 || typeof entry.path !== "string" || typeof entry.diffDigest !== "string" || !isSafeScopedPath(entry.path) || !isDigest(entry.diffDigest) || paths.has(entry.path)) reasons.push("path_scope_invalid");
+    paths.add(entry.path);
+  }
+}
+
+/**
+ * Selects only the next report-only preparation route. All route states are
+ * caller-supplied facts; this function has no provider, process, or tool path.
+ */
+export function selectCanonicalReviewFallback(input = {}) {
+  const blocked = (code, summary, skippedRouteIds = CANONICAL_REVIEW_FALLBACK_ORDER) => ({
+    schemaVersion: CANONICAL_REVIEW_FALLBACK_SCHEMA_VERSION,
+    state: "blocked",
+    orderedRouteIds: CANONICAL_REVIEW_FALLBACK_ORDER,
+    selectedRouteId: null,
+    skippedRouteIds,
+    controllingReason: { code, summary },
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    execution: "none",
+  });
+  if (!isPlainObject(input) || !isPlainObject(input.claude) || !isPlainObject(input.ollama) || !isPlainObject(input.bmad)) {
+    return blocked("fallback_facts_invalid", "Canonical fallback requires bounded readiness facts for Claude, Ollama, and BMAD.");
+  }
+  if (input.claude.state === "ready") return selectedFallback("claude_readonly", [], "claude_prepared", "Claude is the first report-only review preparation candidate.");
+  const claudeSkipped = ["claude_readonly"];
+  if (!["tenant_policy_vetoed", "provider_vetoed", "unavailable", "budget_exhausted", "approval_missing", "scope_rejected", "empty_result", "bounded_failure", "timed_out", "cancelled", "failed"].includes(input.claude.state)) {
+    return blocked("claude_skip_invalid", "Claude may be skipped only for a typed policy, availability, approval, scope, empty-result, or bounded terminal stop.", []);
+  }
+  if (input.ollama.state === "ready" && input.ollama.exactApprovedGate === true && input.ollama.reviewApproval === true) {
+    return selectedFallback("ollama_exact", claudeSkipped, "ollama_prepared", "Claude was safely skipped and exact approved Ollama review preparation is eligible.");
+  }
+  const ollamaSkipped = [...claudeSkipped, "ollama_exact"];
+  if (input.bmad.state === "ready" && input.bmad.boundedScope === true) {
+    return selectedFallback("bmad_local", ollamaSkipped, "bmad_prepared", "External/local provider preparation is unavailable; bounded BMAD is the local report-only fallback.");
+  }
+  return blocked("review_unsatisfied", "No canonical review fallback is eligible; do not treat review as complete or continue delivery.", ollamaSkipped);
+}
+
+function selectedFallback(selectedRouteId, skippedRouteIds, code, summary) {
+  return {
+    schemaVersion: CANONICAL_REVIEW_FALLBACK_SCHEMA_VERSION,
+    state: "report_only",
+    orderedRouteIds: CANONICAL_REVIEW_FALLBACK_ORDER,
+    selectedRouteId,
+    skippedRouteIds,
+    controllingReason: { code, summary },
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    execution: "none",
+  };
+}
+
+function isSafeScopedPath(path) {
+  if (typeof path !== "string" || !SAFE_SCOPED_PATH.test(path)) return false;
+  return !path.split("/").some((segment) => segment === ".git" || segment === ".env" || segment.startsWith(".env.") || /^(?:secrets?|credentials?|tokens?)$/i.test(segment));
 }
 
 function validateRouteAdapterPair(routeAllowlist, adapterAllowlist, reasons) {
@@ -377,8 +469,14 @@ function validateRouteAdapterPair(routeAllowlist, adapterAllowlist, reasons) {
   }
   if (routes.includes("report_only") && !adapters.includes("none")) reasons.push("route_adapter_pair_invalid");
   if (routes.includes("simulated") && !adapters.includes(SIMULATED_REVIEW_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
+  if (routes.includes("claude_readonly") && !adapters.includes(CLAUDE_READONLY_INJECTED_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
+  if (routes.includes("ollama_exact") && !adapters.includes(OLLAMA_EXACT_INJECTED_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
+  if (routes.includes("bmad_local") && !adapters.includes(BMAD_GOVERNED_RUNNER_ADAPTER_ID)) reasons.push("route_adapter_pair_invalid");
   if (adapters.includes("none") && !routes.includes("report_only")) reasons.push("route_adapter_pair_invalid");
   if (adapters.includes(SIMULATED_REVIEW_ADAPTER_ID) && !routes.includes("simulated")) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes(CLAUDE_READONLY_INJECTED_ADAPTER_ID) && !routes.includes("claude_readonly")) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes(OLLAMA_EXACT_INJECTED_ADAPTER_ID) && !routes.includes("ollama_exact")) reasons.push("route_adapter_pair_invalid");
+  if (adapters.includes(BMAD_GOVERNED_RUNNER_ADAPTER_ID) && !routes.includes("bmad_local")) reasons.push("route_adapter_pair_invalid");
 }
 
 function validateInputObject(value, fields) {

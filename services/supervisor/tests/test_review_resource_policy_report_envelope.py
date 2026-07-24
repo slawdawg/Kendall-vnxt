@@ -26,7 +26,7 @@ def _valid_report() -> dict[str, object]:
     return {
         "reportId": "review-resource-policy-report-v1",
         "generatedAt": datetime(2026, 7, 20, 19, 30, tzinfo=timezone.utc),
-        "summary": "Read-only policy map for bounded review routing; it does not launch review tools.",
+        "summary": "Read-only policy map for the default Claude-first review route; it does not launch review tools.",
         "triggers": [
             {
                 "triggerId": "high_risk_diff",
@@ -42,13 +42,13 @@ def _valid_report() -> dict[str, object]:
                 "routeId": "claude_readonly_review",
                 "label": "Claude read-only",
                 "authorityFamily": "external-review-readonly",
-                "status": "approval_required_or_policy_triggered_readonly",
-                "summary": "Use Claude only as a scarce bounded read-only critic.",
-                "allowedWhen": ["high_risk_diff"],
-                "commandPolicy": ["claude -p", "--max-budget-usd 1", "--tools Read,Grep"],
+                "status": "default_primary_for_every_review",
+                "summary": "Claude is the bounded read-only primary route for every review workflow.",
+                "allowedWhen": ["every_review_workflow"],
+                "commandPolicy": ["claude -p", "Read and Grep only", "no repository per-run --max-budget-usd"],
                 "retainedEvidence": ["purpose", "scope", "summarized findings"],
                 "blockedCapabilities": ["edit tools", "shell tools", "GitHub mutation"],
-                "budgetCap": "--max-budget-usd 1",
+                "budgetCap": None,
             }
         ],
         "scenarios": [
@@ -58,8 +58,8 @@ def _valid_report() -> dict[str, object]:
                 "triggerIds": [],
                 "selectedRoutes": [],
                 "policyBasis": "No review trigger is present.",
-                "retentionSummary": "No external review evidence is required.",
-                "nextSafeAction": "Use normal local verification.",
+                "retentionSummary": "summaries_findings_paths_command_metadata_verification_policy_basis_only",
+                "nextSafeAction": "Validate the bounded packet before review.",
             }
         ],
         "packetEvaluations": [
@@ -81,8 +81,8 @@ def _valid_report() -> dict[str, object]:
         ],
         "claudeReadOnlyCommand": [
             "claude -p",
-            "--max-budget-usd 1",
-            "--tools Read,Grep",
+            "Read and Grep only",
+            "no repository per-run --max-budget-usd",
             "<bounded review prompt>",
         ],
         "retentionPolicy": "summaries_findings_paths_command_metadata_verification_policy_basis_only",
