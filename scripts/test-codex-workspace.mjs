@@ -7522,6 +7522,8 @@ try {
       assert(cleanup.status === "ready", cleanup.reason);
       assert(cleanup.exactTreeCloseout === true, "strict closeout marker is missing");
       assert(cleanup.proof.tree.status === "matched", "exact tree equality was not proven");
+      assert(cleanup.proof.originDev.status === "matched", "live origin/dev freshness was not proven");
+      assert(cleanup.proof.originDev.localSha === cleanup.proof.originDev.liveSha, "live origin/dev does not equal the local tracking ref");
       assert(cleanup.proof.remoteBranch.state === "absent", "source remote absence was not proven");
       assert(cleanup.proof.githubNoPr.status === "matched", "live GitHub no-PR proof was not proven");
       assert(cleanup.proof.assignmentCloseout.status === "ready", "linked assignment closeout was not preflighted");
@@ -7563,6 +7565,27 @@ try {
           runGit(fixture.root, ["remote", "set-url", "origin", join(fixture.root, "missing-origin.git")]);
         },
         expected: "source remote branch evidence is unavailable",
+      },
+      {
+        name: "unavailable live origin/dev probe",
+        mutate(fixture) {
+          installFixtureGitProxy(
+            fixture,
+            "args[0] === 'ls-remote' && args[1] === '--heads' && args[2] === 'origin' && args[3] === 'dev'",
+            "simulated live origin/dev probe interruption",
+          );
+        },
+        expected: "live origin/dev proof is unavailable",
+      },
+      {
+        name: "stale local origin/dev",
+        mutate(fixture) {
+          const localOriginDev = runGit(fixture.root, ["rev-parse", "origin/dev"]).stdout;
+          commitFile(fixture.root, "live-dev-drift.txt", "live dev drift\n", "advance live dev only");
+          runGit(fixture.root, ["push", "-q", "origin", "HEAD:refs/heads/dev"]);
+          runGit(fixture.root, ["update-ref", "refs/remotes/origin/dev", localOriginDev]);
+        },
+        expected: "live origin/dev differs from local origin/dev",
       },
       {
         name: "PR evidence",
@@ -7607,6 +7630,29 @@ try {
     }
   });
 
+  test("cleanup-integrated exact-tree closeout selects the manifest by exact task_id only", () => {
+    const fixture = createIntegratedCleanupFixture({
+      taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+      baseBranch: "dev",
+      remoteBranch: false,
+    });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
+      const manifest = readJson(manifestPath);
+      manifest.task_id = "different-task-id";
+      manifest.title = fixture.taskId;
+      manifest.description = `title-shaped decoy for ${fixture.taskId}`;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--summary-json"]);
+      assert(result.code !== 0, "strict closeout accepted a title-shaped manifest decoy");
+      assert(result.stderr.includes("requires a manifest whose task_id exactly equals"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "strict task-id selection removed the decoy worktree");
+      assert(branchExists(fixture.root, fixture.branch), "strict task-id selection deleted the decoy branch");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-integrated exact-tree closeout journals before local deletion, re-probes remote absence, and closes the linked assignment under lock", () => {
     const fixture = createIntegratedCleanupFixture({
       taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
@@ -7622,6 +7668,8 @@ try {
       const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
       const assignment = readJson(join(fixture.stateRoot, "assignments", "integrated-assignment.json"));
       assert(manifest.status === "closed", `manifest status is ${manifest.status}`);
+      assert(manifest.supersession_closeout_evidence?.originDev?.status === "matched", "initial live origin/dev proof was not retained");
+      assert(manifest.supersession_closeout_evidence?.finalOriginDev?.status === "matched", "final live origin/dev proof was not retained");
       assert(manifest.supersession_closeout_evidence?.githubNoPr?.status === "matched", "live GitHub proof was not retained as metadata");
       assert(manifest.supersession_closeout_evidence?.finalRemoteAbsence?.state === "absent", "final remote absence re-probe was not retained");
       assert(manifest.supersession_closeout_evidence?.finalGithubNoPr?.status === "matched", "final live GitHub no-PR proof was not retained");
@@ -7721,12 +7769,15 @@ try {
         assert(assignment.status === "closed", `${scenario.name} did not complete the locked assignment closeout before local deletion`);
         assert(manifest.supersession_closeout_evidence?.assignmentCloseout?.status === "closed", `${scenario.name} did not persist the pre-deletion assignment closure`);
         if (scenario.resumes) {
+          const closedAssignmentEvidence = manifest.supersession_closeout_evidence?.assignmentCloseout;
           rmSync(fakeGit, { force: true });
           fakeGit = null;
           const resumed = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--apply"]);
           assert(resumed.code === 0, `${scenario.name} did not resume safely: ${resumed.stderr || resumed.stdout}`);
           const closedManifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
           assert(closedManifest.status === "closed", `${scenario.name} did not close after resume`);
+          assert(closedManifest.supersession_closeout_evidence?.assignmentCloseout?.status === "closed", `${scenario.name} overwrote closed assignment audit status on resume`);
+          assert(closedManifest.supersession_closeout_evidence?.assignmentCloseout?.closedAt === closedAssignmentEvidence?.closedAt, `${scenario.name} overwrote the assignment closed timestamp on resume`);
         }
       } finally {
         if (fakeGit) rmSync(fakeGit, { force: true });
