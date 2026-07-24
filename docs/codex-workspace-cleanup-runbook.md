@@ -12,6 +12,61 @@ The cleanup path removes generated Python artifacts before removing a disposable
 worktree. This prevents stale cache and temporary-file residue from blocking
 `git worktree remove`.
 
+## Restricted exact-tree closeout
+
+`cleanup-integrated --exact-tree-closeout` is a deliberately narrow recovery
+path for only `20260723-tailnet-authenticated-dashboard-persistence-and`. It
+does not accept a title, description, branch, fragment, or another task id in
+place of that exact manifest `task_id`.
+
+Before either preview or apply, the command requires all of the following:
+
+- the named worktree is registered, clean, and on its manifest branch;
+- the source tree exactly equals local `origin/dev`;
+- a live read-only `git ls-remote` query shows `origin/dev` still equals the
+  local tracking ref (the command never fetches, resets, or rewrites refs);
+- the source remote branch is absent, and GitHub CLI reports no PR for the
+  exact source branch;
+- the linked assignment has an exact, preflighted identity and a visible
+  dry-run closeout action.
+
+The required preview is metadata-only:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-integrated \
+  20260723-tailnet-authenticated-dashboard-persistence-and \
+  --exact-tree-closeout --base origin/dev --summary-json \
+  --supersession-provenance "reviewed supersession provenance" \
+  --closeout-reason "reviewed exact-tree closeout rationale"
+```
+
+Apply only after reviewing that packet and obtaining the required authority:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-integrated \
+  20260723-tailnet-authenticated-dashboard-persistence-and \
+  --exact-tree-closeout --base origin/dev --apply \
+  --supersession-provenance "reviewed supersession provenance" \
+  --closeout-reason "reviewed exact-tree closeout rationale"
+```
+
+The command retains metadata-only evidence: exact tree IDs; the local and live
+`origin/dev` IDs; source-remote absence; no-PR check status and count; the
+preflighted assignment closeout and its closed timestamp; and final rechecks
+of `origin/dev`, source-remote absence, and GitHub no-PR state. It retains no
+GitHub payloads, credentials, tokens, or secrets. It never creates, deletes,
+fetches, force-pushes, or otherwise mutates a remote ref; `--delete-remote` is
+rejected.
+
+Apply writes a locked `cleanup_partial` journal before local worktree or branch
+deletion, then records the linked-assignment metadata closure before those
+local deletions. If an interruption or final live check fails, the manifest
+remains `cleanup_partial`; do not infer success or manually alter it. Inspect
+the retained evidence, restore the required local state if necessary, fetch
+`origin/dev` explicitly when the live/local IDs differ, and rerun the identical
+restricted command. A resume preserves the prior assignment-closeout
+`closed` status and timestamp rather than replacing that audit record.
+
 ## No-PR supersession cleanup
 
 Use `cleanup-superseded` only for one clean, no-PR source lane whose exact
