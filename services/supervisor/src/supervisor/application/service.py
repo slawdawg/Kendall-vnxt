@@ -935,9 +935,7 @@ class SupervisorService:
                 "Live-observed Epic 25 ingestion is unavailable until the server can resolve a trusted, "
                 "server-issued and cryptographically bound observer receipt. Caller assertions cannot create live or go evidence."
             )
-        # The disclosure validator accepts canonical RFC3339 UTC only. Keep
-        # this distinct from database datetime fields used elsewhere.
-        now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        now = datetime.now(timezone.utc)
         if evidence_chain.checkedAt > now + timedelta(minutes=1) or evidence_chain.expiresAt < now:
             raise ValueError("Epic 25 evidence chain is stale, expired, or future-dated.")
         original_metadata = dict(packet.source_ref_json or {})
