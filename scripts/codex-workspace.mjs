@@ -4327,7 +4327,7 @@ function cleanupIntegratedPlan(record, state, context) {
     return { ...base, reason: "epic-batch workspace requires finish-epic closeout; integrated cleanup is disabled" };
   }
   if (strict ? supersededSourceHasPrEvidence(manifest) || (hasStrictCloseoutEvidence(manifest) && !strictResume) : manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || ""))) {
-    return { ...base, reason: "workspace has PR/merged cleanup evidence; use cleanup-merged" };
+    return { ...base, reason: strict ? "source workspace has PR or cleanup evidence" : "workspace has PR/merged cleanup evidence; use cleanup-merged" };
   }
   const ownerWarning = laneOwnerWarning(manifest, context.options);
   if (ownerWarning && !context.options.takeOwnership) {
