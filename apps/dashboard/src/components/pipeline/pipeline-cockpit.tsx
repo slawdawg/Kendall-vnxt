@@ -187,7 +187,10 @@ export function PipelineCockpit({
   const selectedContextualActionStrip = selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
     : null;
-  const runtimeActionStrip = currentProjection && fixtureMode.kind === "runtime"
+  const projectionSupportsOperationalActions = currentProjection
+    ? projectionLiveProofState(currentProjection, currentProjection.sourceLabel, currentProjection.freshnessState).canSatisfyLiveProof
+    : false;
+  const runtimeActionStrip = currentProjection && fixtureMode.kind === "runtime" && projectionSupportsOperationalActions
     ? buildRuntimeOperationalActionStrip(currentProjection)
     : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
@@ -237,6 +240,10 @@ export function PipelineCockpit({
   const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
     if (fixtureMode.kind !== "runtime") {
       setActionFeedback("Operational actions are unavailable outside supervisor runtime mode.");
+      return;
+    }
+    if (!projectionSupportsOperationalActions) {
+      setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
       return;
     }
     if (action.v1Capability) {
@@ -341,7 +348,7 @@ export function PipelineCockpit({
     } catch (error) {
       setActionFeedback(error instanceof Error ? error.message : "Operational action failed.");
     }
-  }, [fixtureMode.kind]);
+  }, [fixtureMode.kind, projectionSupportsOperationalActions]);
   const registerPacketButton = useCallback((packetId: string, node: HTMLButtonElement | null) => {
     if (node) {
       packetButtonRefs.current.set(packetId, node);
@@ -999,7 +1006,7 @@ function projectionToCockpitPackets(
   activeBoardViewModel: PipelineActiveBoardViewModel | null,
   sourceState: PipelineRuntimeSourceState
 ) {
-  if (sourceState.kind !== "runtime") {
+  if (sourceState.kind !== "runtime" && sourceState.kind !== "stale") {
     return sourceState.kind === "demo" ? runtimePackets : [];
   }
   if (!projection) {
@@ -1168,8 +1175,8 @@ function projectionToCockpitPackets(
 
 function cockpitNonRuntimeSourceKind(
   sourceState: PipelineRuntimeSourceState
-): Extract<PipelineRuntimeSourceState["kind"], "demo" | "empty" | "invalid"> | null {
-  return sourceState.kind === "demo" || sourceState.kind === "empty" || sourceState.kind === "invalid"
+): Extract<PipelineRuntimeSourceState["kind"], "demo" | "empty" | "invalid" | "stale"> | null {
+  return sourceState.kind === "demo" || sourceState.kind === "empty" || sourceState.kind === "invalid" || sourceState.kind === "stale"
     ? sourceState.kind
     : null;
 }

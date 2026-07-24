@@ -1,7 +1,6 @@
 import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
 import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";
-import { requestPipelineSupervisorViaUds } from "./pipeline-supervisor-uds";
 import {
   projectSupervisorWorkPacketsToCockpitPackets,
   type PipelineRuntimePacket,
@@ -20,7 +19,7 @@ export type PipelineCockpitPacketDetailLoad = {
 };
 
 export type PipelineRuntimeSourceState = {
-  kind: "runtime" | "empty" | "unavailable" | "invalid" | "demo";
+  kind: "runtime" | "stale" | "empty" | "unavailable" | "invalid" | "demo";
   label: string;
   summary: string;
   matrixRows: number;
@@ -28,20 +27,15 @@ export type PipelineRuntimeSourceState = {
   canSatisfyLiveProof: boolean;
 };
 
-const lanAuthEnabled = process.env.KENDALL_LAN_AUTH_ENABLED === "true";
-
 async function readWorkPackets() {
-  if (lanAuthEnabled) return requestPipelineSupervisorViaUds<PipelineRuntimePacket[]>("/work-packets");
   return getWorkPackets();
 }
 
 async function readWorkPacket(packetId: CanonicalRuntimePacketId) {
-  if (lanAuthEnabled) return requestPipelineSupervisorViaUds<PipelineRuntimePacket>(`/work-packets/${encodeURIComponent(packetId)}`);
   return getWorkPacket(packetId);
 }
 
 async function readPipelineDashboardProjection() {
-  if (lanAuthEnabled) return requestPipelineSupervisorViaUds<PipelineDashboardProjectionV0>("/pipeline-control-plane/projection");
   return getPipelineDashboardProjection();
 }
 
@@ -104,9 +98,10 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         projectionError: projection.error,
       };
     }
+    const packetIds = projection.packets.map((packet) => packet.packetId);
     const packetContradiction = canonicalStaleProjectionTruth(verifiedProjection)
-      ? staleRuntimeContradiction(verifiedProjection)
-      : populatedRuntimeContradiction(verifiedProjection, projection.packets.map((packet) => packet.packetId));
+      ? staleRuntimeContradiction(verifiedProjection) ?? packetIdentityContradiction(verifiedProjection, packetIds)
+      : populatedRuntimeContradiction(verifiedProjection, packetIds);
     if (packetContradiction) {
       return {
         fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${packetContradiction} No runtime or demo packets are shown.`),
@@ -117,7 +112,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
     }
     return {
       fixtureMode: runtimeSourceState(
-        "runtime",
+        canonicalStaleProjectionTruth(verifiedProjection) ? "stale" : "runtime",
         canonicalStaleProjectionTruth(verifiedProjection) ? "Supervisor stale read-only" : "Supervisor runtime",
         canonicalStaleProjectionTruth(verifiedProjection)
           ? "Persisted supervisor WorkPacketV0 rows are stale and read-only; no provider, worker, GitHub, or Obsidian calls are made by this route."
@@ -180,7 +175,7 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
     }
     return {
       fixtureMode: runtimeSourceState(
-        "runtime",
+        projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection) ? "stale" : "runtime",
         projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection) ? "Supervisor stale read-only" : "Supervisor runtime",
         projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection)
           ? "This detail is a stale, read-only supervisor WorkPacketV0 projection resolved by packet identity."
@@ -236,7 +231,7 @@ function toCanonicalRuntimePacketId(packetId: unknown): CanonicalRuntimePacketId
 }
 
 function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null, mode: "list" | "detail"): { kind: "invalid" | "unavailable"; summary: string } | null {
-  if (!projection) {
+  if (!hasProjectionProofShape(projection)) {
     return { kind: "invalid", summary: "Supervisor projection is missing or malformed; no runtime or demo packets are shown." };
   }
   const freshness = projectionFreshnessState(projection);
@@ -409,6 +404,10 @@ function populatedRuntimeContradiction(projection: PipelineDashboardProjectionV0
   if (projection.truthSummary.backendEmpty === true) {
     return "Supervisor returned packets while projection claims the backend is empty.";
   }
+  return packetIdentityContradiction(projection, packetIds);
+}
+
+function packetIdentityContradiction(projection: PipelineDashboardProjectionV0, packetIds: readonly string[]): string | null {
   const invalidPacketId = packetIds.find((packetId) => !toCanonicalRuntimePacketId(packetId));
   if (invalidPacketId) {
     return `Supervisor returned malformed runtime packet identity ${invalidPacketId}.`;
@@ -445,6 +444,22 @@ function populatedRuntimeContradiction(projection: PipelineDashboardProjectionV0
     return `Supervisor projection included detail identity ${extraProjectionDetailId} that was absent from the WorkPacket list.`;
   }
   return null;
+}
+
+function hasProjectionProofShape(projection: unknown): projection is PipelineDashboardProjectionV0 {
+  try {
+    if (!projection || typeof projection !== "object") return false;
+    const candidate = projection as Partial<PipelineDashboardProjectionV0>;
+    if (!candidate.truthSummary || typeof candidate.truthSummary !== "object") return false;
+    if (!candidate.backendReachability || typeof candidate.backendReachability !== "object") return false;
+    if (!candidate.fixtureMode || typeof candidate.fixtureMode !== "object") return false;
+    if (!candidate.queueSummary || typeof candidate.queueSummary !== "object") return false;
+    return Array.isArray(candidate.workPackets)
+      && Array.isArray(candidate.selectedPacketDetails)
+      && Array.isArray(candidate.stageSummaries);
+  } catch {
+    return false;
+  }
 }
 
 function projectionQueuePacketCount(projection: PipelineDashboardProjectionV0): number {

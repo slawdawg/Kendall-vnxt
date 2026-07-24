@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { homedir } from "node:os";
 import { isIP } from "node:net";
@@ -8,6 +8,22 @@ import { join } from "node:path";
 
 function fail(message) {
   throw new Error(`Kendall LAN cockpit: ${message}`);
+}
+
+export function tailnetOriginStatePath(authDir) {
+  return join(authDir, "tailnet-origin.json");
+}
+
+export function writeTailnetOriginState(authDir, origin) {
+  const statePath = tailnetOriginStatePath(authDir);
+  writeFileSync(statePath, JSON.stringify({ origin }), { encoding: "utf8", mode: 0o600 });
+  chmodSync(statePath, 0o600);
+}
+
+export function assertTailnetOriginState(authDir, expectedOrigin, read = readFileSync) {
+  let payload;
+  try { payload = JSON.parse(read(tailnetOriginStatePath(authDir), "utf8")); } catch { fail("supervisor Tailnet origin state is unavailable or invalid."); }
+  if (!payload || payload.origin !== expectedOrigin) fail("supervisor Tailnet origin does not match the dashboard; restart the paired cockpit after rotating the address or certificate.");
 }
 
 export function resolveTailnetIpv4(run = spawnSync) {
@@ -95,7 +111,11 @@ async function main() {
   const pnpmPath = process.env.KENDALL_PNPM_PATH;
   if (!pnpmPath) fail("KENDALL_PNPM_PATH is required.");
   const environment = lanCockpitEnvironment();
-  if (mode === "dashboard") await waitForPrivateSupervisorStartupGate(environment.KENDALL_SUPERVISOR_UDS_PATH);
+  if (mode === "supervisor") writeTailnetOriginState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), environment.KENDALL_DASHBOARD_ORIGIN);
+  if (mode === "dashboard") {
+    await waitForPrivateSupervisorStartupGate(environment.KENDALL_SUPERVISOR_UDS_PATH);
+    assertTailnetOriginState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), environment.KENDALL_DASHBOARD_ORIGIN);
+  }
   const child = spawn(pnpmPath, ["run", mode === "supervisor" ? "dev:supervisor" : "dev:dashboard"], {
     cwd: process.cwd(),
     env: environment,
