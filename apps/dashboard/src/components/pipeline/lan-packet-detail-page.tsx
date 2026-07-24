@@ -33,7 +33,7 @@ type PacketDetail = {
   } | null;
 };
 
-export function LanPacketDetailPage({ packetId }: { packetId: string }) {
+export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabled: boolean; packetId: string }) {
   const [packet, setPacket] = useState<PacketDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "unavailable" | "expired">("loading");
 
@@ -71,17 +71,17 @@ export function LanPacketDetailPage({ packetId }: { packetId: string }) {
   }, [packetId]);
 
   if (state === "expired") {
-    return <Shell compactHeader realtimeRefresh={false} wide><Message title="Session expired" body="Your authenticated Packet Detail session ended. Return to the dashboard to sign in again." action="Return to sign in" /></Shell>;
+    return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Session expired" body="Your authenticated Packet Detail session ended. Return to the dashboard to sign in again." action="Return to sign in" /></Shell>;
   }
   if (state === "unavailable") {
-    return <Shell compactHeader realtimeRefresh={false} wide><Message title="Packet detail unavailable" body="The authenticated Packet Detail read could not be completed." action="Back to pipeline" /></Shell>;
+    return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Packet detail unavailable" body="The authenticated Packet Detail read could not be completed." action="Back to pipeline" /></Shell>;
   }
   if (state === "loading" || !packet) {
-    return <Shell compactHeader realtimeRefresh={false} wide><Message title="Loading packet detail" body="Reading the authenticated Packet Detail mediator." action="" /></Shell>;
+    return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Loading packet detail" body="Reading the authenticated Packet Detail mediator." action="" /></Shell>;
   }
 
   return (
-    <Shell compactHeader realtimeRefresh={false} wide>
+    <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide>
       <main className="grid max-w-full min-w-0 gap-4" aria-label="Authenticated packet detail">
         <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
           <Link className="rounded-[0.375rem] border bg-[var(--surface)] px-2 py-1 text-xs text-[var(--accent)]" href="/pipeline">Back to pipeline</Link>

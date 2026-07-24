@@ -14,7 +14,7 @@ import { MemoryProposalReviewPanel } from "../../../components/memory-proposal-r
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
-import { Shell } from "../../../components/shell";
+import { ServerShell as Shell } from "../../../components/server-shell";
 import { SubscriptionLaunchReadinessPanel } from "../../../components/subscription-launch-readiness-panel";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";

@@ -1,6 +1,6 @@
 import { AuditWorkbench } from "../../components/audit-workbench";
 import { PageIntro } from "../../components/page-intro";
-import { Shell } from "../../components/shell";
+import { ServerShell as Shell } from "../../components/server-shell";
 import Link from "next/link";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getAuditEvents, getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";

@@ -1,6 +1,6 @@
 import { PageIntro } from "../../components/page-intro";
 import { UsageVisibilitySettings } from "../../components/settings/usage-visibility-settings";
-import { Shell } from "../../components/shell";
+import { ServerShell as Shell } from "../../components/server-shell";
 
 const usageSources = [
   {

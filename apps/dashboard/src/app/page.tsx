@@ -1,4 +1,4 @@
-import { Shell } from "../components/shell";
+import { ServerShell as Shell } from "../components/server-shell";
 import { LanOverview } from "../components/lan-overview";
 import { LiveFeed } from "../components/live-feed";
 import { MonitoringHome } from "../components/monitoring-home";

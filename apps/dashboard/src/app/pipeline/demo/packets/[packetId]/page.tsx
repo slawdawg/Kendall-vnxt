@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { Shell } from "../../../../../components/shell";
+import { ServerShell as Shell } from "../../../../../components/server-shell";
 import { PacketDetailPage } from "../../../../../components/pipeline/packet-detail-page";
 import {
   pipelineCockpitPackets,
