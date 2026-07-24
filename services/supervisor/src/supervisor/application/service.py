@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Event
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
@@ -352,8 +353,23 @@ from supervisor.config.settings import Settings
 from supervisor.domain.bmad_import import parse_bmad_import_package
 from supervisor.domain.obsidian_metadata_import import build_obsidian_metadata_import_package
 from supervisor.domain.disabled_provider_adapter import DisabledLocalProviderAdapter
+from supervisor.domain.bounded_provider_transport import BoundedProviderTransport
+from supervisor.domain.delegated_review_adapter import (
+    BoundedBmadReviewAdapter,
+    ClaudeReadonlyReviewAdapter,
+    DurableDelegatedReviewRuntime,
+    OllamaExactReviewAdapter,
+    ReviewAdapterOutcome,
+    ReviewFallbackCoordinator,
+    normalize_review_findings,
+)
 from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
 from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
+from supervisor.domain.review_route import (
+    BMAD_GOVERNED_RUNNER_ADAPTER_ID,
+    disclosure_packet_canonical_digest,
+    validate_disclosure_packet,
+)
 from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
 from supervisor.domain.routing import (
     ExecutionLane,
@@ -541,6 +557,13 @@ TERMINAL_EXECUTION_ATTEMPT_STATUSES = {
 }
 
 EXECUTION_ATTEMPT_TRANSITIONS = {
+    ExecutionAttemptStatus.PREPARED.value: {
+        ExecutionAttemptStatus.STARTING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+    },
     ExecutionAttemptStatus.PLANNED.value: {
         ExecutionAttemptStatus.APPROVED.value,
         ExecutionAttemptStatus.STARTING.value,
@@ -673,6 +696,23 @@ class SupervisorService:
             model_id=self.settings.ollama_model_id or self.settings.ollama_approved_model_id,
             connect_timeout_seconds=self.settings.ollama_connect_timeout_seconds,
             total_timeout_seconds=self.settings.ollama_total_timeout_seconds,
+        )
+        # Review execution is supervisor-owned. Manager/dashboard code only
+        # carries packet metadata and never imports these provider adapters.
+        self._bounded_review_bmad_adapter = BoundedBmadReviewAdapter()
+        self._bounded_review_bmad_runner_id: str | None = None
+        # Composition-only worker registry.  A dispatch call resolves its
+        # materializer here by the worker id frozen in a durable attempt; it
+        # never accepts a callable from a dashboard, manager, or worker call.
+        self._bounded_review_worker_materializers: dict[str, object] = {}
+        self._bounded_review_claude_adapter = ClaudeReadonlyReviewAdapter()
+        self._bounded_review_ollama_adapter = OllamaExactReviewAdapter(
+            transport=BoundedProviderTransport(
+                endpoint_url=self.settings.ollama_endpoint_url or self.settings.ollama_approved_endpoint_url,
+                model_id=self.settings.ollama_model_id or self.settings.ollama_approved_model_id,
+                connect_timeout_seconds=self.settings.ollama_connect_timeout_seconds,
+                total_timeout_seconds=self.settings.ollama_total_timeout_seconds,
+            )
         )
         self.subscription_launch_registry = SubscriptionLaunchRegistry()
         self.disabled_subscription_launch_adapter = DisabledSubscriptionLaunchAdapter()
@@ -895,7 +935,9 @@ class SupervisorService:
                 "Live-observed Epic 25 ingestion is unavailable until the server can resolve a trusted, "
                 "server-issued and cryptographically bound observer receipt. Caller assertions cannot create live or go evidence."
             )
-        now = datetime.now(timezone.utc)
+        # The disclosure validator accepts canonical RFC3339 UTC only. Keep
+        # this distinct from database datetime fields used elsewhere.
+        now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         if evidence_chain.checkedAt > now + timedelta(minutes=1) or evidence_chain.expiresAt < now:
             raise ValueError("Epic 25 evidence chain is stale, expired, or future-dated.")
         original_metadata = dict(packet.source_ref_json or {})
@@ -2158,6 +2200,50 @@ class SupervisorService:
         await session.refresh(locked_item)
         await session.refresh(locked_attempt)
         return locked_attempt
+
+    async def _reject_external_launch_reservation(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        *,
+        operation: str,
+        failure_reason: str,
+    ) -> None:
+        """Terminally reject an unclaimed reservation after a claim failure."""
+        await self._acquire_execute_admission_lock(session)
+        locked_attempt = await session.get(ExecutionAttempt, attempt.id, with_for_update=True, populate_existing=True)
+        if locked_attempt is None or locked_attempt.work_item_id != item.id:
+            return
+        if locked_attempt.status != ExecutionAttemptStatus.STARTING.value or locked_attempt.launch_claimed_at is not None:
+            return
+        reservation = self._external_launch_reservation_ref(locked_attempt)
+        if reservation is None or reservation.get("operation") != operation:
+            return
+        terminal_at = datetime.now(timezone.utc)
+        locked_attempt.status = ExecutionAttemptStatus.REJECTED.value
+        locked_attempt.revision += 1
+        locked_attempt.failure_reason = failure_reason
+        locked_attempt.completed_at = terminal_at
+        locked_attempt.updated_at = terminal_at
+        await self._record_event(
+            session,
+            item,
+            "execution_attempt.external_launch_claim_rejected",
+            f"Rejected unclaimed {operation} reservation after claim failure.",
+            {
+                "executionAttemptId": locked_attempt.id,
+                "operation": operation,
+                "failureReason": failure_reason,
+                "externalLaunchStarted": False,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
+            actor_type="supervisor",
+            actor_id=locked_attempt.requested_by_id,
+            actor_label=locked_attempt.requested_by_label,
+        )
+        await session.commit()
 
     async def _finalize_external_launch_attempt(
         self,
@@ -18057,56 +18143,56 @@ class SupervisorService:
                     checkId="review-only",
                     label="Review-only posture",
                     status="blocked",
-                    summary="Claude review execution remains blocked until a successor story proves review-only invocation behavior.",
-                    evidence=["Story 6.18 is no-launch readiness only.", "Source mutation is not approved for Claude review."],
+                    summary="Claude is the default bounded read-only review route; runtime dispatch remains blocked until the delegated executor is registered.",
+                    evidence=["Default policy is Claude then exact Ollama then BMAD.", "Source mutation is not approved for Claude review."],
                 ),
                 ClaudeReadinessCheckView(
                     checkId="source-mutation",
                     label="Source mutation",
                     status="blocked",
                     summary="Claude must not edit files unless the operator later grants a separate explicit edit-mode authority.",
-                    evidence=["Current Claude lane is scarce adversarial review, not routine implementation."],
+                    evidence=["Current Claude lane is default read-only review, not routine implementation."],
                 ),
             ],
             scarcityPolicy=[
                 ClaudeReadinessCheckView(
                     checkId="scarce-use",
-                    label="Scarce use",
-                    status="required",
-                    summary="Claude is reserved for adversarial review, high-risk changes, security-sensitive diffs, and checks on Codex output.",
-                    evidence=["User preference: Claude is a limited $20/month subscription for review, not routine generation."],
+                    label="Default review route",
+                    status="approved",
+                    summary="Claude is the default bounded read-only route for every review; account and platform controls remain outside this repository policy.",
+                    evidence=["Operator approved Claude-first review with exact Ollama then BMAD fallback."],
                 ),
                 ClaudeReadinessCheckView(
                     checkId="budget-record",
                     label="Budget record",
                     status="not_implemented",
-                    summary="The supervisor does not yet record Claude review budget usage or monthly scarcity limits.",
-                    evidence=["Story 6.19 is the first bounded Claude review authority candidate."],
+                    summary="The supervisor does not set a repository per-run Claude budget cap; provider-account controls remain external.",
+                    evidence=["No repository --max-budget-usd policy."],
                 ),
                 ClaudeReadinessCheckView(
                     checkId="review-trigger",
                     label="Review trigger",
-                    status="policy_pending",
-                    summary="High-risk or explicitly approved work should trigger Claude review only after review-only behavior is proven.",
-                    evidence=["Security-sensitive diffs", "Broad architectural changes", "Codex output flaw-finding"],
+                    status="approved",
+                    summary="Every review selects Claude first, then exact Ollama after a typed Claude stop, then bounded BMAD.",
+                    evidence=["Typed fallback reason", "sanitized path-scoped packet", "exact identity"],
                 ),
             ],
             stopLines=[
                 "This report does not approve Claude CLI process launch.",
                 "This report does not approve sending code, diffs, prompts, repository context, or credentials to Claude.",
                 "This report does not approve source mutation, command execution, Git operations, GitHub delivery, merge, or cleanup.",
-                "This report does not approve consuming scarce Claude subscription usage.",
+                "This report does not override provider-account, tenant, or platform controls.",
             ],
             nextSafeActions=[
-                "Use this report to decide whether a future manual Claude availability check is needed.",
-                "Define a review-only command shape before bounded Claude review execution.",
-                "Keep Claude scarce-use policy separate from Codex implementation and GitHub delivery authority.",
+                "Record the typed Claude result before considering the exact Ollama fallback.",
+                "Register the delegated executor before any bounded Claude review execution.",
+                "Keep implementation and GitHub delivery authority separate from review authority.",
             ],
             readOnly=True,
             processLaunchApproved=False,
             reviewTaskExecutionApproved=False,
             sourceMutationApproved=False,
-            scarceUseApproved=False,
+            scarceUseApproved=True,
         )
 
     def get_claude_review_approval_report(self) -> ClaudeReviewApprovalReportView:
@@ -18114,28 +18200,28 @@ class SupervisorService:
             reportId="claude-review-approval-report-v1",
             generatedAt=datetime.now(timezone.utc),
             summary=(
-                "Read-only approval packet for a future bounded Claude adversarial review. "
-                "It does not launch Claude, send code or diffs, consume subscription usage, write files, or mutate workflow state."
+                "Read-only policy packet for the default bounded Claude-first review route. "
+                "It does not launch Claude or send code or diffs by itself, write files, or mutate workflow state."
             ),
             approvalPrompt=(
-                "Approve one bounded Claude review-only attempt for the selected work item only, using the listed context scope, "
-                "scarcity controls, output contract, and stop conditions. Claude may produce findings only; file edits remain blocked."
+                "Prepare one bounded Claude-first review for the selected work item only, using the listed context scope, "
+                "fallback controls, output contract, and stop conditions. Claude may produce findings only; file edits remain blocked."
             ),
             authorityFamily="claude_review",
-            operation="one_time_bounded_review_only_attempt",
+            operation="default_bounded_review_route",
             triggerPolicy=[
                 ClaudeReviewApprovalRequirementView(
-                    requirementId="explicit-request",
-                    label="Explicit request",
+                    requirementId="default-review",
+                    label="Default review",
                     status="allowed",
-                    summary="The operator can explicitly request Claude review for a named work item or diff.",
-                    evidence=["approvalPrompt", "target work item id", "review reason"],
+                    summary="Every eligible bounded review prepares Claude first without a repository per-run dollar cap.",
+                    evidence=["target work item id", "review reason", "sanitized path-scoped packet"],
                 ),
                 ClaudeReviewApprovalRequirementView(
                     requirementId="high-risk-diff",
                     label="High-risk diff",
                     status="allowed",
-                    summary="Security-sensitive, broad, or architecture-changing diffs can qualify for scarce review.",
+                    summary="Security-sensitive, broad, or architecture-changing diffs may add BMAD perspectives without changing the default external route.",
                     evidence=["riskLevel=high", "security-sensitive paths", "architecture decision impact"],
                 ),
                 ClaudeReviewApprovalRequirementView(
@@ -18150,7 +18236,7 @@ class SupervisorService:
                     label="Routine generation",
                     status="blocked",
                     summary="Claude is not a routine generation or implementation lane.",
-                    evidence=["scarceUseApproved=false", "sourceMutationApproved=false"],
+                    evidence=["sourceMutationApproved=false", "no edit tools"],
                 ),
             ],
             contextScope=[
@@ -18180,34 +18266,34 @@ class SupervisorService:
             ],
             requiredEvidence=[
                 "approval text with authority family, operation, target work item, review reason, and context scope",
-                "scarce-use reason and review trigger",
+                "typed route/fallback reason",
                 "bounded context manifest without raw secrets",
                 "Claude process metadata without raw prompt retention",
                 "findings artifact summary and verification follow-up recommendation",
             ],
             scarcityControls=[
-                "One Claude review attempt per approval unless the operator grants a wider policy.",
-                "Do not use Claude for routine generation, low-risk changes, formatting, or ordinary docs cleanup.",
-                "Record why Codex, Ollama, deterministic checks, or human review were insufficient.",
-                "Stop before retrying or expanding context if the review fails or asks for more authority.",
+                "One bounded Claude attempt per immutable packet before typed fallback evaluation.",
+                "Use exact Ollama only after a typed Claude stop and its own exact gate passes.",
+                "Use bounded BMAD only after provider routes are unavailable or unsatisfied.",
+                "Stop before retrying or expanding context if review asks for more authority.",
             ],
             stopConditions=[
                 "Claude invocation would require credentials, secrets, account state, or browser/session access.",
                 "Claude would edit files, run commands, or mutate Git/GitHub state.",
                 "The review packet expands beyond the approved work item, diff, or question.",
-                "The review would consume scarce subscription usage without a recorded reason.",
+                "The review would bypass a tenant, provider, or platform control.",
                 "The review output requires implementation, merge, delivery, or cleanup authority.",
             ],
             nextSafeActions=[
-                "Use this packet to ask the operator for one review-only Claude authority when a high-risk work item is ready.",
-                "Implement approval binding before any endpoint can launch Claude.",
+                "Validate the immutable packet and typed route state before delegated review dispatch.",
+                "Register the delegated executor before any endpoint can launch Claude.",
                 "Keep implementation fixes, GitHub delivery, and cleanup on separate authority paths.",
             ],
             readOnly=True,
             processLaunchApproved=False,
             reviewTaskExecutionApproved=False,
             sourceMutationApproved=False,
-            scarceUseApproved=False,
+            scarceUseApproved=True,
             approvalBindingImplemented=False,
         )
 
@@ -18283,9 +18369,9 @@ class SupervisorService:
                 routeId="bmad_subagent_review",
                 label="BMAD subagent review",
                 authorityFamily="bounded-bmad-subagent-review",
-                status="allowed_by_standard_delivery_when_bounded",
-                summary="Use focused BMAD reviewers for acceptance, edge-case, or implementation-risk checks without changing authority.",
-                allowedWhen=["high_risk_diff", "source_memory_boundary_change", "merge_readiness_uncertainty"],
+                status="final_local_fallback_when_bounded",
+                summary="Use focused BMAD reviewers as the final local fallback after the ordered Claude then exact-Ollama review route cannot satisfy the review.",
+                allowedWhen=["typed_claude_stop", "typed_ollama_stop", "high_risk_diff", "source_memory_boundary_change", "merge_readiness_uncertainty"],
                 commandPolicy=[
                     "Scope reviewer prompts to the lane and changed files.",
                     "Retain findings summaries only.",
@@ -18298,19 +18384,34 @@ class SupervisorService:
                 routeId="claude_readonly_review",
                 label="Claude read-only",
                 authorityFamily="external-review-readonly",
-                status="approval_required_or_policy_triggered_readonly",
-                summary="Use Claude only as a scarce bounded read-only critic for high-risk or explicitly requested review.",
-                allowedWhen=["high_risk_diff", "authority_expansion", "source_memory_boundary_change", "security_sensitive_change", "major_architectural_decision"],
+                status="default_primary_for_every_review",
+                summary="Claude is the bounded read-only primary route for every review workflow; it does not launch from this report.",
+                allowedWhen=["every_review_workflow"],
                 commandPolicy=[
                     "claude -p",
-                    "--max-budget-usd 1",
-                    "--tools Read,Grep",
+                    "Read and Grep only",
+                    "no repository per-run --max-budget-usd",
                     "scoped prompt naming files, diff, or artifact packet",
                     "findings and recommendations only",
                 ],
-                retainedEvidence=["purpose", "scope", "command metadata", "budget cap", "summarized findings", "file paths", "line references", "verification follow-up"],
+                retainedEvidence=["purpose", "scope", "command metadata", "route result", "summarized findings", "file paths", "line references", "verification follow-up"],
                 blockedCapabilities=["edit tools", "shell tools", "GitHub mutation", "filesystem mutation", "secret access", "credential access", "browser profile access"],
-                budgetCap="--max-budget-usd 1",
+                budgetCap=None,
+            ),
+            ReviewResourcePolicyRouteView(
+                routeId="ollama_exact_review",
+                label="Ollama exact fallback",
+                authorityFamily="local-provider-execution",
+                status="eligible_only_after_typed_claude_stop",
+                summary="Use the approved exact qwen3:14b Ollama route only after a typed Claude veto, unavailability, scope stop, empty result, or bounded failure.",
+                allowedWhen=["typed_claude_stop"],
+                commandPolicy=[
+                    "exact approved endpoint and qwen3:14b model only",
+                    "review-specific approval and sanitized path-scoped packet required",
+                    "no model discovery or provider-memory retention",
+                ],
+                retainedEvidence=["purpose", "scope", "route/fallback reason", "summarized findings", "file paths", "line references", "verification follow-up"],
+                blockedCapabilities=["endpoint discovery", "model discovery", "raw provider payload retention", "source mutation", "GitHub mutation", "cleanup"],
             ),
         ]
         scenarios = [
@@ -18318,17 +18419,17 @@ class SupervisorService:
                 scenarioId="routine-low-risk-docs",
                 label="Routine low-risk docs",
                 triggerIds=[],
-                selectedRoutes=[],
-                policyBasis="No high-risk, authority, source boundary, security, merge-readiness, or architecture trigger is present.",
-                retentionSummary="No external review evidence is required.",
-                nextSafeAction="Use normal local verification and human-readable summary evidence.",
+                selectedRoutes=["claude_readonly_review", "ollama_exact_review", "bmad_subagent_review"],
+                policyBasis="Every review follows the ordered Claude primary, exact Ollama fallback, then bounded BMAD fallback contract; this report does not launch any route.",
+                retentionSummary=retention_policy,
+                nextSafeAction="Validate the bounded packet, retain the typed route result, then use normal local verification.",
             ),
             ReviewResourcePolicyScenarioView(
                 scenarioId="authority-and-security-change",
                 label="Authority and security change",
                 triggerIds=["authority_expansion", "security_sensitive_change"],
-                selectedRoutes=["bmad_party_mode", "claude_readonly_review"],
-                policyBasis="Authority expansion plus credential or process-adjacent risk requires bounded multi-perspective and scarce read-only critique.",
+                selectedRoutes=["claude_readonly_review", "ollama_exact_review", "bmad_party_mode", "bmad_subagent_review"],
+                policyBasis="Authority expansion plus credential or process-adjacent risk uses the default ordered review contract and may add bounded BMAD perspectives.",
                 retentionSummary=retention_policy,
                 nextSafeAction="Record the policy basis, run bounded review only when allowed, then apply fixes through the implementation lane.",
             ),
@@ -18336,8 +18437,8 @@ class SupervisorService:
                 scenarioId="merge-thread-ambiguity",
                 label="Merge thread ambiguity",
                 triggerIds=["merge_readiness_uncertainty"],
-                selectedRoutes=["bmad_subagent_review"],
-                policyBasis="Thread-aware review state or exact-head evidence is ambiguous and must be resolved before merge.",
+                selectedRoutes=["claude_readonly_review", "ollama_exact_review", "bmad_subagent_review"],
+                policyBasis="Thread-aware review state or exact-head evidence is ambiguous and must be resolved before merge through the default ordered review contract.",
                 retentionSummary=retention_policy,
                 nextSafeAction="Inspect review threads and exact-head checks; do not merge until ambiguity is resolved.",
             ),
@@ -18345,8 +18446,8 @@ class SupervisorService:
                 scenarioId="source-memory-boundary-change",
                 label="Source and memory boundary change",
                 triggerIds=["source_memory_boundary_change"],
-                selectedRoutes=["bmad_subagent_review", "claude_readonly_review"],
-                policyBasis="Source ownership, memory proposal, or retention changes can affect durable safety boundaries.",
+                selectedRoutes=["claude_readonly_review", "ollama_exact_review", "bmad_subagent_review"],
+                policyBasis="Source ownership, memory proposal, or retention changes use the default ordered review contract because they affect durable safety boundaries.",
                 retentionSummary=retention_policy,
                 nextSafeAction="Keep evidence metadata-only and route any user-facing documentation through proposal gates.",
             ),
@@ -18356,10 +18457,10 @@ class SupervisorService:
                 packetId="sample-authority-security-packet",
                 packetKind="work-packet-review-policy-fixture",
                 triggerIds=["authority_expansion", "security_sensitive_change"],
-                selectedRoutes=["bmad_party_mode", "claude_readonly_review"],
+                selectedRoutes=["claude_readonly_review", "ollama_exact_review", "bmad_party_mode", "bmad_subagent_review"],
                 decisionBasis=(
                     "A packet with authority expansion plus security-sensitive command or credential-adjacent risk "
-                    "requires bounded BMAD critique and a separate Claude read-only approval packet before external review."
+                    "uses the default ordered review contract; bounded BMAD may add independent critique after the external routes."
                 ),
                 retainedEvidence=["policy basis", "trigger ids", "selected route ids", "command metadata", "verification result references"],
                 stopLines=[
@@ -18378,8 +18479,8 @@ class SupervisorService:
                 packetId="sample-merge-thread-packet",
                 packetKind="work-packet-review-policy-fixture",
                 triggerIds=["merge_readiness_uncertainty"],
-                selectedRoutes=["bmad_subagent_review"],
-                decisionBasis="A packet with ambiguous review-thread or exact-head evidence routes to focused BMAD review before merge.",
+                selectedRoutes=["claude_readonly_review", "ollama_exact_review", "bmad_subagent_review"],
+                decisionBasis="A packet with ambiguous review-thread or exact-head evidence uses the default ordered review contract before merge.",
                 retainedEvidence=["policy basis", "thread-aware review state", "exact-head check state", "verification result references"],
                 stopLines=[
                     "Do not merge while review-thread or exact-head state remains ambiguous.",
@@ -18397,8 +18498,8 @@ class SupervisorService:
             reportId="review-resource-policy-report-v1",
             generatedAt=datetime.now(timezone.utc),
             summary=(
-                "Read-only policy map for deciding when high-risk lane work should trigger BMAD party mode, "
-                "spawned BMAD/subagent review, or Claude Code read-only review. It does not launch review tools."
+                "Read-only policy map for the default Claude-first review route, exact Ollama fallback, and final bounded BMAD fallback. "
+                "It does not launch review tools."
             ),
             triggers=triggers,
             routes=routes,
@@ -18406,8 +18507,8 @@ class SupervisorService:
             packetEvaluations=packet_evaluations,
             claudeReadOnlyCommand=[
                 "claude -p",
-                "--max-budget-usd 1",
-                "--tools Read,Grep",
+                "Read and Grep only",
+                "no repository per-run --max-budget-usd",
                 "<bounded review prompt naming approved files or diff>",
             ],
             retentionPolicy=retention_policy,
@@ -18416,11 +18517,11 @@ class SupervisorService:
                 "This report does not approve Claude process launch by itself.",
                 "This report does not approve source mutation, shell execution, GitHub mutation, merge, or cleanup.",
                 "Do not retain raw prompts, raw completions, raw provider payloads, reasoning traces, secrets, credentials, or full source copies.",
-                "Stop if the review requires more scope, more budget, credentials, provider changes, or mutation authority.",
+                "Stop if the review requires more scope, credentials, provider changes, or mutation authority.",
             ],
             nextSafeActions=[
-                "Use the selected scenario to record why review was used or skipped.",
-                "For Claude, use the separate Claude review approval packet before any external review attempt.",
+                "Use the selected scenario to record the ordered route result and any typed fallback reason.",
+                "Validate the review packet and governing authority before any external review attempt.",
                 "Apply any review fixes through the implementation lane and rerun verification before delivery.",
             ],
             readOnly=True,
@@ -27224,6 +27325,489 @@ class SupervisorService:
             writesAllowed=result.writes_allowed,
             commandsAllowed=result.commands_allowed,
         )
+
+    def register_bounded_bmad_review_runner(self, runner: object, *, runner_id: str) -> None:
+        """Register only the existing governed local BMAD review boundary.
+
+        This is composition-time wiring, not a dashboard/manager control and
+        intentionally accepts no route, model, endpoint, command, or prompt.
+        """
+        if not callable(runner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9._:-]{1,180}", runner_id):
+            raise ValueError("Bounded BMAD review runner must be a callable governed boundary.")
+        self._bounded_review_bmad_runner_id = runner_id
+        self._bounded_review_bmad_adapter = BoundedBmadReviewAdapter(runner=runner, runner_id=runner_id)
+
+    def register_governed_delegated_review_worker(self, materializer: object, *, worker_id: str) -> None:
+        """Register a supervisor-composed, read-only review worker boundary.
+
+        This intentionally accepts no packet, authority, endpoint, model, or
+        prompt.  Those come only from the durable dispatch attempt at runtime.
+        """
+        if not callable(materializer) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9._:-]{1,180}", worker_id):
+            raise ValueError("Governed review worker registration requires a safe named materializer.")
+        self._bounded_review_worker_materializers[worker_id] = materializer
+
+    async def prepare_governed_delegated_review(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        *,
+        immutable_review: dict[str, str],
+        disclosure_packet: dict[str, object],
+        worker_id: str,
+    ) -> str | None:
+        """Persist one validated review dispatch before a worker can execute it.
+
+        Preparation is an internal supervisor ingress.  Dispatch later takes
+        only the returned durable attempt id, so provider execution cannot be
+        steered with caller-supplied authority, worker, packet, or materializer
+        metadata.
+        """
+        if worker_id not in self._bounded_review_worker_materializers:
+            raise ValueError("Governed review worker is not registered by supervisor composition.")
+        now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        route_policy = self._governed_review_route_policy()
+        validation = validate_disclosure_packet(disclosure_packet, now=now, route_policy=route_policy, immutable_review=immutable_review)
+        if not validation.get("ok"):
+            raise ValueError("Governed review packet was rejected before durable dispatch preparation.")
+        packet = json.loads(json.dumps(disclosure_packet, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+        if "claude_readonly" not in self._governed_review_authorized_route_ids(packet):
+            # Claude is the mandatory first route.  Do not turn a packet that
+            # omitted it (or its fixed Read/Grep adapter contract) into a
+            # different provider dispatch.
+            raise ValueError("Governed review packet does not authorize the required Claude-first route.")
+        digest = disclosure_packet_canonical_digest(packet)
+        if digest is None:
+            raise ValueError("Governed review packet has no canonical digest.")
+        item = await session.get(WorkItem, work_item_id, with_for_update=True)
+        if not item:
+            return None
+        authority = packet["authority"]
+        prepared = ExecutionAttempt(
+            id=str(uuid.uuid4()),
+            work_item_id=item.id,
+            route_decision_id=f"{packet['disclosurePacketId']}:governed-review-dispatch",
+            worker_id=worker_id,
+            lane=ExecutionLane.LOCAL_READONLY.value,
+            authority_mode="operator_approved_bounded_review",
+            # This record is an immutable dispatch envelope, not an external
+            # launch attempt.  Keeping it out of ACTIVE_EXECUTION_ATTEMPT_STATUSES
+            # lets the first route create the one real reservation and prevents
+            # a prepared dispatch from self-blocking that reservation.
+            status=ExecutionAttemptStatus.PREPARED.value,
+            requested_by_label="Supervisor governed review dispatch",
+            artifact_refs_json=[{
+                "artifactType": "governed_review_dispatch_v1",
+                "packet": packet,
+                "packetDigest": digest,
+                "immutableReview": dict(immutable_review),
+                "authorityIssuerId": authority["issuerId"],
+                "authorityRef": authority["authorityRef"],
+                "workerId": worker_id,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }],
+            event_refs_json=[],
+        )
+        session.add(prepared)
+        # The dispatch must survive the preparing request and release its row
+        # lock before a worker can run.  Route reservations/claims provide the
+        # separate per-provider durable fence.
+        await session.commit()
+        await session.refresh(prepared)
+        return prepared.id
+
+    @staticmethod
+    def _governed_review_route_policy() -> dict[str, object]:
+        return {
+            "routeAllowlist": ["claude_readonly", "ollama_exact", "bmad_local"],
+            "adapterAllowlist": ["claude-readonly-injected/v1", "ollama-exact-injected/v1", BMAD_GOVERNED_RUNNER_ADAPTER_ID],
+            "toolAllowlist": ["Read", "Grep", "none"],
+            "policyState": "ready",
+            "capabilityState": "supported",
+            "resourceState": "ready",
+        }
+
+    @staticmethod
+    def _governed_review_authorized_route_ids(packet: object) -> frozenset[str]:
+        """Derive only the routes the immutable packet authorizes to receive scope.
+
+        The disclosure validator establishes the broad policy subset.  This
+        method adds the route-specific adapter and fixed-tool checks required
+        before a route reservation, materialization, or provider call.
+        """
+        if type(packet) is not dict:
+            return frozenset()
+        routes = packet.get("routeAllowlist")
+        adapters = packet.get("adapterAllowlist")
+        tools = packet.get("toolAllowlist")
+        if type(routes) is not list or type(adapters) is not list or type(tools) is not list:
+            return frozenset()
+        authorized: set[str] = set()
+        if (
+            "claude_readonly" in routes
+            and "claude-readonly-injected/v1" in adapters
+            and {"Read", "Grep"}.issubset(tools)
+        ):
+            authorized.add("claude_readonly")
+        if (
+            "ollama_exact" in routes
+            and "ollama-exact-injected/v1" in adapters
+            and "none" in tools
+        ):
+            authorized.add("ollama_exact")
+        if (
+            "bmad_local" in routes
+            and BMAD_GOVERNED_RUNNER_ADAPTER_ID in adapters
+            and "none" in tools
+        ):
+            authorized.add("bmad_local")
+        return frozenset(authorized)
+
+    async def execute_governed_delegated_review(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        *,
+        dispatch_attempt_id: str,
+    ) -> object:
+        """Run one immutable packet through the durable supervisor review boundary.
+
+        This internal delegated-worker port is deliberately absent from the
+        manager/dashboard/API surface. Its only caller input is a durable
+        dispatch-attempt id. Packet authority, identity, worker identity, and
+        the registered materializer are resolved from supervisor-owned state
+        before any route reservation or provider side effect.
+        """
+        dispatch = await session.get(ExecutionAttempt, dispatch_attempt_id, with_for_update=True)
+        if (
+            dispatch is None
+            or dispatch.work_item_id != work_item_id
+            or dispatch.authority_mode != "operator_approved_bounded_review"
+            or dispatch.status != ExecutionAttemptStatus.PREPARED.value
+            or dispatch.cancel_requested_at is not None
+            or dispatch.launch_claimed_at is not None
+        ):
+            return {"state": "blocked", "code": "review_dispatch_not_authorized", "nextSafeAction": "prepare_fresh_review_dispatch", "rawPayloadRetained": False}
+        materializer = self._bounded_review_worker_materializers.get(dispatch.worker_id)
+        if not callable(materializer):
+            return {"state": "blocked", "code": "review_worker_unregistered", "nextSafeAction": "refresh_review_worker_registration", "rawPayloadRetained": False}
+        refs = dispatch.artifact_refs_json if isinstance(dispatch.artifact_refs_json, list) else []
+        record = next((ref for ref in refs if isinstance(ref, dict) and ref.get("artifactType") == "governed_review_dispatch_v1"), None)
+        if type(record) is not dict or set(record) != {"artifactType", "packet", "packetDigest", "immutableReview", "authorityIssuerId", "authorityRef", "workerId", "metadataOnly", "rawPayloadRetained"}:
+            return {"state": "blocked", "code": "review_dispatch_record_invalid", "nextSafeAction": "prepare_fresh_review_dispatch", "rawPayloadRetained": False}
+        packet = record["packet"]
+        immutable_review = record["immutableReview"]
+        packet_authority = packet.get("authority") if type(packet) is dict else None
+        if (
+            type(packet) is not dict or type(immutable_review) is not dict
+            or record["workerId"] != dispatch.worker_id
+            or record["metadataOnly"] is not True or record["rawPayloadRetained"] is not False
+            or disclosure_packet_canonical_digest(packet) != record["packetDigest"]
+            or type(packet_authority) is not dict
+            or packet_authority.get("issuerId") != record["authorityIssuerId"]
+            or packet_authority.get("authorityRef") != record["authorityRef"]
+        ):
+            return {"state": "blocked", "code": "review_dispatch_binding_stale", "nextSafeAction": "prepare_fresh_review_dispatch", "rawPayloadRetained": False}
+        dispatch_claimed_at = datetime.now(timezone.utc)
+        dispatch_claim = await session.execute(
+            update(ExecutionAttempt)
+            .execution_options(synchronize_session=False)
+            .where(
+                ExecutionAttempt.id == dispatch.id,
+                ExecutionAttempt.work_item_id == work_item_id,
+                ExecutionAttempt.status == ExecutionAttemptStatus.PREPARED.value,
+                ExecutionAttempt.revision == dispatch.revision,
+                ExecutionAttempt.launch_claimed_at.is_(None),
+                ExecutionAttempt.cancel_requested_at.is_(None),
+            )
+            .values(
+                launch_claimed_at=dispatch_claimed_at,
+                revision=dispatch.revision + 1,
+                heartbeat_at=dispatch_claimed_at,
+                updated_at=dispatch_claimed_at,
+            )
+        )
+        if dispatch_claim.rowcount != 1:
+            await session.rollback()
+            return {"state": "blocked", "code": "review_dispatch_claim_stale", "nextSafeAction": "prepare_fresh_review_dispatch", "rawPayloadRetained": False}
+        # Persist the dispatch claim before materialization or a route
+        # reservation.  It is a non-active envelope claim, so it does not
+        # collide with the real per-route external-attempt fence.
+        await session.commit()
+        await session.refresh(dispatch)
+        return await self._execute_governed_delegated_review_from_server_record(
+            session, work_item_id, immutable_review=immutable_review, disclosure_packet=packet,
+            transient_diff_materializer=materializer, worker_id=dispatch.worker_id, dispatch_attempt=dispatch,
+        )
+
+    async def _execute_governed_delegated_review_from_server_record(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        *,
+        immutable_review: dict[str, str],
+        disclosure_packet: dict[str, object],
+        transient_diff_materializer: object,
+        worker_id: str,
+        dispatch_attempt: ExecutionAttempt,
+    ) -> object:
+        """Execute only a durable, server-resolved governed review dispatch."""
+        if not callable(transient_diff_materializer):
+            raise ValueError("Governed review requires a server-registered worker materialization port.")
+        now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        route_policy = self._governed_review_route_policy()
+        packet_validation = validate_disclosure_packet(
+            disclosure_packet,
+            now=now,
+            route_policy=route_policy,
+            immutable_review=immutable_review,
+        )
+        if not packet_validation.get("ok"):
+            raise ValueError("Governed review packet was rejected before any durable attempt or provider side effect.")
+        accepted_packet = json.loads(json.dumps(disclosure_packet, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+        packet_digest = disclosure_packet_canonical_digest(accepted_packet)
+        if packet_digest is None:
+            raise ValueError("Governed review packet was rejected because its canonical digest is unavailable.")
+        scope = disclosure_packet.get("scope")
+        if type(scope) is not dict or scope.get("dataClass") != "sanitized_path_scoped_private_diff" or type(scope.get("pathScope")) is not list:
+            raise ValueError("Governed review requires one immutable sanitized path-scoped packet.")
+        authorized_route_ids = self._governed_review_authorized_route_ids(accepted_packet)
+        if "claude_readonly" not in authorized_route_ids:
+            raise ValueError("Governed review packet no longer authorizes the required Claude-first route.")
+
+        item = await session.get(WorkItem, work_item_id, with_for_update=True)
+        if not item:
+            await session.rollback()
+            return None
+        await session.refresh(item)
+        service = self
+        active_attempts: dict[str, ExecutionAttempt] = {}
+        authority = accepted_packet["authority"]
+        binding_base = {
+            "packetId": accepted_packet["disclosurePacketId"],
+            "packetDigest": packet_digest,
+            "immutableReview": dict(immutable_review),
+            "authorityIssuerId": authority["issuerId"],
+            "authorityRef": authority["authorityRef"],
+            "workerId": worker_id,
+            "approvalMode": "operator_approved_bounded_review",
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+        cancellation_event = Event()
+
+        async def dispatch_is_cancelled() -> bool:
+            """Read the durable dispatch state, never a worker-supplied flag."""
+            fresh_dispatch = await session.get(ExecutionAttempt, dispatch_attempt.id, populate_existing=True)
+            return (
+                fresh_dispatch is None
+                or fresh_dispatch.work_item_id != item.id
+                or fresh_dispatch.worker_id != worker_id
+                or fresh_dispatch.authority_mode != "operator_approved_bounded_review"
+                or fresh_dispatch.launch_claimed_at is None
+                or fresh_dispatch.cancel_requested_at is not None
+                or fresh_dispatch.status != ExecutionAttemptStatus.PREPARED.value
+            )
+
+        async def server_owned_state_code(route_id: str, attempt: ExecutionAttempt | None = None) -> str | None:
+            if await dispatch_is_cancelled():
+                cancellation_event.set()
+                return "review_dispatch_cancelled"
+            fresh_packet = validate_disclosure_packet(
+                accepted_packet,
+                now=datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                route_policy=route_policy,
+                immutable_review=immutable_review,
+            )
+            if not fresh_packet.get("ok"):
+                reasons = fresh_packet.get("reasons")
+                return str(reasons[0]) if type(reasons) is list and reasons else "disclosure_packet_stale"
+            if attempt is None:
+                return None
+            if getattr(attempt, "cancel_requested_at", None) is not None:
+                return "packet_cancelled"
+            refs = attempt.artifact_refs_json if isinstance(attempt.artifact_refs_json, list) else []
+            expected_binding = {**binding_base, "routeId": route_id}
+            if not any(
+                isinstance(ref, dict)
+                and ref.get("artifactType") == "governed_review_authority_binding"
+                and {key: ref.get(key) for key in expected_binding} == expected_binding
+                for ref in refs
+            ):
+                return "review_authority_binding_stale"
+            if attempt.worker_id != worker_id or attempt.authority_mode != "operator_approved_bounded_review":
+                return "review_authority_binding_stale"
+            return None
+
+        async def watch_durable_cancellation() -> None:
+            """Bridge a cancellation committed by another session to HTTP abort.
+
+            Provider calls run outside the request session.  This watcher uses
+            a separate session when one is available, so a transition to
+            cancel_requested closes the in-flight Ollama socket immediately.
+            """
+            bind = getattr(session, "bind", None)
+            if bind is None:
+                return
+            try:
+                while not cancellation_event.is_set():
+                    async with AsyncSession(bind=bind) as reader:
+                        current = await reader.get(ExecutionAttempt, dispatch_attempt.id, populate_existing=True)
+                    if (
+                        current is None
+                        or current.work_item_id != item.id
+                        or current.worker_id != worker_id
+                        or current.authority_mode != "operator_approved_bounded_review"
+                        or current.launch_claimed_at is None
+                        or current.cancel_requested_at is not None
+                        or current.status != ExecutionAttemptStatus.PREPARED.value
+                    ):
+                        cancellation_event.set()
+                        return
+                    await asyncio.sleep(0.05)
+            except (SQLAlchemyError, OSError):
+                # A lost durable-state reader fails closed: no provider request
+                # may remain alive when cancellation state cannot be observed.
+                cancellation_event.set()
+
+        class Lifecycle:
+            async def reserve_and_claim(self, route_id: str) -> None:
+                operation = f"governed_delegated_review:{route_id}"
+                attempt = await service._reserve_external_launch_attempt(
+                    session,
+                    item,
+                    route_decision_id=f"{accepted_packet['disclosurePacketId']}:{route_id}",
+                    worker_id=worker_id,
+                    lane=ExecutionLane.LOCAL_READONLY.value,
+                    authority_mode="operator_approved_bounded_review",
+                    operation=operation,
+                    requested_by_label="Delegated review worker",
+                    task_kind=TaskKind.ARCHITECTURE_REVIEW.value,
+                    artifact_refs=[{
+                        "artifactType": "governed_review_packet_metadata",
+                        "disclosurePacketId": accepted_packet["disclosurePacketId"],
+                        "routeId": route_id,
+                        "immutableReview": dict(immutable_review),
+                        "metadataOnly": True,
+                        "rawPayloadRetained": False,
+                    }, {
+                        "artifactType": "governed_review_authority_binding",
+                        **binding_base,
+                        "routeId": route_id,
+                    }],
+                )
+                try:
+                    active_attempts[route_id] = await service._claim_external_launch_attempt(
+                        session, item, attempt, operation=operation
+                    )
+                except Exception as exc:
+                    await service._reject_external_launch_reservation(
+                        session,
+                        item,
+                        attempt,
+                        operation=operation,
+                        failure_reason=f"claim_{type(exc).__name__.lower()}",
+                    )
+                    raise
+
+            async def revalidate(self, route_id: str, phase: str) -> str | None:
+                if route_id == "ollama_exact" and not service._ollama_provider_gate_state().get("enabled"):
+                    return "ollama_exact_gate_invalid"
+                attempt = active_attempts.get(route_id)
+                if attempt is None:
+                    return "review_attempt_missing"
+                fresh_attempt = await session.get(ExecutionAttempt, attempt.id, populate_existing=True)
+                if (
+                    fresh_attempt is None
+                    or fresh_attempt.work_item_id != item.id
+                    or fresh_attempt.status != ExecutionAttemptStatus.RUNNING.value
+                    or fresh_attempt.launch_claimed_at is None
+                    or fresh_attempt.launch_fence_token != attempt.launch_fence_token
+                ):
+                    return "work_item_fence_stale"
+                stale = await server_owned_state_code(route_id, fresh_attempt)
+                if stale is not None:
+                    return stale
+                return None
+
+            async def finalize(self, route_id: str, outcome: ReviewAdapterOutcome) -> None:
+                attempt = active_attempts.pop(route_id, None)
+                if attempt is None:
+                    return
+                normalized = normalize_review_findings(
+                    outcome.findings,
+                    immutable_review=immutable_review,
+                    allowed_paths={entry["path"] for entry in scope["pathScope"] if type(entry) is dict and isinstance(entry.get("path"), str)},
+                ) if outcome.status == "completed" else ()
+                normalized_findings_invalid = outcome.status == "completed" and normalized is None
+                status = {
+                    "completed": ExecutionAttemptStatus.COMPLETED.value,
+                    "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
+                    "cancelled": ExecutionAttemptStatus.CANCELLED.value,
+                    "stale": ExecutionAttemptStatus.REJECTED.value,
+                }.get(outcome.status, ExecutionAttemptStatus.FAILED.value)
+                if normalized_findings_invalid:
+                    status = ExecutionAttemptStatus.FAILED.value
+                await service._finalize_external_launch_attempt(
+                    session,
+                    item,
+                    attempt,
+                    status=status,
+                    operation=f"governed_delegated_review:{route_id}",
+                    failure_reason=None if status == ExecutionAttemptStatus.COMPLETED.value else ("normalized_findings_invalid" if normalized_findings_invalid else outcome.code),
+                    evidence={
+                        "artifactType": "governed_review_terminal_metadata",
+                        "routeId": route_id,
+                        "status": outcome.status,
+                        "code": outcome.code,
+                        "findings": list(normalized or ()),
+                        "findingCount": len(normalized or ()),
+                        "metadataOnly": True,
+                        "rawPayloadRetained": False,
+                    },
+                )
+
+        gate_state = self._ollama_provider_gate_state()
+        ollama_gate = {
+            "enabled": True,
+            "endpointApproved": True,
+            "modelApproved": True,
+            "endpointRef": "ollama-endpoint:192.168.1.128:11434/v1/chat/completions",
+            "modelRef": "ollama-model:qwen3-14b",
+        } if gate_state.get("enabled") is True else {"enabled": False}
+        bmad_gate = {
+            "routeAllowed": "bmad_local" in authorized_route_ids,
+            "adapterAllowed": "bmad_local" in authorized_route_ids,
+            "toolsAllowed": "bmad_local" in authorized_route_ids,
+            "registeredRunnerId": self._bounded_review_bmad_runner_id,
+        }
+        coordinator = ReviewFallbackCoordinator(
+            claude=self._bounded_review_claude_adapter,
+            ollama=self._bounded_review_ollama_adapter,
+            bmad=self._bounded_review_bmad_adapter,
+        )
+        runtime = DurableDelegatedReviewRuntime(coordinator=coordinator, lifecycle=Lifecycle())
+        cancellation_watcher = asyncio.create_task(watch_durable_cancellation())
+        try:
+            return await runtime.execute(
+                immutable_review=immutable_review,
+                path_scope=scope["pathScope"],
+                materializer=transient_diff_materializer,
+                ollama_exact_gate=ollama_gate,
+                bmad_local_gate=bmad_gate,
+                cancellation_event=cancellation_event,
+                allowed_route_ids=authorized_route_ids,
+            )
+        except ValueError as exc:
+            # A pre-reservation current-state failure must not fall through to a provider.
+            return {"state": "blocked", "code": str(exc), "nextSafeAction": "reissue_disclosure_packet", "rawPayloadRetained": False}
+        finally:
+            cancellation_watcher.cancel()
+            try:
+                await cancellation_watcher
+            except asyncio.CancelledError:
+                pass
     async def get_local_evidence_explanation(
         self,
         session: AsyncSession,
@@ -32900,6 +33484,7 @@ class SupervisorService:
         if not event_type.startswith("execution_attempt."):
             return 1000
         return {
+            "prepared": 105,
             "planned": 100,
             "approved": 110,
             "starting": 120,
@@ -34076,7 +34661,7 @@ class SupervisorService:
     def _lane_status_for_attempt(self, status: str) -> str:
         if status in {"starting", "running"}:
             return "running"
-        if status in {"planned", "approved", "cancel_requested"}:
+        if status in {"prepared", "planned", "approved", "cancel_requested"}:
             return "pending"
         if status == "completed":
             return "complete"

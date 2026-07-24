@@ -274,21 +274,23 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   unlocked work while other lanes wait for CI, review, or an external gate.
   Parallel lanes retain the same BMAD, review, authority, evidence, and
   delivery requirements; concurrency never permits a lane to bypass them.
-- Claude Code CLI read-only review is a durable approved review lane when all
-  of these are true: the operator asks for Claude review or the active
-  end-to-end lane explicitly calls for independent Claude critique; the command
-  uses `claude -p` or an equivalent non-interactive read-only mode; tools are
-  limited to file reads/searches and no edit, shell, network-expanding, secret,
-  credential, browser profile, GitHub mutation, or filesystem mutation tools are
-  allowed; the prompt names a bounded review scope; a per-run spend cap is set
-  with `--max-budget-usd` and should default to `1` unless the operator approves
-  more; retained evidence is limited to summarized findings, file paths,
-  line references, command metadata, and verification results, not raw provider
-  payloads, reasoning traces, secrets, or unnecessary source copies. Record the
-  purpose, scope, command shape, budget cap, result, and any platform-level
-  veto in the lane evidence. This repo policy authorizes the attempt but does
-  not override system, tenant, provider, or sandbox policy if that layer blocks
-  the external review call.
+- Every review workflow uses the durable default route: Claude Code read-only
+  first, the exact approved local Ollama review route second when safely
+  available, then internal BMAD review. Claude uses `claude -p` or an equivalent
+  non-interactive read-only mode; tools are limited to file reads/searches and
+  no edit, shell, network-expanding, secret, credential, browser profile,
+  GitHub mutation, or filesystem mutation tools are allowed. The prompt names a
+  bounded review scope. Do not impose a repository per-run dollar cap or pass
+  `--max-budget-usd`; provider-account and platform controls still apply.
+  A Claude unavailability, tenant/provider veto, scope rejection, empty result,
+  or bounded failure records an explicit fallback reason before Ollama is
+  considered. Ollama is eligible only with its exact approved endpoint/model,
+  review approval, and sanitized path-scoped packet. Retained evidence is
+  limited to summarized findings, file paths, line references, command metadata,
+  route/fallback result, and verification results, not raw provider payloads,
+  reasoning traces, secrets, or unnecessary source copies. This repo policy
+  does not override system, tenant, provider, or sandbox policy; a veto falls
+  through to the next approved route rather than being bypassed.
 
 ## Alpha Slice Operating Model
 

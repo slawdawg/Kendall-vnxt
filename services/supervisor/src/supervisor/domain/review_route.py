@@ -16,6 +16,9 @@ from typing import Any
 DISCLOSURE_PACKET_SCHEMA_VERSION = "disclosure-packet/v1"
 DISCLOSURE_PACKET_MAX_UTF8_BYTES = 16 * 1024
 SIMULATED_REVIEW_ADAPTER_ID = "simulated-review-fixture/v1"
+CLAUDE_READONLY_INJECTED_ADAPTER_ID = "claude-readonly-injected/v1"
+OLLAMA_EXACT_INJECTED_ADAPTER_ID = "ollama-exact-injected/v1"
+BMAD_GOVERNED_RUNNER_ADAPTER_ID = "bmad-governed-runner/v1"
 NORMALIZED_FINDING_SCHEMA_VERSION = "normalized-finding/v1"
 SIMULATED_REVIEW_RESULT_SCHEMA_VERSION = "simulated-review-result/v2"
 _MISSING = object()
@@ -309,11 +312,14 @@ def _copy_disclosure_packet(value: object) -> dict[str, object] | None:
     immutable_review = _copy_strict_object(packet["immutableReview"], _IDENTITY_FIELDS)
     authority = _copy_strict_object(packet["authority"], _AUTHORITY_FIELDS)
     issuance = _copy_strict_object(packet["issuance"], _ISSUANCE_FIELDS)
-    scope = _copy_strict_object(packet["scope"], _SCOPE_FIELDS)
+    raw_scope = packet.get("scope")
+    if type(raw_scope) is not dict or set(raw_scope) not in ({"dataClass", "evidenceRefs"}, _SCOPE_FIELDS):
+        return None
+    scope = dict(raw_scope)
     route_allowlist = _copy_strict_array(packet["routeAllowlist"])
     adapter_allowlist = _copy_strict_array(packet["adapterAllowlist"])
     tool_allowlist = _copy_strict_array(packet["toolAllowlist"])
-    evidence_refs = _copy_strict_array(scope["evidenceRefs"]) if scope is not None else None
+    evidence_refs = _copy_strict_array(scope["evidenceRefs"])
     if any(item is None for item in (immutable_review, authority, issuance, scope, route_allowlist, adapter_allowlist, tool_allowlist, evidence_refs)):
         return None
     return {
@@ -446,7 +452,7 @@ _PACKET_FIELDS = frozenset(
 _IDENTITY_FIELDS = frozenset({"executionJobId", "exactHead", "digest"})
 _AUTHORITY_FIELDS = frozenset({"issuerId", "authorityRef", "valid"})
 _ISSUANCE_FIELDS = frozenset({"issuedAt", "expiresAt", "revocationState", "cancellationState", "singleUse"})
-_SCOPE_FIELDS = frozenset({"dataClass", "evidenceRefs"})
+_SCOPE_FIELDS = frozenset({"dataClass", "evidenceRefs", "pathScope"})
 _SAFE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9._:/-]{1,180}$")
 _SAFE_EVIDENCE_REF = re.compile(r"^evidence:sha256:[0-9a-f]{64}$")
 _EXACT_HEAD = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -476,9 +482,9 @@ def validate_disclosure_packet(
     if not _safe_id(packet.get("disclosurePacketId")):
         reasons.append("packet_id_invalid")
     _validate_identity(packet.get("immutableReview"), reasons, immutable_review)
-    _validate_string_list(packet.get("routeAllowlist"), "route", reasons, {"report_only", "simulated"})
-    _validate_string_list(packet.get("adapterAllowlist"), "adapter", reasons, {"none", SIMULATED_REVIEW_ADAPTER_ID})
-    _validate_string_list(packet.get("toolAllowlist"), "tool", reasons, {"none"})
+    _validate_string_list(packet.get("routeAllowlist"), "route", reasons, {"report_only", "simulated", "claude_readonly", "ollama_exact", "bmad_local"})
+    _validate_string_list(packet.get("adapterAllowlist"), "adapter", reasons, {"none", SIMULATED_REVIEW_ADAPTER_ID, CLAUDE_READONLY_INJECTED_ADAPTER_ID, OLLAMA_EXACT_INJECTED_ADAPTER_ID, BMAD_GOVERNED_RUNNER_ADAPTER_ID})
+    _validate_string_list(packet.get("toolAllowlist"), "tool", reasons, {"none", "Read", "Grep"})
     _validate_subset(packet.get("routeAllowlist"), _policy_list(route_policy, "routeAllowlist"), "route", reasons)
     _validate_subset(packet.get("adapterAllowlist"), _policy_list(route_policy, "adapterAllowlist"), "adapter", reasons)
     _validate_subset(packet.get("toolAllowlist"), _policy_list(route_policy, "toolAllowlist"), "tool", reasons)
@@ -552,10 +558,18 @@ def _validate_scope(value: object, reasons: list[str]) -> None:
     if type(value) is not dict:
         reasons.append("scope_invalid")
         return
-    _inspect_fields(value, _SCOPE_FIELDS, reasons)
-    if value.get("dataClass") != "metadata_only":
+    # pathScope is validated structurally below. Treating its metadata key as
+    # arbitrary content would reject every permitted sanitized diff packet.
+    _inspect_fields(value, _SCOPE_FIELDS, reasons, excluded_nested_fields=frozenset({"pathScope"}))
+    data_class = value.get("dataClass")
+    if data_class not in {"metadata_only", "sanitized_path_scoped_private_diff"}:
         reasons.append("data_class_invalid")
     _validate_evidence_refs(value.get("evidenceRefs"), reasons)
+    path_scope = value.get("pathScope")
+    if data_class == "metadata_only" and path_scope not in ([], None):
+        reasons.append("scope_invalid")
+    if data_class == "sanitized_path_scoped_private_diff":
+        _validate_path_scope(path_scope, reasons)
 
 
 def _valid_string_list(value: object, fixed_values: set[str]) -> bool:
@@ -590,8 +604,41 @@ def _validate_evidence_refs(value: object, reasons: list[str]) -> None:
         reasons.append("evidence_ref_allowlist_invalid")
 
 
+def _validate_path_scope(value: object, reasons: list[str]) -> None:
+    if type(value) is not list or not value or len(value) > 32:
+        reasons.append("path_scope_invalid")
+        return
+    paths: set[str] = set()
+    for ref in value:
+        if type(ref) is not dict or set(ref) != {"path", "diffDigest"}:
+            reasons.append("path_scope_invalid")
+            return
+        path = ref.get("path")
+        digest = ref.get("diffDigest")
+        if not _safe_scoped_path(path) or not _digest(digest) or path in paths:
+            reasons.append("path_scope_invalid")
+            return
+        paths.add(path)
+
+
+def _safe_scoped_path(value: object) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,239}", value):
+        return False
+    parts = value.split("/")
+    return all(
+        part not in {"", ".", "..", ".git"}
+        and not part.lower().startswith(".env")
+        and not any(word in part.lower() for word in ("secret", "credential", "token", "password", "key"))
+        for part in parts
+    )
+
+
 def _validate_subset(values: object, allowed: object, label: str, reasons: list[str]) -> None:
-    fixed_values = {"report_only", "simulated"} if label == "route" else ({"none", SIMULATED_REVIEW_ADAPTER_ID} if label == "adapter" else {"none"})
+    fixed_values = (
+        {"report_only", "simulated", "claude_readonly", "ollama_exact", "bmad_local"}
+        if label == "route"
+        else ({"none", SIMULATED_REVIEW_ADAPTER_ID, CLAUDE_READONLY_INJECTED_ADAPTER_ID, OLLAMA_EXACT_INJECTED_ADAPTER_ID, BMAD_GOVERNED_RUNNER_ADAPTER_ID} if label == "adapter" else {"none", "Read", "Grep"})
+    )
     if type(values) is not list or not _valid_string_list(allowed, fixed_values) or any(value not in allowed for value in values):
         reasons.append(f"{label}_not_allowed")
 
@@ -608,9 +655,27 @@ def _validate_route_adapter_pair(route_allowlist: object, adapter_allowlist: obj
         reasons.append("route_adapter_pair_invalid")
     if SIMULATED_REVIEW_ADAPTER_ID in adapter_allowlist and "simulated" not in route_allowlist:
         reasons.append("route_adapter_pair_invalid")
+    if "claude_readonly" in route_allowlist and CLAUDE_READONLY_INJECTED_ADAPTER_ID not in adapter_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if "ollama_exact" in route_allowlist and OLLAMA_EXACT_INJECTED_ADAPTER_ID not in adapter_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if "bmad_local" in route_allowlist and BMAD_GOVERNED_RUNNER_ADAPTER_ID not in adapter_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if CLAUDE_READONLY_INJECTED_ADAPTER_ID in adapter_allowlist and "claude_readonly" not in route_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if OLLAMA_EXACT_INJECTED_ADAPTER_ID in adapter_allowlist and "ollama_exact" not in route_allowlist:
+        reasons.append("route_adapter_pair_invalid")
+    if BMAD_GOVERNED_RUNNER_ADAPTER_ID in adapter_allowlist and "bmad_local" not in route_allowlist:
+        reasons.append("route_adapter_pair_invalid")
 
 
-def _inspect_fields(value: dict[str, object], allowed: frozenset[str], reasons: list[str]) -> None:
+def _inspect_fields(
+    value: dict[str, object],
+    allowed: frozenset[str],
+    reasons: list[str],
+    *,
+    excluded_nested_fields: frozenset[str] = frozenset(),
+) -> None:
     for key in value:
         if not isinstance(key, str):
             reasons.append("packet_malformed")
@@ -618,7 +683,7 @@ def _inspect_fields(value: dict[str, object], allowed: frozenset[str], reasons: 
         if key not in allowed:
             reasons.append("forbidden_field" if _FORBIDDEN_NAME.search(key) else "unknown_field")
     for key, nested in value.items():
-        if isinstance(key, str) and key in allowed and _contains_forbidden_text(nested, identifier_value=key in _IDENTIFIER_VALUE_FIELDS):
+        if isinstance(key, str) and key in allowed and key != "scope" and key not in excluded_nested_fields and _contains_forbidden_text(nested, identifier_value=key in _IDENTIFIER_VALUE_FIELDS):
             reasons.append("forbidden_content")
 
 

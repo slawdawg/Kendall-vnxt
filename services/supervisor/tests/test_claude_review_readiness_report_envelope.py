@@ -41,14 +41,14 @@ def _valid_report() -> dict[str, object]:
             _check("source-mutation", "Source mutation"),
         ],
         "scarcityPolicy": [
-            _check("scarce-use", "Scarce use"),
+            _check("scarce-use", "Default review route"),
             _check("budget-record", "Budget record"),
             _check("review-trigger", "Review trigger"),
         ],
         "stopLines": [
             "This report does not approve Claude CLI process launch.",
             "This report does not approve sending code, diffs, prompts, repository context, or credentials to Claude.",
-            "This report does not approve consuming scarce Claude subscription usage.",
+            "This report does not override provider-account, tenant, or platform controls.",
         ],
         "nextSafeActions": [
             "Define a review-only command shape before bounded Claude review execution."
@@ -57,7 +57,7 @@ def _valid_report() -> dict[str, object]:
         "processLaunchApproved": False,
         "reviewTaskExecutionApproved": False,
         "sourceMutationApproved": False,
-        "scarceUseApproved": False,
+        "scarceUseApproved": True,
     }
 
 

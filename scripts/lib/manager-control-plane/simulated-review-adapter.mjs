@@ -17,7 +17,7 @@ const PACKET_FIELDS = Object.freeze(["schemaVersion", "disclosurePacketId", "imm
 const ROUTE_POLICY_FIELDS = Object.freeze(["routeAllowlist", "adapterAllowlist", "toolAllowlist", "policyState", "capabilityState", "resourceState"]);
 const AUTHORITY_FIELDS = Object.freeze(["issuerId", "authorityRef", "valid"]);
 const ISSUANCE_FIELDS = Object.freeze(["issuedAt", "expiresAt", "revocationState", "cancellationState", "singleUse"]);
-const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs"]);
+const SCOPE_FIELDS = Object.freeze(["dataClass", "evidenceRefs", "pathScope"]);
 const FINDING_FIELDS = Object.freeze(["schemaVersion", "findingId", "rule", "severity", "pathOrRef", "lineOrRange", "summary", "remediation", "reviewedHead", "digest"]);
 const SEVERITIES = Object.freeze(["info", "low", "medium", "high"]);
 const FALLBACKS = Object.freeze(["none", "timeout"]);
@@ -303,8 +303,12 @@ function copyDisclosurePacket(value) {
   const adapterAllowlist = copyStrictArray(packet.adapterAllowlist);
   const toolAllowlist = copyStrictArray(packet.toolAllowlist);
   const evidenceRefs = scope ? copyStrictArray(scope.evidenceRefs) : null;
+  const pathScope = scope ? copyStrictArray(scope.pathScope) : null;
+  // The fixture remains strictly metadata-only. It recognizes the canonical
+  // empty path scope but never becomes an execution path for private diffs.
   return immutableReview && authority && issuance && scope && routeAllowlist && adapterAllowlist && toolAllowlist && evidenceRefs
-    ? { ...packet, immutableReview, authority, issuance, scope: { ...scope, evidenceRefs }, routeAllowlist, adapterAllowlist, toolAllowlist }
+    && pathScope && ownDataValue(scope, "dataClass") === "metadata_only" && pathScope.length === 0
+    ? { ...packet, immutableReview, authority, issuance, scope: { ...scope, evidenceRefs, pathScope }, routeAllowlist, adapterAllowlist, toolAllowlist }
     : null;
 }
 

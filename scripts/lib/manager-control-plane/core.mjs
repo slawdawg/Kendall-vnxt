@@ -48,6 +48,9 @@ export {
   disclosurePacketCanonicalDigest,
   disclosurePacketUtf8Bytes,
   isDisclosurePacketSizeAllowed,
+  selectCanonicalReviewFallback,
+  CANONICAL_REVIEW_FALLBACK_ORDER,
+  CANONICAL_REVIEW_FALLBACK_SCHEMA_VERSION,
 } from "./review-route.mjs";
 
 export {

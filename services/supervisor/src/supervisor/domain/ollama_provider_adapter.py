@@ -1,26 +1,14 @@
-import asyncio
-import http.client
-import json
-import socket
-import time
+"""Task-specific local evidence adapter over the bounded provider transport."""
+
+from __future__ import annotations
+
 from dataclasses import dataclass
 from threading import Event
 from typing import Any
-from urllib.parse import urlsplit
 
-MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1024
-
-
-class OllamaProviderHTTPError(OSError):
-    def __init__(self, status: int) -> None:
-        self.status = status
-        if status == 429:
-            self.status_label = "rate-limited"
-        elif 500 <= status <= 599:
-            self.status_label = "unavailable"
-        else:
-            self.status_label = "failed"
-        super().__init__(f"Ollama provider returned HTTP {status}.")
+from supervisor.domain.bounded_provider_transport import (
+    BoundedProviderTransport,
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +52,8 @@ class OllamaProviderResult:
 
 
 class OllamaProviderAdapter:
+    """Evidence-only facade; it cannot receive a review diff or arbitrary prompt."""
+
     endpoint_family = "approved_vm_to_host_ollama_openai_compatible"
 
     def __init__(
@@ -78,6 +68,12 @@ class OllamaProviderAdapter:
         self.model_id = model_id
         self.connect_timeout_seconds = connect_timeout_seconds
         self.total_timeout_seconds = total_timeout_seconds
+        self._transport = BoundedProviderTransport(
+            endpoint_url=endpoint_url,
+            model_id=model_id,
+            connect_timeout_seconds=connect_timeout_seconds,
+            total_timeout_seconds=total_timeout_seconds,
+        )
 
     async def explain(
         self,
@@ -87,152 +83,55 @@ class OllamaProviderAdapter:
         cancellation_event: Event | None = None,
     ) -> OllamaProviderResult:
         prompt = self._build_prompt(evidence_summary=evidence_summary, evidence_count=evidence_count)
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(self._post_chat_completion, prompt, cancellation_event),
-                timeout=self.total_timeout_seconds,
-            )
-        except TimeoutError:
-            return self._terminal_result(
-                status="timed_out",
-                prompt=prompt,
-                response_summary="Provider request timed out; raw provider payload was not retained.",
-                timeout_state="total_timeout_elapsed",
-                cancellation_state="not_cancelled",
-            )
-        except asyncio.CancelledError:
-            if cancellation_event:
-                cancellation_event.set()
-            return self._terminal_result(
-                status="cancelled",
-                prompt=prompt,
-                response_summary="Provider request cancelled; raw provider payload was not retained.",
-                timeout_state="not_timed_out",
-                cancellation_state="cancel_requested_request_abort_recorded",
-            )
-        except OllamaProviderHTTPError as exc:
-            return self._terminal_result(
-                status=exc.status_label,
-                prompt=prompt,
-                response_summary=(
-                    f"Provider returned HTTP {exc.status}; raw provider payload was not retained."
-                ),
-                timeout_state="not_timed_out",
-                cancellation_state="not_cancelled",
-            )
-        except (http.client.HTTPException, OSError, ValueError) as exc:
-            return self._terminal_result(
-                status="failed",
-                prompt=prompt,
-                response_summary=f"Provider request failed before retained output; reason class {type(exc).__name__}.",
-                timeout_state="not_timed_out",
-                cancellation_state="not_cancelled",
-            )
-
-    def _post_chat_completion(self, prompt: str, cancellation_event: Event | None) -> OllamaProviderResult:
-        if cancellation_event and cancellation_event.is_set():
-            return self._terminal_result(
-                status="cancelled",
-                prompt=prompt,
-                response_summary="Provider request cancelled before send; raw provider payload was not retained.",
-                timeout_state="not_timed_out",
-                cancellation_state="cancel_requested_before_send",
-            )
-        body = json.dumps(
-            {
-                "model": self.model_id,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Summarize approved Kendall_vNxt evidence only. Do not request secrets, files, commands, or credentials.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": False,
-            }
-        ).encode("utf-8")
-        parsed = urlsplit(self.endpoint_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("Ollama endpoint must be an HTTP(S) URL with a host")
-        connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        connection = connection_type(
-            parsed.hostname,
-            parsed.port,
-            timeout=self.connect_timeout_seconds,
+        result = await self._transport.execute_evidence_explanation(
+            messages=(
+                {"role": "system", "content": "Summarize approved Kendall_vNxt evidence only. Do not request secrets, files, commands, or credentials."},
+                {"role": "user", "content": prompt},
+            ),
+            cancellation_event=cancellation_event,
         )
-        started = time.monotonic()
-        try:
-            connection.connect()
-            remaining = max(0.1, self.total_timeout_seconds - (time.monotonic() - started))
-            if connection.sock is not None:
-                connection.sock.settimeout(remaining)
-            path = parsed.path or "/"
-            if parsed.query:
-                path = f"{path}?{parsed.query}"
-            connection.request("POST", path, body=body, headers={"Content-Type": "application/json"})
-            response = connection.getresponse()
-            if not 200 <= response.status < 300:
-                raise OllamaProviderHTTPError(response.status)
-            response_body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
-            if len(response_body) > MAX_PROVIDER_RESPONSE_BYTES:
-                raise ValueError("Ollama provider response exceeded the metadata-only bound")
-            payload = json.loads(response_body.decode("utf-8"))
-        finally:
-            connection.close()
-        choice = (payload.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        content = message.get("content") if isinstance(message.get("content"), str) else ""
-        reasoning = message.get("reasoning") if isinstance(message.get("reasoning"), str) else ""
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        return self._from_transport_result(result, prompt)
+
+    def _from_transport_result(self, result: object, prompt: str) -> OllamaProviderResult:
+        """Map transient transport output to the historical evidence-only receipt."""
+        metadata = result.to_metadata()
         return OllamaProviderResult(
-            status="completed",
-            model_id=str(payload.get("model") or self.model_id),
-            endpoint_family=self.endpoint_family,
-            finish_reason=choice.get("finish_reason") if isinstance(choice.get("finish_reason"), str) else None,
+            status=self._compatibility_status(result.status),
+            model_id=result.model_id,
+            endpoint_family=result.endpoint_family,
+            finish_reason=result.finish_reason,
             prompt_summary=self._prompt_summary(prompt),
             response_summary=(
-                f"Provider returned {len(content)} content character(s) and {len(reasoning)} reasoning character(s); "
-                "raw text redacted."
+                f"Provider returned {len(result.content)} content character(s) and {len(result.reasoning)} reasoning character(s); raw text redacted."
+                if result.status == "completed"
+                else f"Provider request {result.status}; raw provider payload was not retained."
             ),
-            response_character_count=len(content),
-            reasoning_character_count=len(reasoning),
+            response_character_count=metadata["responseCharacterCount"],
+            reasoning_character_count=metadata["reasoningCharacterCount"],
             prompt_character_count=len(prompt),
-            completion_tokens=usage.get("completion_tokens") if isinstance(usage.get("completion_tokens"), int) else None,
-            prompt_tokens=usage.get("prompt_tokens") if isinstance(usage.get("prompt_tokens"), int) else None,
-            total_tokens=usage.get("total_tokens") if isinstance(usage.get("total_tokens"), int) else None,
+            completion_tokens=metadata["completionTokens"],
+            prompt_tokens=metadata["promptTokens"],
+            total_tokens=metadata["totalTokens"],
             redaction_applied=True,
             raw_payload_retained=False,
-            timeout_state="completed_before_total_timeout",
-            cancellation_state="not_cancelled",
+            timeout_state=result.timeout_state,
+            cancellation_state=result.cancellation_state,
         )
 
-    def _terminal_result(
-        self,
-        *,
-        status: str,
-        prompt: str,
-        response_summary: str,
-        timeout_state: str,
-        cancellation_state: str,
-    ) -> OllamaProviderResult:
-        return OllamaProviderResult(
-            status=status,
-            model_id=self.model_id,
-            endpoint_family=self.endpoint_family,
-            finish_reason=None,
-            prompt_summary=self._prompt_summary(prompt),
-            response_summary=response_summary,
-            response_character_count=0,
-            reasoning_character_count=0,
-            prompt_character_count=len(prompt),
-            completion_tokens=None,
-            prompt_tokens=None,
-            total_tokens=None,
-            redaction_applied=True,
-            raw_payload_retained=False,
-            timeout_state=timeout_state,
-            cancellation_state=cancellation_state,
+    def _post_chat_completion(self, prompt: str, cancellation_event: Event | None) -> OllamaProviderResult:
+        """Compatibility seam retained for existing focused adapter tests."""
+        result = self._transport._post_chat_completion(
+            (
+                {"role": "system", "content": "Summarize approved Kendall_vNxt evidence only. Do not request secrets, files, commands, or credentials."},
+                {"role": "user", "content": prompt},
+            ),
+            cancellation_event,
         )
+        return self._from_transport_result(result, prompt)
+
+    @staticmethod
+    def _compatibility_status(status: str) -> str:
+        return {"rate_limited": "rate-limited", "rejected": "failed"}.get(status, status)
 
     def _build_prompt(self, *, evidence_summary: str, evidence_count: int) -> str:
         return (
@@ -242,5 +141,6 @@ class OllamaProviderAdapter:
             "Return a concise operator-facing explanation based only on this approved summary."
         )
 
-    def _prompt_summary(self, prompt: str) -> str:
+    @staticmethod
+    def _prompt_summary(prompt: str) -> str:
         return f"Approved local evidence prompt, {len(prompt)} character(s), raw text not retained."
