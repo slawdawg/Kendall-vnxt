@@ -82,6 +82,8 @@ export function handoffAdmittedManagedLane(admission = {}, context = {}) {
   const admittedLaneEvidence = Object.freeze({
     taskId: boundedText(packet.taskId),
     branch: boundedText(packet.branch),
+    baseBranch: expected.baseBranch,
+    baseRef: expected.baseRef,
     worktreePath: worktreeIdentity.realPath,
     manifestPath: resolve(packet.manifestPath),
     owner: boundedText(packet.owner),
@@ -137,7 +139,7 @@ function startArgs(expected, description, context) {
     "--owner", expected.owner,
   ];
   if (context.noFetch !== false) args.push("--no-fetch");
-  if (boundedText(context.baseBranch)) args.push("--base", boundedText(context.baseBranch));
+  args.push("--base", expected.baseBranch);
   return args;
 }
 
@@ -183,7 +185,7 @@ function packetFailureReason(packet, expected) {
   if (packet.status !== "active" || packet.mutation !== "none; resume only") {
     return { code: "handoff.resume_packet_invalid", nextSafeAction: "Inspect codex-workspace resume evidence before any implementation worker is started." };
   }
-  for (const key of ["taskId", "branch", "worktreePath", "manifestPath"]) {
+  for (const key of ["taskId", "branch", "baseBranch", "baseRef", "worktreePath", "manifestPath"]) {
     if (resolve(String(packet[key] || "")) !== resolve(String(expected[key] || "")) && key.endsWith("Path")) {
       return { code: "handoff.resume_packet_invalid", nextSafeAction: "Inspect codex-workspace resume evidence before any implementation worker is started." };
     }
@@ -199,11 +201,13 @@ function laneEvidence(value) {
   const expected = {
     taskId: boundedText(lane.taskId),
     branch: boundedText(lane.branch),
+    baseBranch: boundedText(lane.baseBranch),
+    baseRef: boundedText(lane.baseRef),
     worktreePath: boundedText(lane.worktreePath),
     manifestPath: boundedText(lane.manifestPath),
     owner: boundedText(lane.owner),
   };
-  return Object.values(expected).every(Boolean) ? expected : null;
+  return Object.values(expected).every(Boolean) && hasProducerCompatibleBasePair(expected) ? expected : null;
 }
 
 function stateRootFor(expected) {
@@ -230,8 +234,31 @@ function hasMatchingManifestProvenance(manifest, expected, worktreePath) {
     && manifest.task_id === expected.taskId
     && manifest.status === "active"
     && manifest.branch === expected.branch
+    && manifest.base_branch === expected.baseBranch
+    && manifest.base_ref === expected.baseRef
     && manifest.owner === expected.owner
     && resolve(String(manifest.worktree_path || manifest.worktreePath || "")) === resolve(worktreePath);
+}
+
+function hasProducerCompatibleBasePair(value) {
+  const branch = boundedText(value.baseBranch);
+  const ref = boundedText(value.baseRef);
+  if (!branch || !ref || (ref !== branch && ref !== `origin/${branch}`)) return false;
+  if (branch === "HEAD") return true;
+  if (
+    branch !== branch.trim()
+    || branch.startsWith("-")
+    || branch.startsWith("refs/")
+    || /[\s\u0000-\u001f\u007f]/.test(branch)
+    || ["~", "^", ":", "?", "*", "[", "\\"].some((character) => branch.includes(character))
+    || branch.includes("..")
+    || branch.includes("@{")
+    || branch === "@"
+    || branch.endsWith(".")
+    || branch.endsWith("/")
+    || branch.includes("//")
+  ) return false;
+  return branch.split("/").every((component) => component.length > 0 && !component.startsWith(".") && !component.endsWith(".lock"));
 }
 
 function registeredWorktreeRegistry(worktreePath, context = {}) {

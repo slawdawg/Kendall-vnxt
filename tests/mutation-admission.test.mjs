@@ -203,6 +203,8 @@ test("only a usable safe exact codex-workspace resume packet yields resume", () 
   assert.deepEqual(result.laneEvidence, {
     taskId: resumePacket.taskId,
     branch: resumePacket.branch,
+    baseBranch: resumePacket.baseBranch,
+    baseRef: resumePacket.baseRef,
     worktreePath: resumePacket.worktreePath,
     manifestPath: resumePacket.manifestPath,
     owner: resumePacket.owner,
@@ -347,6 +349,8 @@ test("only a bounded start dry-run preview permits managed-lane creation", () =>
   assert.equal(result.canonicalOwner, "kendall");
   assert.deepEqual(result.projection, { column: "Prepare", attentionKind: null, derived: true });
   assert.equal(result.laneEvidence.taskId, createPreview.taskId);
+  assert.equal(result.laneEvidence.baseBranch, createPreview.baseBranch);
+  assert.equal(result.laneEvidence.baseRef, createPreview.baseRef);
   assert.match(result.nextSafeAction, /codex-workspace/i);
 });
 
@@ -355,7 +359,11 @@ test("missing or malformed candidate evidence fails closed instead of creating a
     undefined,
     {},
     { ...createPreview, mutation: "none; preview" },
-    { ...createPreview, plannedWrites: { ...createPreview.plannedWrites, branch: "other" } }
+    { ...createPreview, plannedWrites: { ...createPreview.plannedWrites, branch: "other" } },
+    { ...createPreview, baseBranch: undefined },
+    { ...createPreview, baseRef: undefined },
+    { ...createPreview, baseBranch: "dev", baseRef: "origin/main" },
+    { ...createPreview, baseBranch: "refs/heads/dev", baseRef: "refs/heads/dev" }
   ]) {
     const result = evaluateMutationAdmission({
       requestedActivity: "source_change",

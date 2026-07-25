@@ -13,6 +13,8 @@ function trustedLane(baseCheckoutPath, worktreePath) {
     laneEvidence: {
       taskId: "clean-lane",
       branch: "codex/clean-lane",
+      baseBranch: "dev",
+      baseRef: "origin/dev",
       manifestPath: "/state/tasks/clean-lane.json",
       owner: "codex:worker",
     },
@@ -34,6 +36,7 @@ test("allows a source-write handoff only from its trusted managed worktree", () 
 
     assert.equal(result.status, "allowed");
     assert.equal(result.reasonCode, "guard.managed_lane_approved");
+    assert.deepEqual(result.laneEvidence, trustedLane(base, worktree).laneEvidence);
     assert.equal(result.projection.column, "Prepare");
     assert.match(result.enforcementLimit, /manual shell|operator's editor/i);
   } finally {
@@ -95,6 +98,27 @@ test("denies an unknown or mismatched CWD and keeps read-only work outside the g
     assert.equal(readOnly.status, "not_applicable");
     assert.equal(readOnly.reasonCode, "guard.read_only_bypass");
     assert.equal(readOnly.projection.column, "Understand");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("denies legacy trusted evidence that omits the admitted base pair", () => {
+  const root = mkdtempSync(join(tmpdir(), "mutation-prewrite-legacy-"));
+  const base = join(root, "base");
+  const worktree = join(root, "worktrees", "clean-lane");
+  mkdirSync(base);
+  mkdirSync(worktree, { recursive: true });
+  try {
+    const lane = trustedLane(base, worktree);
+    delete lane.laneEvidence.baseRef;
+    const result = approveManagedSourceWrite({
+      operation: "source_write",
+      actualCwd: worktree,
+      trustedLane: lane,
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.reasonCode, "guard.trusted_lane_invalid");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

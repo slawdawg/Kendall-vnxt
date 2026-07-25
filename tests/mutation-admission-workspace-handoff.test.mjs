@@ -21,6 +21,8 @@ const createAdmission = Object.freeze({
   laneEvidence: {
     taskId: "clean-lane",
     branch: "codex/clean-lane",
+    baseBranch: "dev",
+    baseRef: "origin/dev",
     worktreePath,
     manifestPath,
     owner: "codex:worker",
@@ -61,6 +63,8 @@ test("create starts exactly the previewed codex-workspace lane then returns mana
   assert.deepEqual(result.laneEvidence, {
     taskId: "clean-lane",
     branch: "codex/clean-lane",
+    baseBranch: "dev",
+    baseRef: "origin/dev",
     worktreePath,
     manifestPath,
     owner: "codex:worker",
@@ -83,6 +87,7 @@ test("create starts exactly the previewed codex-workspace lane then returns mana
       "--state-root", "/workspace",
       "--owner", "codex:worker",
       "--no-fetch",
+      "--base", "dev",
     ],
   });
   assert.deepEqual(calls[1], {
@@ -92,6 +97,47 @@ test("create starts exactly the previewed codex-workspace lane then returns mana
       "--state-root", "/workspace", "--owner", "codex:worker",
     ],
   });
+});
+
+test("handoff blocks base drift in a fresh resume packet before a worker CWD is returned", () => {
+  const result = handoffAdmittedManagedLane(resumeAdmission, {
+    runner: () => jsonSuccess({ ...resumePacket(), baseRef: "origin/main" }),
+    exists: (path) => path === worktreePath,
+    ...safeManagedLaneContext(),
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.reasonCode, "handoff.resume_packet_invalid");
+  assert.equal("workerHandoff" in result, false);
+});
+
+test("handoff blocks manifest base drift before a worker CWD is returned", () => {
+  const result = handoffAdmittedManagedLane(resumeAdmission, {
+    runner: () => jsonSuccess(resumePacket()),
+    exists: (path) => path === worktreePath,
+    ...safeManagedLaneContext({ base_ref: "origin/main" }),
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.reasonCode, "handoff.manifest_provenance_invalid");
+  assert.equal("workerHandoff" in result, false);
+});
+
+test("handoff blocks legacy admitted evidence without its base pair before invoking the runner", () => {
+  let calls = 0;
+  const result = handoffAdmittedManagedLane({
+    ...resumeAdmission,
+    laneEvidence: { ...resumeAdmission.laneEvidence, baseBranch: undefined },
+  }, {
+    runner() {
+      calls += 1;
+      return jsonSuccess(resumePacket());
+    },
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.reasonCode, "handoff.lane_evidence_invalid");
+  assert.equal(calls, 0);
 });
 
 test("resume uses the owner-aware JSON packet and returns the existing managed CWD", () => {
@@ -330,6 +376,8 @@ function resumePacket() {
     taskId: "clean-lane",
     status: "active",
     branch: "codex/clean-lane",
+    baseBranch: "dev",
+    baseRef: "origin/dev",
     owner: "codex:worker",
     currentOwner: "codex:worker",
     ownerMatches: true,
@@ -354,15 +402,17 @@ function manifestPacket(overrides = {}) {
     task_id: "clean-lane",
     status: "active",
     branch: "codex/clean-lane",
+    base_branch: "dev",
+    base_ref: "origin/dev",
     owner: "codex:worker",
     worktree_path: worktreePath,
     ...overrides,
   };
 }
 
-function safeManagedLaneContext() {
+function safeManagedLaneContext(manifestOverrides = {}) {
   return {
-    readManifest: () => manifestPacket(),
+    readManifest: () => manifestPacket(manifestOverrides),
     worktreeRegistry: () => [
       { path: baseCheckout, branch: "refs/heads/dev", detached: false },
       { path: worktreePath, branch: "refs/heads/codex/clean-lane", detached: false },
