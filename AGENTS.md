@@ -111,6 +111,12 @@
     Operation not permitted` in the sandbox. Treat this as a local-network
     socket boundary; request approval for the exact read-only probe outside
     the sandbox rather than treating the target service as unreachable.
+  - `gh auth status` may report the active token invalid inside the sandbox
+    when the GitHub CLI cannot reach the operator's keychain-backed credential.
+    Treat that result as a keychain visibility boundary, not proof that the
+    token expired. Before requesting `gh auth login`, run the exact read-only
+    `gh auth status` command outside the sandbox; use that result as the
+    authoritative delivery-auth check.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying
@@ -463,6 +469,27 @@ durable, milestone-driven workflow rather than a single unbounded task.
 - Keep the operator's attention focused. Interrupt only for decisions, approvals,
   blockers, failed checks, scope expansion, scarce paid/review resources, or
   unsafe behavior.
+
+### Checkpoint Budget
+
+Within an explicitly authorized lane, carry routine work through to its next
+meaningful gate without requesting repeated confirmation for ordinary
+inspection, scoped verification, review, or standard delivery steps. Batch
+routine progress into concise state updates rather than stopping at ritual
+workflow checkpoints. Interrupt only when an action changes the approved
+authority or target scope, is destructive, requires human-only interaction,
+encounters a failed or ambiguous gate, expands paid/provider use, or presents
+a genuine product or safety decision. A previously granted lane authority
+remains effective for its stated scope.
+
+When an active task gains source changes and the operator asks for delivery
+through merge or cleanup—even if it did not start with an exact end-to-end-lane
+trigger phrase—adopt the work into the existing `codex-workspace` lifecycle
+before delivery. Use its managed-lane, `finish-pr`, exact-head merge, and
+cleanup gates rather than manually recreating branch, PR, CI, merge, and
+cleanup mechanics. If the current diff cannot be safely adopted, explain that
+specific runner limitation once and request the smallest necessary direction;
+do not silently fall back to a parallel ad-hoc delivery process.
 - For mutating automation, define recovery before or during implementation:
   resume, retry, rollback, inspect failure, preserve evidence, and cleanup.
 - Preserve metadata and links, not raw prompts, completions, reasoning traces,
