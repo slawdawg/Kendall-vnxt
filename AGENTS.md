@@ -482,6 +482,11 @@ encounters a failed or ambiguous gate, expands paid/provider use, or presents
 a genuine product or safety decision. A previously granted lane authority
 remains effective for its stated scope.
 
+For BMAD work, preserve skill-required interactive checkpoints by default. The
+operator may explicitly waive a named checkpoint as unnecessary for the current
+lane only; that waiver never bypasses safety, authority, destructive-action, or
+required external-approval gates.
+
 When an active task gains source changes and the operator asks for delivery
 through merge or cleanup—even if it did not start with an exact end-to-end-lane
 trigger phrase—adopt the work into the existing `codex-workspace` lifecycle
