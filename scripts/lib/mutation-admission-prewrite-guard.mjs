@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 
 const SOURCE_WRITE_OPERATION = "source_write";
 const ENFORCEMENT_LIMIT = "This guard covers supported manager worker handoffs only; it does not restrict the Operator's editor, manual shell commands, or arbitrary unwrapped local processes.";
+const MAX_BASE_BRANCH_LENGTH = 250;
+const MAX_BASE_REF_LENGTH = 257;
 
 /**
  * Approves the narrow, source-write-capable manager handoff after the worker
@@ -85,13 +87,31 @@ function boundedLaneEvidence(value) {
   const evidence = object(value);
   const taskId = boundedText(evidence.taskId);
   const branch = boundedText(evidence.branch);
-  const baseBranch = boundedText(evidence.baseBranch);
-  const baseRef = boundedText(evidence.baseRef);
+  const baseBranch = boundedBaseBranch(evidence.baseBranch);
+  const baseRef = boundedBaseRef(evidence.baseRef);
   const manifestPath = boundedText(evidence.manifestPath);
   const owner = boundedText(evidence.owner);
-  return taskId && branch && baseBranch && baseRef && manifestPath && owner
+  return taskId && branch && baseBranch && baseRef && hasProducerCompatibleBasePair(baseBranch, baseRef) && manifestPath && owner
     ? Object.freeze({ taskId, branch, baseBranch, baseRef, manifestPath, owner })
     : null;
+}
+
+function hasProducerCompatibleBasePair(branch, ref) {
+  if (ref !== branch && ref !== `origin/${branch}`) return false;
+  if (branch === "HEAD") return true;
+  if (
+    branch.startsWith("-")
+    || branch.startsWith("refs/")
+    || /[\s\u0000-\u001f\u007f]/.test(branch)
+    || ["~", "^", ":", "?", "*", "[", "\\"].some((character) => branch.includes(character))
+    || branch.includes("..")
+    || branch.includes("@{")
+    || branch === "@"
+    || branch.endsWith(".")
+    || branch.endsWith("/")
+    || branch.includes("//")
+  ) return false;
+  return branch.split("/").every((component) => component.length > 0 && !component.startsWith(".") && !component.endsWith(".lock"));
 }
 
 function pathIdentity(path, context) {
@@ -120,4 +140,17 @@ function object(value) {
 function boundedText(value, limit = 260) {
   const text = typeof value === "string" ? value.trim() : "";
   return text && text.length <= limit ? text : null;
+}
+
+function boundedBaseBranch(value) {
+  return boundedStrictText(value, MAX_BASE_BRANCH_LENGTH);
+}
+
+function boundedBaseRef(value) {
+  return boundedStrictText(value, MAX_BASE_REF_LENGTH);
+}
+
+function boundedStrictText(value, limit) {
+  const text = typeof value === "string" ? value : "";
+  return text && text === text.trim() && text.length <= limit ? text : null;
 }

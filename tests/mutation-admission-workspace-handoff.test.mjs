@@ -88,6 +88,7 @@ test("create starts exactly the previewed codex-workspace lane then returns mana
       "--owner", "codex:worker",
       "--no-fetch",
       "--base", "dev",
+      "--base-ref", "origin/dev",
     ],
   });
   assert.deepEqual(calls[1], {
@@ -97,6 +98,38 @@ test("create starts exactly the previewed codex-workspace lane then returns mana
       "--state-root", "/workspace", "--owner", "codex:worker",
     ],
   });
+});
+
+test("handoff retains the producer-valid maximum base pair in its exact start command", () => {
+  const baseBranch = "a".repeat(250);
+  const baseRef = `origin/${baseBranch}`;
+  const calls = [];
+  const admission = {
+    ...createAdmission,
+    laneEvidence: { ...createAdmission.laneEvidence, baseBranch, baseRef },
+  };
+  const result = handoffAdmittedManagedLane(admission, {
+    description: "Maximum base handoff",
+    runner(command, args) {
+      calls.push({ command, args });
+      if (args[1] === "start") return success();
+      return jsonSuccess({ ...resumePacket(), baseBranch, baseRef });
+    },
+    exists: (path) => path === worktreePath,
+    readManifest: () => manifestPacket({ base_branch: baseBranch, base_ref: baseRef }),
+    worktreeRegistry: () => [
+      { path: baseCheckout, branch: "refs/heads/dev", detached: false },
+      { path: worktreePath, branch: "refs/heads/codex/clean-lane", detached: false },
+    ],
+    realpath: (path) => path,
+    stat: (path) => ({ dev: 1, ino: path === baseCheckout ? 1 : 2 }),
+  });
+
+  assert.equal(baseRef.length, 257);
+  assert.equal(result.status, "ready");
+  assert.equal(result.laneEvidence.baseBranch, baseBranch);
+  assert.equal(result.laneEvidence.baseRef, baseRef);
+  assert.deepEqual(calls[0].args.slice(-4), ["--base", baseBranch, "--base-ref", baseRef]);
 });
 
 test("handoff blocks base drift in a fresh resume packet before a worker CWD is returned", () => {

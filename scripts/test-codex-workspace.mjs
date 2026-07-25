@@ -706,6 +706,152 @@ try {
     }
   });
 
+  test("start uses a validated explicit base ref without re-resolving the admitted pair", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const taskId = "explicit-base-ref-lane";
+    const branch = "codex/explicit-base-ref-lane";
+    const worktree = join(fixture.stateRoot, "worktrees", taskId);
+    try {
+      runGit(fixture.root, ["switch", "-q", "dev"]);
+      commitFile(fixture.root, "local-dev-only.txt", "local dev\n", "local dev advance");
+      const localDevHead = runGit(fixture.root, ["rev-parse", "dev"]).stdout;
+      runGit(fixture.root, ["switch", "-q", "main"]);
+
+      const result = runFixtureScript(fixture, [
+        "start", "explicit base ref lane",
+        "--base", "dev", "--base-ref", "dev", "--no-fetch",
+        "--task-id", taskId, "--branch", branch, "--worktree", worktree,
+        "--owner", "runner-a", "--state-root", fixture.stateRoot,
+      ]);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${taskId}.json`));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(manifest.base_branch === "dev", JSON.stringify(manifest));
+      assert(manifest.base_ref === "dev", JSON.stringify(manifest));
+      assert(runGit(worktree, ["rev-parse", "HEAD"]).stdout === localDevHead, "start did not use the explicit local base ref");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("invalid explicit base refs stop before fetch, manifest, branch, or worktree writes", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const taskId = "invalid-explicit-base-ref-lane";
+    const branch = "codex/invalid-explicit-base-ref-lane";
+    const worktree = join(fixture.stateRoot, "worktrees", taskId);
+    const manifestPath = join(fixture.stateRoot, "tasks", `${taskId}.json`);
+    try {
+      const beforeRefs = refSnapshot(fixture.root);
+      const beforeTasks = taskSnapshot(join(fixture.stateRoot, "tasks"));
+      for (const { baseBranch, baseRef } of [
+        { baseBranch: "dev", baseRef: "origin/main" },
+        { baseBranch: "unavailable", baseRef: "unavailable" },
+        { baseBranch: "a".repeat(251), baseRef: `origin/${"a".repeat(251)}` },
+      ]) {
+        const result = runFixtureScript(fixture, [
+          "start", "invalid explicit base ref lane",
+          "--base", baseBranch, "--base-ref", baseRef,
+          "--task-id", taskId, "--branch", branch, "--worktree", worktree,
+          "--owner", "runner-a", "--state-root", fixture.stateRoot,
+        ]);
+        assert(result.code !== 0, `${baseBranch}/${baseRef} unexpectedly started`);
+        assert(!existsSync(manifestPath), `${baseBranch}/${baseRef} wrote a manifest`);
+        assert(!existsSync(worktree), `${baseBranch}/${baseRef} created a worktree`);
+        assert(!branchExists(fixture.root, branch), `${baseBranch}/${baseRef} created a branch`);
+      }
+      assert(refSnapshot(fixture.root) === beforeRefs, "invalid explicit base refs changed refs");
+      assert(taskSnapshot(join(fixture.stateRoot, "tasks")) === beforeTasks, "invalid explicit base refs changed manifests");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("a valueless base-ref flag is rejected before fallback resolution or lane mutation", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const taskId = "valueless-base-ref-lane";
+    const branch = "codex/valueless-base-ref-lane";
+    const worktree = join(fixture.stateRoot, "worktrees", taskId);
+    const manifestPath = join(fixture.stateRoot, "tasks", `${taskId}.json`);
+    try {
+      runGit(fixture.root, ["branch", "true", "main"]);
+      runGit(fixture.root, ["update-ref", "refs/remotes/origin/true", "true"]);
+      const beforeRefs = refSnapshot(fixture.root);
+      const beforeTasks = taskSnapshot(join(fixture.stateRoot, "tasks"));
+      const result = runFixtureScript(fixture, [
+        "start", "valueless base ref lane",
+        "--base", "true", "--base-ref",
+        "--task-id", taskId, "--branch", branch, "--worktree", worktree,
+        "--owner", "runner-a", "--state-root", fixture.stateRoot,
+      ]);
+
+      assert(result.code !== 0, "valueless --base-ref unexpectedly started a lane");
+      assert(result.stderr.includes("--base-ref requires a value"), result.stderr || result.stdout);
+      assert(!existsSync(manifestPath), "valueless --base-ref wrote a manifest");
+      assert(!existsSync(worktree), "valueless --base-ref created a worktree");
+      assert(!branchExists(fixture.root, branch), "valueless --base-ref created a branch");
+      assert(refSnapshot(fixture.root) === beforeRefs, "valueless --base-ref changed refs");
+      assert(taskSnapshot(join(fixture.stateRoot, "tasks")) === beforeTasks, "valueless --base-ref changed manifests");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("a 258-character explicit ref reaches the ref-length gate before lane mutation", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const baseBranch = "a".repeat(250);
+    const baseRef = `origin/${baseBranch}x`;
+    const taskId = "oversized-explicit-base-ref-lane";
+    const branch = "codex/oversized-explicit-base-ref-lane";
+    const worktree = join(fixture.stateRoot, "worktrees", taskId);
+    const manifestPath = join(fixture.stateRoot, "tasks", `${taskId}.json`);
+    try {
+      runGit(fixture.root, ["branch", baseBranch, "main"]);
+      runGit(fixture.root, ["update-ref", `refs/remotes/origin/${baseBranch}`, baseBranch]);
+      const beforeRefs = refSnapshot(fixture.root);
+      const beforeTasks = taskSnapshot(join(fixture.stateRoot, "tasks"));
+      const result = runFixtureScript(fixture, [
+        "start", "oversized explicit base ref lane",
+        "--base", baseBranch, "--base-ref", baseRef,
+        "--task-id", taskId, "--branch", branch, "--worktree", worktree,
+        "--owner", "runner-a", "--state-root", fixture.stateRoot,
+      ]);
+
+      assert(baseRef.length === 258, baseRef.length);
+      assert(result.code !== 0, "258-character --base-ref unexpectedly started a lane");
+      assert(result.stderr.includes("Explicit base ref exceeds maximum length 257: 258"), result.stderr || result.stdout);
+      assert(!existsSync(manifestPath), "oversized --base-ref wrote a manifest");
+      assert(!existsSync(worktree), "oversized --base-ref created a worktree");
+      assert(!branchExists(fixture.root, branch), "oversized --base-ref created a branch");
+      assert(refSnapshot(fixture.root) === beforeRefs, "oversized --base-ref changed refs");
+      assert(taskSnapshot(join(fixture.stateRoot, "tasks")) === beforeTasks, "oversized --base-ref changed manifests");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("start accepts the producer-valid 250/257 explicit base pair", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const baseBranch = "a".repeat(250);
+    const baseRef = `origin/${baseBranch}`;
+    try {
+      runGit(fixture.root, ["branch", baseBranch, "main"]);
+      runGit(fixture.root, ["update-ref", `refs/remotes/${baseRef}`, baseBranch]);
+      const result = runFixtureScript(fixture, [
+        "start", "maximum explicit base ref lane", "--dry-run", "--summary-json",
+        "--base", baseBranch, "--base-ref", baseRef,
+        "--owner", "runner-a", "--state-root", fixture.stateRoot,
+      ]);
+      const packet = JSON.parse(result.stdout);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(baseRef.length === 257, baseRef.length);
+      assert(packet.baseBranch === baseBranch, result.stdout || result.stderr);
+      assert(packet.baseRef === baseRef, result.stdout || result.stderr);
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("start rejects refspec-shaped base before fetch or worktree planning", () => {
     const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
     try {

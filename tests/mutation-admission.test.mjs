@@ -354,6 +354,33 @@ test("only a bounded start dry-run preview permits managed-lane creation", () =>
   assert.match(result.nextSafeAction, /codex-workspace/i);
 });
 
+test("admission retains a producer-valid 250/257 base pair without truncation", () => {
+  const baseBranch = "a".repeat(250);
+  const baseRef = `origin/${baseBranch}`;
+  const preview = { ...createPreview, baseBranch, baseRef };
+  const create = evaluateMutationAdmission({
+    requestedActivity: "source_change",
+    authorizedScope: true,
+    baseCheckout: cleanBaseCheckout,
+    createPreview: preview,
+  });
+  const resume = evaluateMutationAdmission({
+    requestedActivity: "source_change",
+    authorizedScope: true,
+    baseCheckout: cleanBaseCheckout,
+    managedLane: { ...resumePacket, baseBranch, baseRef },
+    expectedRequestIdentity: { taskId: resumePacket.taskId, owner: resumePacket.owner },
+  });
+
+  assert.equal(baseRef.length, 257);
+  assert.equal(create.outcome, "create_managed_lane");
+  assert.equal(create.laneEvidence.baseBranch, baseBranch);
+  assert.equal(create.laneEvidence.baseRef, baseRef);
+  assert.equal(resume.outcome, "resume_managed_lane");
+  assert.equal(resume.laneEvidence.baseBranch, baseBranch);
+  assert.equal(resume.laneEvidence.baseRef, baseRef);
+});
+
 test("missing or malformed candidate evidence fails closed instead of creating a lane", () => {
   for (const createPlan of [
     undefined,
