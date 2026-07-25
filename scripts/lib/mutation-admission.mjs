@@ -235,6 +235,10 @@ function hasUsableCreatePreview(preview) {
   const plannedWrites = object(preview.plannedWrites);
   return isBoundedText(preview.taskId)
     && isBoundedText(preview.branch)
+    && isBoundedText(preview.baseBranch)
+    && isBoundedText(preview.baseRef)
+    && hasProducerCompatibleBaseBranch(preview.baseBranch)
+    && hasProducerCompatibleBaseRef(preview)
     && isBoundedText(preview.worktreePath)
     && isBoundedText(preview.manifestPath)
     && preview.mutation === "none; dry-run summary only"
@@ -254,6 +258,8 @@ function laneEvidence(lane) {
   return Object.freeze({
     taskId: boundedText(lane.taskId),
     branch: boundedText(lane.branch),
+    baseBranch: boundedText(lane.baseBranch),
+    baseRef: boundedText(lane.baseRef),
     worktreePath: boundedText(lane.worktreePath),
     manifestPath: boundedText(lane.manifestPath),
     owner: boundedText(lane.owner),

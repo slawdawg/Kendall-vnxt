@@ -85,10 +85,12 @@ function boundedLaneEvidence(value) {
   const evidence = object(value);
   const taskId = boundedText(evidence.taskId);
   const branch = boundedText(evidence.branch);
+  const baseBranch = boundedText(evidence.baseBranch);
+  const baseRef = boundedText(evidence.baseRef);
   const manifestPath = boundedText(evidence.manifestPath);
   const owner = boundedText(evidence.owner);
-  return taskId && branch && manifestPath && owner
-    ? Object.freeze({ taskId, branch, manifestPath, owner })
+  return taskId && branch && baseBranch && baseRef && manifestPath && owner
+    ? Object.freeze({ taskId, branch, baseBranch, baseRef, manifestPath, owner })
     : null;
 }
 
