@@ -105,6 +105,63 @@ surface, skip party mode and continue with the normal single-agent lane flow
 when that still satisfies the objective. Stop only when the lane objective
 cannot be completed without expanded party-mode authority.
 
+## Source-Change Admission
+
+Before starting or resuming a lane, classify structured request facts without
+mutating Git or workspace state. The admission result is metadata-only and has
+one outcome:
+
+- `read_only`: inspection or GitHub triage stays in **Understand**; do not
+  create a branch, manifest, or worktree.
+- `create_managed_lane`: a clear, authorized source change enters **Prepare**;
+  preview or start it through `node ./scripts/codex-workspace.mjs start`.
+- `resume_managed_lane`: a uniquely safe existing lane enters **Prepare**;
+  inspect it through `node ./scripts/codex-workspace.mjs resume <task> --json`.
+- `recovery_required`: an unmanaged dirty Base Checkout appears in **Needs
+  attention**. Preserve the diff and inspect it only; do not stage, publish,
+  reset, clean, move, or adopt it from this route.
+- `decision_needed`: ambiguity, missing authority, or unsafe lane evidence
+  appears in **Needs attention** until the named decision is resolved.
+
+Routine clear source-change requests should move directly to the managed-lane
+preview or resume route without an extra operator checkpoint. Admission never
+falls back to in-place publishing and does not create a second lifecycle or
+persisted board state.
+
+### Managed-lane handoff
+
+After admission, the handoff adapter consumes the completed result rather than
+reclassifying the request. A `create_managed_lane` result invokes only
+`codex-workspace start` for the previewed task, branch, worktree, manifest
+state root, and owner; it then reads the resulting `resume --json` packet.
+A `resume_managed_lane` result reads that owner-aware packet directly. The
+worker may start only when the returned worktree exists, differs from the Base
+Checkout, and exactly matches the admitted task, branch, manifest, and owner.
+The handoff returns a structured `cwd`, not a shell `cd` command. It also
+requires the active manifest and registered Git worktree to agree, and compares
+resolved filesystem identity so a symlink to the Base Checkout cannot qualify.
+For an existing manager-owned warm worker, the manager restarts that worker in
+the validated `cwd` and confirms the pane path before delivering its handoff
+pointer. The manager drift check permits that single `tmux respawn-pane -c`
+operation only as this validated managed-CWD rebind; arbitrary respawns and
+other destructive tmux controls remain rejected. Immediately after that rebind, the supported manager implementation
+handoff compares the actual pane CWD by realpath/inode identity to the trusted
+managed-lane evidence. It rejects the Base Checkout (including a symlink alias),
+unknown CWDs, and mismatches before the source-edit handoff is delivered; the
+returned route is to start or resume the named managed lane. A source-write
+manager handoff without admitted managed-CWD evidence is rejected before its
+pointer is delivered; read-only work bypasses this guard. This is an agent-path safeguard, not filesystem-wide
+protection: it does not constrain the Operator's editor, manual shell, or an
+arbitrary unwrapped local process. The Base Checkout is derived from Git's
+primary-worktree metadata, and the selected entry must be non-detached and
+match the admitted branch.
+
+For `read_only`, `recovery_required`, and `decision_needed`, do not invoke a
+workspace command. A failed start or unsafe resume result is a blocked handoff:
+inspect the named `codex-workspace` route (and use its explicit takeover flow
+when applicable), rather than inventing a branch, manifest, worker, or
+publisher.
+
 ## Lane Lifecycle
 
 1. **Start or resume lane.** Use `node ./scripts/codex-workspace.mjs` as the

@@ -2,22 +2,25 @@ import { spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAntiChurnGuidanceHookCli } from "./anti-churn-guidance-hook.mjs";
 import { protectedBranches as branchFoundationProtectedBranches } from "./lib/branch-foundation.mjs";
 import { buildAssignmentInventory } from "./lib/codex-workspace-assignment-inventory.mjs";
-import { currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
+import { inspectBaseCheckoutRecovery } from "./lib/base-checkout-recovery.mjs";
+import { assertWorkspaceStateStorage, currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 import {
   evaluateEpicBatchAdmission,
@@ -334,6 +337,9 @@ rebuild-index options:
 
 doctor options:
   --summary-json            Print a bounded JSON readiness summary.
+  --break-glass             Record a metadata-only Base Checkout break-glass recovery marker.
+  --resolve-break-glass     Resolve the active recovery marker; requires --resolution.
+  --resolution <text>       Bounded operator resolution evidence for --resolve-break-glass.
 `);
 }
 
@@ -2233,6 +2239,7 @@ function finishPr(argv) {
     assertKnownVerificationProfile(String(options.verify || ""));
   }
   assertLaneOwner(manifest, options);
+  assertBaseCheckoutRecoveryClearForDelivery(state);
   requireGh("finish-pr");
   if (manifest.mode === "experiment") {
     throw new Error("This workspace is marked as experiment mode. Create a PR only after changing its manifest mode to pr.");
@@ -3406,16 +3413,15 @@ function cleanupMerged(argv, mode = {}) {
   }
   const state = workspaceState(options);
   const records = mode.currentOnly
-    ? [findManifest(state, positional.join(" "), { preferCurrentWorktree: true })]
+    ? [findCleanupManifest(state, positional.join(" "), { preferCurrentWorktree: true })]
     : positional.length > 0
-      ? [findManifest(state, positional.join(" "))]
-      : readManifests(state);
+      ? [findCleanupManifest(state, positional.join(" "))]
+      : readCleanupManifests(state);
   const deleteRemote = Boolean(options.deleteRemote);
   const apply = Boolean(options.apply);
   const currentOwner = currentLaneOwner(options);
   const summaryResults = [];
-
-  requireGh("cleanup-merged");
+  let ghChecked = false;
 
   for (const record of records) {
     const { manifest, path: manifestPath } = record;
@@ -3426,6 +3432,11 @@ function cleanupMerged(argv, mode = {}) {
       continue;
     }
     assertLaneOwner(manifest, options);
+    const cleanupTarget = assertCleanupWorktreeForMerged(manifest, state);
+    if (!ghChecked) {
+      requireGh("cleanup-merged");
+      ghChecked = true;
+    }
     reconcileManifest(manifest, { refreshPr: true });
 
     const pr = prView(manifest);
@@ -3451,7 +3462,7 @@ function cleanupMerged(argv, mode = {}) {
       continue;
     }
 
-    const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+    const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, cleanupTarget);
     const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
     if (worktreeStatus.dirty) {
       if (options.summaryJson) {
@@ -3535,11 +3546,12 @@ function cleanupMerged(argv, mode = {}) {
       assertLaneOwner(lockedManifest, options);
       claimLaneOwner(lockedManifest, options);
       Object.assign(manifest, lockedManifest);
+      const lockedCleanupTarget = assertCleanupWorktreeForMerged(manifest, state);
       try {
         // Capture target state as soon as this worker owns the lock. Every
         // later lock-time hold must leave cleanup_partial with current,
         // target-specific resume evidence rather than a generic error alone.
-        const lockedCleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+        const lockedCleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, lockedCleanupTarget);
         recordCleanupTargetEvidence(manifest, lockedCleanupCwd, { deleteRemote });
         const lockedRemoteResumeBlocker = cleanupRemoteResumeBlocker(manifest, deleteRemote);
         if (lockedRemoteResumeBlocker) {
@@ -4249,7 +4261,7 @@ function cleanupIntegrated(argv) {
     throw new Error(`Base ref not found locally: ${baseRef}`);
   }
 
-  const records = query ? [exactTreeCloseout ? findManifestByExactTaskId(state, query) : findManifest(state, query)] : readManifests(state);
+  const records = query ? [exactTreeCloseout ? findCleanupManifestByExactTaskId(state, query) : findCleanupManifest(state, query)] : readCleanupManifests(state);
   const currentOwner = currentLaneOwner(options);
   const results = records.map((record) => cleanupIntegratedPlan(record, state, { baseRef, currentOwner, options, exactTreeCloseout }));
 
@@ -4341,7 +4353,8 @@ function cleanupIntegratedPlan(record, state, context) {
   }
 
   assertSafeBranch(manifest.branch);
-  const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+  const cleanupTarget = assertCleanupWorktreeForIntegrated(manifest, state, { strict, strictResume });
+  const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, cleanupTarget);
   const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
   const strictRegistration = strict ? strictWorktreeRegistration(manifest, cleanupCwd) : null;
   if (strict && strictRegistration.status !== "matched") {
@@ -4802,7 +4815,8 @@ function cleanupSuperseded(argv) {
 
   const proofInput = cleanupSupersessionInput(options);
   const state = workspaceState(options);
-  const record = findManifest(state, positional[0]);
+  const record = findCleanupManifest(state, positional[0]);
+  assertCleanupWorktreeForSuperseded(record.manifest, state, proofInput);
   requireGh("cleanup-superseded");
   const plan = cleanupSupersededPlan(record, state, { options, proofInput, currentOwner: currentLaneOwner(options) });
 
@@ -4989,9 +5003,10 @@ function cleanupSupersededPlan(record, state, context) {
   }
 
   assertSafeBranch(manifest.branch);
+  const cleanupTarget = assertCleanupWorktreeForSuperseded(manifest, state, proofInput);
   let cleanupCwd;
   try {
-    cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+    cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, cleanupTarget);
   } catch (error) {
     return { ...base, reason: error.message };
   }
@@ -5328,7 +5343,9 @@ function supersededAssignmentGate(state, manifest, options, proofInput) {
     if (assignment.task_id !== manifest.task_id) return { status: "blocked", reason: `source assignment ${assignmentId} task does not exactly match source task` };
     const backlogItemId = String(assignment.source_backlog_item?.item_id || "").trim();
     if (backlogItemId && backlogItemId !== manifest.task_id) return { status: "blocked", reason: `source assignment ${assignmentId} backlog item does not exactly match source task` };
-    if (assignment.branch !== manifest.branch || !samePath(assignment.worktree_path, manifest.worktree_path)) {
+    const matchingWorktree = samePath(assignment.worktree_path, manifest.worktree_path) ||
+      (manifest.status === "cleanup_partial" && sameAbsentPath(assignment.worktree_path, manifest.worktree_path));
+    if (assignment.branch !== manifest.branch || !matchingWorktree) {
       return { status: "blocked", reason: `source assignment ${assignmentId} does not exactly match source branch and worktree` };
     }
     if (!String(assignment.owner || "").trim()) return { status: "blocked", reason: `source assignment ${assignmentId} owner is required` };
@@ -5775,7 +5792,10 @@ function assertSupersededRemoteState(manifest, cleanupCwd, expectedHeadSha, expe
 }
 
 
-function cleanupRepositoryRoot(worktreePath) {
+function cleanupRepositoryRoot(worktreePath, state = null, validatedTarget = null) {
+  if (state && !validatedTarget) {
+    assertManagedWorktreePath(worktreePath, state);
+  }
   const main = mainWorktreePath();
   if (main && !samePath(main, worktreePath) && existsSync(main)) {
     return main;
@@ -6131,26 +6151,22 @@ function cleanupOrphans(argv) {
     throw new Error("cleanup-orphans --summary-json is only supported without --apply.");
   }
 
-  if (!existsSync(state.worktreesDir)) {
-    if (options.summaryJson) {
-      console.log(
-        JSON.stringify(
-          buildCleanupOrphansSummary({ state, query, all: Boolean(options.all), directories: [], hiddenMetadataSkipped: 0 }),
-          null,
-          2,
-        ),
-      );
-      return;
+  const managedRoot = assertManagedWorktreeRoot(state);
+  const entries = readdirSync(managedRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Refusing to inspect managed worktree root: ${state.worktreesDir} (cleanup target must not be a symlink: ${entry.name}).`);
     }
-    console.log(`No managed worktree directory exists: ${state.worktreesDir}`);
-    return;
   }
-
-  const directoryEntries = readdirSync(state.worktreesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  const directoryEntries = entries.filter((entry) => entry.isDirectory());
   const hiddenMetadataSkipped = directoryEntries.filter((entry) => hiddenWorkspaceMetadataEntry(entry.name)).length;
   const directories = directoryEntries
     .filter((entry) => !hiddenWorkspaceMetadataEntry(entry.name))
-    .map((entry) => join(state.worktreesDir, entry.name))
+    .map((entry) => join(managedRoot, entry.name))
+    .map((worktreePath) => {
+      assertManagedWorktreePath(worktreePath, state);
+      return worktreePath;
+    })
     .filter((worktreePath) => !worktreeListed(worktreePath))
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
 
@@ -6445,10 +6461,53 @@ function buildRebuildIndexSummary({ state, records, planned, skipped }) {
   };
 }
 
+function assertBaseCheckoutRecoveryClearForDelivery(state) {
+  const markerPath = baseCheckoutRecoveryMarkerPath(state);
+  const recoveryMarker = readBaseCheckoutRecoveryMarker(markerPath);
+  const recovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+  if (recovery.status !== "clear") {
+    throw new Error(`Base Checkout recovery prevents delivery (${recovery.reasonCode}). ${recovery.nextSafeAction}`);
+  }
+  return recovery;
+}
+
 function doctor(argv) {
   const { options } = parseOptions(argv);
-  const state = workspaceState(options);
+  const requiresRecoveryMarkerWrite = options.breakGlass === true || options.resolveBreakGlass === true;
+  const state = requiresRecoveryMarkerWrite
+    ? assertWorkspaceStateStorage(options, { repoRoot }).state
+    : workspaceState(options);
   const findings = [];
+  if (options.breakGlass === true && options.resolveBreakGlass === true) {
+    throw new Error("doctor --break-glass and --resolve-break-glass cannot be used together.");
+  }
+
+  const markerPath = baseCheckoutRecoveryMarkerPath(state);
+  let recoveryMarker = readBaseCheckoutRecoveryMarker(markerPath);
+  let baseCheckoutRecovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+  let recoveryMutation = "none; inspection only";
+  if (options.breakGlass === true) {
+    if (!baseCheckoutRecovery.checkout) {
+      throw new Error("Cannot record Base Checkout break-glass recovery without trusted checkout metadata.");
+    }
+    recoveryMarker = activeBreakGlassMarker(baseCheckoutRecovery.checkout);
+    writeJsonAtomic(markerPath, recoveryMarker);
+    baseCheckoutRecovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+    recoveryMutation = "metadata-only break-glass recovery marker recorded";
+  } else if (options.resolveBreakGlass === true) {
+    const resolution = boundedRecoveryResolution(options.resolution);
+    if (!resolution) throw new Error("doctor --resolve-break-glass requires --resolution with at least 10 non-whitespace characters.");
+    if (!isActiveBreakGlassMarker(recoveryMarker)) throw new Error("No active Base Checkout break-glass recovery marker is available to resolve.");
+    recoveryMarker = {
+      ...recoveryMarker,
+      status: "resolved",
+      resolvedAt: new Date().toISOString(),
+      resolution,
+    };
+    writeJsonAtomic(markerPath, recoveryMarker);
+    baseCheckoutRecovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+    recoveryMutation = "metadata-only break-glass recovery marker resolved";
+  }
 
   collectCommand(findings, "git", ["--version"]);
   collectCommand(findings, "node", ["--version"]);
@@ -6505,10 +6564,15 @@ function doctor(argv) {
   }
 
   if (options.summaryJson) {
-    console.log(JSON.stringify(buildDoctorSummary({ state, findings }), null, 2));
+    console.log(JSON.stringify(buildDoctorSummary({ state, findings, baseCheckoutRecovery, recoveryMutation }), null, 2));
   } else {
     for (const finding of findings) {
       console.log(`${finding.ok ? "OK" : finding.optional ? "WARN" : "FAIL"}: ${finding.message}`);
+    }
+    if (baseCheckoutRecovery.status === "recovery_required") {
+      console.log(`WARN: Base Checkout recovery needed: ${baseCheckoutRecovery.reasonCode}. ${baseCheckoutRecovery.nextSafeAction}`);
+    } else if (baseCheckoutRecovery.status === "inspection_unknown") {
+      console.log(`WARN: Base Checkout recovery inspection unavailable. ${baseCheckoutRecovery.nextSafeAction}`);
     }
   }
 
@@ -6517,7 +6581,7 @@ function doctor(argv) {
   }
 }
 
-function buildDoctorSummary({ state, findings }) {
+function buildDoctorSummary({ state, findings, baseCheckoutRecovery = null, recoveryMutation = "none; inspection only" }) {
   const failures = findings.filter((finding) => !finding.ok && !finding.optional);
   const warnings = findings.filter((finding) => !finding.ok && finding.optional);
   const ok = findings.filter((finding) => finding.ok);
@@ -6537,8 +6601,52 @@ function buildDoctorSummary({ state, findings }) {
     warningsTruncated: warnings.length > 10,
     okFindings: ok.slice(0, 10),
     okFindingsTruncated: ok.length > 10,
-    mutation: "none; summary only",
+    baseCheckoutRecovery,
+    mutation: recoveryMutation === "none; inspection only" ? "none; summary only" : recoveryMutation,
   };
+}
+
+function baseCheckoutRecoveryMarkerPath(state) {
+  return join(state.root, "recovery", "base-checkout.json");
+}
+
+function readBaseCheckoutRecoveryMarker(path) {
+  if (!existsSync(path)) return null;
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : { status: "invalid" };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+function activeBreakGlassMarker(checkout) {
+  return {
+    schema_version: 1,
+    status: "active",
+    reasonCode: "recovery.break_glass_edit",
+    recordedAt: new Date().toISOString(),
+    checkout: {
+      identity: checkout.identity,
+      path: checkout.path,
+      branch: checkout.branch,
+      head: checkout.head,
+      changedPathCount: checkout.changedPathCount,
+    },
+    mutation: "metadata-only recovery marker",
+  };
+}
+
+function isActiveBreakGlassMarker(marker) {
+  return marker?.status === "active"
+    && marker.reasonCode === "recovery.break_glass_edit"
+    && typeof marker.recordedAt === "string"
+    && marker.recordedAt.length > 0;
+}
+
+function boundedRecoveryResolution(value) {
+  const normalized = String(value || "").trim().replace(/\s+/g, " ");
+  return normalized.replace(/\s/g, "").length >= 10 ? normalized.slice(0, 256) : null;
 }
 
 function readManifests(state) {
@@ -6565,6 +6673,74 @@ function readManifests(state) {
       return true;
     })
     .sort((left, right) => left.manifest.task_id.localeCompare(right.manifest.task_id));
+}
+
+function readCleanupManifests(state) {
+  return readManifestRecords(state)
+    .map((record) => {
+      if (record.error) return record;
+      try {
+        validateManifest(record.manifest, record.path);
+        return record;
+      } catch (error) {
+        return { path: record.path, error };
+      }
+    })
+    .filter((record) => {
+      if (!record.error) return true;
+      console.error(`WARN: skipping invalid cleanup manifest ${record.path}: ${record.error.message}`);
+      return false;
+    })
+    .sort((left, right) => left.manifest.task_id.localeCompare(right.manifest.task_id));
+}
+
+function findCleanupManifest(state, query, options = {}) {
+  const manifests = readCleanupManifests(state);
+  if (manifests.length === 0) {
+    throw new Error(`No Codex workspace manifests found under ${state.tasksDir}`);
+  }
+
+  if (options.preferCurrentWorktree) {
+    const currentRoot = currentGitRoot();
+    const current = manifests.find((record) => samePath(record.manifest.worktree_path, currentRoot));
+    if (current && !query.trim()) return current;
+  }
+
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    const active = manifests.filter((record) => record.manifest.status !== "closed");
+    if (active.length === 1) return active[0];
+    throw new Error("Specify a task query; multiple active workspaces exist.");
+  }
+
+  const searchableValues = (manifest) =>
+    [manifest.task_id, manifest.title, manifest.description, manifest.branch].filter(Boolean);
+  const exactMatches = manifests.filter(({ manifest }) =>
+    searchableValues(manifest).some((value) => String(value).toLowerCase() === normalized),
+  );
+  if (exactMatches.length === 1) return exactMatches[0];
+  if (exactMatches.length > 1) {
+    throw new Error(`Query matched multiple workspaces: ${exactMatches.map((match) => match.manifest.task_id).join(", ")}`);
+  }
+
+  const matches = manifests.filter(({ manifest }) =>
+    searchableValues(manifest).some((value) => String(value).toLowerCase().includes(normalized)),
+  );
+  if (matches.length === 0) throw new Error(`No workspace matched query: ${query}`);
+  if (matches.length > 1) {
+    throw new Error(`Query matched multiple workspaces: ${matches.map((match) => match.manifest.task_id).join(", ")}`);
+  }
+  return matches[0];
+}
+
+function findCleanupManifestByExactTaskId(state, taskId) {
+  assertSafeTaskId(taskId);
+  const matches = readCleanupManifests(state).filter(({ manifest }) => manifest.task_id === taskId);
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    throw new Error(`Strict exact-tree closeout requires a manifest whose task_id exactly equals ${taskId}.`);
+  }
+  throw new Error(`Strict exact-tree closeout found multiple manifests with task_id ${taskId}.`);
 }
 
 function repairManifests(argv) {
@@ -10108,13 +10284,200 @@ function generatedCleanupArtifacts() {
   ];
 }
 
+function assertManagedWorktreeRoot(state) {
+  if (typeof state?.worktreesDir !== "string" || !state.worktreesDir.trim()) {
+    throw new Error("Refusing to inspect managed worktree root: missing managed root target.");
+  }
+  const managedRootPath = resolve(state.worktreesDir);
+  let managedRootStat;
+  try {
+    managedRootStat = lstatSync(managedRootPath);
+  } catch {
+    throw new Error(`Refusing to inspect managed worktree root: ${state.worktreesDir} (canonical identity is unavailable).`);
+  }
+  if (managedRootStat.isSymbolicLink()) {
+    throw new Error(`Refusing to inspect managed worktree root: ${state.worktreesDir} (managed root must not be a symlink).`);
+  }
+  const managedRoot = canonicalExistingPath(managedRootPath);
+  if (!managedRoot) {
+    throw new Error(`Refusing to inspect managed worktree root: ${state.worktreesDir} (canonical identity is unavailable).`);
+  }
+  return managedRoot;
+}
+
 function assertManagedWorktreePath(worktreePath, state) {
-  const target = resolve(worktreePath);
-  const managedRoot = resolve(state.worktreesDir);
+  if (typeof worktreePath !== "string" || !worktreePath.trim()) {
+    throw new Error("Refusing to remove unmanaged worktree path: missing worktree target.");
+  }
+  const targetPath = resolve(worktreePath);
+  const managedRoot = assertManagedWorktreeRoot(state);
+  let targetStat;
+  try {
+    targetStat = lstatSync(targetPath);
+  } catch {
+    throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath} (target identity is unavailable).`);
+  }
+  if (targetStat.isSymbolicLink()) {
+    throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath} (cleanup target must not be a symlink).`);
+  }
+  const target = canonicalExistingPath(targetPath);
+  if (!target) {
+    throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath} (canonical identity is unavailable).`);
+  }
   const rel = relative(managedRoot, target);
   if (!rel || rel.startsWith("..") || resolve(managedRoot, rel) !== target) {
     throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath}`);
   }
+  const trustedBase = canonicalExistingPath(mainWorktreePath());
+  if (trustedBase && target === trustedBase) {
+    throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath} (target resolves to the trusted Base Checkout).`);
+  }
+  return { target, managedRoot };
+}
+
+function assertRegisteredManagedWorktree(manifest, state) {
+  assertSafeBranch(manifest.branch);
+  const target = assertManagedWorktreePath(manifest.worktree_path, state);
+  const registryCwd = mainWorktreePath();
+  const result = git(["worktree", "list", "--porcelain"], { cwd: registryCwd });
+  if (result.code !== 0) {
+    throw new Error(`Refusing cleanup: managed worktree registration evidence is unavailable for ${manifest.task_id}.`);
+  }
+  const expectedBranch = `refs/heads/${manifest.branch}`;
+  const match = parseWorktreePorcelain(result.stdout).find(
+    (record) => record.branch === expectedBranch && samePath(record.path, target.target),
+  );
+  if (!match) {
+    throw new Error(`Refusing cleanup: ${manifest.task_id} target is not a registered managed worktree on ${manifest.branch}.`);
+  }
+  return target;
+}
+
+function assertCleanupWorktreeForMerged(manifest, state) {
+  return assertCleanupWorktreeTarget(manifest, state, {
+    absentPartial: () => exactMergedCleanupPartialResume(manifest),
+  });
+}
+
+function assertCleanupWorktreeForIntegrated(manifest, state, context) {
+  return assertCleanupWorktreeTarget(manifest, state, {
+    absentPartial: () => context.strictResume && exactIntegratedCleanupPartialResume(manifest, context.strict),
+  });
+}
+
+function assertCleanupWorktreeForSuperseded(manifest, state, proofInput) {
+  return assertCleanupWorktreeTarget(manifest, state, {
+    absentPartial: () => exactSupersededCleanupPartialResume(manifest, proofInput),
+  });
+}
+
+function assertCleanupWorktreeTarget(manifest, state, options = {}) {
+  assertSafeBranch(manifest.branch);
+  const targetPath = resolve(manifest.worktree_path);
+  if (!managedWorktreePathAbsent(targetPath)) {
+    return assertRegisteredManagedWorktree(manifest, state);
+  }
+  if (!options.absentPartial?.()) {
+    throw new Error(`Refusing cleanup: ${manifest.task_id} absent worktree target requires an exact cleanup_partial journal with expected branch/head evidence.`);
+  }
+  const target = assertManagedAbsentWorktreePath(manifest.worktree_path, state);
+  const registry = managedWorktreeRegistry(manifest, state);
+  if (registry.some((record) => resolve(record.path) === target.target)) {
+    throw new Error(`Refusing cleanup: ${manifest.task_id} absent worktree target remains registered and must be repaired before resuming.`);
+  }
+  return { ...target, absent: true };
+}
+
+function managedWorktreePathAbsent(targetPath) {
+  try {
+    lstatSync(targetPath);
+    return false;
+  } catch (error) {
+    if (error?.code === "ENOENT") return true;
+    throw new Error(`Refusing to remove unmanaged worktree path: ${targetPath} (target identity is unavailable).`);
+  }
+}
+
+function sameAbsentPath(left, right) {
+  if (typeof left !== "string" || typeof right !== "string" || !left.trim() || !right.trim()) return false;
+  return resolve(left) === resolve(right) && managedWorktreePathAbsent(resolve(left));
+}
+
+function assertManagedAbsentWorktreePath(worktreePath, state) {
+  if (typeof worktreePath !== "string" || !worktreePath.trim()) {
+    throw new Error("Refusing to remove unmanaged worktree path: missing worktree target.");
+  }
+  const target = resolve(worktreePath);
+  const managedRoot = assertManagedWorktreeRoot(state);
+  const rel = relative(managedRoot, target);
+  if (!rel || rel.startsWith("..") || resolve(managedRoot, rel) !== target) {
+    throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath}`);
+  }
+  let inspected = managedRoot;
+  for (const segment of rel.split(sep)) {
+    inspected = join(inspected, segment);
+    try {
+      const stat = lstatSync(inspected);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath} (cleanup target must not traverse a symlink).`);
+      }
+      const canonical = canonicalExistingPath(inspected);
+      if (!canonical || (canonical !== managedRoot && !canonical.startsWith(`${managedRoot}${sep}`))) {
+        throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath}`);
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT") return { target, managedRoot };
+      throw error;
+    }
+  }
+  throw new Error(`Refusing cleanup: ${worktreePath} is present and must have registered worktree evidence.`);
+}
+
+function exactCleanupPartialJournal(manifest, expectedHead) {
+  const expected = exactGitObjectIdOrNull(expectedHead);
+  return manifest.status === "cleanup_partial" &&
+    typeof manifest.cleanup_started_at === "string" && Boolean(manifest.cleanup_started_at) &&
+    manifest.cleanup_branch === manifest.branch &&
+    exactGitObjectIdOrNull(manifest.cleanup_expected_head_sha) === expected;
+}
+
+function exactMergedCleanupPartialResume(manifest) {
+  const expectedHead = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha);
+  const targets = manifest.cleanup_target_evidence;
+  return exactCleanupPartialJournal(manifest, expectedHead) &&
+    targets?.worktree?.required === true &&
+    targets.worktree.state === "absent" &&
+    targets.worktree.exists === false &&
+    targets.worktree.listed === false &&
+    resolve(targets.worktree.path || "") === resolve(manifest.worktree_path) &&
+    (targets.localBranch?.state === "absent" ||
+      (targets.localBranch?.state === "present" && exactGitObjectIdOrNull(targets.localBranch.sha) === expectedHead));
+}
+
+function exactIntegratedCleanupPartialResume(manifest, strict) {
+  const evidence = manifest.supersession_closeout_evidence;
+  return exactCleanupPartialJournal(manifest, manifest.cleanup_expected_head_sha) &&
+    evidence?.mode === "exact-tree-closeout/v1" &&
+    evidence.baseRef === "origin/dev" &&
+    evidence.supersessionProvenance === strict.provenance &&
+    evidence.closeoutReason === strict.closeoutReason &&
+    exactGitObjectIdOrNull(evidence.sourceTree) &&
+    exactGitObjectIdOrNull(evidence.baseTree);
+}
+
+function exactSupersededCleanupPartialResume(manifest, proofInput) {
+  return exactCleanupPartialJournal(manifest, proofInput.sourceHead) &&
+    sameSupersessionPartialResume(manifest, proofInput) &&
+    exactGitObjectIdOrNull(manifest.cleanup_supersession_evidence?.proof?.source?.requestedHead) === proofInput.sourceHead;
+}
+
+function managedWorktreeRegistry(manifest, state) {
+  const registryCwd = mainWorktreePath();
+  const result = git(["worktree", "list", "--porcelain"], { cwd: registryCwd });
+  if (result.code !== 0) {
+    throw new Error(`Refusing cleanup: managed worktree registration evidence is unavailable for ${manifest.task_id}.`);
+  }
+  return parseWorktreePorcelain(result.stdout);
 }
 
 function worktreeListed(worktreePath, cwd = repoRoot) {
@@ -10347,5 +10710,16 @@ function run(commandName, commandArguments, options = {}) {
 }
 
 function samePath(left, right) {
-  return resolve(left) === resolve(right);
+  const leftCanonical = canonicalExistingPath(left);
+  const rightCanonical = canonicalExistingPath(right);
+  return Boolean(leftCanonical && rightCanonical && leftCanonical === rightCanonical);
+}
+
+function canonicalExistingPath(path) {
+  if (typeof path !== "string" || !path.trim()) return null;
+  try {
+    return resolve(realpathSync.native(path));
+  } catch {
+    return null;
+  }
 }

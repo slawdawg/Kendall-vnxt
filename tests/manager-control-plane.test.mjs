@@ -94,6 +94,34 @@ const COURSE_CORRECTION_TEMPLATE_ITEMS = [
   { id: "6-6-overnight-run-recovery-and-housekeeping", title: "Overnight Run Recovery and Housekeeping" },
 ];
 
+const ADMITTED_MANAGER_FIXTURE_CWD = "/tmp/manager-admitted-fixture-worktree";
+
+function fixtureMutationAdmission(taskId) {
+  return { outcome: "resume_managed_lane", laneEvidence: { taskId } };
+}
+
+function fixtureAdmittedLaneHandoff(admission) {
+  const taskId = admission?.laneEvidence?.taskId;
+  assert.ok(taskId, "admitted manager fixture must carry its task identity");
+  return {
+    status: "ready",
+    workerHandoff: { cwd: ADMITTED_MANAGER_FIXTURE_CWD },
+    laneEvidence: { taskId, branch: `codex/${taskId}`, manifestPath: `/tmp/${taskId}.json`, owner: "manager-runner" },
+    preWriteGuardEvidence: {
+      baseCheckoutPath: "/tmp/manager-admitted-fixture-base",
+      worktreePath: ADMITTED_MANAGER_FIXTURE_CWD,
+      laneEvidence: { taskId, branch: `codex/${taskId}`, manifestPath: `/tmp/${taskId}.json`, owner: "manager-runner" },
+    },
+  };
+}
+
+function fixturePreWriteGuard(input) {
+  assert.equal(input.operation, "source_write");
+  assert.equal(input.actualCwd, ADMITTED_MANAGER_FIXTURE_CWD);
+  assert.equal(input.trustedLane?.worktreePath, ADMITTED_MANAGER_FIXTURE_CWD);
+  return { status: "allowed", reasonCode: "guard.managed_lane_approved" };
+}
+
 function ensureIgnoredBmadFixture(relativePath, content = "# Fixture\n") {
   const path = join(process.cwd(), relativePath);
   mkdirSync(dirname(path), { recursive: true });
@@ -3959,14 +3987,17 @@ test("worker code review implementer history survives normal reusable handoff wi
       {
         storyStatuses: { "old-implemented-lane": "done", "new-lane": "ready-for-dev" },
         receiptCheck: false,
+        admittedLaneHandoff: fixtureAdmittedLaneHandoff,
+        preWriteGuard: fixturePreWriteGuard,
         tmuxRunner(_command, args) {
           if (args[0] === "list-panes") return { status: 0, stdout: "1:%92\n", stderr: "" };
+          if (args[0] === "display-message") return { status: 0, stdout: `${ADMITTED_MANAGER_FIXTURE_CWD}\n`, stderr: "" };
           return { status: 0, stdout: "", stderr: "" };
         },
         workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
         assignmentSummary: { summary: { laneAssignments: [
-          { assignmentId: "bmad-old-implemented-lane", taskId: "task-old-implemented-lane", status: "claimed", branch: "codex/old-implemented-lane", owner: "manager-runner", phase: "handoff" },
-          { assignmentId: "bmad-new-lane", taskId: "task-new-lane", status: "claimed", branch: "codex/new-lane", owner: "manager-runner", phase: "handoff" },
+          { assignmentId: "bmad-old-implemented-lane", taskId: "task-old-implemented-lane", status: "claimed", branch: "codex/old-implemented-lane", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-old-implemented-lane") },
+          { assignmentId: "bmad-new-lane", taskId: "task-new-lane", status: "claimed", branch: "codex/new-lane", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-new-lane") },
         ] } },
       },
     );
@@ -4235,7 +4266,18 @@ test("worker code review shared lock recovers a reused pid only when process ide
     writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify({ runId, pid: process.pid, process: { startTime: "reused-pid-old-start", commandLineDigest: "old-command" }, token: "stale", createdAt: "2026-07-09T00:00:00.000Z" })}\n`);
     const applied = buildWorkerHandoffPlan(
       { runId, stateRoot, apply: true, limit: 1 },
-      { workerAssignmentLockTimeoutMs: 0, receiptCheck: false, workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm" }] } }, assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-next", taskId: "task-next", status: "claimed", branch: "codex/lane-next", owner: "manager-runner", phase: "handoff" }] } }, tmuxRunner: () => ({ status: 0, stdout: "1:%92\n", stderr: "" }) },
+      {
+        workerAssignmentLockTimeoutMs: 0,
+        receiptCheck: false,
+        admittedLaneHandoff: fixtureAdmittedLaneHandoff,
+        preWriteGuard: fixturePreWriteGuard,
+        workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [{ workerId: "codex-2", owner: `${runId}/codex-2`, runId, sessionName: "codex-2", state: "warm" }] } },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-next", taskId: "task-next", status: "claimed", branch: "codex/lane-next", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-next") }] } },
+        tmuxRunner(_command, args) {
+          if (args[0] === "display-message") return { status: 0, stdout: `${ADMITTED_MANAGER_FIXTURE_CWD}\n`, stderr: "" };
+          return { status: 0, stdout: "1:%92\n", stderr: "" };
+        },
+      },
     );
     assert.equal(applied.status, "ready", JSON.stringify(applied.blockers || []));
   } finally {
@@ -12881,7 +12923,7 @@ test("worker handoff gate previews durable handoff files for warm workers", () =
     const assignmentSummary = {
       summary: {
         laneAssignments: [
-          { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+          { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-1") },
           { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", phase: "verified" },
           { assignmentId: "lane-3", taskId: "task-3", status: "claimed", branch: "codex/lane-3", phase: "handoff" },
         ],
@@ -12904,6 +12946,182 @@ test("worker handoff gate previews durable handoff files for warm workers", () =
     assert.ok(handoffAction);
     assert.match(handoffAction.nextAction, /--run-id 'manager-test'/);
     assert.match(handoffAction.nextAction, /--state-root '/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff consumes a ready admitted managed CWD before activating the worker", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-admitted-worker-handoff-"));
+  const worker = { workerId: "codex-admitted", owner: "manager-test/codex-admitted", runId: "manager-test", sessionName: "codex-admitted", state: "warm", lastHeartbeatAt: new Date().toISOString() };
+  const admission = { outcome: "resume_managed_lane", laneEvidence: { taskId: "task-admitted" } };
+  let calls = 0;
+  const tmuxCalls = [];
+  const admittedLaneHandoff = (receivedAdmission) => {
+    calls += 1;
+    assert.equal(receivedAdmission, admission);
+    return { status: "ready", workerHandoff: { cwd: "/tmp/admitted-managed-worktree" }, laneEvidence: { taskId: "task-admitted" } };
+  };
+  const context = {
+    receiptCheck: false,
+    preWriteGuard(input) {
+      tmuxCalls.push(["pre-write-guard", input.actualCwd]);
+      assert.equal(input.operation, "source_write");
+      assert.equal(input.actualCwd, "/tmp/admitted-managed-worktree");
+      return { status: "allowed", reasonCode: "guard.managed_lane_approved" };
+    },
+    admittedLaneHandoff,
+    tmuxRunner(_command, args) {
+      tmuxCalls.push(args);
+      if (args[0] === "list-panes") return { status: 0, stdout: "1:%91\n", stderr: "" };
+      if (args[0] === "display-message") return { status: 0, stdout: "/tmp/admitted-managed-worktree\n", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
+    assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-admitted", taskId: "task-admitted", status: "claimed", branch: "codex/lane-admitted", owner: "manager-test/codex-admitted", phase: "handoff", mutationAdmission: admission }] } },
+  };
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), `${JSON.stringify([worker], null, 2)}\n`);
+    const preview = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 1 }, context);
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.pairings[0].worktreePath, "/tmp/admitted-managed-worktree");
+    assert.deepEqual(preview.summary.pairings[0].workerHandoff, { cwd: "/tmp/admitted-managed-worktree" });
+
+    const applied = buildWorkerHandoffPlan({ runId: "manager-test", stateRoot, limit: 1, apply: true }, context);
+    assert.equal(applied.status, "ready");
+    assert.equal(JSON.parse(readFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), "utf8"))[0].worktreePath, "/tmp/admitted-managed-worktree");
+    assert.ok(calls >= 2);
+    const respawnIndex = tmuxCalls.findIndex((args) => args[0] === "respawn-pane");
+    const pointerIndex = tmuxCalls.findIndex((args) => args[0] === "load-buffer");
+    const guardIndex = tmuxCalls.findIndex((args) => args[0] === "pre-write-guard");
+    assert.ok(respawnIndex >= 0, "managed worker must be restarted in its validated CWD");
+    assert.ok(guardIndex >= 0, "pre-write guard must approve the rebound managed CWD");
+    assert.ok(respawnIndex < pointerIndex, "CWD rebind must finish before the source-edit handoff pointer");
+    assert.ok(respawnIndex < guardIndex && guardIndex < pointerIndex, "guard approval must occur after CWD rebind and before source-edit handoff");
+    assert.deepEqual(tmuxCalls[respawnIndex].slice(0, 7), ["respawn-pane", "-k", "-t", "%91", "-c", "/tmp/admitted-managed-worktree", "env"]);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff reports the exact managed-lane route when pre-write approval is denied", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-admitted-worker-prewrite-denied-"));
+  const worker = { workerId: "codex-denied", owner: "manager-test/codex-denied", runId: "manager-test", sessionName: "codex-denied", state: "warm", lastHeartbeatAt: new Date().toISOString() };
+  const admission = { outcome: "resume_managed_lane", laneEvidence: { taskId: "task-denied" } };
+  const tmuxCalls = [];
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 1, apply: true },
+      {
+        receiptCheck: false,
+        admittedLaneHandoff: () => ({ status: "ready", workerHandoff: { cwd: "/tmp/admitted-managed-worktree" }, laneEvidence: { taskId: "task-denied" } }),
+        preWriteGuard: () => ({
+          status: "blocked",
+          reasonCode: "guard.base_checkout_target",
+          nextSafeAction: "Start or resume a distinct managed lane through codex-workspace before source edits.",
+        }),
+        tmuxRunner(_command, args) {
+          tmuxCalls.push(args);
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%92\n", stderr: "" };
+          if (args[0] === "display-message") return { status: 0, stdout: "/tmp/admitted-managed-worktree\n", stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-denied", taskId: "task-denied", status: "claimed", branch: "codex/lane-denied", owner: "manager-test/codex-denied", phase: "handoff", mutationAdmission: admission }] } },
+      },
+    );
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-handoff-prewrite-guard-blocked");
+    assert.equal(result.blockers[0].nextAction, "Start or resume a distinct managed lane through codex-workspace before source edits.");
+    assert.equal(tmuxCalls.some((args) => args[0] === "load-buffer"), false, "denial must stop the edit-capable handoff pointer");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff blocks a legacy source-write lane without admission before its pointer", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-legacy-worker-prewrite-denied-"));
+  const worker = { workerId: "codex-legacy", owner: "manager-test/codex-legacy", runId: "manager-test", sessionName: "codex-legacy", state: "warm", lastHeartbeatAt: new Date().toISOString() };
+  const tmuxCalls = [];
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 1, apply: true },
+      {
+        receiptCheck: false,
+        tmuxRunner(_command, args) {
+          tmuxCalls.push(args);
+          return { status: 0, stdout: args[0] === "list-panes" ? "1:%93\n" : "", stderr: "" };
+        },
+        workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-legacy", taskId: "task-legacy", status: "claimed", branch: "codex/lane-legacy", owner: "manager-test/codex-legacy", phase: "handoff" }] } },
+      },
+    );
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-handoff-prewrite-guard-blocked");
+    assert.match(result.blockers[0].nextAction, /admit.*start or resume/i);
+    assert.equal(tmuxCalls.some((args) => args[0] === "load-buffer"), false, "legacy lane must not receive a source-edit handoff pointer");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff gives the guard the observed post-rebind pane path", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-observed-worker-prewrite-"));
+  const worker = { workerId: "codex-observed", owner: "manager-test/codex-observed", runId: "manager-test", sessionName: "codex-observed", state: "warm", lastHeartbeatAt: new Date().toISOString() };
+  const admission = { outcome: "resume_managed_lane", laneEvidence: { taskId: "task-observed" } };
+  const observedPath = "/tmp/observed-not-admitted-worktree";
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    writeFileSync(join(stateRoot, "manager-runs", "manager-test", "workers.json"), `${JSON.stringify([worker], null, 2)}\n`);
+    const result = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 1, apply: true },
+      {
+        receiptCheck: false,
+        admittedLaneHandoff: () => ({ status: "ready", workerHandoff: { cwd: "/tmp/admitted-managed-worktree" }, laneEvidence: { taskId: "task-observed" } }),
+        preWriteGuard(input) {
+          assert.equal(input.actualCwd, observedPath);
+          return { status: "blocked", reasonCode: "guard.managed_lane_mismatch", nextSafeAction: "Rebind the worker to the admitted managed lane." };
+        },
+        tmuxRunner(_command, args) {
+          if (args[0] === "list-panes") return { status: 0, stdout: "1:%94\n", stderr: "" };
+          if (args[0] === "display-message") return { status: 0, stdout: `${observedPath}\n`, stderr: "" };
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-observed", taskId: "task-observed", status: "claimed", branch: "codex/lane-observed", owner: "manager-test/codex-observed", phase: "handoff", mutationAdmission: admission }] } },
+      },
+    );
+    assert.equal(result.status, "blocked");
+    assert.equal(result.blockers[0].code, "worker-handoff-prewrite-guard-blocked");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("worker handoff preview never starts a create-managed-lane admission", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-admitted-worker-preview-"));
+  const worker = { workerId: "codex-preview", owner: "manager-test/codex-preview", runId: "manager-test", sessionName: "codex-preview", state: "warm", lastHeartbeatAt: new Date().toISOString() };
+  const admission = { outcome: "create_managed_lane", laneEvidence: { worktreePath: "/tmp/planned-managed-worktree" } };
+  let calls = 0;
+  try {
+    ledgerCommand({ command: "init", runId: "manager-test", stateRoot });
+    const preview = buildWorkerHandoffPlan(
+      { runId: "manager-test", stateRoot, limit: 1 },
+      {
+        admittedLaneHandoff() { calls += 1; throw new Error("preview must not start a lane"); },
+        workerStatus: { status: "ready", summary: { targets: { usageState: "normal", resourceState: "normal", dispatcherState: "ready", sourceBlockedCount: 0, sourceExhausted: false }, workers: [worker] } },
+        assignmentSummary: { summary: { laneAssignments: [{ assignmentId: "lane-preview", taskId: "task-preview", status: "claimed", branch: "codex/lane-preview", phase: "handoff", mutationAdmission: admission }] } },
+      },
+    );
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.summary.pairings[0].worktreePath, "/tmp/planned-managed-worktree");
+    assert.equal(preview.summary.pairings[0].workerHandoff, null);
+    assert.equal(calls, 0);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -13348,6 +13566,7 @@ test("worker handoff apply marks BMAD ready story in progress after receipt", ()
     );
     const tmuxRunner = (_command, args) => {
       if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+      if (args[0] === "display-message") return { status: 0, stdout: `${ADMITTED_MANAGER_FIXTURE_CWD}\n`, stderr: "" };
       return { status: 0, stdout: "", stderr: "" };
     };
 
@@ -13356,6 +13575,8 @@ test("worker handoff apply marks BMAD ready story in progress after receipt", ()
       {
         tmuxRunner,
         receiptCheck: false,
+        admittedLaneHandoff: fixtureAdmittedLaneHandoff,
+        preWriteGuard: fixturePreWriteGuard,
         workerStatus: {
           status: "ready",
           summary: {
@@ -13368,7 +13589,7 @@ test("worker handoff apply marks BMAD ready story in progress after receipt", ()
         assignmentSummary: {
           summary: {
             laneAssignments: [
-              { assignmentId: "99-1-worker-handoff-status-transition", taskId: "task-99-1", status: "claimed", branch: "codex/99-1-worker-handoff-status-transition", owner: "manager-runner", phase: "handoff" },
+              { assignmentId: "99-1-worker-handoff-status-transition", taskId: "task-99-1", status: "claimed", branch: "codex/99-1-worker-handoff-status-transition", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-99-1") },
             ],
           },
         },
@@ -13402,9 +13623,12 @@ test("worker handoff apply persists successful records when a later paste fails"
     let pasteAttempts = 0;
     const context = {
       receiptCheck: false,
+      admittedLaneHandoff: fixtureAdmittedLaneHandoff,
+      preWriteGuard: fixturePreWriteGuard,
       tmuxRunner: (_command, args) => {
         if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
         if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "display-message") return { status: 0, stdout: `${ADMITTED_MANAGER_FIXTURE_CWD}\n`, stderr: "" };
         if (args[0] === "paste-buffer") {
           pasteAttempts += 1;
           return pasteAttempts === 1
@@ -13427,8 +13651,8 @@ test("worker handoff apply persists successful records when a later paste fails"
       assignmentSummary: {
         summary: {
           laneAssignments: [
-            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
-            { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-1") },
+            { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-2") },
           ],
         },
       },
@@ -13455,8 +13679,8 @@ test("worker handoff apply persists successful records when a later paste fails"
         assignmentSummary: {
           summary: {
             laneAssignments: [
-              { assignmentId: "lane-1", taskId: "task-1-changed", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
-              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff" },
+              { assignmentId: "lane-1", taskId: "task-1-changed", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-1-changed") },
+              { assignmentId: "lane-2", taskId: "task-2", status: "claimed", branch: "codex/lane-2", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-2") },
             ],
           },
         },
@@ -13480,9 +13704,12 @@ test("worker handoff duplicate retries block authoritative busy workers", () => 
     writeFileSync(workerPath, `${JSON.stringify(initialWorkers, null, 2)}\n`);
     const context = {
       receiptCheck: false,
+      admittedLaneHandoff: fixtureAdmittedLaneHandoff,
+      preWriteGuard: fixturePreWriteGuard,
       tmuxRunner: (_command, args) => {
         if (args[0] === "load-buffer") return { status: 0, stdout: "", stderr: "" };
         if (args[0] === "list-panes") return { status: 0, stdout: "1:%99\n", stderr: "" };
+        if (args[0] === "display-message") return { status: 0, stdout: `${ADMITTED_MANAGER_FIXTURE_CWD}\n`, stderr: "" };
         if (args[0] === "paste-buffer") return { status: 0, stdout: "", stderr: "" };
         if (args[0] === "send-keys") return { status: 0, stdout: "", stderr: "" };
         return { status: 0, stdout: "", stderr: "" };
@@ -13497,7 +13724,7 @@ test("worker handoff duplicate retries block authoritative busy workers", () => 
       assignmentSummary: {
         summary: {
           laneAssignments: [
-            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+            { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-1") },
           ],
         },
       },
@@ -13835,7 +14062,7 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
     const assignmentSummary = {
       summary: {
         laneAssignments: [
-          { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff" },
+          { assignmentId: "lane-1", taskId: "task-1", status: "claimed", branch: "codex/lane-1", owner: "manager-runner", phase: "handoff", mutationAdmission: fixtureMutationAdmission("task-1") },
         ],
       },
     };
@@ -13845,9 +14072,12 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
       {
         workerStatus,
         assignmentSummary,
+        admittedLaneHandoff: fixtureAdmittedLaneHandoff,
+        preWriteGuard: fixturePreWriteGuard,
         tmuxRunner(command, args) {
           calls.push({ command, args });
           if (args[0] === "list-panes") return { status: 0, stdout: "0:%0\n1:%1\n", stderr: "" };
+          if (args[0] === "display-message") return { status: 0, stdout: `${ADMITTED_MANAGER_FIXTURE_CWD}\n`, stderr: "" };
           return { status: 0, stdout: "", stderr: "" };
         },
       },
@@ -13855,14 +14085,17 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
 
     assert.equal(applied.status, "ready");
     assert.equal(applied.summary.mutation, "manager-owned-worker-handoff-file-and-tmux-buffer");
-    assert.equal(calls.length, 6);
-    assert.deepEqual(calls[0].args.slice(0, 3), ["load-buffer", "-b", "codex-1-handoff"]);
-    assert.match(calls[0].args[3], /codex-1-lane-1\.paste\.txt$/);
-    assert.deepEqual(calls[1].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
-    assert.deepEqual(calls[2].args, ["paste-buffer", "-b", "codex-1-handoff", "-t", "%1"]);
-    assert.deepEqual(calls[3].args, ["send-keys", "-t", "%1", "C-m"]);
-    assert.deepEqual(calls[4].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
-    assert.deepEqual(calls[5].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
+    assert.equal(calls.length, 9);
+    assert.deepEqual(calls[0].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
+    assert.deepEqual(calls[1].args.slice(0, 7), ["respawn-pane", "-k", "-t", "%1", "-c", ADMITTED_MANAGER_FIXTURE_CWD, "env"]);
+    assert.deepEqual(calls[2].args, ["display-message", "-p", "-t", "%1", "#{pane_current_path}"]);
+    assert.deepEqual(calls[3].args.slice(0, 3), ["load-buffer", "-b", "codex-1-handoff"]);
+    assert.match(calls[3].args[3], /codex-1-lane-1\.paste\.txt$/);
+    assert.deepEqual(calls[4].args, ["list-panes", "-t", "codex-1", "-F", "#{pane_active}:#{pane_id}:#{pane_current_command}:#{session_name}"]);
+    assert.deepEqual(calls[5].args, ["paste-buffer", "-b", "codex-1-handoff", "-t", "%1"]);
+    assert.deepEqual(calls[6].args, ["send-keys", "-t", "%1", "C-m"]);
+    assert.deepEqual(calls[7].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
+    assert.deepEqual(calls[8].args.slice(0, 5), ["capture-pane", "-J", "-p", "-t", "%1"]);
     assert.equal(applied.summary.results[0].paste.submitKey, "C-m");
     assert.equal(applied.summary.results[0].paste.receipt.verified, true);
     const handoffPath = join(stateRoot, "manager-runs", "manager-test", "handoffs", "codex-1-lane-1.md");

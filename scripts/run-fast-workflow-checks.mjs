@@ -10,6 +10,10 @@ const suites = {
   workspace: [
     "test:codex-workspace-state",
     "test:workspace-command-resolution",
+    "test:base-checkout-recovery",
+    "test:mutation-admission",
+    "test:mutation-admission-workspace-handoff",
+    "test:mutation-admission-prewrite-guard",
     "test:codex-workspace",
   ],
   sandbox: [

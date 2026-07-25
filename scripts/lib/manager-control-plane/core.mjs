@@ -6,6 +6,8 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertWorkspaceStateStorage, workspaceState } from "../codex-workspace-state.mjs";
+import { handoffAdmittedManagedLane } from "../mutation-admission-workspace-handoff.mjs";
+import { approveManagedSourceWrite } from "../mutation-admission-prewrite-guard.mjs";
 import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-routing.mjs";
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
 import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
@@ -2959,7 +2961,7 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       ? readAssignmentFileReviewFeedbackHandoffCandidates(paths, { excludeAssignmentIds: handoffExcludedAssignmentIds, currentOwner: assignmentSummary.currentOwner, now, storyStatuses }, context)
       : [];
   const seenLaneIds = new Set();
-  const lanes = [...summaryLanes, ...fallbackLanes, ...reviewFeedbackLanes]
+  const candidateLanes = [...summaryLanes, ...fallbackLanes, ...reviewFeedbackLanes]
     .filter((lane) => {
       if (seenLaneIds.has(lane.assignmentId)) return false;
       seenLaneIds.add(lane.assignmentId);
@@ -2970,7 +2972,11 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       worktreePath: lane.worktreePath || taskManifestWorktreePath(paths.proof.state.root, lane.taskId),
     }))
     .slice(0, warmWorkers.length);
-  const blockers = [];
+  const admittedLaneResults = candidateLanes.map((lane) => resolveManagerAdmittedLaneHandoff(lane, paths, context, { apply }));
+  const lanes = admittedLaneResults.filter((result) => result.ok).map((result) => result.lane);
+  const blockers = admittedLaneResults
+    .filter((result) => !result.ok)
+    .map((result) => ({ code: "worker-handoff-managed-lane-blocked", message: result.message, nextAction: result.nextAction }));
   if (!paths.proof.ok) {
     blockers.push({ code: "workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe workspace state root." });
   }
@@ -3090,12 +3096,18 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
   if (handoffReservation.packet) return handoffReservation.packet;
   const results = [];
   for (const pairing of pairings) {
+    const rebind = rebindManagedWorkerCwd(pairing, paths, runOptions, context);
+    const preWriteGuard = rebind.ok
+      ? approveManagerPreWriteHandoff(pairing, rebind, context)
+      : { status: "not_run", reasonCode: "guard.rebind_failed" };
     const handoffBody = renderWorkerHandoffFile(pairing);
     writeFileSync(pairing.handoffPath, handoffBody);
     writeFileSync(pairing.pastePath, `${pairing.pasteText}\n`);
-    const paste = pasteWorkerHandoff(pairing, context);
+    const paste = rebind.ok && preWriteGuard.status === "allowed"
+      ? pasteWorkerHandoff(pairing, context)
+      : { ok: false, error: preWriteGuard.nextSafeAction || rebind.error || "managed worker CWD rebind failed" };
     const statusUpdate = paste.ok ? markManagerHandoffStoryInProgress(pairing, runOptions, context) : null;
-    results.push({ ...pairing, status: paste.ok ? "handoff_sent" : "failed", paste, statusUpdate });
+    results.push({ ...pairing, status: paste.ok ? "handoff_sent" : "failed", rebind, preWriteGuard, paste, statusUpdate });
     if (!paste.ok) {
       recordPointerReceiptFailure({ ...runOptions, runId }, results[results.length - 1], context, "handoff");
       const sentCount = results.filter((result) => result.status === "handoff_sent").length;
@@ -3119,7 +3131,13 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
         ok: false,
         status: "blocked",
         summary: { runId, apply: true, mutation: "partial", results },
-        blockers: [{ code: "worker-handoff-paste-failed", message: paste.error || `Failed to paste handoff to ${pairing.sessionName}.`, nextAction: "Inspect tmux handoff result before retrying." }],
+        blockers: [{
+          code: preWriteGuard.status === "blocked" ? "worker-handoff-prewrite-guard-blocked" : "worker-handoff-paste-failed",
+          message: paste.error || `Failed to paste handoff to ${pairing.sessionName}.`,
+          nextAction: preWriteGuard.status === "blocked"
+            ? preWriteGuard.nextSafeAction
+            : "Inspect tmux handoff result before retrying.",
+        }],
       });
     }
     const target = workerRecords.find((worker) => worker.workerId === pairing.workerId && worker.owner === pairing.owner);
@@ -3419,6 +3437,8 @@ function managerHandoffLaneCandidates(assignmentSummary = {}, options = {}) {
       heartbeat: sanitizeLedgerField(lane.heartbeat || "", "", 80),
       nextAction: sanitizeLedgerField(lane.nextAction || "", "", 180),
       worktreePath: sanitizeLedgerField(lane.worktreePath || lane.worktree_path || "", "", 240),
+      mutationAdmission: isPlainObject(lane.mutationAdmission) ? lane.mutationAdmission : null,
+      handoffDescription: sanitizeLedgerField(lane.handoffDescription || lane.description || "", "", 512),
     }))
     .filter((lane) => lane.assignmentId && lane.taskId && lane.branch && !excludeAssignmentIds.has(lane.assignmentId) && !isDoneSprintStory(lane.assignmentId, storyStatuses));
 }
@@ -3460,6 +3480,8 @@ function readAssignmentFileHandoffCandidates(stateRoot = "", options = {}) {
       heartbeat: sanitizeLedgerField(record.last_heartbeat_at || record.lastHeartbeatAt || "", "", 80),
       nextAction: sanitizeLedgerField(record.current_command || record.nextAction || "", "", 180),
       worktreePath: sanitizeLedgerField(record.worktree_path || record.worktreePath || "", "", 240),
+      mutationAdmission: isPlainObject(record.mutation_admission || record.mutationAdmission) ? (record.mutation_admission || record.mutationAdmission) : null,
+      handoffDescription: sanitizeLedgerField(record.handoff_description || record.handoffDescription || record.description || "", "", 512),
     }))
     .filter((lane) => lane.assignmentId && lane.taskId && lane.branch);
 }
@@ -3750,6 +3772,43 @@ function taskManifestWorktreePath(stateRoot = "", taskId = "") {
   }
 }
 
+function resolveManagerAdmittedLaneHandoff(lane = {}, paths = {}, context = {}, options = {}) {
+  if (!isPlainObject(lane.mutationAdmission)) return { ok: true, lane };
+  if (options.apply !== true && lane.mutationAdmission.outcome === "create_managed_lane") {
+    return {
+      ok: true,
+      lane: {
+        ...lane,
+        worktreePath: sanitizeLedgerField(lane.mutationAdmission.laneEvidence?.worktreePath || lane.worktreePath || "", "", 260),
+        workerHandoff: null,
+        admissionHandoffPreview: true,
+      },
+    };
+  }
+  const handoff = (context.admittedLaneHandoff || handoffAdmittedManagedLane)(lane.mutationAdmission, {
+    ...(isPlainObject(context.admittedLaneHandoffContext) ? context.admittedLaneHandoffContext : {}),
+    ...(lane.handoffDescription ? { description: lane.handoffDescription } : {}),
+    baseCheckoutPath: context.baseCheckoutPath || repoRoot,
+  });
+  const cwd = sanitizeLedgerField(handoff?.workerHandoff?.cwd || "", "", 260);
+  if (handoff?.status !== "ready" || !cwd) {
+    return {
+      ok: false,
+      message: sanitizeLedgerField(handoff?.reasonCode || "managed lane handoff did not return a worker CWD", "managed lane handoff did not return a worker CWD", 180),
+      nextAction: sanitizeLedgerField(handoff?.nextSafeAction || "Inspect managed-lane admission evidence before assigning a worker.", "Inspect managed-lane admission evidence before assigning a worker.", 240),
+    };
+  }
+  return {
+    ok: true,
+    lane: {
+      ...lane,
+      worktreePath: cwd,
+      workerHandoff: { cwd },
+      preWriteGuardEvidence: handoff.preWriteGuardEvidence || null,
+    },
+  };
+}
+
 function buildWorkerHandoffPairing(worker = {}, lane = {}, paths = {}) {
   const handoffPath = join(paths.root, "handoffs", `${worker.workerId}-${lane.assignmentId}.md`);
   const pastePath = join(paths.root, "handoffs", `${worker.workerId}-${lane.assignmentId}.paste.txt`);
@@ -3765,6 +3824,8 @@ function buildWorkerHandoffPairing(worker = {}, lane = {}, paths = {}) {
     laneOwner: lane.laneOwner || "",
     phase: lane.phase || "handoff",
     worktreePath: lane.worktreePath || "",
+    workerHandoff: lane.workerHandoff || null,
+    preWriteGuardEvidence: lane.preWriteGuardEvidence || null,
     reviewFindingsPath: lane.reviewFindingsPath || "",
     handoffPath,
     pastePath,
@@ -3858,6 +3919,9 @@ function workerHandoffSourceContextLines(pairing = {}) {
   if (pairing.worktreePath) {
     lines.push(`worktreePath: ${pairing.worktreePath}`);
   }
+  if (pairing.workerHandoff?.cwd) {
+    lines.push(`managedWorkerCwd: ${pairing.workerHandoff.cwd}`);
+  }
   if (assignmentId) {
     lines.push(`storyArtifact: ${resolve(repoRoot, "_bmad-output", "implementation-artifacts", `${assignmentId}.md`)}`);
   }
@@ -3885,6 +3949,45 @@ function pasteWorkerHandoff(pairing = {}, context = {}) {
   const receipt = verifyTmuxPointerSubmitted(pairing, target.target, runner, context);
   if (!receipt.ok) return { ...receipt, sessionName: pairing.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName: `${pairing.workerId}-handoff`, receipt };
   return { ok: true, sessionName: pairing.sessionName, paneTarget: target.target, submitKey: enter.submitKey || "C-m", bufferName: `${pairing.workerId}-handoff`, receipt };
+}
+
+function rebindManagedWorkerCwd(pairing = {}, paths = {}, options = {}, context = {}) {
+  const cwd = sanitizeLedgerField(pairing.workerHandoff?.cwd || "", "", 260);
+  if (!cwd) return { ok: true, status: "not_required" };
+  const runner = context.tmuxRunner || spawnSync;
+  const target = resolveTmuxPaneTarget(pairing.sessionName, runner, context);
+  if (!target.ok) return target;
+  const launchCommand = defaultWarmWorkerCommand(paths.proof?.state?.root || "", cwd).trim();
+  if (!launchCommand) return { ok: false, error: "managed worker restart command is unavailable" };
+  const respawn = runner("tmux", [
+    "respawn-pane", "-k", "-t", target.target, "-c", cwd,
+    "env", `CODEX_WORKSPACE_OWNER=${pairing.workerId}`, `CODEX_THREAD_ID=tmux-${pairing.sessionName}`,
+    "bash", "-lc", launchCommand,
+  ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (respawn?.error) return { ok: false, error: respawn.error.message || "tmux respawn-pane failed" };
+  if ((respawn?.status ?? 0) !== 0) return { ok: false, error: String(respawn?.stderr || respawn?.stdout || "tmux respawn-pane failed").trim(), status: respawn?.status };
+  const inspected = runner("tmux", ["display-message", "-p", "-t", target.target, "#{pane_current_path}"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (inspected?.error) return { ok: false, error: inspected.error.message || "tmux pane CWD inspection failed" };
+  if ((inspected?.status ?? 0) !== 0) return { ok: false, error: String(inspected?.stderr || inspected?.stdout || "tmux pane CWD inspection failed").trim(), status: inspected?.status };
+  const observedCwd = sanitizeLedgerField(String(inspected?.stdout || "").trim(), "", 260);
+  if (!observedCwd) return { ok: false, error: "tmux worker CWD inspection returned no usable path" };
+  return { ok: true, status: "rebound", cwd: observedCwd, expectedCwd: cwd, paneTarget: target.target };
+}
+
+function approveManagerPreWriteHandoff(pairing = {}, rebind = {}, context = {}) {
+  if (!pairing.workerHandoff?.cwd) {
+    return {
+      status: "blocked",
+      outcome: "decision_needed",
+      reasonCode: "guard.admission_required",
+      nextSafeAction: "Admit the source-change request, then start or resume its managed lane through codex-workspace before source edits.",
+    };
+  }
+  return (context.preWriteGuard || approveManagedSourceWrite)({
+    operation: "source_write",
+    actualCwd: rebind.cwd,
+    trustedLane: pairing.preWriteGuardEvidence,
+  }, isPlainObject(context.preWriteGuardContext) ? context.preWriteGuardContext : {});
 }
 
 export function buildWorkerProgressStatus(options = {}, context = {}) {
@@ -8492,13 +8595,13 @@ function workerResultMaterial(results = []) {
   }));
 }
 
-function defaultWarmWorkerCommand(stateRoot = "") {
+function defaultWarmWorkerCommand(stateRoot = "", cwd = repoRoot) {
   const addDir = stateRoot ? ` --add-dir ${shellQuote(stateRoot)}` : "";
   return [
     "codex",
     "--no-alt-screen",
     "--cd",
-    shellQuote(repoRoot),
+    shellQuote(cwd),
     addDir.trim(),
     "--sandbox workspace-write",
     "--ask-for-approval on-request",
