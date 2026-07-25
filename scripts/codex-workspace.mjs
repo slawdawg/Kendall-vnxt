@@ -31,6 +31,8 @@ import {
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultBaseBranch = "dev";
+const MAX_BASE_BRANCH_LENGTH = 250;
+const MAX_BASE_REF_LENGTH = 257;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
@@ -167,6 +169,7 @@ Common options:
 
 start options:
   --base <branch>           Base branch. Defaults to dev.
+  --base-ref <ref>          Exact local or origin base ref paired with --base.
   --branch <branch>         Override generated branch name.
   --mode <pr|experiment|epic-batch>
                              Task mode. Defaults to pr.
@@ -385,9 +388,17 @@ function startWorkspace(argv) {
     throw new Error("start --summary-json is only supported with --dry-run.");
   }
 
+  if (options.baseRef === true) {
+    throw new Error("--base-ref requires a value.");
+  }
   const usingDefaultBase = !options.base;
   const baseBranch = String(options.base || defaultBaseBranch);
   assertSafeBaseBranch(baseBranch);
+  const explicitBaseRef = options.baseRef === undefined ? null : String(options.baseRef);
+  if (explicitBaseRef !== null) {
+    assertSafeExplicitBasePair(baseBranch, explicitBaseRef);
+    assertExplicitBaseRefAvailable(explicitBaseRef);
+  }
   const mode = String(options.mode || "pr");
   if (!["pr", "experiment", "epic-batch"].includes(mode)) {
     throw new Error("--mode must be either pr, experiment, or epic-batch.");
@@ -427,7 +438,7 @@ function startWorkspace(argv) {
   if (!options.dryRun && shouldFetch) {
     fetchBaseBranch(baseBranch, { usingDefaultBase });
   }
-  const baseRef = resolveBaseRef(baseBranch, { usingDefaultBase });
+  const baseRef = explicitBaseRef || resolveBaseRef(baseBranch, { usingDefaultBase });
 
   if (existsSync(manifestPath)) {
     throw new Error(`Task manifest already exists: ${manifestPath}`);
@@ -7076,6 +7087,26 @@ function resolveBaseRef(baseBranch, options = {}) {
   throw new Error(`Base branch not found locally: ${baseBranch}`);
 }
 
+function assertSafeExplicitBasePair(baseBranch, baseRef) {
+  assertSafeBaseBranch(baseBranch);
+  const ref = String(baseRef || "");
+  if (!ref || ref !== baseRef) {
+    throw new Error(`Invalid explicit base ref for ${baseBranch}: ${baseRef}`);
+  }
+  if (ref.length > MAX_BASE_REF_LENGTH) {
+    throw new Error(`Explicit base ref exceeds maximum length ${MAX_BASE_REF_LENGTH}: ${ref.length}`);
+  }
+  if (ref !== baseBranch && ref !== `origin/${baseBranch}`) {
+    throw new Error(`Invalid explicit base ref for ${baseBranch}: ${baseRef}`);
+  }
+}
+
+function assertExplicitBaseRefAvailable(baseRef) {
+  if (!refExists(baseRef)) {
+    throw new Error(`Explicit base ref not found locally: ${baseRef}`);
+  }
+}
+
 function baseRefAvailable(baseBranch) {
   return refExists(`origin/${baseBranch}`) || refExists(baseBranch);
 }
@@ -7133,6 +7164,7 @@ function assertSafeBaseBranch(branch) {
   if (
     !value ||
     value !== branch ||
+    value.length > MAX_BASE_BRANCH_LENGTH ||
     value.startsWith("-") ||
     value.startsWith("refs/") ||
     /[\s:*]/.test(value) ||

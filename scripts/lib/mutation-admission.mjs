@@ -18,6 +18,8 @@ export const MUTATION_ADMISSION_OUTCOMES = Object.freeze([
 ]);
 
 const READ_ONLY_ACTIVITIES = new Set(["read_only_diagnosis", "github_triage"]);
+const MAX_BASE_BRANCH_LENGTH = 250;
+const MAX_BASE_REF_LENGTH = 257;
 
 const PROJECTIONS = Object.freeze({
   understand: Object.freeze({ column: "Understand", attentionKind: null, derived: true }),
@@ -191,8 +193,8 @@ function hasUsableResumePacket(packet, expectedRequestIdentity) {
   return packet.status === "active"
     && isBoundedText(packet.taskId)
     && isBoundedText(packet.branch)
-    && isBoundedText(packet.baseBranch)
-    && isBoundedText(packet.baseRef)
+    && isBoundedBaseBranch(packet.baseBranch)
+    && isBoundedBaseRef(packet.baseRef)
     && hasProducerCompatibleBaseBranch(packet.baseBranch)
     && hasProducerCompatibleBaseRef(packet)
     && isBoundedText(packet.owner)
@@ -208,14 +210,15 @@ function hasUsableResumePacket(packet, expectedRequestIdentity) {
 }
 
 function hasProducerCompatibleBaseRef(packet) {
-  return packet.baseRef === packet.baseBranch || packet.baseRef === `origin/${packet.baseBranch}`;
+  return isBoundedBaseRef(packet.baseRef)
+    && (packet.baseRef === packet.baseBranch || packet.baseRef === `origin/${packet.baseBranch}`);
 }
 
 function hasProducerCompatibleBaseBranch(value) {
   const branch = text(value);
   if (branch === "HEAD") return true;
   if (
-    !isBoundedText(branch)
+    !isBoundedBaseBranch(branch)
     || branch !== branch.trim()
     || branch.startsWith("-")
     || branch.startsWith("refs/")
@@ -235,8 +238,8 @@ function hasUsableCreatePreview(preview) {
   const plannedWrites = object(preview.plannedWrites);
   return isBoundedText(preview.taskId)
     && isBoundedText(preview.branch)
-    && isBoundedText(preview.baseBranch)
-    && isBoundedText(preview.baseRef)
+    && isBoundedBaseBranch(preview.baseBranch)
+    && isBoundedBaseRef(preview.baseRef)
     && hasProducerCompatibleBaseBranch(preview.baseBranch)
     && hasProducerCompatibleBaseRef(preview)
     && isBoundedText(preview.worktreePath)
@@ -258,8 +261,8 @@ function laneEvidence(lane) {
   return Object.freeze({
     taskId: boundedText(lane.taskId),
     branch: boundedText(lane.branch),
-    baseBranch: boundedText(lane.baseBranch),
-    baseRef: boundedText(lane.baseRef),
+    baseBranch: boundedBaseBranch(lane.baseBranch),
+    baseRef: boundedBaseRef(lane.baseRef),
     worktreePath: boundedText(lane.worktreePath),
     manifestPath: boundedText(lane.manifestPath),
     owner: boundedText(lane.owner),
@@ -292,9 +295,29 @@ function isBoundedText(value) {
   return valueText.trim().length > 0 && valueText.length <= 256;
 }
 
+function isBoundedBaseBranch(value) {
+  const valueText = text(value);
+  return valueText === valueText.trim() && valueText.length > 0 && valueText.length <= MAX_BASE_BRANCH_LENGTH;
+}
+
+function isBoundedBaseRef(value) {
+  const valueText = text(value);
+  return valueText === valueText.trim() && valueText.length > 0 && valueText.length <= MAX_BASE_REF_LENGTH;
+}
+
 function boundedText(value) {
   const valueText = text(value).trim();
   return valueText ? valueText.slice(0, 256) : null;
+}
+
+function boundedBaseBranch(value) {
+  const valueText = text(value);
+  return isBoundedBaseBranch(valueText) ? valueText : null;
+}
+
+function boundedBaseRef(value) {
+  const valueText = text(value);
+  return isBoundedBaseRef(valueText) ? valueText : null;
 }
 
 function boundedCount(value) {

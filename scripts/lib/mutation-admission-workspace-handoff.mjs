@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const LANE_OUTCOMES = new Set(["create_managed_lane", "resume_managed_lane"]);
 const NON_LANE_OUTCOMES = new Set(["read_only", "recovery_required", "decision_needed"]);
+const MAX_BASE_BRANCH_LENGTH = 250;
+const MAX_BASE_REF_LENGTH = 257;
 
 /**
  * Starts or resumes only a lane already selected by mutation admission.
@@ -139,7 +141,7 @@ function startArgs(expected, description, context) {
     "--owner", expected.owner,
   ];
   if (context.noFetch !== false) args.push("--no-fetch");
-  args.push("--base", expected.baseBranch);
+  args.push("--base", expected.baseBranch, "--base-ref", expected.baseRef);
   return args;
 }
 
@@ -201,8 +203,8 @@ function laneEvidence(value) {
   const expected = {
     taskId: boundedText(lane.taskId),
     branch: boundedText(lane.branch),
-    baseBranch: boundedText(lane.baseBranch),
-    baseRef: boundedText(lane.baseRef),
+    baseBranch: boundedBaseBranch(lane.baseBranch),
+    baseRef: boundedBaseRef(lane.baseRef),
     worktreePath: boundedText(lane.worktreePath),
     manifestPath: boundedText(lane.manifestPath),
     owner: boundedText(lane.owner),
@@ -241,8 +243,8 @@ function hasMatchingManifestProvenance(manifest, expected, worktreePath) {
 }
 
 function hasProducerCompatibleBasePair(value) {
-  const branch = boundedText(value.baseBranch);
-  const ref = boundedText(value.baseRef);
+  const branch = boundedBaseBranch(value.baseBranch);
+  const ref = boundedBaseRef(value.baseRef);
   if (!branch || !ref || (ref !== branch && ref !== `origin/${branch}`)) return false;
   if (branch === "HEAD") return true;
   if (
@@ -326,4 +328,17 @@ function blocked(reasonCode, nextSafeAction, mutation = "none; worker handoff bl
 function boundedText(value, limit = 256) {
   const text = typeof value === "string" ? value.trim() : "";
   return text && text.length <= limit ? text : null;
+}
+
+function boundedBaseBranch(value) {
+  return boundedStrictText(value, MAX_BASE_BRANCH_LENGTH);
+}
+
+function boundedBaseRef(value) {
+  return boundedStrictText(value, MAX_BASE_REF_LENGTH);
+}
+
+function boundedStrictText(value, limit) {
+  const text = typeof value === "string" ? value : "";
+  return text && text === text.trim() && text.length <= limit ? text : null;
 }

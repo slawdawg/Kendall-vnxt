@@ -44,6 +44,33 @@ test("allows a source-write handoff only from its trusted managed worktree", () 
   }
 });
 
+test("guard retains the producer-valid 250/257 base pair without truncation", () => {
+  const root = mkdtempSync(join(tmpdir(), "mutation-prewrite-max-base-"));
+  const base = join(root, "base");
+  const worktree = join(root, "worktrees", "clean-lane");
+  const baseBranch = "a".repeat(250);
+  const baseRef = `origin/${baseBranch}`;
+  mkdirSync(base);
+  mkdirSync(worktree, { recursive: true });
+  try {
+    const lane = trustedLane(base, worktree);
+    lane.laneEvidence.baseBranch = baseBranch;
+    lane.laneEvidence.baseRef = baseRef;
+    const result = approveManagedSourceWrite({
+      operation: "source_write",
+      actualCwd: worktree,
+      trustedLane: lane,
+    });
+
+    assert.equal(baseRef.length, 257);
+    assert.equal(result.status, "allowed");
+    assert.equal(result.laneEvidence.baseBranch, baseBranch);
+    assert.equal(result.laneEvidence.baseRef, baseRef);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("denies the Base Checkout and a symlink alias before source-edit handoff", () => {
   const root = mkdtempSync(join(tmpdir(), "mutation-prewrite-base-"));
   const base = join(root, "base");
