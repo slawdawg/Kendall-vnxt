@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { evaluateMutationAdmission } from "./lib/mutation-admission.mjs";
+import { handoffAdmittedManagedLane } from "./lib/mutation-admission-workspace-handoff.mjs";
+import { approveManagedSourceWrite } from "./lib/mutation-admission-prewrite-guard.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
@@ -90,6 +93,83 @@ try {
       assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
     } finally {
       rmSync(doctorStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor summary-json exposes a read-only Base Checkout recovery packet", () => {
+    const doctorStateRoot = mkdtempSync(join(tmpdir(), "codex-doctor-base-recovery-"));
+    const beforeStatus = runGit(rootDir, ["status", "--porcelain=v1", "-z"]).stdout;
+    try {
+      const result = run(["doctor", "--summary-json", "--state-root", doctorStateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      const recovery = packet.baseCheckoutRecovery;
+      assert(["clear", "recovery_required", "inspection_unknown"].includes(recovery.status), result.stdout || result.stderr);
+      assert(recovery.mutation === "none; inspection only", result.stdout || result.stderr);
+      assert(recovery.checkout === null || Number.isInteger(recovery.checkout.changedPathCount), result.stdout || result.stderr);
+      assert(recovery.checkout === null || !Object.hasOwn(recovery.checkout, "changedPaths"), result.stdout || result.stderr);
+      if (recovery.status === "recovery_required") {
+        assert(recovery.outcome === "recovery_required", result.stdout || result.stderr);
+        assert(recovery.projection?.column === "Needs attention", result.stdout || result.stderr);
+      }
+      assert(runGit(rootDir, ["status", "--porcelain=v1", "-z"]).stdout === beforeStatus, "doctor recovery inspection changed the Base Checkout index or worktree state");
+    } finally {
+      rmSync(doctorStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor persists and explicitly resolves a metadata-only break-glass recovery marker", () => {
+    const doctorStateRoot = mkdtempSync(join(tmpdir(), "codex-doctor-break-glass-"));
+    const markerPath = join(doctorStateRoot, "recovery", "base-checkout.json");
+    const beforeStatus = runGit(rootDir, ["status", "--porcelain=v1", "-z"]).stdout;
+    try {
+      const recorded = run(["doctor", "--break-glass", "--summary-json", "--state-root", doctorStateRoot]);
+      assert(recorded.code === 0, recorded.stderr || recorded.stdout);
+      const recordedPacket = JSON.parse(recorded.stdout);
+      assert(recordedPacket.baseCheckoutRecovery.reasonCode === "recovery.break_glass_edit", recorded.stdout || recorded.stderr);
+      assert(recordedPacket.mutation === "metadata-only break-glass recovery marker recorded", recorded.stdout || recorded.stderr);
+      const activeMarker = JSON.parse(readFileSync(markerPath, "utf8"));
+      assert(activeMarker.status === "active", JSON.stringify(activeMarker));
+      assert(activeMarker.reasonCode === "recovery.break_glass_edit", JSON.stringify(activeMarker));
+      assert(!Object.hasOwn(activeMarker, "diff"), JSON.stringify(activeMarker));
+
+      const later = run(["doctor", "--summary-json", "--state-root", doctorStateRoot]);
+      assert(later.code === 0, later.stderr || later.stdout);
+      const laterPacket = JSON.parse(later.stdout);
+      assert(laterPacket.baseCheckoutRecovery.reasonCode === "recovery.break_glass_edit", later.stdout || later.stderr);
+      assert(laterPacket.baseCheckoutRecovery.recoveryMarker.status === "active", later.stdout || later.stderr);
+      assert(laterPacket.mutation === "none; summary only", later.stdout || later.stderr);
+
+      const resolved = run([
+        "doctor", "--resolve-break-glass", "--resolution", "operator inspected marker", "--summary-json", "--state-root", doctorStateRoot,
+      ]);
+      assert(resolved.code === 0, resolved.stderr || resolved.stdout);
+      const resolvedMarker = JSON.parse(readFileSync(markerPath, "utf8"));
+      assert(resolvedMarker.status === "resolved", JSON.stringify(resolvedMarker));
+      assert(typeof resolvedMarker.resolvedAt === "string", JSON.stringify(resolvedMarker));
+      assert(resolvedMarker.resolution === "operator inspected marker", JSON.stringify(resolvedMarker));
+      assert(!Object.hasOwn(resolvedMarker, "diff"), JSON.stringify(resolvedMarker));
+      assert(runGit(rootDir, ["status", "--porcelain=v1", "-z"]).stdout === beforeStatus, "break-glass marker handling changed the Base Checkout index or worktree state");
+    } finally {
+      rmSync(doctorStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor rejects Base Checkout break-glass marker writes inside tracked source", () => {
+    const sourceMarkerPath = join(rootDir, "recovery", "base-checkout.json");
+    const markerExisted = existsSync(sourceMarkerPath);
+    const beforeMarker = markerExisted ? readFileSync(sourceMarkerPath, "utf8") : null;
+    const beforeStatus = runGit(rootDir, ["status", "--porcelain=v1", "-z"]).stdout;
+    for (const args of [
+      ["doctor", "--break-glass", "--summary-json", "--state-root", "."],
+      ["doctor", "--resolve-break-glass", "--resolution", "operator inspected marker", "--summary-json", "--state-root", "."],
+    ]) {
+      const result = run(args);
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("inside tracked source"), result.stdout || result.stderr);
+      assert(existsSync(sourceMarkerPath) === markerExisted, "source-root marker path changed despite rejected storage boundary");
+      if (markerExisted) assert(readFileSync(sourceMarkerPath, "utf8") === beforeMarker, "existing source-root marker changed despite rejected storage boundary");
+      assert(runGit(rootDir, ["status", "--porcelain=v1", "-z"]).stdout === beforeStatus, "rejected source-root marker write changed the Base Checkout index or worktree state");
     }
   });
 
@@ -6162,6 +6242,239 @@ try {
     assert(result.stderr.includes("Unknown verification profile"));
   });
 
+  test("managed admission, worker CWD, pre-write guard, and finish-pr eligibility share one lane while recovery stops before GitHub", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const ghProbe = join(fixture.root, "gh-called.txt");
+    try {
+      const head = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      const resume = runFixtureScript(
+        fixture,
+        ["resume", "resumed-task", "--json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.root, env: fixture.env },
+      );
+      assert(resume.code === 0, resume.stderr || resume.stdout);
+      const resumePacket = JSON.parse(resume.stdout);
+      const admission = evaluateMutationAdmission({
+        requestedActivity: "source_change",
+        authorizedScope: true,
+        baseCheckout: {
+          isBaseCheckout: true,
+          dirty: false,
+          branch: "main",
+          head,
+          changedPathCount: 0,
+        },
+        expectedRequestIdentity: { taskId: "resumed-task", owner: "runner-a" },
+        managedLane: resumePacket,
+      });
+      assert(admission.outcome === "resume_managed_lane", JSON.stringify(admission));
+
+      const handoff = handoffAdmittedManagedLane(admission, {
+        runner(_command, args) {
+          const result = spawnSync(process.execPath, [fixture.script, ...args.slice(1)], {
+            cwd: fixture.root,
+            encoding: "utf8",
+            env: fixture.env,
+            stdio: "pipe",
+          });
+          return { code: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || result.error?.message || "" };
+        },
+      });
+      assert(handoff.status === "ready", JSON.stringify(handoff));
+      assert(handoff.workerHandoff.cwd === fixture.worktree, JSON.stringify(handoff));
+
+      const guard = approveManagedSourceWrite({
+        operation: "source_write",
+        actualCwd: handoff.workerHandoff.cwd,
+        trustedLane: handoff.preWriteGuardEvidence,
+      });
+      assert(guard.status === "allowed", JSON.stringify(guard));
+
+      const eligible = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(eligible.code === 0, eligible.stderr || eligible.stdout);
+      assert(eligible.stdout.includes("finish-pr"), eligible.stdout || eligible.stderr);
+      assert(eligible.stdout.includes(`git push -u origin ${fixture.branch}`), eligible.stdout || eligible.stderr);
+
+      const recoveryDir = join(fixture.stateRoot, "recovery");
+      mkdirSync(recoveryDir, { recursive: true });
+      writeFileSync(
+        join(recoveryDir, "base-checkout.json"),
+        `${JSON.stringify({
+          schema_version: 1,
+          status: "active",
+          reasonCode: "recovery.break_glass_edit",
+          recordedAt: "2026-07-25T00:00:00.000Z",
+          checkout: { identity: "primary_worktree", path: fixture.root },
+          mutation: "metadata-only recovery marker",
+        }, null, 2)}\n`,
+      );
+      writeFileSync(
+        join(fixture.fakeBin, "gh"),
+        [
+          "#!/usr/bin/env node",
+          "import { writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(ghProbe)}, 'called\\n');`,
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+
+      const blocked = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(blocked.code !== 0, "recovery unexpectedly allowed finish-pr planning");
+      assert(blocked.stderr.includes("Base Checkout recovery prevents delivery"), blocked.stderr || blocked.stdout);
+      assert(!existsSync(ghProbe), "finish-pr contacted GitHub after Base Checkout recovery was active");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("cleanup refuses Base Checkout and unmanaged paths before a cleanup plan can target them", () => {
+    const fixture = createMergedCleanupFixture();
+    const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+    const unmanaged = join(fixture.root, "unmanaged-worktree");
+    mkdirSync(unmanaged);
+    try {
+      for (const worktreePath of [fixture.root, unmanaged]) {
+        const manifest = readJson(manifestPath);
+        manifest.worktree_path = worktreePath;
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runFixtureScript(
+          fixture,
+          ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.root, env: fixture.env },
+        );
+        assert(result.code !== 0, `cleanup unexpectedly planned unmanaged target ${worktreePath}`);
+        assert(result.stderr.includes("Refusing to remove unmanaged worktree path"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, "rejected cleanup target mutated its manifest");
+        assert(existsSync(fixture.root), "cleanup touched the Base Checkout");
+        assert(branchExists(fixture.root, fixture.branch), "cleanup deleted the managed branch after rejecting its path");
+      }
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup rejects managed-root symlinks to the Base Checkout or a foreign checkout before planning", () => {
+    const fixture = createMergedCleanupFixture();
+    const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+    const managedRoot = join(fixture.stateRoot, "worktrees");
+    const foreignCheckout = mkdtempSync(join(tmpdir(), "codex-foreign-checkout-"));
+    const aliases = [
+      join(managedRoot, "base-alias"),
+      join(managedRoot, "foreign-alias"),
+    ];
+    try {
+      runGit(foreignCheckout, ["init", "-q"]);
+      writeFileSync(join(foreignCheckout, "foreign.txt"), "foreign\n");
+      symlinkSync(fixture.root, aliases[0], "dir");
+      symlinkSync(foreignCheckout, aliases[1], "dir");
+      for (const worktreePath of aliases) {
+        const manifest = readJson(manifestPath);
+        manifest.worktree_path = worktreePath;
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runFixtureScript(
+          fixture,
+          ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.root, env: fixture.env },
+        );
+        assert(result.code !== 0, `cleanup unexpectedly planned symlink target ${worktreePath}`);
+        assert(result.stderr.includes("Refusing to remove unmanaged worktree path"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, "rejected symlink target mutated its manifest");
+        assert(existsSync(fixture.root), "cleanup touched the Base Checkout through a managed-root symlink");
+        assert(existsSync(foreignCheckout), "cleanup touched the foreign checkout through a managed-root symlink");
+        assert(branchExists(fixture.root, fixture.branch), "cleanup deleted the lane branch after rejecting a symlink target");
+      }
+    } finally {
+      for (const alias of aliases) rmSync(alias, { force: true });
+      rmSync(foreignCheckout, { recursive: true, force: true });
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup rejects a managed worktree root that is itself a symlink to the Base Checkout", () => {
+    const fixture = createMergedCleanupFixture();
+    const aliasStateRoot = join(fixture.root, "alias-state");
+    const aliasTasks = join(aliasStateRoot, "tasks");
+    const aliasWorktrees = join(aliasStateRoot, "worktrees");
+    const targetDirectory = join(fixture.root, "not-a-managed-worktree");
+    try {
+      mkdirSync(aliasTasks, { recursive: true });
+      mkdirSync(targetDirectory);
+      symlinkSync(fixture.root, aliasWorktrees, "dir");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "cleanup-task.json"));
+      manifest.worktree_path = join(aliasWorktrees, "not-a-managed-worktree");
+      writeFileSync(join(aliasTasks, "cleanup-task.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", aliasStateRoot],
+        { cwd: fixture.root, env: fixture.env },
+      );
+      assert(result.code !== 0, "cleanup unexpectedly planned through a symlinked managed root");
+      assert(result.stderr.includes("managed root must not be a symlink"), result.stderr || result.stdout);
+      assert(existsSync(targetDirectory), "cleanup touched a Base Checkout directory through the symlinked managed root");
+      assert(branchExists(fixture.root, fixture.branch), "cleanup deleted the lane branch through the symlinked managed root");
+    } finally {
+      rmSync(aliasStateRoot, { recursive: true, force: true });
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged rejects a regular foreign Git checkout placed inside the managed worktree root", () => {
+    const fixture = createMergedCleanupFixture();
+    const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+    const foreignCheckout = join(fixture.stateRoot, "worktrees", "foreign-regular-checkout");
+    const ghProbe = join(fixture.root, "foreign-cleanup-gh-called.txt");
+    try {
+      mkdirSync(foreignCheckout, { recursive: true });
+      runGit(foreignCheckout, ["init", "-q"]);
+      runGit(foreignCheckout, ["config", "user.email", "foreign@example.test"]);
+      runGit(foreignCheckout, ["config", "user.name", "Foreign Checkout"]);
+      writeFileSync(join(foreignCheckout, "foreign.txt"), "foreign\n");
+      runGit(foreignCheckout, ["add", "foreign.txt"]);
+      runGit(foreignCheckout, ["commit", "-q", "-m", "foreign"]);
+      runGit(foreignCheckout, ["branch", "-M", fixture.branch]);
+      const manifest = readJson(manifestPath);
+      manifest.worktree_path = foreignCheckout;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(
+        join(fixture.fakeBin, "gh"),
+        [
+          "#!/usr/bin/env node",
+          "import { writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(ghProbe)}, 'called\\n');`,
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.root, env: fixture.env },
+      );
+      assert(result.code !== 0, "cleanup unexpectedly planned an unregistered foreign checkout");
+      assert(result.stderr.includes("registered managed worktree"), result.stderr || result.stdout);
+      assert(!existsSync(ghProbe), "cleanup contacted GitHub before rejecting the unregistered target");
+      assert(existsSync(foreignCheckout), "cleanup touched the foreign regular checkout");
+      assert(branchExists(fixture.root, fixture.branch), "cleanup deleted the registered lane branch after rejecting foreign checkout");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("finish-pr scoped verification selects manager delivery checks for manager-control-plane diffs", () => {
     const fixture = createFinishPrExistingCommitFixture({
       featurePath: "scripts/lib/manager-control-plane/feature.mjs",
@@ -6997,8 +7310,19 @@ try {
       runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
       const manifest = readJson(manifestPath);
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
       manifest.status = "cleanup_partial";
       manifest.cleanup_error = "simulated prior failure after worktree removal";
+      manifest.cleanup_started_at = new Date().toISOString();
+      manifest.cleanup_branch = fixture.branch;
+      manifest.cleanup_expected_head_sha = expectedHead;
+      manifest.cleanup_local_branch_sha = expectedHead;
+      manifest.cleanup_target_evidence = {
+        checkedAt: new Date().toISOString(),
+        worktree: { required: true, path: fixture.worktree, state: "absent", exists: false, listed: false },
+        localBranch: { required: true, branch: fixture.branch, state: "present", sha: expectedHead, error: null },
+        remoteBranch: { required: true, branch: fixture.branch, state: "present", sha: expectedHead, error: null },
+      };
       manifest.worktree_removed_at = new Date().toISOString();
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -7013,6 +7337,30 @@ try {
       const updated = readJson(manifestPath);
       assert(updated.status === "closed", `manifest status is ${updated.status}`);
       assert(updated.cleanup_error === null, `cleanup_error not cleared: ${updated.cleanup_error}`);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged rejects an absent worktree without its exact partial-cleanup journal", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_error = "unproven absent target";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code !== 0, "unproven absent merged target unexpectedly resumed");
+      assert(result.stderr.includes("absent worktree target requires an exact cleanup_partial journal"), result.stderr || result.stdout);
+      assert(branchExists(fixture.root, fixture.branch), "unproven absent target deleted the local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "unproven absent target deleted the remote branch");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -7786,6 +8134,29 @@ try {
     }
   });
 
+  test("cleanup-integrated exact-tree closeout rejects an absent worktree without its exact partial journal", () => {
+    const fixture = createIntegratedCleanupFixture({
+      taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
+      baseBranch: "dev",
+      remoteBranch: false,
+    });
+    try {
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_error = "unproven exact-tree interruption";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(fixture, [...exactTreeCloseoutArgs(fixture), "--summary-json"]);
+      assert(result.code !== 0, "unproven absent strict target unexpectedly planned");
+      assert(result.stderr.includes("absent worktree target requires an exact cleanup_partial journal"), result.stderr || result.stdout);
+      assert(branchExists(fixture.root, fixture.branch), "unproven absent strict target deleted its local branch");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-integrated exact-tree closeout rejects missing evidence and unsafe invocation before planning", () => {
     const fixture = createIntegratedCleanupFixture({
       taskId: "20260723-tailnet-authenticated-dashboard-persistence-and",
@@ -8258,11 +8629,7 @@ try {
       assert(plan.proof.currentBase.headSha === fixture.currentBaseHead, preview.stdout || preview.stderr);
       runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
       runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
-      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
-      const manifest = readJson(manifestPath);
-      manifest.status = "cleanup_partial";
-      manifest.cleanup_supersession_evidence = { schemaVersion: 1, remoteBranchPolicy: "absent", proof: plan.proof };
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const manifestPath = markFirstUseSupersededCleanupPartial(fixture, plan.proof);
 
       const resumed = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
       assert(resumed.code === 0, resumed.stderr || resumed.stdout);
@@ -8288,6 +8655,32 @@ try {
     }
   });
 
+  test("cleanup-superseded first-use repair rejects an absent target with proof but no durable partial journal", () => {
+    const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
+    const args = legacyFirstUseSupersededArgs(fixture);
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const plan = JSON.parse(preview.stdout).results[0];
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_supersession_evidence = { schemaVersion: 1, remoteBranchPolicy: "absent", proof: plan.proof };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const resumed = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(resumed.code !== 0, "first-use proof without a durable journal unexpectedly resumed");
+      assert(resumed.stderr.includes("absent worktree target requires an exact cleanup_partial journal"), resumed.stderr || resumed.stdout);
+      assert(!existsSync(fixture.worktree), "unproven first-use resume recreated its worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "unproven first-use resume recreated its local branch");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "unproven first-use resume mutated the absent remote");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-superseded first-use partial resume blocks changed canonical base evidence without mutation", () => {
     const fixture = createSupersededCleanupFixture({ firstUseRepair: true });
     const args = legacyFirstUseSupersededArgs(fixture);
@@ -8299,11 +8692,7 @@ try {
 
       runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
       runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
-      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
-      const manifest = readJson(manifestPath);
-      manifest.status = "cleanup_partial";
-      manifest.cleanup_supersession_evidence = { schemaVersion: 1, remoteBranchPolicy: "absent", proof: initialPlan.proof };
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const manifestPath = markFirstUseSupersededCleanupPartial(fixture, initialPlan.proof);
 
       commitFile(fixture.root, "after-cleanup-base-advance.txt", "advance after local targets were removed\n", "advance canonical base after cleanup interruption");
       const advancedBaseHead = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
@@ -8657,6 +9046,27 @@ try {
     }
   });
 
+  test("cleanup-superseded rejects an absent worktree without its exact partial journal", () => {
+    const fixture = createSupersededCleanupFixture();
+    try {
+      runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, fixture.sourceHead]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_error = "unproven absent superseded target";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(fixture, [...supersededCleanupArgs(fixture), "--summary-json"], { env: fixture.env });
+      assert(result.code !== 0, "unproven absent superseded target unexpectedly planned");
+      assert(result.stderr.includes("absent worktree target requires an exact cleanup_partial journal"), result.stderr || result.stdout);
+      assert(!branchExists(fixture.root, fixture.branch), "unproven absent superseded target recreated its local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "unproven absent superseded target deleted the retained remote branch");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-superseded refuses persisted PR evidence even for an otherwise exact cleanup_partial resume", () => {
     const fixture = createSupersededCleanupFixture();
     try {
@@ -8760,6 +9170,35 @@ try {
     assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
     assert(existsSync(orphanPath), "cleanup-orphans summary-json removed an orphan directory");
     assert(existsSync(metadataPath), "cleanup-orphans summary-json removed hidden metadata");
+  });
+
+  test("cleanup-orphans rejects symlinked managed roots and child entries before directory inspection", () => {
+    const externalRoot = mkdtempSync(join(tmpdir(), "codex-orphan-external-"));
+    const symlinkStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-root-link-state-"));
+    const symlinkedRoot = join(symlinkStateRoot, "worktrees");
+    const childTarget = mkdtempSync(join(tmpdir(), "codex-orphan-child-link-target-"));
+    const childLink = join(stateRoot, "worktrees", "foreign-child-link");
+    try {
+      mkdirSync(join(externalRoot, "foreign-orphan"));
+      symlinkSync(externalRoot, symlinkedRoot, "dir");
+      const rootResult = run(["cleanup-orphans", "--summary-json", "--state-root", symlinkStateRoot]);
+      assert(rootResult.code !== 0, "cleanup-orphans unexpectedly inspected a symlinked managed root");
+      assert(rootResult.stderr.includes("managed root must not be a symlink"), rootResult.stderr || rootResult.stdout);
+      assert(existsSync(join(externalRoot, "foreign-orphan")), "cleanup-orphans touched symlinked-root content");
+
+      mkdirSync(join(childTarget, "foreign-orphan"));
+      mkdirSync(join(stateRoot, "worktrees"), { recursive: true });
+      symlinkSync(childTarget, childLink, "dir");
+      const childResult = run(["cleanup-orphans", "--summary-json", "--state-root", stateRoot]);
+      assert(childResult.code !== 0, "cleanup-orphans unexpectedly skipped a symlinked child entry");
+      assert(childResult.stderr.includes("cleanup target must not be a symlink"), childResult.stderr || childResult.stdout);
+      assert(existsSync(join(childTarget, "foreign-orphan")), "cleanup-orphans touched symlinked-child content");
+    } finally {
+      rmSync(childLink, { force: true });
+      rmSync(childTarget, { recursive: true, force: true });
+      rmSync(symlinkStateRoot, { recursive: true, force: true });
+      rmSync(externalRoot, { recursive: true, force: true });
+    }
   });
 
   test("cleanup-orphans refuses hidden workspace metadata even when queried", () => {
@@ -8896,6 +9335,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(fixtureRoot, ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
+  writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\n");
   writeFileSync(join(fixtureRoot, "base.txt"), "base\n");
   runGit(fixtureRoot, ["add", "base.txt", "scripts"]);
   runGit(fixtureRoot, ["commit", "-q", "-m", "base"]);
@@ -9510,6 +9950,10 @@ function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBran
   const manifest = readJson(manifestPath);
   manifest.status = "cleanup_partial";
   manifest.cleanup_error = "simulated interruption after exact supersession resource cleanup";
+  manifest.cleanup_started_at = new Date().toISOString();
+  manifest.cleanup_branch = fixture.branch;
+  manifest.cleanup_expected_head_sha = fixture.sourceHead;
+  manifest.cleanup_local_branch_sha = deleteLocalBranch ? null : fixture.sourceHead;
   manifest.cleanup_supersession_evidence = {
     schemaVersion: 1,
     remoteBranchPolicy: "retained",
@@ -9520,6 +9964,34 @@ function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBran
     },
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function markFirstUseSupersededCleanupPartial(fixture, proof) {
+  const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+  const manifest = readJson(manifestPath);
+  const appliedAt = new Date().toISOString();
+  manifest.status = "cleanup_partial";
+  manifest.cleanup_error = "simulated interruption after durable first-use superseded cleanup journal";
+  manifest.cleanup_started_at = appliedAt;
+  manifest.cleanup_owner = manifest.owner || null;
+  manifest.cleanup_branch = fixture.branch;
+  manifest.cleanup_expected_head_sha = fixture.sourceHead;
+  manifest.cleanup_local_branch_sha = null;
+  manifest.cleanup_remote_branch_sha = null;
+  manifest.cleanup_remote_branch_deleted_at = null;
+  manifest.cleanup_remote_branch_policy = "absent-first-use-superseded-cleanup";
+  manifest.cleanup_supersession_evidence = {
+    schemaVersion: 1,
+    appliedAt,
+    approval: "fixture approved first-use superseded cleanup journal",
+    reason: "fixture records the exact first-use proof before local deletion",
+    proof,
+    remoteBranchPolicy: "absent",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifestPath;
 }
 
 function createSupersededCleanupFixture(options = {}) {

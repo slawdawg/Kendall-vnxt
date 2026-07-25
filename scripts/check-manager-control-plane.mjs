@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { buildCodexAdvisorClassificationPlan, buildCodexAdvisorPacketPlan, buildContinuousRunPlan, buildCyclePacket, buildDeliveryPlan, buildFeedbackPlan, buildManagerSelfRepairSummary, buildProgressBeaconPlan, buildRecoveryPlan, buildSourceBackedPacketSeedPlan, buildSteeringPlan, buildWorkerFrictionPlan, buildWorkerLifecyclePlan, buildWorkerQuestionAnswerPlan, classifyAutoApply, ledgerCommand } from "./lib/manager-control-plane/core.mjs";
+import { findManagerTmuxControlViolations } from "./lib/manager-control-plane/tmux-cwd-rebind-contract.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -168,7 +169,7 @@ for (const [name, command] of [
   ["manager:run", "node ./scripts/manager-run-loop.mjs --summary-json"],
   ["test:manager-control-plane", "pnpm run test:manager-control-plane:preflight && pnpm run test:manager-control-plane:full"],
   ["test:manager-control-plane:preflight", "pnpm run test:manager-control-plane:contracts && pnpm run test:manager-control-plane:focused && pnpm run test:manager-control-plane:verification"],
-  ["test:manager-control-plane:contracts", "node ./scripts/run-manager-control-plane-fast-tests.mjs contracts"],
+  ["test:manager-control-plane:contracts", "node ./scripts/run-manager-control-plane-fast-tests.mjs contracts && pnpm run test:manager-control-plane-tmux-cwd-rebind-contract"],
   ["test:manager-control-plane:focused", "node ./scripts/run-manager-control-plane-fast-tests.mjs focused && node --test tests/manager-review-route.test.mjs"],
   ["test:manager-control-plane:verification", "node --test tests/manager-control-plane-verification.test.mjs"],
   ["test:supervisor", "node ./scripts/run-supervisor-tests.mjs"],
@@ -196,6 +197,7 @@ for (const [name, command] of [
   ["test:manager-control-plane-dispatcher-port", "node --test tests/manager-control-plane.dispatcher-port.test.mjs"],
   ["test:manager-control-plane-forbidden-boundary", "node --test tests/manager-control-plane.forbidden-boundary.test.mjs"],
   ["test:manager-control-plane-run-contract", "node --test tests/manager-control-plane.run-contract.test.mjs"],
+  ["test:manager-control-plane-tmux-cwd-rebind-contract", "node --test tests/manager-control-plane-tmux-cwd-rebind-contract.test.mjs"],
   ["test:manager-worker-clean-cycle-observer", "node --test tests/manager-worker-clean-cycle-observer.test.mjs"],
   ["check:manager-control-plane", "node ./scripts/check-manager-control-plane.mjs"],
 ]) {
@@ -551,9 +553,7 @@ if (existsSync(join(rootDir, "scripts/lib/manager-control-plane/core.mjs"))) {
   }
   assertCondition(core.includes("verifyTmuxPointerSubmitted"), "Manager core must include bounded tmux pointer receipt verification", failures);
   assertCondition(core.includes('["capture-pane", "-J", "-p", "-t", target, "-S", start]'), "Manager core may use capture-pane only for bounded pointer receipt checks", failures);
-  for (const forbidden of ["kill-pane", "respawn-pane", "source-file"]) {
-    assertCondition(!core.includes(forbidden), `Manager core must not expose tmux ${forbidden}`, failures);
-  }
+  failures.push(...findManagerTmuxControlViolations(core));
   assertCondition(!/send-keys[\s\S]{0,120}(handoff|prompt|assignment|task|branch)/i.test(core), "Manager core must not use send-keys for long handoff text", failures);
 }
 
