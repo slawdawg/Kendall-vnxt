@@ -191,6 +191,10 @@ function hasUsableResumePacket(packet, expectedRequestIdentity) {
   return packet.status === "active"
     && isBoundedText(packet.taskId)
     && isBoundedText(packet.branch)
+    && isBoundedText(packet.baseBranch)
+    && isBoundedText(packet.baseRef)
+    && hasProducerCompatibleBaseBranch(packet.baseBranch)
+    && hasProducerCompatibleBaseRef(packet)
     && isBoundedText(packet.owner)
     && isBoundedText(packet.currentOwner)
     && packet.owner === packet.currentOwner
@@ -201,6 +205,30 @@ function hasUsableResumePacket(packet, expectedRequestIdentity) {
     && isBoundedText(packet.manifestPath)
     && packet.mutation === "none; resume only"
     && hasMatchingExpectedRequestIdentity(packet, expectedRequestIdentity);
+}
+
+function hasProducerCompatibleBaseRef(packet) {
+  return packet.baseRef === packet.baseBranch || packet.baseRef === `origin/${packet.baseBranch}`;
+}
+
+function hasProducerCompatibleBaseBranch(value) {
+  const branch = text(value);
+  if (branch === "HEAD") return true;
+  if (
+    !isBoundedText(branch)
+    || branch !== branch.trim()
+    || branch.startsWith("-")
+    || branch.startsWith("refs/")
+    || /[\s\u0000-\u001f\u007f]/.test(branch)
+    || ["~", "^", ":", "?", "*", "[", "\\"].some((character) => branch.includes(character))
+    || branch.includes("..")
+    || branch.includes("@{")
+    || branch === "@"
+    || branch.endsWith(".")
+    || branch.endsWith("/")
+    || branch.includes("//")
+  ) return false;
+  return branch.split("/").every((component) => component.length > 0 && !component.startsWith(".") && !component.endsWith(".lock"));
 }
 
 function hasUsableCreatePreview(preview) {

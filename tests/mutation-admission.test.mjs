@@ -236,6 +236,83 @@ test("unsafe, incomplete, or fabricated lane facts require a decision and never 
   }
 });
 
+test("resume requires bounded base-branch and base-ref evidence", () => {
+  for (const field of ["baseBranch", "baseRef"]) {
+    for (const value of [undefined, null, "", "   ", "x".repeat(257)]) {
+      const managedLane = { ...resumePacket, [field]: value };
+      const result = evaluateMutationAdmission({
+        requestedActivity: "source_change",
+        authorizedScope: true,
+        baseCheckout: cleanBaseCheckout,
+        managedLane,
+        expectedRequestIdentity: { taskId: resumePacket.taskId, owner: resumePacket.owner },
+        createPreview
+      });
+
+      assert.equal(result.outcome, "decision_needed", `${field}=${String(value)}`);
+      assert.equal(result.reasonCode, "admission.managed_lane_unsafe", `${field}=${String(value)}`);
+    }
+  }
+});
+
+test("resume requires a producer-compatible base-branch and base-ref pair", () => {
+  for (const [baseBranch, baseRef] of [
+    [resumePacket.baseBranch, resumePacket.baseBranch],
+    ["feature/alpha", "origin/feature/alpha"],
+    ["HEAD", "HEAD"],
+    ["HEAD", "origin/HEAD"]
+  ]) {
+    const result = evaluateMutationAdmission({
+      requestedActivity: "source_change",
+      authorizedScope: true,
+      baseCheckout: cleanBaseCheckout,
+      managedLane: { ...resumePacket, baseBranch, baseRef },
+      expectedRequestIdentity: { taskId: resumePacket.taskId, owner: resumePacket.owner }
+    });
+    assert.equal(result.outcome, "resume_managed_lane", `${baseBranch} / ${baseRef}`);
+  }
+
+  for (const baseRef of ["origin/main", "main", "refs/heads/dev", "origin/dev/other"]) {
+    const result = evaluateMutationAdmission({
+      requestedActivity: "source_change",
+      authorizedScope: true,
+      baseCheckout: cleanBaseCheckout,
+      managedLane: { ...resumePacket, baseRef },
+      expectedRequestIdentity: { taskId: resumePacket.taskId, owner: resumePacket.owner },
+      createPreview
+    });
+
+    assert.equal(result.outcome, "decision_needed", `baseRef=${baseRef}`);
+    assert.equal(result.reasonCode, "admission.managed_lane_unsafe", `baseRef=${baseRef}`);
+  }
+});
+
+test("resume rejects base branches outside the producer's safe grammar even with matching refs", () => {
+  for (const baseBranch of [
+    "refs/heads/dev",
+    "dev ",
+    "-dev",
+    "feature..next",
+    "feature//next",
+    "feature/.next",
+    "feature/next.lock",
+    "@",
+    "feature?next"
+  ]) {
+    const result = evaluateMutationAdmission({
+      requestedActivity: "source_change",
+      authorizedScope: true,
+      baseCheckout: cleanBaseCheckout,
+      managedLane: { ...resumePacket, baseBranch, baseRef: `origin/${baseBranch}` },
+      expectedRequestIdentity: { taskId: resumePacket.taskId, owner: resumePacket.owner },
+      createPreview
+    });
+
+    assert.equal(result.outcome, "decision_needed", `baseBranch=${baseBranch}`);
+    assert.equal(result.reasonCode, "admission.managed_lane_unsafe", `baseBranch=${baseBranch}`);
+  }
+});
+
 test("resume requires a matching bounded request identity before selecting a lane", () => {
   for (const expectedRequestIdentity of [
     undefined,
