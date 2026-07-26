@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -6910,6 +6911,191 @@ try {
     }
   });
 
+  test("finish-pr resumable check packet pauses at its budget and resumes remaining stages without rerun", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseAfterStageSeam(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "budget-limited check unexpectedly completed");
+      assert(first.stderr.includes("packet paused"), first.stderr || first.stdout);
+      const afterPause = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(afterPause.check_verification_packet?.status === "partial", JSON.stringify(afterPause.check_verification_packet));
+      assert(afterPause.check_verification_packet?.next_stage === "check:packet-two", JSON.stringify(afterPause.check_verification_packet));
+      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one", "paused packet ran an unexpected stage");
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(second.code === 0, second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-two", "resume reran an already-proven stage");
+      const completed = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(completed.check_verification_packet?.status === "passed", JSON.stringify(completed.check_verification_packet));
+      assert(completed.pr_delivery_evidence, "completed packet did not enter the existing delivery path");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr resumable check packet resumes after interruption immediately following a committed stage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckInterruptAfterStageWrite(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "interrupted packet stage unexpectedly completed delivery");
+      assert(first.stderr.includes("fixture packet interruption"), first.stderr || first.stdout);
+      const afterInterruption = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(afterInterruption.check_verification_packet?.status === "partial", JSON.stringify(afterInterruption.check_verification_packet));
+      assert(afterInterruption.check_verification_packet?.next_stage === "check:packet-two", JSON.stringify(afterInterruption.check_verification_packet));
+      assert(afterInterruption.check_verification_packet?.stages?.length === 1, JSON.stringify(afterInterruption.check_verification_packet));
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE: "0" } },
+      );
+      assert(second.code === 0, second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-two", "interrupted packet reran a committed stage");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr resumable check packet fails closed before execution on binding drift, expiry, or malformed state", () => {
+    for (const scenario of [
+      { name: "task", mutate: (packet) => ({ ...packet, task_id: "other-task" }) },
+      { name: "owner", mutate: (packet) => ({ ...packet, owner: "other-runner" }) },
+      { name: "head", mutate: (packet) => ({ ...packet, head: "0".repeat(40) }) },
+      { name: "plan digest", mutate: (packet) => ({ ...packet, plan_digest: "f".repeat(64) }) },
+      { name: "expiry", mutate: (packet) => ({ ...packet, expires_at: "2026-07-25T00:00:00.000Z" }) },
+      { name: "future timestamp", mutate: (packet) => ({ ...packet, updated_at: "2099-01-01T00:00:00.000Z" }) },
+      { name: "unexpected retained data", mutate: (packet) => ({ ...packet, raw_output: "fixture-packet-secret" }) },
+      { name: "malformed", mutate: () => ({ status: "partial", raw_output: "fixture-packet-secret" }) },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["check:packet-one", "check:packet-two"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.check_verification_packet = scenario.mutate(fixtureResumableCheckPacket(fixture, stages));
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} packet unexpectedly resumed`);
+        assert(result.stderr.includes("check verification packet"), result.stderr || result.stdout);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} packet ran a stage`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} packet reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.name} packet reached PR creation`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("finish-pr resumable check packet records a nonzero stage without raw output and blocks delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-failure"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, { "check:packet-failure": "secret-nonzero" });
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "nonzero packet stage unexpectedly passed");
+      assert(result.stderr.includes("check stage=check:packet-failure"), result.stderr || result.stdout);
+      assert(!result.stderr.includes("fixture-packet-secret"), "nonzero packet error leaked child output");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.failed_stage === "check:packet-failure", JSON.stringify(manifest.check_verification_packet));
+      assert(!JSON.stringify(manifest.check_verification_packet).includes("fixture-packet-secret"), "packet retained child output");
+      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-failure", "nonzero stage evidence did not preserve execution order");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "nonzero packet stage reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "nonzero packet stage reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr completed resumable check packet unlocks only the existing downstream delivery path", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const completedAt = new Date().toISOString();
+      const packet = fixtureResumableCheckPacket(fixture, stages, {
+        status: "passed",
+        stages: stages.map((stage) => ({ stage, completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" })),
+        next_stage: null,
+        updated_at: completedAt,
+        completed_at: completedAt,
+      });
+      manifest.check_verification_packet = packet;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "completed packet reran a verification stage");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.last_verified_at, "completed packet did not record the existing verification gate");
+      assert(updated.pr_delivery_evidence?.operation === "create-pr", JSON.stringify(updated.pr_delivery_evidence));
+      assert(updated.lane_evidence_packet?.pr_delivery?.operation === "create-pr", JSON.stringify(updated.lane_evidence_packet));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr resumable check packet retains only metadata across packet and diagnostic evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-secret"];
+      installFixtureResumableCheckPlan(fixture, stages, { "check:packet-secret": "secret-nonzero" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "secret packet stage unexpectedly passed");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "packet failure did not persist one bounded diagnostic");
+      const retained = JSON.stringify({ packet: manifest.check_verification_packet, diagnostic: readJson(join(diagnosticsDir, names[0])) });
+      assert(!retained.includes("fixture-packet-secret"), "resumable check retained raw child output");
+      assert(manifest.check_verification_packet?.stages?.[0]?.output === "omitted", JSON.stringify(manifest.check_verification_packet));
+      assert(readJson(join(diagnosticsDir, names[0])).child?.output === "omitted", retained);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr check diagnostic projects a later aggregate stage without retaining child output", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -10180,6 +10366,11 @@ function installFixtureVerificationCommand(fixture, mode) {
 }
 
 function installFixtureVerificationProfileCommand(fixture, profile, mode) {
+  if (profile === "check") {
+    writeFileSync(join(fixture.worktree, "package.json"), `${JSON.stringify({ scripts: { check: "pnpm run check:fixture", "check:fixture": "fixture-verification" } })}\n`);
+    runGit(fixture.worktree, ["add", "package.json"]);
+    runGit(fixture.worktree, ["commit", "-q", "-m", "fixture check profile plan"]);
+  }
   const fixtureSource = readFileSync(fixture.script, "utf8");
   const commands = {
     check: 'check: ["pnpm", "run", "check"],',
@@ -10223,6 +10414,122 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     writeFileSync(verificationCommand, `#!/bin/sh\n${selected}\n`);
   }
   chmodSync(verificationCommand, 0o755);
+}
+
+function installFixtureResumableCheckPlan(fixture, stages, stageModes = {}) {
+  assert(Array.isArray(stages) && stages.length > 0, "resumable check fixture requires at least one stage");
+  const stageLog = join(fixture.stateRoot, "resumable-check-stages.log");
+  const scripts = {
+    check: stages.map((stage) => `pnpm run ${stage}`).join(" && "),
+  };
+  for (const stage of stages) {
+    scripts[stage] = `fixture-resumable-stage ${stage}`;
+  }
+  writeFileSync(join(fixture.worktree, "package.json"), `${JSON.stringify({ scripts })}\n`);
+  writeFileSync(join(fixture.worktree, ".gitignore"), "node_modules/\npnpm-lock.yaml\n");
+  runGit(fixture.worktree, ["add", "package.json", ".gitignore"]);
+  runGit(fixture.worktree, ["commit", "-q", "-m", "fixture resumable check plan"]);
+
+  const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+  const modeCases = Object.entries(stageModes)
+    .map(([stage, mode]) => {
+      if (mode === "secret-nonzero") return `  ${JSON.stringify(stage)}) echo 'fixture-packet-secret' >&2; exit 23 ;;`;
+      throw new Error(`unknown resumable check fixture stage mode ${mode}`);
+    })
+    .join("\n");
+  writeFileSync(
+    stageCommand,
+    [
+      "#!/bin/sh",
+      'stage="$1"',
+      'if [ -n "${CODEX_WORKSPACE_FIXTURE_STAGE_LOG:-}" ]; then echo "$stage" >> "$CODEX_WORKSPACE_FIXTURE_STAGE_LOG"; fi',
+      "case \"$stage\" in",
+      modeCases,
+      "esac",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(stageCommand, 0o755);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_STAGE_LOG: stageLog };
+  return stageLog;
+}
+
+function readFixtureStageLog(path) {
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split(/\r?\n/).filter(Boolean) : [];
+}
+
+function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const started = "  const started = Date.now();";
+  const stageBudgetCheck = "if (Date.now() - started >= resumableCheckInvocationBudgetMs)";
+  const stageTimeout = "timeout: resumableCheckInvocationBudgetMs - (Date.now() - started)";
+  assert(source.includes(started) && source.includes(stageBudgetCheck) && source.includes(stageTimeout), "fixture did not contain the resumable check clock seams");
+  const patched = source
+    .replace(
+      started,
+      [
+        "  let fixturePacketClockCalls = 0;",
+        "  const fixturePacketNow = () => {",
+        "    const now = Date.now();",
+        '    return process.env.CODEX_WORKSPACE_FIXTURE_PACKET_PAUSE_AFTER_STAGE === "1" && fixturePacketClockCalls++ >= 3',
+        "      ? now + resumableCheckInvocationBudgetMs",
+        "      : now;",
+        "  };",
+        "  const started = fixturePacketNow();",
+      ].join("\n"),
+    )
+    .replace(stageBudgetCheck, "if (fixturePacketNow() - started >= resumableCheckInvocationBudgetMs)")
+    .replace(stageTimeout, "timeout: resumableCheckInvocationBudgetMs - (fixturePacketNow() - started)");
+  writeFileSync(fixture.script, patched);
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pause clock"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_PAUSE_AFTER_STAGE: "1" };
+}
+
+function installFixtureResumableCheckInterruptAfterStageWrite(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const persistedTransition = [
+    "    manifest.check_verification_packet = packet;",
+    "    writeManifest(manifestPath, manifest);",
+  ].join("\n");
+  assert(source.includes(persistedTransition), "fixture did not contain the persisted resumable stage transition");
+  writeFileSync(
+    fixture.script,
+    source.replace(
+      persistedTransition,
+      [
+        persistedTransition,
+        '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE === "1" && packet.status === "partial") {',
+        '      throw new Error("fixture packet interruption after committed stage");',
+        "    }",
+      ].join("\n"),
+    ),
+  );
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable packet interruption seam"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE: "1" };
+}
+
+function fixtureResumableCheckPacket(fixture, stages, overrides = {}) {
+  const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+  const planDigest = createHash("sha256").update(stages.join("\n")).digest("hex");
+  const createdAt = new Date(Date.now() - 1_000).toISOString();
+  const expiresAt = new Date(Date.now() + 20 * 60 * 1_000).toISOString();
+  return {
+    schema_version: 1,
+    task_id: "resumed-task",
+    owner: "runner-a",
+    head,
+    plan_digest: planDigest,
+    stages: [],
+    status: "partial",
+    next_stage: stages[0],
+    created_at: createdAt,
+    updated_at: createdAt,
+    expires_at: expiresAt,
+    ...overrides,
+  };
 }
 
 function installFixtureDeliveryProbes(fixture) {

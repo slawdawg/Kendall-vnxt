@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -37,6 +38,10 @@ const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
 const codexWorkspaceVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
+const resumableCheckInvocationBudgetMs = 180_000;
+const resumableCheckPacketSchemaVersion = 1;
+const resumableCheckPacketTtlMs = 30 * 60 * 1000;
+const resumableCheckPacketFutureSkewMs = 30_000;
 const taskLockSchemaVersion = 1;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
@@ -2348,7 +2353,9 @@ function finishPr(argv) {
 
     if (verifyCommand.length > 0) {
       lock.heartbeat();
-      runBoundedVerification(verificationPlan, {
+      if (verificationPlan.resolvedProfile === "check") {
+        runResumableCheckVerification(manifest, manifestPath, verificationPlan, { state, owner: currentLaneOwner(options), cwd: manifest.worktree_path });
+      } else runBoundedVerification(verificationPlan, {
         cwd: manifest.worktree_path,
         diagnosticContext: { state, taskId: manifest.task_id, lockToken: lock.token },
       });
@@ -7700,6 +7707,111 @@ function verificationCommand(profile) {
 function verificationTimeoutMs(profile) {
   if (profile === "check") return checkVerificationTimeoutMs;
   return profile === "codex-workspace" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;
+}
+
+function resumableCheckPlan(cwd) {
+  const check = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).scripts?.check;
+  const stages = String(check || "").split("&&").map((part) => part.trim()).map((part) => /^pnpm run ([A-Za-z0-9:_-]+)$/.exec(part)?.[1]);
+  if (!stages.length || stages.some((stage) => !stage)) throw new Error("check profile stage plan is not allowlisted.");
+  const digest = createHash("sha256").update(stages.join("\n")).digest("hex");
+  return { stages, digest };
+}
+
+function runResumableCheckVerification(manifest, manifestPath, verificationPlan, options) {
+  const plan = resumableCheckPlan(options.cwd);
+  const head = git(["rev-parse", "HEAD"], { cwd: options.cwd }).stdout.trim();
+  const prior = manifest.check_verification_packet;
+  if (prior) validateResumableCheckPacket(prior, { taskId: manifest.task_id, owner: options.owner, head, plan });
+  const packet = prior || createResumableCheckPacket({ taskId: manifest.task_id, owner: options.owner, head, planDigest: plan.digest, nextStage: plan.stages[0] });
+  const started = Date.now();
+  for (let index = packet.stages.length; index < plan.stages.length; index += 1) {
+    if (Date.now() - started >= resumableCheckInvocationBudgetMs) {
+      packet.status = "partial"; packet.next_stage = plan.stages[index]; packet.updated_at = new Date().toISOString(); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest);
+      throw new Error(`Check verification packet paused before ${packet.next_stage}; resume finish-pr to continue.`);
+    }
+    const stage = plan.stages[index];
+    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout: resumableCheckInvocationBudgetMs - (Date.now() - started), killSignal: "SIGKILL" });
+    const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
+    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: checkVerificationTimeoutMs, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${checkVerificationTimeoutMs}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
+    packet.stages.push(evidence);
+    packet.updated_at = new Date().toISOString();
+    if (index + 1 === plan.stages.length) {
+      packet.status = "passed";
+      packet.next_stage = null;
+      packet.completed_at = packet.updated_at;
+    } else {
+      packet.status = "partial";
+      packet.next_stage = plan.stages[index + 1];
+    }
+    manifest.check_verification_packet = packet;
+    writeManifest(manifestPath, manifest);
+  }
+}
+
+function createResumableCheckPacket({ taskId, owner, head, planDigest, nextStage }) {
+  const createdAt = new Date();
+  return {
+    schema_version: resumableCheckPacketSchemaVersion,
+    task_id: taskId,
+    owner,
+    head,
+    plan_digest: planDigest,
+    stages: [],
+    status: "partial",
+    next_stage: nextStage,
+    created_at: createdAt.toISOString(),
+    updated_at: createdAt.toISOString(),
+    expires_at: new Date(createdAt.getTime() + resumableCheckPacketTtlMs).toISOString(),
+  };
+}
+
+function validateResumableCheckPacket(packet, expected) {
+  const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage"];
+  if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
+  if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
+  if (packet.task_id !== expected.taskId || packet.owner !== expected.owner || packet.head !== expected.head || packet.plan_digest !== expected.plan.digest) {
+    invalid("binding changed");
+  }
+  if (!["partial", "passed", "failed"].includes(packet.status)) invalid("status is unsupported");
+  if (packet.status === "failed") throw new Error("check verification packet previously failed; refusing to resume.");
+  if (!Array.isArray(packet.stages) || packet.stages.length > expected.plan.stages.length) invalid("stage evidence is not an ordered plan prefix");
+
+  const now = Date.now();
+  const timestamp = (value, label, { allowNull = false, allowFuture = false } = {}) => {
+    if (allowNull && value === null) return null;
+    if (typeof value !== "string" || value.length > 80) invalid(`${label} is malformed`);
+    const parsed = Date.parse(value);
+    if (!Number.isFinite(parsed)) invalid(`${label} is malformed`);
+    if (!allowFuture && parsed > now + resumableCheckPacketFutureSkewMs) invalid(`${label} is in the future`);
+    return parsed;
+  };
+  const createdAt = timestamp(packet.created_at, "created_at");
+  const updatedAt = timestamp(packet.updated_at, "updated_at");
+  const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
+  if (updatedAt < createdAt || expiresAt <= createdAt) invalid("timestamp ordering is invalid");
+  if (expiresAt <= now) invalid("packet expired");
+  if (expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("expiry exceeds packet lifetime");
+
+  for (let index = 0; index < packet.stages.length; index += 1) {
+    const evidence = packet.stages[index];
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) invalid("stage evidence is malformed");
+    const allowedKeys = ["completed_at", "error_code", "output", "signal", "stage", "status"];
+    if (Object.keys(evidence).some((key) => !allowedKeys.includes(key))) invalid("stage evidence contains unbounded fields");
+    if (evidence.stage !== expected.plan.stages[index]) invalid("stage evidence is not an ordered plan prefix");
+    const completedAt = timestamp(evidence.completed_at, `stage ${index} completed_at`);
+    if (completedAt < createdAt || completedAt > updatedAt) invalid("stage evidence timestamp is invalid");
+    if (evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null || evidence.output !== "omitted") invalid("stage evidence is not a successful metadata-only result");
+  }
+  if (packet.status === "partial") {
+    if (packet.stages.length >= expected.plan.stages.length || packet.next_stage !== expected.plan.stages[packet.stages.length]) invalid("partial packet next stage is invalid");
+    if (Object.hasOwn(packet, "completed_at")) invalid("partial packet cannot be complete");
+  } else {
+    if (packet.stages.length !== expected.plan.stages.length || packet.next_stage !== null) invalid("passed packet completion is invalid");
+    const completedAt = timestamp(packet.completed_at, "completed_at");
+    if (completedAt < createdAt || completedAt > updatedAt) invalid("completion timestamp is invalid");
+  }
 }
 
 function runBoundedVerification(verificationPlan, options = {}) {
