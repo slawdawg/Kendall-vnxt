@@ -2511,6 +2511,7 @@ function verifyPrGates(argv) {
 }
 
 function reconcileMergedPr(argv) {
+  assertReconciliationModeOptionOccurrences(argv);
   const { positional, options } = parseOptions(argv);
   const query = positional.join(" ").trim();
   if (!query) {
@@ -2586,6 +2587,23 @@ function reconcileMergedPr(argv) {
   });
 
   printApplied("reconcile-merged-pr", renderMergedPrReconciliationEvidence(manifest.merged_pr_reconciliation));
+}
+
+function assertReconciliationModeOptionOccurrences(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = arg === "--apply" || arg.startsWith("--apply=")
+      ? "--apply"
+      : arg === "--dry-run" || arg.startsWith("--dry-run=")
+        ? "--dry-run"
+        : null;
+    if (!option) {
+      continue;
+    }
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
+      throw new Error(`reconcile-merged-pr ${option} must be a bare flag without a value.`);
+    }
+  }
 }
 
 function assertReconciliationModeOptionValues(options) {

@@ -7472,6 +7472,39 @@ try {
     }
   });
 
+  test("reconcile-merged-pr rejects duplicate mutation switches that hide an earlier value without writing reconciliation metadata", () => {
+    const cases = [
+      ["--apply=false", "--apply"],
+      ["--dry-run=false", "--dry-run"],
+      ["--apply", "false"],
+      ["--dry-run", "false"],
+      ["--apply", ""],
+      ["--dry-run", ""],
+    ];
+    for (const args of cases) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runMergedCleanupFixtureScript(fixture, [
+          "reconcile-merged-pr",
+          "cleanup-task",
+          ...args,
+          "--owner",
+          "runner-a",
+          "--state-root",
+          fixture.stateRoot,
+        ]);
+
+        assert(result.code !== 0, `${args.join(" ")} unexpectedly reconciled metadata`);
+        assert(result.stderr.includes("must be a bare flag without a value"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${args.join(" ")} wrote reconciliation metadata`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
   test("reconcile-merged-pr fails closed on retained delivery-head mismatch", () => {
     const fixture = createMergedCleanupFixture();
     try {
