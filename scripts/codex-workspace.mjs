@@ -96,6 +96,9 @@ try {
     case "verify-pr-gates":
       verifyPrGates(commandArgs);
       break;
+    case "reconcile-merged-pr":
+      reconcileMergedPr(commandArgs);
+      break;
     case "cleanup-merged":
       cleanupMerged(commandArgs);
       break;
@@ -149,6 +152,7 @@ Commands:
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
+  reconcile-merged-pr <query> Record verified merged-PR metadata before cleanup.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-integrated [query] Remove clean no-PR worktrees already integrated into a base ref.
@@ -275,6 +279,14 @@ verify-pr-gates options:
   --delivery-audit-agent <id> Agent or reviewer id for independent delivery audit evidence.
   --delivery-audit-status <status> Delivery audit recommendation. Must be merge-ready for low-risk merge.
   --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
+
+reconcile-merged-pr options:
+  --apply                   Record verified merged-PR metadata only. Without this, inspect only.
+  --summary-json            Without --apply, print a compact reconciliation packet.
+  --delivery-audit-agent <id> Agent or reviewer id for an independent cleanup audit.
+  --delivery-audit-status <status> Cleanup audit recommendation. Must be cleanup-ready.
+  --delivery-audit-summary <text> Metadata-only cleanup audit summary for the exact PR head.
+  --delivery-audit-head-sha <sha> Optional exact head override; must match the merged PR head.
 
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -2494,6 +2506,353 @@ function verifyPrGates(argv) {
   });
 
   printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
+}
+
+function reconcileMergedPr(argv) {
+  const { positional, options } = parseOptions(argv);
+  const query = positional.join(" ").trim();
+  if (!query) {
+    throw new Error("reconcile-merged-pr requires a task query.");
+  }
+  if (options.takeOwnership) {
+    throw new Error("reconcile-merged-pr does not support --take-ownership; the recorded lane owner must run this metadata-only operation.");
+  }
+  if (options.summaryJson && options.apply) {
+    throw new Error("reconcile-merged-pr --summary-json is only supported without --apply.");
+  }
+
+  const state = workspaceState(options);
+  const manifestRecord = findCleanupManifest(state, query);
+  const { manifest, path: manifestPath } = manifestRecord;
+  assertExactReconciliationOwner(manifest, options);
+  assertReconciliationManifestState(manifest);
+  assertSafeBranch(manifest.branch);
+  assertRegisteredManagedWorktree(manifest, state);
+  requireGh("reconcile-merged-pr");
+
+  const packet = buildMergedPrReconciliationEvidence(manifest, { options });
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  if (!packet.ready) {
+    printBlocked("reconcile-merged-pr", renderMergedPrReconciliationEvidence(packet));
+    throw new Error(`Merged PR reconciliation is not ready: ${packet.blockers.join("; ")}`);
+  }
+  if (!options.apply) {
+    printPlan("reconcile-merged-pr", renderMergedPrReconciliationEvidence(packet));
+    console.log("Add --apply to record only verified merged-PR metadata and cleanup audit evidence.");
+    return;
+  }
+
+  withManifestLock(state, manifest.task_id, () => {
+    const lockedManifest = readManifest(manifestPath);
+    validateManifest(lockedManifest, manifestPath);
+    assertExactReconciliationOwner(lockedManifest, options);
+    assertReconciliationManifestState(lockedManifest);
+    assertSafeBranch(lockedManifest.branch);
+    assertRegisteredManagedWorktree(lockedManifest, state);
+
+    const lockedPacket = buildMergedPrReconciliationEvidence(lockedManifest, { options });
+    if (!lockedPacket.ready) {
+      printBlocked("reconcile-merged-pr", renderMergedPrReconciliationEvidence(lockedPacket));
+      throw new Error(`Merged PR reconciliation changed under lock: ${lockedPacket.blockers.join("; ")}`);
+    }
+
+    applyVerifiedMergedPrStatus(lockedManifest);
+    lockedManifest.pr_url = lockedPacket.pr.url;
+    lockedManifest.pr_number = lockedPacket.pr.number;
+    lockedManifest.pr_delivery_head_sha = lockedPacket.expectedHeadSha;
+    lockedManifest.merged_at = lockedPacket.pr.mergedAt;
+    lockedManifest.delivery_subagent_audit = lockedPacket.deliverySubagentAudit;
+    lockedManifest.delivery_subagent_audit_checked_at = lockedPacket.checkedAt;
+    lockedManifest.merged_pr_reconciliation = lockedPacket;
+    appendAuthorityDecision(lockedManifest, lockedPacket.authorityDecision);
+    lockedManifest.updated_at = lockedPacket.checkedAt;
+    appendTaskEvent(
+      lockedManifest,
+      "merged_pr_reconciled",
+      `PR ${lockedPacket.pr.number} ${lockedPacket.expectedHeadSha} cleanup audit ${lockedPacket.deliverySubagentAudit.status}`,
+    );
+    writeManifest(manifestPath, lockedManifest);
+    Object.assign(manifest, lockedManifest);
+  });
+
+  printApplied("reconcile-merged-pr", renderMergedPrReconciliationEvidence(manifest.merged_pr_reconciliation));
+}
+
+function buildMergedPrReconciliationEvidence(manifest, context = {}) {
+  const checkedAt = new Date().toISOString();
+  const blockers = [];
+  const livePr = prView(manifest);
+  const { pr, blockers: providerFieldBlockers } = shapeMergedPrReconciliationPr(livePr);
+  blockers.push(...providerFieldBlockers);
+  let localHeadSha = "";
+  let remoteHeadSha = null;
+  let remoteInspectionError = null;
+  let rawRemoteHeadSha = "";
+
+  if (!pr) {
+    addReconciliationBlocker(blockers, "Could not load live PR state for merged-PR reconciliation.");
+  } else {
+    validateMergedPrReconciliationIdentity(pr, blockers);
+    if (pr.state !== "MERGED" || !pr.mergedAt) {
+      addReconciliationBlocker(blockers, "Live PR is not merged.");
+    }
+    if (!pr.number || !pr.url) {
+      addReconciliationBlocker(blockers, "Live PR identity is incomplete.");
+    }
+    if (!pr.headRefName || pr.headRefName !== manifest.branch) {
+      addReconciliationBlocker(blockers, `Live PR head branch ${pr.headRefName || "missing"} does not match manifest branch ${safeMetadataText(manifest.branch, 250)}.`);
+    }
+    if (!pr.baseRefName || pr.baseRefName !== manifest.base_branch) {
+      addReconciliationBlocker(blockers, `Live PR base ${pr.baseRefName || "missing"} does not match manifest base ${safeMetadataText(manifest.base_branch, 250)}.`);
+    }
+    if (!exactGitObjectIdOrNull(pr.headRefOid)) {
+      addReconciliationBlocker(blockers, "Live PR head is missing or is not an exact Git object id.");
+    }
+    if (manifest.pr_number && manifest.pr_number !== pr.number) {
+      addReconciliationBlocker(blockers, `Manifest PR number ${safeMetadataText(manifest.pr_number, 32)} does not match live PR ${pr.number || "missing"}.`);
+    }
+    if (manifest.pr_url && manifest.pr_url !== pr.url) {
+      addReconciliationBlocker(blockers, "Manifest PR URL does not match the live PR URL.");
+    }
+    if (manifest.pr_delivery_head_sha && manifest.pr_delivery_head_sha !== pr.headRefOid) {
+      addReconciliationBlocker(blockers, `Recorded delivery head ${safeMetadataText(manifest.pr_delivery_head_sha, 80)} does not match live PR head ${pr.headRefOid || "missing"}.`);
+    }
+    if (manifest.merged_at && manifest.merged_at !== pr.mergedAt) {
+      addReconciliationBlocker(blockers, "Recorded merged timestamp does not match the live PR merged timestamp.");
+    }
+  }
+
+  try {
+    localHeadSha = branchSha(manifest.branch, manifest.worktree_path);
+  } catch (error) {
+    addReconciliationBlocker(blockers, `Could not inspect local branch head: ${error.message}`);
+  }
+  localHeadSha = exactGitObjectIdOrNull(localHeadSha) || "";
+  if (!localHeadSha) {
+    addReconciliationBlocker(blockers, `Local branch ${safeMetadataText(manifest.branch, 250)} is missing or does not resolve to an exact Git object id.`);
+  } else if (pr?.headRefOid && localHeadSha !== pr.headRefOid) {
+    addReconciliationBlocker(blockers, `Local branch ${safeMetadataText(manifest.branch, 250)} head ${localHeadSha} does not match live PR head ${pr.headRefOid}.`);
+  }
+
+  try {
+    rawRemoteHeadSha = originBranchSha(manifest.branch, manifest.worktree_path) || "";
+  } catch (error) {
+    remoteInspectionError = safeMetadataText(error.message || error, 500);
+    addReconciliationBlocker(blockers, `Could not inspect remote branch origin/${safeMetadataText(manifest.branch, 250)}: ${remoteInspectionError}`);
+  }
+  remoteHeadSha = rawRemoteHeadSha ? exactGitObjectIdOrNull(rawRemoteHeadSha) : null;
+  if (!remoteInspectionError && rawRemoteHeadSha && remoteHeadSha === null) {
+    addReconciliationBlocker(blockers, "Remote branch head is not an exact Git object id.");
+  }
+  if (remoteHeadSha && pr?.headRefOid && remoteHeadSha !== pr.headRefOid) {
+    addReconciliationBlocker(blockers, `Remote branch origin/${safeMetadataText(manifest.branch, 250)} head ${remoteHeadSha} does not match live PR head ${pr.headRefOid}.`);
+  }
+
+  const expectedHeadSha = pr?.headRefOid || "";
+  const deliverySubagentAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr || {}, context.options || {}, {
+    expectedHeadSha,
+    checkedAt,
+  });
+  blockers.push(...deliverySubagentAudit.blockers.map((blocker) => safeMetadataText(blocker, 500)));
+
+  const requiredGates = [
+    "manifest names a registered managed worktree",
+    "live PR is merged on the manifest base from the manifest branch",
+    "live PR head is an exact Git object id",
+    "local lane branch exactly matches the merged PR head",
+    "live remote lane branch is absent or exactly matches the merged PR head",
+    "retained PR identity and delivery metadata do not conflict",
+    "independent cleanup audit recommends cleanup-ready for the exact merged head",
+  ];
+  const status = blockers.length === 0 ? "ready" : "blocked";
+  const authorityDecision = shapeAuthorityDecisionEvidence({
+    operation: "reconcile-merged-pr",
+    authorityFamily: "post-merge-metadata",
+    decision: status,
+    allowed: blockers.length === 0,
+    requiredGates,
+    satisfiedGates: blockers.length === 0 ? requiredGates : [],
+    blockedReasons: blockers,
+    stopLines: [
+      "no source, worktree, branch, remote, PR, assignment, or cleanup mutation",
+      "live merged-PR evidence is rechecked under the manifest lock before recording",
+      "conflicting retained metadata is a fail-closed hold",
+      "retain metadata only; no raw provider payloads",
+    ],
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      pr?.number ? `pr:${pr.number}` : "",
+      expectedHeadSha ? `merged-head:${expectedHeadSha}` : "",
+      deliverySubagentAudit.agent ? `delivery-audit-agent:${deliverySubagentAudit.agent}` : "",
+    ],
+    nextSafeAction: blockers.length === 0
+      ? "Record the verified merged-PR metadata, then run cleanup-merged as a separate dry-run."
+      : "Resolve the recorded identity or audit mismatch, then rerun reconcile-merged-pr.",
+    recoveryPath: "No cleanup was attempted. Preserve the manifest and rerun after the live PR, branch, or cleanup audit evidence is consistent.",
+    generatedAt: checkedAt,
+  });
+
+  return {
+    schemaVersion: 1,
+    status,
+    ready: blockers.length === 0,
+    checkedAt,
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch,
+    expectedHeadSha: expectedHeadSha || null,
+    localHeadSha: localHeadSha || null,
+    remoteBranch: {
+      branch: manifest.branch,
+      state: remoteInspectionError ? "unknown" : remoteHeadSha ? "present" : "absent",
+      headSha: remoteHeadSha,
+      error: remoteInspectionError,
+    },
+    pr: pr
+      ? {
+          number: pr.number || null,
+          url: pr.url || null,
+          state: pr.state || null,
+          mergedAt: pr.mergedAt || null,
+          baseRefName: pr.baseRefName || null,
+          headRefName: pr.headRefName || null,
+          headRefOid: pr.headRefOid || null,
+        }
+      : null,
+    deliverySubagentAudit,
+    blockers,
+    requiredGates,
+    authorityDecision,
+    recoveryPath: "No cleanup was attempted. Preserve the manifest and rerun after the live PR, branch, or cleanup audit evidence is consistent.",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function renderMergedPrReconciliationEvidence(packet = {}) {
+  return [
+    `PR ${packet.pr?.number || "unknown"} ${packet.pr?.state || "unknown"}`,
+    `head ${packet.expectedHeadSha || "unknown"} local=${packet.localHeadSha || "unknown"} remote=${packet.remoteBranch?.state || "unknown"}:${packet.remoteBranch?.headSha || "none"}`,
+    `base ${packet.pr?.baseRefName || "unknown"} branch ${packet.pr?.headRefName || "unknown"}`,
+    `deliveryAudit status=${packet.deliverySubagentAudit?.status || "unknown"} agent=${packet.deliverySubagentAudit?.agent || "unknown"}`,
+    `status ${packet.status || "unknown"}`,
+  ];
+}
+
+function addReconciliationBlocker(blockers, value) {
+  const bounded = safeMetadataText(value, 500);
+  if (bounded) {
+    blockers.push(bounded);
+  }
+}
+
+function boundedProviderText(value, maxLength, field, blockers) {
+  const raw = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) {
+    return null;
+  }
+  if (raw.length > maxLength) {
+    addReconciliationBlocker(blockers, `Live PR ${field} exceeds the ${maxLength}-character metadata bound.`);
+    return null;
+  }
+  return safeMetadataText(raw, maxLength) || null;
+}
+
+function shapeMergedPrReconciliationPr(livePr) {
+  const blockers = [];
+  if (!livePr || typeof livePr !== "object" || Array.isArray(livePr)) {
+    addReconciliationBlocker(blockers, "Live PR response must be a JSON object.");
+    return { pr: null, blockers };
+  }
+  const rawNumber = livePr.number;
+  const number = Number.isSafeInteger(rawNumber) && rawNumber > 0 ? rawNumber : null;
+  if (rawNumber !== undefined && rawNumber !== null && number === null) {
+    addReconciliationBlocker(blockers, "Live PR number is not a positive safe integer.");
+  }
+  const url = boundedProviderText(livePr.url, 500, "URL", blockers);
+  const state = boundedProviderText(livePr.state, 64, "state", blockers);
+  const mergedAt = boundedProviderText(livePr.mergedAt, 80, "merged timestamp", blockers);
+  const baseRefName = boundedProviderText(livePr.baseRefName, MAX_BASE_BRANCH_LENGTH, "base branch", blockers);
+  const headRefName = boundedProviderText(livePr.headRefName, 250, "head branch", blockers);
+  const rawHeadRefOid = boundedProviderText(livePr.headRefOid, 80, "head object id", blockers);
+  const headRefOid = exactGitObjectIdOrNull(rawHeadRefOid) || null;
+  if (rawHeadRefOid && !headRefOid) {
+    addReconciliationBlocker(blockers, "Live PR head is not an exact Git object id.");
+  }
+  return {
+    pr: { number, url, state, mergedAt, baseRefName, headRefName, headRefOid },
+    blockers,
+  };
+}
+
+function validateMergedPrReconciliationIdentity(pr, blockers) {
+  if (!validMergedPrUrl(pr.url, pr.number)) {
+    addReconciliationBlocker(blockers, "Live PR URL is not a valid HTTPS pull-request URL for the reported PR number.");
+  }
+  if (!validProviderBranchName(pr.baseRefName, MAX_BASE_BRANCH_LENGTH)) {
+    addReconciliationBlocker(blockers, "Live PR base branch is not a valid branch name.");
+  }
+  if (!validProviderBranchName(pr.headRefName, 250)) {
+    addReconciliationBlocker(blockers, "Live PR head branch is not a valid branch name.");
+  }
+  if (!exactGitObjectIdOrNull(pr.headRefOid)) {
+    addReconciliationBlocker(blockers, "Live PR head is not an exact Git object id.");
+  }
+  if (pr.state !== "MERGED") {
+    addReconciliationBlocker(blockers, "Live PR state must be MERGED for reconciliation.");
+  }
+  if (!validMergedAtTimestamp(pr.mergedAt)) {
+    addReconciliationBlocker(blockers, "Live PR merged timestamp is not a valid RFC 3339 timestamp.");
+  }
+}
+
+function validMergedPrUrl(value, number) {
+  if (!value || !Number.isSafeInteger(number) || number <= 0) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    const match = parsed.pathname.match(/\/pull\/(\d+)\/?$/);
+    return parsed.protocol === "https:" && Boolean(parsed.hostname) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && Boolean(match) && Number(match[1]) === number;
+  } catch {
+    return false;
+  }
+}
+
+function validProviderBranchName(value, maxLength) {
+  if (!value || value.length > maxLength || value === "HEAD" || value.startsWith("-") || value.startsWith("refs/") || /[\s:*]/.test(value) || value.includes("..") || value.includes("@{")) {
+    return false;
+  }
+  return git(["check-ref-format", "--branch", value], { cwd: repoRoot }).code === 0;
+}
+
+function validMergedAtTimestamp(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/);
+  if (!match) {
+    return false;
+  }
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, 0);
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+    && date.getUTCHours() === hour
+    && date.getUTCMinutes() === minute
+    && date.getUTCSeconds() === second;
 }
 
 function buildPrGateEvidence(manifest, context = {}) {
@@ -7354,6 +7713,33 @@ function assertLaneOwner(manifest, options = {}) {
   }
 }
 
+function assertExactReconciliationOwner(manifest, options = {}) {
+  const recordedOwner = String(manifest.owner || "").trim();
+  const currentOwner = String(currentLaneOwner(options) || "").trim();
+  if (!recordedOwner) {
+    throw new Error(`${manifest.task_id} has no recorded owner; reconcile-merged-pr requires the exact current lane owner.`);
+  }
+  if (recordedOwner !== currentOwner) {
+    throw new Error(`${manifest.task_id} is owned by ${safeMetadataText(recordedOwner, 160)}; reconcile-merged-pr requires exact current-owner match (${safeMetadataText(currentOwner, 160) || "missing"}).`);
+  }
+}
+
+function assertReconciliationManifestState(manifest) {
+  const status = safeMetadataText(manifest.status, 80);
+  if (["active", "pr_open", "merged"].includes(status)) {
+    return;
+  }
+  throw new Error(`${manifest.task_id} has unsafe status ${status || "missing"}; reconcile-merged-pr only accepts active, pr_open, or merged manifests.`);
+}
+
+function applyVerifiedMergedPrStatus(manifest) {
+  assertReconciliationManifestState(manifest);
+  if (manifest.status === "merged") {
+    return;
+  }
+  manifest.status = "merged";
+}
+
 function validTakeoverReason(value) {
   return String(value || "").replace(/\s+/g, "").length >= 10;
 }
@@ -10576,7 +10962,7 @@ function assertWorktreeExists(manifest) {
 
 function prView(manifest) {
   const selector = manifest.pr_number ? String(manifest.pr_number) : manifest.branch;
-  const result = run("gh", ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName,headRefOid"], {
+  const result = run("gh", ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName,headRefName,headRefOid"], {
     cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
   });
   if (result.code !== 0) {
