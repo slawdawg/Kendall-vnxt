@@ -7244,6 +7244,299 @@ try {
     }
   });
 
+  test("reconcile-merged-pr dry-run is read-only and reports a missing cleanup audit", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      delete manifest.delivery_subagent_audit;
+      delete manifest.pr_delivery_head_sha;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, "summary unexpectedly marked reconciliation ready without an audit");
+      assert(packet.status === "blocked", `status is ${packet.status}`);
+      assert(packet.blockers.some((blocker) => blocker.includes("Delivery subagent audit")), JSON.stringify(packet.blockers));
+      assert(readFileSync(manifestPath, "utf8") === before, "dry-run reconciliation mutated the manifest");
+      assert(existsSync(fixture.worktree), "dry-run reconciliation removed the worktree");
+      assert(branchExists(fixture.root, fixture.branch), "dry-run reconciliation deleted the local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "dry-run reconciliation deleted the remote branch");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr records only verified merged metadata and cleanup audit evidence", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      delete manifest.delivery_subagent_audit;
+      delete manifest.pr_delivery_head_sha;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const assignmentBefore = readFileSync(join(fixture.stateRoot, "assignments", "cleanup-assignment.json"), "utf8");
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--delivery-audit-agent",
+        "PostMergeAudit",
+        "--delivery-audit-status",
+        "cleanup-ready",
+        "--delivery-audit-summary",
+        "Verified merged PR metadata before separate cleanup.",
+        "--delivery-audit-head-sha",
+        expectedHead,
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: reconcile-merged-pr"), result.stdout || result.stderr);
+      const updated = readJson(manifestPath);
+      assert(updated.status === "merged", `manifest status is ${updated.status}`);
+      assert(updated.pr_number === 123, `PR number is ${updated.pr_number}`);
+      assert(updated.pr_delivery_head_sha === expectedHead, "reconciliation did not bind the exact merged head");
+      assert(updated.delivery_subagent_audit?.status === "cleanup-ready", "cleanup audit was not recorded");
+      assert(updated.merged_pr_reconciliation?.ready === true, "reconciliation packet was not recorded");
+      assert(updated.events.some((event) => event.type === "merged_pr_reconciled"), "merged reconciliation event missing");
+      assert(updated.authority_decisions?.some((entry) => entry.operation === "reconcile-merged-pr"), "reconciliation authority decision missing");
+      assert(existsSync(fixture.worktree), "reconciliation removed the worktree");
+      assert(branchExists(fixture.root, fixture.branch), "reconciliation deleted the local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "reconciliation deleted the remote branch");
+      assert(readFileSync(join(fixture.stateRoot, "assignments", "cleanup-assignment.json"), "utf8") === assignmentBefore, "reconciliation mutated the assignment");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr fails closed on retained delivery-head mismatch", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = "0000000000000000000000000000000000000000";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code !== 0, "reconciliation unexpectedly accepted a conflicting retained head");
+      assert(result.stderr.includes("Recorded delivery head"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "failed reconciliation mutated the manifest");
+      assert(existsSync(fixture.worktree), "failed reconciliation removed the worktree");
+      assert(branchExists(fixture.root, fixture.branch), "failed reconciliation deleted the local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "failed reconciliation deleted the remote branch");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr is owner-gated and refuses ownership takeover", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--apply",
+        "--owner",
+        "other-runner",
+        "--take-ownership",
+        "--takeover-reason",
+        "completed owner is idle",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code !== 0, "reconciliation unexpectedly accepted ownership takeover");
+      assert(result.stderr.includes("does not support --take-ownership"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "rejected takeover mutated the manifest");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr fails closed when the manifest has no owner", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.owner;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code !== 0, "ownerless reconciliation unexpectedly succeeded");
+      assert(result.stderr.includes("has no recorded owner"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "ownerless reconciliation mutated the manifest");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr rejects recovery and authority-held manifests without overwriting their status", () => {
+    for (const unsafeStatus of ["blocked_authority", "blocked_authority_delivery", "cleanup_partial", "recovery_required", "closed"]) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.status = unsafeStatus;
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+
+        const result = runMergedCleanupFixtureScript(fixture, [
+          "reconcile-merged-pr",
+          "cleanup-task",
+          "--apply",
+          "--owner",
+          "runner-a",
+          "--state-root",
+          fixture.stateRoot,
+        ]);
+        assert(result.code !== 0, `${unsafeStatus} reconciliation unexpectedly succeeded`);
+        assert(result.stderr.includes("unsafe status"), result.stderr || result.stdout);
+        const after = readJson(manifestPath);
+        assert(after.status === unsafeStatus, `${unsafeStatus} was overwritten as ${after.status}`);
+        assert(readFileSync(manifestPath, "utf8") === before, `${unsafeStatus} reconciliation mutated the manifest`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("reconcile-merged-pr bounds oversized provider metadata in its read-only packet", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      const oversizedUrl = `https://example.test/pull/${"x".repeat(700)}`;
+      writeFixtureGhPrPayload(fixture, {
+        number: 123,
+        url: oversizedUrl,
+        mergedAt: "2026-06-21T00:00:00Z",
+        state: "MERGED",
+        baseRefName: "main",
+        headRefName: fixture.branch,
+        headRefOid: expectedHead,
+      });
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, "oversized provider URL unexpectedly passed reconciliation");
+      assert(packet.pr.url === null, "oversized provider URL was retained in the packet");
+      assert(packet.blockers.some((blocker) => blocker.includes("Live PR URL exceeds")), JSON.stringify(packet.blockers));
+      assert(!result.stdout.includes(oversizedUrl), "oversized provider URL leaked into the retained packet");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr returns a bounded blocked summary for truthy non-object PR JSON", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      writeFixtureGhPrPayload(fixture, ["malformed", "PR", "payload"]);
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.status === "blocked", `status is ${packet.status}`);
+      assert(packet.pr === null, "non-object PR payload was retained as PR metadata");
+      assert(packet.blockers.some((blocker) => blocker.includes("JSON object")), JSON.stringify(packet.blockers));
+      assert(!result.stdout.includes("malformed\",\"PR"), "raw malformed provider payload leaked into the summary");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr rejects semantically invalid provider PR identity fields", () => {
+    const invalidCases = [
+      { name: "URL", patch: { url: "http://example.test/pull/123" } },
+      { name: "base", patch: { baseRefName: "refs/heads/main" } },
+      { name: "head branch", patch: { headRefName: "refs/heads/codex/cleanup-current" } },
+      { name: "head object", patch: { headRefOid: "not-a-git-object" } },
+      { name: "merge state", patch: { state: "OPEN" } },
+      { name: "merge timestamp", patch: { mergedAt: "not-a-timestamp" } },
+      { name: "impossible merge timestamp", patch: { mergedAt: "2026-02-30T00:00:00Z" } },
+    ];
+    for (const scenario of invalidCases) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const branchHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+        writeFixtureGhPrPayload(fixture, {
+          number: 123,
+          url: "https://example.test/pull/123",
+          mergedAt: "2026-06-21T00:00:00Z",
+          state: "MERGED",
+          baseRefName: "main",
+          headRefName: fixture.branch,
+          headRefOid: branchHead,
+          ...scenario.patch,
+        });
+        const result = runMergedCleanupFixtureScript(fixture, [
+          "reconcile-merged-pr",
+          "cleanup-task",
+          "--summary-json",
+          "--owner",
+          "runner-a",
+          "--state-root",
+          fixture.stateRoot,
+        ]);
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        const packet = JSON.parse(result.stdout);
+        assert(packet.ready === false, `${scenario.name} provider identity unexpectedly passed`);
+        assert(packet.status === "blocked", `${scenario.name} status is ${packet.status}`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
   test("cleanup-merged summary-json accepts exact-head post-merge delivery audit evidence", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -9653,7 +9946,7 @@ function createMergedCleanupFixture() {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'view') {",
-      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefOid: '${branchHead}' }));`,
+      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: '${branch}', headRefOid: '${branchHead}' }));`,
       "  process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
@@ -9792,7 +10085,27 @@ function writeFixtureGhPrView(fixture, headRefOid) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'view') {",
-      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefOid: ${JSON.stringify(headRefOid)} }));`,
+      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: ${JSON.stringify(fixture.branch)}, headRefOid: ${JSON.stringify(headRefOid)} }));`,
+      "  process.exit(0);",
+      "}",
+      "console.error(`unexpected gh args: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGh, 0o755);
+}
+
+function writeFixtureGhPrPayload(fixture, payload) {
+  const fakeGh = join(fixture.fakeBin, "gh");
+  writeFileSync(
+    fakeGh,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'view') {",
+      `  console.log(JSON.stringify(${JSON.stringify(payload)}));`,
       "  process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",

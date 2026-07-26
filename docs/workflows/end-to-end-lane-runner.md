@@ -234,6 +234,12 @@ publisher.
    cleanup-readiness packet instead of human-readable plan text. Apply cleanup
    only when the dry-run output names the expected PR, owner, worktree, local
    branch, remote branch, and delivery subagent audit for the current lane.
+   If the PR is already merged but the manifest lacks verified merged metadata
+   or a current `cleanup-ready` audit, run `reconcile-merged-pr <query>
+   --summary-json` first. Its optional `--apply` records only locked,
+   rechecked merged-PR metadata and an exact-head cleanup audit; it never
+   deletes a worktree or branch, mutates a PR, or changes an assignment. Run a
+   separate `cleanup-merged` dry run after reconciliation.
    Cleanup is resumable; if a previous attempt removed the worktree but stopped
    before branch deletion or manifest closure, rerun the same cleanup command
    from a stable worktree. When cleanup records `cleanup_partial`, inspect the

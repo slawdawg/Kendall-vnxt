@@ -12,6 +12,41 @@ The cleanup path removes generated Python artifacts before removing a disposable
 worktree. This prevents stale cache and temporary-file residue from blocking
 `git worktree remove`.
 
+## Reconcile a merged PR before cleanup
+
+If a managed lane's PR is already merged but its manifest lacks current merged
+metadata or the exact-head `cleanup-ready` audit, reconcile that evidence before
+retrying cleanup. This is not cleanup: it does not remove a worktree, delete a
+local or remote branch, mutate a PR, or change an assignment.
+
+First inspect the metadata-only packet:
+
+```bash
+node ./scripts/codex-workspace.mjs reconcile-merged-pr <task> --summary-json
+```
+
+The packet fails closed unless the live PR is merged from the manifest branch
+to the manifest base, its exact head matches the retained local lane branch,
+and a still-present remote lane branch also matches. A remote branch that has
+already been deleted is permitted. Conflicting retained PR identity, head, or
+merge timestamp evidence remains a hold.
+
+After an independent cleanup audit has produced a bounded exact-head summary,
+record only that verified metadata:
+
+```bash
+node ./scripts/codex-workspace.mjs reconcile-merged-pr <task> --apply \
+  --delivery-audit-agent <auditor-id> \
+  --delivery-audit-status cleanup-ready \
+  --delivery-audit-summary "Exact merged-head cleanup audit passed."
+```
+
+The command locks the manifest and rechecks the live PR and branch evidence
+before writing. It is owner-gated and intentionally does not support an
+ownership takeover. Run `cleanup-merged <task> --summary-json` separately
+after a successful reconciliation; reconciliation never starts or completes
+cleanup.
+
 ## Restricted exact-tree closeout
 
 `cleanup-integrated --exact-tree-closeout` is a deliberately narrow recovery
