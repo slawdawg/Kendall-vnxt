@@ -2514,6 +2514,11 @@ function reconcileMergedPr(argv) {
   if (!query) {
     throw new Error("reconcile-merged-pr requires a task query.");
   }
+  assertReconciliationModeOptionValues(options);
+  if (options.apply && options.dryRun) {
+    throw new Error("reconcile-merged-pr accepts either --dry-run or --apply, not both.");
+  }
+  assertReconciliationAuditOptionValues(options);
   if (options.takeOwnership) {
     throw new Error("reconcile-merged-pr does not support --take-ownership; the recorded lane owner must run this metadata-only operation.");
   }
@@ -2579,6 +2584,31 @@ function reconcileMergedPr(argv) {
   });
 
   printApplied("reconcile-merged-pr", renderMergedPrReconciliationEvidence(manifest.merged_pr_reconciliation));
+}
+
+function assertReconciliationModeOptionValues(options) {
+  for (const [option, value] of [
+    ["--apply", options.apply],
+    ["--dry-run", options.dryRun],
+  ]) {
+    if (value !== undefined && value !== true) {
+      throw new Error(`reconcile-merged-pr ${option} must be a bare flag without a value.`);
+    }
+  }
+}
+
+function assertReconciliationAuditOptionValues(options) {
+  for (const [option, value] of [
+    ["--delivery-audit-agent", options.deliveryAuditAgent],
+    ["--delivery-audit-summary", options.deliveryAuditSummary],
+  ]) {
+    if (value === undefined) {
+      continue;
+    }
+    if (value === true || typeof value !== "string" || !value.trim()) {
+      throw new Error(`reconcile-merged-pr ${option} requires a non-empty value.`);
+    }
+  }
 }
 
 function buildMergedPrReconciliationEvidence(manifest, context = {}) {
