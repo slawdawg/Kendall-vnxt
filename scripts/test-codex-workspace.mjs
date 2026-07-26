@@ -6804,6 +6804,77 @@ try {
     }
   });
 
+  test("finish-pr bounded codex-workspace verification records success only after the fixed profile budget", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "success");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--timeout", "1", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.last_verification_command === "fixture-verification ./scripts/test-codex-workspace.mjs", "finish-pr did not record the successful verification command");
+      assert(Boolean(manifest.last_verified_at), "finish-pr did not record successful verification time");
+      assert(manifest.status === "pr_open", `unexpected manifest status ${manifest.status}`);
+      const source = readFileSync(scriptPath, "utf8");
+      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 600_000;"), "codex-workspace profile must retain its reviewed fixed 600s budget");
+      assert(source.includes("return profile === \"codex-workspace\" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;"), "profile timeout selection must remain fixed in source");
+      const boundedRunner = source.match(/function runBoundedVerification[\s\S]*?function verificationOutcome/);
+      assert(boundedRunner, "bounded verification runner missing");
+      assert(!boundedRunner[0].includes("options.timeout"), "finish-pr verification must not expose a user-controlled timeout override");
+      assert(boundedRunner[0].includes('killSignal: "SIGKILL"'), "bounded verification must force-kill only its timed-out direct child");
+      assert(source.includes('if (!Number.isInteger(result.status)) return "ambiguous-result";'), "bounded verification must fail closed on an ambiguous child result");
+      assert(!source.includes("CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT"), "production source must not contain the fixture-only ambiguous-result seam");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr bounded verification failures preserve the manifest, avoid delivery mutation, and release the task lock", () => {
+    for (const scenario of [
+      { mode: "timeout", expected: "Verification timeout", budgetMs: 25 },
+      { mode: "nonzero", expected: "Verification nonzero-exit" },
+      { mode: "secret-nonzero", expected: "Verification nonzero-exit", secret: "fixture-secret-token-123" },
+      { mode: "signal", expected: "Verification signal" },
+      { mode: "launch-error", expected: "Verification launch-error" },
+      { mode: "ambiguous-result", expected: "Verification ambiguous-result" },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        if (scenario.budgetMs) setFixtureCodexWorkspaceVerificationTimeout(fixture, scenario.budgetMs);
+        installFixtureVerificationCommand(fixture, scenario.mode);
+        installFixtureDeliveryProbes(fixture);
+        if (scenario.mode === "ambiguous-result") {
+          fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT: "1" };
+        }
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const lockPath = join(fixture.stateRoot, "tasks", "resumed-task.lock");
+        const before = readFileSync(manifestPath, "utf8");
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.mode} verification unexpectedly passed`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        assert(result.stderr.includes("child_output=omitted"), result.stderr || result.stdout);
+        if (scenario.secret) assert(!result.stderr.includes(scenario.secret), "verification diagnostic retained child secret output");
+        assert(result.stderr.includes("No verification or PR delivery evidence was recorded"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${scenario.mode} verification changed the manifest`);
+        assert(!existsSync(lockPath), `${scenario.mode} verification retained the task lock`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.mode} verification reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.mode} verification reached gh pr create`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
   test("finish-pr without verification profile does not satisfy verification authority gate", () => {
     const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
     try {
@@ -9986,6 +10057,90 @@ function cleanupFinishPrExistingCommitFixture(fixture) {
   rmSync(fixture.worktree, { recursive: true, force: true });
   rmSync(fixture.remoteRoot, { recursive: true, force: true });
   rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {
+  const source = readFileSync(fixture.script, "utf8");
+  const original = "const codexWorkspaceVerificationTimeoutMs = 600_000;";
+  assert(source.includes(original), "fixture did not contain the reviewed codex-workspace timeout literal");
+  writeFileSync(fixture.script, source.replace(original, `const codexWorkspaceVerificationTimeoutMs = ${timeoutMs};`));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture verification timeout seam"]);
+}
+
+function installFixtureVerificationCommand(fixture, mode) {
+  const fixtureSource = readFileSync(fixture.script, "utf8");
+  const original = '"codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],';
+  assert(fixtureSource.includes(original), "fixture did not contain the codex-workspace verification command");
+  let patchedSource = fixtureSource.replace(original, '"codex-workspace": ["fixture-verification", "./scripts/test-codex-workspace.mjs"],');
+  if (mode === "ambiguous-result") {
+    const spawnLine = "const result = spawnSync(resolved.command, resolved.args, spawnOptions);";
+    assert(patchedSource.includes(spawnLine), "fixture did not contain the verification spawn boundary");
+    patchedSource = patchedSource.replace(
+      spawnLine,
+      [
+        'const result = process.env.CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT === "1" && resolved.command === "fixture-verification"',
+        '  ? { status: null, signal: null, error: null, stdout: "", stderr: "" }',
+        "  : spawnSync(resolved.command, resolved.args, spawnOptions);",
+      ].join("\n"),
+    );
+  }
+  writeFileSync(fixture.script, patchedSource);
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", `fixture verification command ${mode}`]);
+
+  const verificationCommand = join(fixture.fakeBin, "fixture-verification");
+  const selected = {
+    success: "exit 0",
+    timeout: "sleep 1\nexit 0",
+    nonzero: "echo 'fixture verification failed' >&2\nexit 23",
+    "secret-nonzero": "echo 'fixture-secret-token-123' >&2\nexit 23",
+    signal: "kill -TERM $$",
+  }[mode];
+  if (mode === "launch-error") {
+    writeFileSync(verificationCommand, "#!/definitely-missing-codex-workspace-fixture-command\n");
+  } else if (mode === "ambiguous-result") {
+    return;
+  } else {
+    assert(selected, `unknown fixture verification mode ${mode}`);
+    writeFileSync(verificationCommand, `#!/bin/sh\n${selected}\n`);
+  }
+  chmodSync(verificationCommand, 0o755);
+}
+
+function installFixtureDeliveryProbes(fixture) {
+  const pushProbe = join(fixture.root, "git-push-called.txt");
+  const prProbe = join(fixture.root, "gh-pr-create-called.txt");
+  const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+  writeFileSync(
+    join(fixture.fakeBin, "git"),
+    [
+      `#!${process.execPath}`,
+      "import { spawnSync } from 'node:child_process';",
+      "import { writeFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      `if (args[0] === 'push') { writeFileSync(${JSON.stringify(pushProbe)}, 'called\\n'); process.exit(1); }`,
+      `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
+      "process.exit(result.status ?? 1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(join(fixture.fakeBin, "git"), 0o755);
+  writeFileSync(
+    join(fixture.fakeBin, "gh"),
+    [
+      `#!${process.execPath}`,
+      "import { writeFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
+      `if (args[0] === 'pr' && args[1] === 'create') { writeFileSync(${JSON.stringify(prProbe)}, 'called\\n'); process.exit(1); }`,
+      "console.error(`unexpected gh args: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(join(fixture.fakeBin, "gh"), 0o755);
 }
 
 function createMergedCleanupFixture() {
