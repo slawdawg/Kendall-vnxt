@@ -7757,6 +7757,7 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
         stderr_bytes: Buffer.byteLength(String(result?.stderr || "")),
         output: "omitted",
       },
+      check_projection: boundedCheckProjection(profile, result),
       lock: redactTaskLockInspection(inspectTaskLock(context.state, context.taskId)),
     };
     const fileName = `${context.taskId}-${record.recorded_at.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
@@ -7765,6 +7766,21 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
   } catch {
     return { status: "unavailable" };
   }
+}
+
+function boundedCheckProjection(profile, result) {
+  if (profile !== "check") return null;
+  const output = `${String(result?.stdout || "")}\n${String(result?.stderr || "")}`;
+  let stage = null;
+  for (const match of output.matchAll(/(?:^|\n)\s*>\s+pnpm run ([A-Za-z0-9:_-]+)/g)) {
+    stage = match[1];
+  }
+  return {
+    stage,
+    stage_observed: Boolean(stage),
+    result_status: Number.isInteger(result?.status) ? result.status : null,
+    raw_output: "omitted",
+  };
 }
 
 function verificationOutcome(result) {

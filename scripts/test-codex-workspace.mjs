@@ -6899,10 +6899,34 @@ try {
       assert(diagnostic.profile === "check", JSON.stringify(diagnostic));
       assert(diagnostic.timeout_ms === 900_000, JSON.stringify(diagnostic));
       assert(diagnostic.child.output === "omitted", JSON.stringify(diagnostic));
+      assert(diagnostic.check_projection?.stage === null, JSON.stringify(diagnostic));
+      assert(diagnostic.check_projection?.raw_output === "omitted", JSON.stringify(diagnostic));
       assert(!JSON.stringify(diagnostic).includes("fixture-secret-token-123"), "persisted diagnostic leaked child output");
       const source = readFileSync(scriptPath, "utf8");
       assert(source.includes("const checkVerificationTimeoutMs = 900_000;"), "check profile must retain its reviewed fixed 900s budget");
       assert(source.includes('if (profile === "check") return checkVerificationTimeoutMs;'), "check profile timeout selection must be explicit and fixed");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr check diagnostic projects a later aggregate stage without retaining child output", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationProfileCommand(fixture, "check", "later-stage-nonzero");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "later-stage verification unexpectedly passed");
+      const names = readdirSync(join(fixture.stateRoot, "tasks", ".diagnostics")).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "later-stage failure did not persist a diagnostic");
+      const diagnostic = readJson(join(fixture.stateRoot, "tasks", ".diagnostics", names[0]));
+      assert(diagnostic.check_projection?.stage === "check:later-stage", JSON.stringify(diagnostic));
+      assert(diagnostic.check_projection?.result_status === 23, JSON.stringify(diagnostic));
+      assert(diagnostic.check_projection?.raw_output === "omitted", JSON.stringify(diagnostic));
+      assert(!JSON.stringify(diagnostic).includes("fixture-later-stage-secret"), "projection retained child output");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10187,6 +10211,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     timeout: "sleep 1\nexit 0",
     nonzero: "echo 'fixture verification failed' >&2\nexit 23",
     "secret-nonzero": "echo 'fixture-secret-token-123' >&2\nexit 23",
+    "later-stage-nonzero": "echo '> pnpm run check:later-stage'\necho 'fixture-later-stage-secret' >&2\nexit 23",
     signal: "kill -TERM $$",
   }[mode];
   if (mode === "launch-error") {
