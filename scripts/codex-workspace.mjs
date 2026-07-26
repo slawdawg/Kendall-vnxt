@@ -33,6 +33,8 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultBaseBranch = "dev";
 const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
+const defaultVerificationTimeoutMs = 120_000;
+const codexWorkspaceVerificationTimeoutMs = 600_000;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
@@ -2334,7 +2336,7 @@ function finishPr(argv) {
     }
 
     if (verifyCommand.length > 0) {
-      runChecked(verifyCommand[0], verifyCommand.slice(1), { cwd: manifest.worktree_path });
+      runBoundedVerification(verificationPlan, { cwd: manifest.worktree_path });
       manifest.last_verified_at = new Date().toISOString();
       manifest.last_verification_command = verifyCommand.join(" ");
       appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
@@ -7652,6 +7654,41 @@ function verificationCommand(profile) {
   return profiles[profile];
 }
 
+function verificationTimeoutMs(profile) {
+  return profile === "codex-workspace" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;
+}
+
+function runBoundedVerification(verificationPlan, options = {}) {
+  const command = Array.isArray(verificationPlan?.command) ? verificationPlan.command : [];
+  if (command.length === 0) {
+    throw new Error("Verification command is missing or ambiguous.");
+  }
+  const profile = String(verificationPlan.resolvedProfile || verificationPlan.profile || "unknown");
+  const timeoutMs = verificationTimeoutMs(profile);
+  const startedAt = Date.now();
+  const result = run(command[0], command.slice(1), { ...options, timeout: timeoutMs, killSignal: "SIGKILL" });
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+  const outcome = verificationOutcome(result);
+  if (outcome === "success") {
+    return result;
+  }
+
+  throw new Error(
+    `Verification ${outcome}: profile=${profile}; command=${command.join(" ")}; elapsed_ms=${elapsedMs}; timeout_ms=${timeoutMs}; child_output=omitted. ` +
+      "No verification or PR delivery evidence was recorded. Inspect the bounded child diagnostic, then rerun the selected verification after the cause is resolved.",
+  );
+}
+
+function verificationOutcome(result) {
+  if (!result || typeof result !== "object") return "ambiguous-result";
+  if (result.errorCode === "ETIMEDOUT") return "timeout";
+  if (result.signal) return "signal";
+  if (result.errorCode) return "launch-error";
+  if (!Number.isInteger(result.status)) return "ambiguous-result";
+  if (result.status !== 0) return "nonzero-exit";
+  return "success";
+}
+
 function requireGh(commandName) {
   const result = run("gh", ["--version"], { cwd: repoRoot });
   if (result.code !== 0) {
@@ -11112,16 +11149,24 @@ function runShellChecked(commandText, options = {}) {
 
 function run(commandName, commandArguments, options = {}) {
   const resolved = resolveWorkspaceCommand(commandName, commandArguments);
-  const result = spawnSync(resolved.command, resolved.args, {
+  const spawnOptions = {
     cwd: options.cwd || repoRoot,
     encoding: "utf8",
     env: resolved.env ?? process.env,
     stdio: "pipe",
-    timeout: options.timeout || 120_000,
-  });
+    timeout: options.timeout || defaultVerificationTimeoutMs,
+  };
+  if (options.killSignal) {
+    spawnOptions.killSignal = options.killSignal;
+  }
+  const result = spawnSync(resolved.command, resolved.args, spawnOptions);
 
   return {
     code: result.status ?? 1,
+    status: result.status,
+    signal: result.signal || null,
+    errorCode: result.error?.code || null,
+    errorMessage: result.error?.message || "",
     stdout: (result.stdout || "").trim(),
     stderr: (result.stderr || result.error?.message || "").trim(),
   };
