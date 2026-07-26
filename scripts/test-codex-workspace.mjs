@@ -6875,6 +6875,135 @@ try {
     }
   });
 
+  test("finish-pr check profile uses its fixed fifteen-minute budget and persists redacted failure diagnostics", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationProfileCommand(fixture, "check", "secret-nonzero");
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "check verification unexpectedly passed");
+      assert(result.stderr.includes("profile=check"), result.stderr || result.stdout);
+      assert(result.stderr.includes("timeout_ms=900000"), result.stderr || result.stdout);
+      assert(result.stderr.includes("diagnostic=recorded"), result.stderr || result.stdout);
+      assert(!result.stderr.includes("fixture-secret-token-123"), "check diagnostic leaked child output");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "check failure reached git push");
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const diagnosticNames = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(diagnosticNames.length === 1, "check failure did not persist exactly one bounded diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, diagnosticNames[0]));
+      assert(diagnostic.profile === "check", JSON.stringify(diagnostic));
+      assert(diagnostic.timeout_ms === 900_000, JSON.stringify(diagnostic));
+      assert(diagnostic.child.output === "omitted", JSON.stringify(diagnostic));
+      assert(!JSON.stringify(diagnostic).includes("fixture-secret-token-123"), "persisted diagnostic leaked child output");
+      const source = readFileSync(scriptPath, "utf8");
+      assert(source.includes("const checkVerificationTimeoutMs = 900_000;"), "check profile must retain its reviewed fixed 900s budget");
+      assert(source.includes('if (profile === "check") return checkVerificationTimeoutMs;'), "check profile timeout selection must be explicit and fixed");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("task lock inspection and stale recovery are exact-task, redacted, and fail closed", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const lockPath = writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task"));
+      const activeInspection = runFixtureScript(
+        fixture,
+        ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(activeInspection.code === 0, activeInspection.stderr || activeInspection.stdout);
+      const activePacket = JSON.parse(activeInspection.stdout);
+      assert(activePacket.status === "active", activeInspection.stdout);
+      assert(activePacket.mutation === "none; read-only lock inspection", activeInspection.stdout);
+      assert(!activeInspection.stdout.includes("11111111-1111-4111-8111-111111111111"), "inspection leaked lock token");
+
+      const activeAttempt = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(activeAttempt.code !== 0, "active lock unexpectedly recovered");
+      assert(activeAttempt.stderr.includes("status=active"), activeAttempt.stderr || activeAttempt.stdout);
+      assert(existsSync(lockPath), "active lock was changed");
+
+      writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task", { process_start_identity: "linux-proc-start-ticks:pid-reuse" }));
+      const ambiguousAttempt = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(ambiguousAttempt.code !== 0, "ambiguous lock unexpectedly recovered");
+      assert(ambiguousAttempt.stderr.includes("status=ambiguous"), ambiguousAttempt.stderr || ambiguousAttempt.stdout);
+
+      writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+        token: "33333333-3333-4333-8333-333333333333",
+      }));
+      const staleRecovery = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(staleRecovery.code === 0, staleRecovery.stderr || staleRecovery.stdout);
+      assert(!existsSync(lockPath), "recovered lock remained after successful finish-pr cleanup");
+      assert(
+        existsSync(join(fixture.stateRoot, "tasks", ".lock-history", "resumed-task-33333333-3333-4333-8333-333333333333.stale-lock")),
+        "stale lock archive was not preserved",
+      );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("task lock stale recovery re-reads the exact token before replacing a raced lock", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+        token: "44444444-4444-4444-8444-444444444444",
+      }));
+      const source = readFileSync(fixture.script, "utf8");
+      const seam = "const reread = inspectTaskLock(state, taskId);";
+      assert(source.includes(seam), "fixture did not expose stale-lock reread seam");
+      writeFileSync(
+        fixture.script,
+        source.replace(
+          seam,
+          [
+            'if (process.env.CODEX_WORKSPACE_FIXTURE_LOCK_RACE === "1") {',
+            '  const replacement = JSON.parse(readFileSync(taskLockPath(state, taskId), "utf8"));',
+            '  replacement.token = "55555555-5555-4555-8555-555555555555";',
+            '  writeFileSync(taskLockPath(state, taskId), `${JSON.stringify(replacement)}\\n`);',
+            "}",
+            seam,
+          ].join("\n"),
+        ),
+      );
+      runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+      runGit(fixture.root, ["commit", "-q", "-m", "fixture stale-lock recovery race seam"]);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_LOCK_RACE: "1" } },
+      );
+      assert(result.code !== 0, "raced stale lock unexpectedly recovered");
+      assert(result.stderr.includes("status=stale"), result.stderr || result.stdout);
+      const replacement = JSON.parse(readFileSync(join(fixture.stateRoot, "tasks", "resumed-task.lock"), "utf8"));
+      assert(replacement.token === "55555555-5555-4555-8555-555555555555", "raced lock was replaced or deleted");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "raced lock was archived despite token change");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr without verification profile does not satisfy verification authority gate", () => {
     const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
     try {
@@ -9831,6 +9960,35 @@ function taskSnapshot(tasksDir) {
     .join("\n---\n");
 }
 
+function currentLinuxStartIdentity() {
+  const raw = readFileSync(`/proc/${process.pid}/stat`, "utf8");
+  const close = raw.lastIndexOf(")");
+  assert(close >= 0, "fixture process stat did not contain a command terminator");
+  const startTicks = raw.slice(close + 1).trim().split(/\s+/)[19];
+  assert(/^\d+$/.test(startTicks || ""), "fixture process stat did not expose a start tick identity");
+  return `linux-proc-start-ticks:${startTicks}`;
+}
+
+function fixtureTaskLockMetadata(taskId, overrides = {}) {
+  return {
+    schema_version: 1,
+    task_id: taskId,
+    owner: "runner-a",
+    pid: process.pid,
+    process_start_identity: currentLinuxStartIdentity(),
+    acquired_at: "2026-07-26T00:00:00.000Z",
+    heartbeat_at: "2026-07-26T00:00:00.000Z",
+    token: "11111111-1111-4111-8111-111111111111",
+    ...overrides,
+  };
+}
+
+function writeFixtureTaskLock(fixture, metadata) {
+  const path = join(fixture.stateRoot, "tasks", `${metadata.task_id}.lock`);
+  writeFileSync(path, `${JSON.stringify(metadata)}\n`);
+  return path;
+}
+
 function createFinishPrExistingCommitFixture(options = {}) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-finish-existing-commit-"));
   const remoteRoot = `${fixtureRoot}-remote.git`;
@@ -9994,10 +10152,19 @@ function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {
 }
 
 function installFixtureVerificationCommand(fixture, mode) {
+  return installFixtureVerificationProfileCommand(fixture, "codex-workspace", mode);
+}
+
+function installFixtureVerificationProfileCommand(fixture, profile, mode) {
   const fixtureSource = readFileSync(fixture.script, "utf8");
-  const original = '"codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],';
-  assert(fixtureSource.includes(original), "fixture did not contain the codex-workspace verification command");
-  let patchedSource = fixtureSource.replace(original, '"codex-workspace": ["fixture-verification", "./scripts/test-codex-workspace.mjs"],');
+  const commands = {
+    check: 'check: ["pnpm", "run", "check"],',
+    "codex-workspace": '"codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],',
+  };
+  const original = commands[profile];
+  assert(original, `unsupported fixture verification profile ${profile}`);
+  assert(fixtureSource.includes(original), `fixture did not contain the ${profile} verification command`);
+  let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", "./scripts/test-codex-workspace.mjs"],`);
   if (mode === "ambiguous-result") {
     const spawnLine = "const result = spawnSync(resolved.command, resolved.args, spawnOptions);";
     assert(patchedSource.includes(spawnLine), "fixture did not contain the verification spawn boundary");

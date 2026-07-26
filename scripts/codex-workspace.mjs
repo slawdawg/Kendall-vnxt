@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -35,6 +36,8 @@ const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
 const codexWorkspaceVerificationTimeoutMs = 600_000;
+const checkVerificationTimeoutMs = 900_000;
+const taskLockSchemaVersion = 1;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
@@ -91,6 +94,9 @@ try {
       break;
     case "finish-pr":
       finishPr(commandArgs);
+      break;
+    case "inspect-task-lock":
+      inspectTaskLockCommand(commandArgs);
       break;
     case "finish-epic":
       finishEpic(commandArgs);
@@ -152,6 +158,7 @@ Commands:
   emergency-stop            Preview, apply, or clear a metadata-only emergency stop checkpoint.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
+  inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
   reconcile-merged-pr <query> Record verified merged-PR metadata before cleanup.
@@ -268,6 +275,10 @@ finish-pr options:
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
+
+inspect-task-lock options:
+  <task-id>                 Exact managed task id to inspect.
+  --summary-json            Print a redacted, read-only lock inspection packet.
 
 finish-epic options:
   --summary-json            Print a bounded closeout plan without mutation.
@@ -2322,7 +2333,7 @@ function finishPr(argv) {
     return;
   }
 
-  withManifestLock(state, manifest.task_id, () => {
+  withManifestLock(state, manifest.task_id, (lock) => {
     const lockedManifest = readManifest(manifestPath);
     validateManifest(lockedManifest, manifestPath);
     assertLaneOwner(lockedManifest, options);
@@ -2336,7 +2347,12 @@ function finishPr(argv) {
     }
 
     if (verifyCommand.length > 0) {
-      runBoundedVerification(verificationPlan, { cwd: manifest.worktree_path });
+      lock.heartbeat();
+      runBoundedVerification(verificationPlan, {
+        cwd: manifest.worktree_path,
+        diagnosticContext: { state, taskId: manifest.task_id, lockToken: lock.token },
+      });
+      lock.heartbeat();
       manifest.last_verified_at = new Date().toISOString();
       manifest.last_verification_command = verifyCommand.join(" ");
       appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
@@ -2377,6 +2393,7 @@ function finishPr(argv) {
       worktreeStatus = parseStatus(manifest.worktree_path);
     }
 
+    lock.heartbeat();
     runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
     appendTaskEvent(manifest, "pushed", manifest.branch);
     manifest.pr_delivery_head_sha = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path }).stdout.trim() || null;
@@ -2388,6 +2405,7 @@ function finishPr(argv) {
       manifest.pr_url = existingPr.url;
       manifest.pr_number = existingPr.number;
     } else {
+      lock.heartbeat();
       const result = runChecked(
         "gh",
         [
@@ -2437,6 +2455,31 @@ function finishPr(argv) {
     }
   }
   console.log(`PR: ${manifest.pr_url}`);
+}
+
+function inspectTaskLockCommand(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) {
+    throw new Error("inspect-task-lock requires exactly one task id.");
+  }
+  const taskId = String(positional[0] || "").trim();
+  assertSafeTaskId(taskId);
+  const state = workspaceState(options);
+  const inspection = inspectTaskLock(state, taskId);
+  const packet = redactTaskLockInspection(inspection);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  printPlan("inspect-task-lock", [
+    `task_id=${packet.taskId}`,
+    `status=${packet.status}`,
+    `reason=${packet.reason}`,
+    `owner=${packet.owner || "unknown"}`,
+    `pid=${packet.pid ?? "unknown"}`,
+    `heartbeat_at=${packet.heartbeatAt || "unknown"}`,
+    "mutation=none; read-only lock inspection",
+  ]);
 }
 
 function verifyPrGates(argv) {
@@ -7655,6 +7698,7 @@ function verificationCommand(profile) {
 }
 
 function verificationTimeoutMs(profile) {
+  if (profile === "check") return checkVerificationTimeoutMs;
   return profile === "codex-workspace" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;
 }
 
@@ -7673,10 +7717,54 @@ function runBoundedVerification(verificationPlan, options = {}) {
     return result;
   }
 
+  const diagnostic = persistVerificationDiagnostic({
+    context: options.diagnosticContext,
+    profile,
+    command,
+    elapsedMs,
+    timeoutMs,
+    outcome,
+    result,
+  });
+
   throw new Error(
-    `Verification ${outcome}: profile=${profile}; command=${command.join(" ")}; elapsed_ms=${elapsedMs}; timeout_ms=${timeoutMs}; child_output=omitted. ` +
+    `Verification ${outcome}: profile=${profile}; command=${command.join(" ")}; elapsed_ms=${elapsedMs}; timeout_ms=${timeoutMs}; child_output=omitted; diagnostic=${diagnostic.status}${diagnostic.id ? `:${diagnostic.id}` : ""}. ` +
       "No verification or PR delivery evidence was recorded. Inspect the bounded child diagnostic, then rerun the selected verification after the cause is resolved.",
   );
+}
+
+function persistVerificationDiagnostic({ context, profile, command, elapsedMs, timeoutMs, outcome, result }) {
+  if (!context?.state || !context?.taskId) return { status: "unavailable" };
+  try {
+    assertSafeTaskId(context.taskId);
+    const diagnosticsDir = join(context.state.tasksDir, ".diagnostics");
+    mkdirSync(diagnosticsDir, { recursive: true });
+    const record = {
+      schema_version: 1,
+      recorded_at: new Date().toISOString(),
+      operation: "finish-pr-verification",
+      task_id: context.taskId,
+      profile,
+      command: command.map((value) => String(value)),
+      outcome,
+      elapsed_ms: elapsedMs,
+      timeout_ms: timeoutMs,
+      child: {
+        status: Number.isInteger(result?.status) ? result.status : null,
+        signal: result?.signal || null,
+        error_code: result?.errorCode || null,
+        stdout_bytes: Buffer.byteLength(String(result?.stdout || "")),
+        stderr_bytes: Buffer.byteLength(String(result?.stderr || "")),
+        output: "omitted",
+      },
+      lock: redactTaskLockInspection(inspectTaskLock(context.state, context.taskId)),
+    };
+    const fileName = `${context.taskId}-${record.recorded_at.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
+    writeFileSync(join(diagnosticsDir, fileName), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
+    return { status: "recorded", id: fileName };
+  } catch {
+    return { status: "unavailable" };
+  }
 }
 
 function verificationOutcome(result) {
@@ -10602,24 +10690,177 @@ function branchCleanupSafety(branch, baseRef) {
   return { safe: true, reason: `patch-equivalent to ${baseRef}` };
 }
 
-function withManifestLock(state, taskId, fn) {
+function taskLockPath(state, taskId) {
+  assertSafeTaskId(taskId);
+  return join(state.tasksDir, `${taskId}.lock`);
+}
+
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "linux") return null;
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    const startTicks = fields[19];
+    return /^\d+$/.test(startTicks || "") ? `linux-proc-start-ticks:${startTicks}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function isIsoTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function validTaskLockMetadata(metadata, taskId) {
+  return Boolean(
+    metadata &&
+      metadata.schema_version === taskLockSchemaVersion &&
+      metadata.task_id === taskId &&
+      typeof metadata.owner === "string" && metadata.owner.trim() &&
+      Number.isInteger(metadata.pid) && metadata.pid > 0 &&
+      typeof metadata.process_start_identity === "string" && metadata.process_start_identity &&
+      isIsoTimestamp(metadata.acquired_at) &&
+      isIsoTimestamp(metadata.heartbeat_at) &&
+      typeof metadata.token === "string" && /^[0-9a-f-]{36}$/i.test(metadata.token),
+  );
+}
+
+function inspectTaskLock(state, taskId) {
+  const lockPath = taskLockPath(state, taskId);
+  if (!existsSync(lockPath)) {
+    return { taskId, lockPath, status: "absent", reason: "lock_not_present", metadata: null };
+  }
+  try {
+    const stats = lstatSync(lockPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      return { taskId, lockPath, status: "ambiguous", reason: "lock_not_regular_file", metadata: null };
+    }
+    if (stats.size > 16_384) {
+      return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_too_large", metadata: null };
+    }
+    const metadata = JSON.parse(readFileSync(lockPath, "utf8"));
+    if (!validTaskLockMetadata(metadata, taskId)) {
+      return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_invalid", metadata: null };
+    }
+    const observedStart = processStartIdentity(metadata.pid);
+    if (observedStart === metadata.process_start_identity) {
+      return { taskId, lockPath, status: "active", reason: "owner_process_identity_matches", metadata };
+    }
+    if (observedStart) {
+      return { taskId, lockPath, status: "ambiguous", reason: "pid_start_identity_mismatch", metadata };
+    }
+    try {
+      process.kill(metadata.pid, 0);
+      return { taskId, lockPath, status: "ambiguous", reason: "owner_process_identity_unavailable", metadata };
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return { taskId, lockPath, status: "stale", reason: "owner_process_not_present", metadata };
+      }
+      return { taskId, lockPath, status: "ambiguous", reason: "owner_process_probe_denied", metadata };
+    }
+  } catch {
+    return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_unreadable", metadata: null };
+  }
+}
+
+function redactTaskLockInspection(inspection) {
+  const metadata = inspection?.metadata;
+  return {
+    taskId: inspection?.taskId || null,
+    lockPath: inspection?.lockPath || null,
+    status: inspection?.status || "ambiguous",
+    reason: inspection?.reason || "lock_inspection_unavailable",
+    owner: metadata?.owner || null,
+    pid: metadata?.pid ?? null,
+    processStartIdentityPresent: Boolean(metadata?.process_start_identity),
+    acquiredAt: metadata?.acquired_at || null,
+    heartbeatAt: metadata?.heartbeat_at || null,
+    tokenPresent: Boolean(metadata?.token),
+    mutation: "none; read-only lock inspection",
+  };
+}
+
+function recoverStaleTaskLock(state, taskId) {
+  const before = inspectTaskLock(state, taskId);
+  if (before.status !== "stale" || !before.metadata?.token) {
+    return { recovered: false, inspection: before };
+  }
+  const reread = inspectTaskLock(state, taskId);
+  if (reread.status !== "stale" || reread.metadata?.token !== before.metadata.token) {
+    return { recovered: false, inspection: reread };
+  }
+  const historyDir = join(state.tasksDir, ".lock-history");
+  mkdirSync(historyDir, { recursive: true });
+  const archivePath = join(historyDir, `${taskId}-${before.metadata.token}.stale-lock`);
+  try {
+    renameSync(before.lockPath, archivePath);
+    return { recovered: true, inspection: before, archivePath };
+  } catch {
+    return { recovered: false, inspection: inspectTaskLock(state, taskId) };
+  }
+}
+
+function withManifestLock(state, taskId, fn, options = {}) {
   mkdirSync(state.tasksDir, { recursive: true });
-  const lockPath = join(state.tasksDir, `${taskId}.lock`);
+  const lockPath = taskLockPath(state, taskId);
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) {
+    throw new Error("Task lock ownership cannot be established because the current process start identity is unavailable.");
+  }
+  const metadata = {
+    schema_version: taskLockSchemaVersion,
+    task_id: taskId,
+    owner: String(options.owner || currentLaneOwner(options)),
+    pid: process.pid,
+    process_start_identity: processStart,
+    acquired_at: new Date().toISOString(),
+    heartbeat_at: new Date().toISOString(),
+    token: randomUUID(),
+  };
   let fd;
   try {
     fd = openSync(lockPath, "wx");
   } catch (error) {
-    if (error?.code !== "EEXIST") {
-      throw error;
+    if (error?.code !== "EEXIST") throw error;
+    const recovery = recoverStaleTaskLock(state, taskId);
+    if (!recovery.recovered) {
+      const inspected = redactTaskLockInspection(recovery.inspection);
+      throw new Error(`Task lock cannot be recovered: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
     }
-    throw new Error(`Task is locked by another session: ${lockPath}`);
+    try {
+      fd = openSync(lockPath, "wx");
+    } catch (retryError) {
+      throw new Error(`Task lock could not be acquired after exact-task stale recovery: ${retryError?.code || "unknown"}.`);
+    }
   }
 
   try {
-    return fn();
-  } finally {
+    writeFileSync(fd, `${JSON.stringify(metadata)}\n`);
+  } catch (error) {
     closeSync(fd);
     rmSync(lockPath, { force: true });
+    throw error;
+  }
+
+  const heartbeat = () => {
+    const current = inspectTaskLock(state, taskId);
+    if (current.status !== "active" || current.metadata?.token !== metadata.token) {
+      throw new Error("Task lock ownership changed before heartbeat; refusing to continue.");
+    }
+    metadata.heartbeat_at = new Date().toISOString();
+    writeFileSync(lockPath, `${JSON.stringify(metadata)}\n`);
+  };
+
+  try {
+    return fn({ token: metadata.token, heartbeat });
+  } finally {
+    closeSync(fd);
+    const current = inspectTaskLock(state, taskId);
+    if (current.metadata?.token === metadata.token) {
+      rmSync(lockPath, { force: true });
+    }
   }
 }
 
