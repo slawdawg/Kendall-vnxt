@@ -51,6 +51,9 @@ It authorizes, for the named lane only:
 - Run scoped verification, then broader checks when the changed surface
   requires it.
 - Commit, push, open or update the lane PR, and address review or CI feedback.
+- Resolve current, fully satisfied GitHub review threads under the bounded
+  delivery-thread rule below; this is not standing permission to close unclear
+  or merely old conversations.
 - Merge low-risk PRs when the merge evidence checklist is satisfied.
 - Clean up the merged local worktree, local lane branch, and remote lane branch
   after a valid dry run names only expected lane resources.
@@ -615,7 +618,8 @@ These surfaces are not automatically covered by `standard-delivery`:
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
 - GitHub Actions or automation with write permissions.
-- Review-thread mutation, branch protection changes, or merge automation.
+- Review-thread mutation outside the bounded current-thread rule above, branch
+  protection changes, or merge automation.
 - Destructive cleanup outside the managed lane.
 - Lane ownership takeover without operator confirmation.
 - Broad policy expansion or evidence-retention changes.
