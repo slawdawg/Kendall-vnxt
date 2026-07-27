@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -140,10 +140,23 @@ test("delivery session receipt is manifest/pane-bound, dry-run safe, idempotent,
     assert.equal(second.status, "ready");
     assert.equal(second.summary.idempotent, true);
     assert.equal(JSON.parse(readFileSync(join(stateRoot, "manager-runs", binding.runId, "delivery-session-receipts.json"), "utf8")).length, 1);
+    const activeWorker = JSON.parse(readFileSync(workersPath, "utf8"));
+    activeWorker[0].state = "active";
+    activeWorker[0].assignmentState = "active";
+    activeWorker[0].currentLease = { assignmentId: "assignment-delivery", taskId: binding.taskId, leaseId: "lease-delivery", state: "active" };
+    writeFileSync(workersPath, `${JSON.stringify(activeWorker)}\n`);
     const running = buildDeliverySessionReceiptPlan({ ...binding, receiptRunning: true }, deliveryReceiptContext());
     assert.equal(running.summary.receipt.status, "running");
     const terminal = buildDeliverySessionReceiptPlan({ ...binding, terminalExitCode: 0, terminalCompletedAt: "2026-07-27T00:00:00.000Z" }, deliveryReceiptContext());
     assert.equal(terminal.summary.receipt.status, "terminal");
+    const immutable = buildDeliverySessionReceiptPlan({ ...binding, terminalExitCode: 1, terminalCompletedAt: "2026-07-27T00:01:00.000Z" }, deliveryReceiptContext());
+    assert.equal(immutable.status, "unknown");
+    assert.equal(JSON.parse(readFileSync(join(stateRoot, "manager-runs", binding.runId, "delivery-session-receipts.json"), "utf8"))[0].terminal.exitCode, 0);
+    const invalidExit = buildDeliverySessionReceiptPlan({ ...binding, terminalExitCodeProvided: true, terminalExitCode: null }, deliveryReceiptContext());
+    assert.equal(invalidExit.status, "unknown");
+    const noVerify = buildActiveWorkerDeliveryInstructionPlan({ ...binding, command: "node ./scripts/codex-workspace.mjs finish-pr task-delivery --no-verify", deliveryInstruction: true }, deliveryReceiptContext());
+    assert.equal(noVerify.status, "unknown");
+    assert.ok(noVerify.blockers.some((blocker) => blocker.code === "active-delivery-worker-mismatch"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -157,6 +170,12 @@ test("delivery session receipt parser accepts only the documented bounded comman
   const workerLocal = parseCommonArgs(["--worker-local-delivery-instruction", "--lease-id", "lease-1"]);
   assert.equal(workerLocal.workerLocalDeliveryInstruction, true);
   assert.equal(workerLocal.leaseId, "lease-1");
+  const invalidExit = parseCommonArgs(["--terminal-exit-code", "-1"]);
+  assert.equal(invalidExit.terminalExitCodeProvided, true);
+  assert.equal(invalidExit.terminalExitCode, null);
+  const conflictingModes = spawnSync(process.execPath, ["./scripts/manager-worker-handoff.mjs", "--delivery-session-receipt", "--delivery-instruction"], { cwd: process.cwd(), encoding: "utf8" });
+  assert.notEqual(conflictingModes.status, 0);
+  assert.match(`${conflictingModes.stdout}\n${conflictingModes.stderr}`, /exactly one delivery operation/i);
 });
 
 test("active worker delivery instruction acknowledges an exact receipt without tmux input or delivery", () => {
@@ -171,6 +190,9 @@ test("active worker delivery instruction acknowledges an exact receipt without t
     const request = buildActiveWorkerDeliveryInstructionPlan({ ...binding, apply: true, deliveryInstruction: true }, deliveryReceiptContext());
     assert.equal(request.status, "ready");
     assert.equal(request.summary.deliveryClaim, "none");
+    const staleAck = buildActiveWorkerDeliveryInstructionPlan({ ...binding, apply: true, deliveryInstruction: true, deliveryAck: true }, deliveryReceiptContext("b".repeat(40)));
+    assert.equal(staleAck.status, "unknown");
+    assert.equal(JSON.parse(readFileSync(join(stateRoot, "manager-runs", binding.runId, "delivery-instructions.json"), "utf8"))[0].status, "pending");
     const ack = buildActiveWorkerDeliveryInstructionPlan({ ...binding, apply: true, deliveryInstruction: true, deliveryAck: true }, context);
     assert.equal(ack.summary.instruction.status, "acknowledged");
     assert.equal(ack.summary.execution, "none");
@@ -179,6 +201,7 @@ test("active worker delivery instruction acknowledges an exact receipt without t
 
 test("worker-local delivery instruction consumes one exact instruction without tmux, process, or delivery execution", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-local-delivery-"));
+  const sourceRootLink = `${stateRoot}-source-link`;
   const binding = deliveryReceiptFixture(stateRoot);
   const receiptBinding = { taskId: binding.taskId, workerId: binding.workerId, sessionName: binding.sessionName, paneId: "%7", worktreePath: binding.worktreePath, head: binding.head, commandDigest: "af3a47312f5fe612e4acf5942c0a688e346948f6ced4001442afa6ff7900c30f" };
   const workersPath = join(stateRoot, "manager-runs", binding.runId, "workers.json");
@@ -212,7 +235,47 @@ test("worker-local delivery instruction consumes one exact instruction without t
     const sourceRoot = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot: process.cwd(), workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, context);
     assert.equal(sourceRoot.status, "unknown");
     assert.equal(readFileSync(instructionPath, "utf8"), acknowledged);
-  } finally { rmSync(stateRoot, { recursive: true, force: true }); }
+    symlinkSync(process.cwd(), sourceRootLink, "dir");
+    const sourceRootViaLink = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot: sourceRootLink, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, context);
+    assert.equal(sourceRootViaLink.status, "unknown");
+    assert.equal(readFileSync(instructionPath, "utf8"), acknowledged);
+  } finally { rmSync(stateRoot, { recursive: true, force: true }); rmSync(sourceRootLink, { recursive: true, force: true }); }
+});
+
+test("worker-local delivery acknowledgement resolves linked-worktree symbolic HEADs from common loose and packed refs", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-worker-local-linked-head-state-"));
+  const worktreePath = mkdtempSync(join(tmpdir(), "manager-worker-local-linked-head-worktree-"));
+  const privateGitDir = join(worktreePath, "git-private");
+  const commonGitDir = join(worktreePath, "git-common");
+  const runId = "manager-test";
+  const head = "a".repeat(40);
+  const command = "node ./scripts/codex-workspace.mjs finish-pr task-delivery --verify scoped";
+  const commandDigest = "af3a47312f5fe612e4acf5942c0a688e346948f6ced4001442afa6ff7900c30f";
+  try {
+    ledgerCommand({ command: "init", runId, stateRoot });
+    mkdirSync(join(stateRoot, "tasks"), { recursive: true });
+    mkdirSync(join(privateGitDir), { recursive: true });
+    mkdirSync(join(commonGitDir, "refs", "heads"), { recursive: true });
+    writeFileSync(join(worktreePath, ".git"), `gitdir: ${privateGitDir}\n`);
+    writeFileSync(join(privateGitDir, "HEAD"), "ref: refs/heads/lane\n");
+    writeFileSync(join(privateGitDir, "commondir"), "../git-common\n");
+    writeFileSync(join(commonGitDir, "refs", "heads", "lane"), `${head}\n`);
+    writeFileSync(join(stateRoot, "tasks", "task-delivery.json"), `${JSON.stringify({ worktree_path: worktreePath })}\n`);
+    const binding = { runId, stateRoot, taskId: "task-delivery", workerId: "codex-1", sessionName: "codex-1", worktreePath, head, command, apply: true };
+    const receiptBinding = { taskId: binding.taskId, workerId: binding.workerId, sessionName: binding.sessionName, paneId: "%7", worktreePath, head, commandDigest };
+    writeFileSync(join(stateRoot, "manager-runs", runId, "delivery-session-receipts.json"), `${JSON.stringify([{ schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId, binding: receiptBinding, status: "requested", startedAt: "2026-07-27T00:00:00.000Z", terminal: null, rawPayloadRetained: false }])}\n`);
+    writeFileSync(join(stateRoot, "manager-runs", runId, "workers.json"), `${JSON.stringify([{ workerId: binding.workerId, owner: `${runId}/${binding.workerId}`, runId, sessionName: binding.sessionName, paneTarget: "%7", paneId: "%7", state: "active", assignmentId: "assignment-delivery", taskId: binding.taskId, worktreePath, currentLease: { assignmentId: "assignment-delivery", taskId: binding.taskId, leaseId: "lease-delivery", state: "active" } }])}\n`);
+    const managerContext = deliveryReceiptContext(head, worktreePath);
+    assert.equal(buildActiveWorkerDeliveryInstructionPlan({ ...binding, deliveryInstruction: true }, managerContext).status, "ready");
+    const localContext = { worktreeResolver: (value) => value, gitRunner: () => { throw new Error("worker-local acknowledgement must not invoke git"); }, tmuxRunner: () => { throw new Error("worker-local acknowledgement must not inspect tmux"); } };
+    assert.equal(consumeWorkerLocalDeliveryInstruction({ runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, localContext).status, "ready");
+    rmSync(join(commonGitDir, "refs"), { recursive: true, force: true });
+    writeFileSync(join(commonGitDir, "packed-refs"), `# pack-refs with: peeled fully-peeled\n${head} refs/heads/lane\n`);
+    assert.equal(consumeWorkerLocalDeliveryInstruction({ runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, localContext).status, "ready");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+    rmSync(worktreePath, { recursive: true, force: true });
+  }
 });
 
 test("worker-local delivery instruction fails closed and records unknown for changed HEAD or malformed state", () => {
@@ -220,20 +283,32 @@ test("worker-local delivery instruction fails closed and records unknown for cha
   const binding = deliveryReceiptFixture(stateRoot);
   const receiptBinding = { taskId: binding.taskId, workerId: binding.workerId, sessionName: binding.sessionName, paneId: "%7", worktreePath: binding.worktreePath, head: binding.head, commandDigest: "af3a47312f5fe612e4acf5942c0a688e346948f6ced4001442afa6ff7900c30f" };
   const instructionPath = join(stateRoot, "manager-runs", binding.runId, "delivery-instructions.json");
+  const workersPath = join(stateRoot, "manager-runs", binding.runId, "workers.json");
   try {
     writeFileSync(join(stateRoot, "manager-runs", binding.runId, "delivery-session-receipts.json"), `${JSON.stringify([{ schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId: binding.runId, binding: receiptBinding, status: "requested", startedAt: "2026-07-27T00:00:00.000Z", terminal: null, rawPayloadRetained: false }])}\n`);
-    writeFileSync(join(stateRoot, "manager-runs", binding.runId, "workers.json"), `${JSON.stringify([{ workerId: binding.workerId, owner: `${binding.runId}/${binding.workerId}`, runId: binding.runId, sessionName: binding.sessionName, paneTarget: "%7", paneId: "%7", state: "active", assignmentId: "assignment-delivery", taskId: binding.taskId, worktreePath: binding.worktreePath, currentLease: { assignmentId: "assignment-delivery", taskId: binding.taskId, leaseId: "lease-delivery", state: "active" } }])}\n`);
+    writeFileSync(workersPath, `${JSON.stringify([{ workerId: binding.workerId, owner: `${binding.runId}/${binding.workerId}`, runId: binding.runId, sessionName: binding.sessionName, paneTarget: "%7", paneId: "%7", state: "active", assignmentId: "assignment-delivery", taskId: binding.taskId, worktreePath: binding.worktreePath, currentLease: { assignmentId: "assignment-delivery", taskId: binding.taskId, leaseId: "lease-delivery", state: "active" } }])}\n`);
     assert.equal(buildActiveWorkerDeliveryInstructionPlan({ ...binding, apply: true, deliveryInstruction: true }, deliveryReceiptContext()).status, "ready");
-    const expiredWorker = JSON.parse(readFileSync(join(stateRoot, "manager-runs", binding.runId, "workers.json"), "utf8"));
+    const malformedWorkers = JSON.parse(readFileSync(workersPath, "utf8"));
+    writeFileSync(workersPath, `${JSON.stringify([...malformedWorkers, null])}\n`);
+    const malformedWorkerAck = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, deliveryReceiptContext());
+    assert.equal(malformedWorkerAck.status, "unknown");
+    assert.equal(JSON.parse(readFileSync(instructionPath, "utf8"))[0].status, "pending");
+    writeFileSync(workersPath, `${JSON.stringify(malformedWorkers)}\n`);
+    const expiredWorker = JSON.parse(readFileSync(workersPath, "utf8"));
     expiredWorker[0].currentLease.state = "released";
-    writeFileSync(join(stateRoot, "manager-runs", binding.runId, "workers.json"), `${JSON.stringify(expiredWorker)}\n`);
+    writeFileSync(workersPath, `${JSON.stringify(expiredWorker)}\n`);
     const expired = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, deliveryReceiptContext());
     assert.equal(expired.status, "unknown");
     expiredWorker[0].currentLease.state = "active";
-    writeFileSync(join(stateRoot, "manager-runs", binding.runId, "workers.json"), `${JSON.stringify(expiredWorker)}\n`);
+    writeFileSync(workersPath, `${JSON.stringify(expiredWorker)}\n`);
     const drift = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, deliveryReceiptContext("b".repeat(40)));
     assert.equal(drift.status, "unknown");
-    assert.equal(JSON.parse(readFileSync(instructionPath, "utf8"))[0].status, "unknown");
+    assert.equal(JSON.parse(readFileSync(instructionPath, "utf8"))[0].status, "pending");
+    const invalidRun = JSON.parse(readFileSync(instructionPath, "utf8"));
+    invalidRun[0].runId = "../bad";
+    writeFileSync(instructionPath, `${JSON.stringify(invalidRun)}\n`);
+    const invalidRunResult = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, deliveryReceiptContext());
+    assert.equal(invalidRunResult.status, "unknown");
     writeFileSync(instructionPath, "[{\"invalid\":true}]\n");
     const malformed = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, deliveryReceiptContext());
     assert.equal(malformed.status, "unknown");
@@ -266,11 +341,33 @@ test("worker-local delivery acknowledgement rejects a concurrent ledger change w
 test("delivery session receipt fails closed on a malformed persisted record", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-delivery-session-malformed-"));
   const binding = deliveryReceiptFixture(stateRoot);
+  const receiptPath = join(stateRoot, "manager-runs", binding.runId, "delivery-session-receipts.json");
   try {
-    writeFileSync(join(stateRoot, "manager-runs", binding.runId, "delivery-session-receipts.json"), `${JSON.stringify([{ binding: { taskId: binding.taskId } }])}\n`);
+    writeFileSync(receiptPath, `${JSON.stringify([{ binding: { taskId: binding.taskId } }])}\n`);
     const result = buildDeliverySessionReceiptPlan(binding, deliveryReceiptContext());
     assert.equal(result.status, "unknown");
     assert.equal(result.summary.deliveryClaim, "none");
+    writeFileSync(receiptPath, "[null]\n");
+    const nonObject = buildDeliverySessionReceiptPlan({ ...binding, apply: true }, deliveryReceiptContext());
+    assert.equal(nonObject.status, "unknown");
+    assert.equal(readFileSync(receiptPath, "utf8"), "[null]\n");
+    const validBinding = { taskId: binding.taskId, workerId: binding.workerId, sessionName: binding.sessionName, paneId: "%7", worktreePath: binding.worktreePath, head: binding.head, commandDigest: "af3a47312f5fe612e4acf5942c0a688e346948f6ced4001442afa6ff7900c30f" };
+    writeFileSync(receiptPath, `${JSON.stringify([{ schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId: "other-run", binding: validBinding, status: "requested", startedAt: "2026-07-27T00:00:00.000Z", terminal: null, rawPayloadRetained: false }])}\n`);
+    const foreignRun = buildDeliverySessionReceiptPlan(binding, deliveryReceiptContext());
+    assert.equal(foreignRun.status, "unknown");
+    writeFileSync(receiptPath, `${JSON.stringify([{ schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId: "../bad", binding: validBinding, status: "requested", startedAt: "2026-07-27T00:00:00.000Z", terminal: null, rawPayloadRetained: false }])}\n`);
+    const invalidRun = buildDeliverySessionReceiptPlan(binding, deliveryReceiptContext());
+    assert.equal(invalidRun.status, "unknown");
+    writeFileSync(receiptPath, `${JSON.stringify([{ schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId: binding.runId, binding: validBinding, status: "requested", terminal: null, rawPayloadRetained: false }])}\n`);
+    const missingStart = buildDeliverySessionReceiptPlan(binding, deliveryReceiptContext());
+    assert.equal(missingStart.status, "unknown");
+    writeFileSync(receiptPath, "[]\n");
+    const workersPath = join(stateRoot, "manager-runs", binding.runId, "workers.json");
+    const workers = JSON.parse(readFileSync(workersPath, "utf8"));
+    writeFileSync(workersPath, `${JSON.stringify([...workers, null])}\n`);
+    const malformedWorkers = buildDeliverySessionReceiptPlan({ ...binding, apply: true }, deliveryReceiptContext());
+    assert.equal(malformedWorkers.status, "unknown");
+    assert.equal(readFileSync(receiptPath, "utf8"), "[]\n");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -14345,7 +14442,13 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
     assert.equal(workers[0].assignmentState, "active");
     assert.equal(workers[0].assignmentId, "lane-1");
     assert.equal(workers[0].taskId, "task-1");
-    assert.deepEqual(workers[0].currentLease, { assignmentId: "lane-1", taskId: "task-1", source: "dispatcher_lease_state" });
+    assert.equal(workers[0].currentLease.assignmentId, "lane-1");
+    assert.equal(workers[0].currentLease.taskId, "task-1");
+    assert.equal(workers[0].currentLease.state, "active");
+    assert.match(workers[0].currentLease.leaseId, /^[a-f0-9]{64}$/);
+    assert.equal(workers[0].leaseId, workers[0].currentLease.leaseId);
+    assert.equal(workers[0].leaseState, "active");
+    assert.equal(workers[0].currentLease.source, "dispatcher_lease_state");
     assert.equal(workers[0].heartbeat.status, "recorded");
     assert.equal(workers[0].modelRoute.policy, "task-fit");
     assert.equal(workers[0].recoveryAction, "monitor_active_lease");
