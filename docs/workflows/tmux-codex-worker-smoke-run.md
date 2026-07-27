@@ -128,6 +128,23 @@ only. They never send tmux input, restart a pane, capture terminal text, run
 worktree, or HEAD is stale or mismatched, report `unknown` and inspect rather
 than retrying or recreating the worker.
 
+After first recording and inspecting the matching `requested` or `running`
+receipt, the manager can persist the one metadata-only instruction with the
+same immutable binding:
+
+```bash
+node ./scripts/manager-worker-handoff.mjs --summary-json --apply \
+  --delivery-instruction --run-id <run> --task-id <task> \
+  --worker-id <worker> --session-name <session> \
+  --worktree-path <managed-worktree> --head <admission-40-char-head> \
+  --command 'node ./scripts/codex-workspace.mjs finish-pr <task> --verify scoped'
+```
+
+If this returns `unknown`, do not recreate the receipt or instruction. Inspect
+the manager worker, active lease, pane CWD, worktree, and HEAD, repair the
+existing ledger through the manager recovery route, then make a fresh bounded
+request only after those facts agree.
+
 If the named session disappears, its worker/worktree identity changes, or a
 terminal result is missing or malformed, atomically record the matching receipt
 or instruction as `unknown` and
