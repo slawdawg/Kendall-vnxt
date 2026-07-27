@@ -97,22 +97,25 @@ The supervising Codex session should:
 
 Before a worker is asked to use the existing `finish-pr` lifecycle, the manager
 may record a metadata-only delivery-session receipt in its existing ledger. The
-receipt binds the admitted task, managed worktree, exact HEAD, command digest,
-manager-owned warm worker, exact single Codex pane, tmux session, and start
-time. It moves only through `requested`, `running`, `terminal`, or `unknown`.
+receipt binds the admitted task, managed worktree, immutable admission HEAD,
+command digest, and the post-handoff manager-owned active worker's exact lease,
+single Codex pane, tmux session, and start time. It moves only through
+`requested`, `running`, `terminal`, or `unknown`.
 It is a reconnect breadcrumb only: it does not run `finish-pr` and is never
 delivery, push, PR, merge, or cleanup evidence.
 
 Use the existing handoff wrapper for a read-only projection or a receipt-only
 write after the admitted manifest, worker, pane CWD, and checkout HEAD agree:
 
-`node ./scripts/manager-worker-handoff.mjs --summary-json --delivery-session-receipt --run-id <run> --task-id <task> --worker-id <worker> --session-name <session> --worktree-path <managed-worktree> --head <40-char-head> --command 'node ./scripts/codex-workspace.mjs finish-pr <task>'`
+`node ./scripts/manager-worker-handoff.mjs --summary-json --delivery-session-receipt --run-id <run> --task-id <task> --worker-id <worker> --session-name <session> --worktree-path <managed-worktree> --head <admission-40-char-head> --command 'node ./scripts/codex-workspace.mjs finish-pr <task> --verify scoped'`
 
 Adding `--apply` records or advances only the manager-ledger receipt. It never
 submits a pane command, starts/reuses a tmux session, or runs `finish-pr`.
 Use `--receipt-running` only after the same bound receipt is observed running;
-use `--terminal-exit-code <n> --terminal-completed-at <ISO-8601>` only after a
-matching requested receipt exists. Neither status is delivery evidence: inspect
+use `--terminal-exit-code <n> --terminal-completed-at <ISO-8601> --result-head <40-char-head>` only after a
+matching requested receipt exists. The result HEAD is the checkout observed
+after `finish-pr`; it is distinct from the immutable admission HEAD and the
+completion time cannot precede receipt creation. Neither status is delivery evidence: inspect
 the existing `codex-workspace` and GitHub gates before any delivery conclusion.
 
 ## Active-worker delivery instruction
@@ -126,7 +129,8 @@ worktree, or HEAD is stale or mismatched, report `unknown` and inspect rather
 than retrying or recreating the worker.
 
 If the named session disappears, its worker/worktree identity changes, or a
-terminal result is missing or malformed, report the receipt as `unknown` and
+terminal result is missing or malformed, atomically record the matching receipt
+or instruction as `unknown` and
 inspect the manager worker and existing `codex-workspace` gates. Do not retry a
 delivery command, create another tmux session, or infer success from pane text.
 Receipt records retain metadata and digests only; raw pane capture, terminal
