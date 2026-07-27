@@ -117,6 +117,13 @@
     token expired. Before requesting `gh auth login`, run the exact read-only
     `gh auth status` command outside the sandbox; use that result as the
     authoritative delivery-auth check.
+  - `node ./scripts/codex-workspace.mjs finish-pr <task> --verify check` from
+    a managed worktree: after a runner process disappears without a manifest
+    result or bounded diagnostic while its exact owned lock was active, classify
+    it as an external process-lifecycle/sandbox boundary. Do not retry or wrap
+    the command in the sandbox. Request approval for the exact same governed
+    command outside the sandbox, then run it once and preserve its normal
+    verification, push, and PR evidence.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying

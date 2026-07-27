@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -35,6 +37,62 @@ const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
 const codexWorkspaceVerificationTimeoutMs = 600_000;
+const checkVerificationTimeoutMs = 900_000;
+const resumableCheckInvocationBudgetMs = 180_000;
+const resumableCheckSupervisorLeafTimeoutMs = 150_000;
+const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
+const resumableCheckPacketSchemaVersion = 1;
+const resumableCheckPacketTtlMs = 30 * 60 * 1000;
+const resumableCheckPacketFutureSkewMs = 30_000;
+const resumableCheckRoutingPreviewLeaves = Object.freeze([
+  "test:supervisor:check-routing-preview-01",
+  "test:supervisor:check-routing-preview-02",
+  "test:supervisor:check-routing-preview-03",
+  "test:supervisor:check-routing-preview-04",
+  "test:supervisor:check-routing-preview-05",
+  "test:supervisor:check-routing-preview-06",
+  "test:supervisor:check-routing-preview-07",
+  "test:supervisor:check-routing-preview-08",
+]);
+const resumableCheckSupervisorLeaves = Object.freeze([
+  "test:supervisor:check:preflight",
+  "test:supervisor:check:non-integration",
+  "test:supervisor:check:integration:orchestrator-fake-workers",
+  "test:supervisor:check:integration:operational-action-v1-pause-drain",
+  "test:supervisor:check:integration:work-packets",
+  "test:supervisor:check:integration:bmad-import-parser",
+  "test:supervisor:check:integration:epic25-evidence-chain",
+  ...resumableCheckRoutingPreviewLeaves,
+  "test:supervisor:check:integration:review-route-packet",
+  "test:supervisor:check:integration:manager-source-intake-adapter",
+  "test:supervisor:check:integration:operational-action-v1-retry-reassign",
+  "test:supervisor:check:integration:candidate-work-api",
+  "test:supervisor:check:integration:local-dogfood-attestation",
+  "test:supervisor:check:integration:manager-terminal-events",
+  "test:supervisor:check:integration:supervisor-flow",
+]);
+const resumableCheckSupervisorLeafSet = new Set(resumableCheckSupervisorLeaves);
+const resumableCheckNestedStageExpansions = Object.freeze({
+  "check:fast": ["check:ci-fast", "check:workspace-fast", "check:sandbox-fast", "check:dashboard-fast"],
+  "check:workspace-fast": [
+    "test:codex-workspace-state",
+    "test:workspace-command-resolution",
+    "test:base-checkout-recovery",
+    "test:mutation-admission",
+    "test:mutation-admission-workspace-handoff",
+    "test:mutation-admission-prewrite-guard",
+    "test:codex-workspace",
+  ],
+  "test:supervisor": resumableCheckSupervisorLeaves,
+});
+const resumableCheckTrailingWorkspaceDuplicates = new Set([
+  "test:codex-workspace",
+  "test:codex-workspace-state",
+  "test:workspace-command-resolution",
+]);
+const externalCheckStageEvidenceStage = "test:codex-workspace";
+const externalCheckStageEvidenceCommand = Object.freeze(["pnpm", "run", externalCheckStageEvidenceStage]);
+const taskLockSchemaVersion = 1;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
@@ -91,6 +149,12 @@ try {
       break;
     case "finish-pr":
       finishPr(commandArgs);
+      break;
+    case "record-check-stage-evidence":
+      recordCheckStageEvidence(commandArgs);
+      break;
+    case "inspect-task-lock":
+      inspectTaskLockCommand(commandArgs);
       break;
     case "finish-epic":
       finishEpic(commandArgs);
@@ -152,6 +216,7 @@ Commands:
   emergency-stop            Preview, apply, or clear a metadata-only emergency stop checkpoint.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
+  inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
   reconcile-merged-pr <query> Record verified merged-PR metadata before cleanup.
@@ -268,6 +333,16 @@ finish-pr options:
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
+
+record-check-stage-evidence options:
+  --external-direct-success Attest that the fixed external direct command succeeded.
+  --apply                   Record the bounded handoff. Without this, show a dry-run plan.
+  --state-root <path>       Override local workspace state root.
+  Runner identity is derived from the current runner and must match the recorded lane owner.
+
+inspect-task-lock options:
+  <task-id>                 Exact managed task id to inspect.
+  --summary-json            Print a redacted, read-only lock inspection packet.
 
 finish-epic options:
   --summary-json            Print a bounded closeout plan without mutation.
@@ -2304,13 +2379,13 @@ function finishPr(argv) {
   }
 
   const plan = [];
+  if (worktreeStatus.unstaged && options.stageAll) {
+    plan.push("git add --all");
+  }
   if (verifyCommand.length > 0) {
     plan.push(verifyCommand.join(" "));
   }
   plan.push("anti-churn hook evaluate --apply-safe --format json");
-  if (worktreeStatus.unstaged && options.stageAll) {
-    plan.push("git add --all");
-  }
   if (worktreeStatus.any) {
     plan.push(`git commit -m "${commitMessage}"`);
   }
@@ -2322,7 +2397,7 @@ function finishPr(argv) {
     return;
   }
 
-  withManifestLock(state, manifest.task_id, () => {
+  withManifestLock(state, manifest.task_id, (lock) => {
     const lockedManifest = readManifest(manifestPath);
     validateManifest(lockedManifest, manifestPath);
     assertLaneOwner(lockedManifest, options);
@@ -2330,13 +2405,31 @@ function finishPr(argv) {
     Object.assign(manifest, lockedManifest);
     assertCurrentBranch(manifest);
 
+    worktreeStatus = parseStatus(manifest.worktree_path);
+    if (worktreeStatus.unstaged && options.stageAll) {
+      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path });
+      worktreeStatus = parseStatus(manifest.worktree_path);
+    }
+
     const existingPr = prView(manifest);
     if (existingPr?.baseRefName && existingPr.baseRefName !== manifest.base_branch) {
       throw new Error(`Existing PR base is ${existingPr.baseRefName}, expected ${manifest.base_branch}.`);
     }
 
     if (verifyCommand.length > 0) {
-      runBoundedVerification(verificationPlan, { cwd: manifest.worktree_path });
+      lock.heartbeat();
+      if (verificationPlan.resolvedProfile === "check") {
+        runResumableCheckVerification(manifest, manifestPath, verificationPlan, {
+          state,
+          owner: currentLaneOwner(options),
+          cwd: manifest.worktree_path,
+          allowTerminalPacketRecovery: Boolean(options.stageAll),
+        });
+      } else runBoundedVerification(verificationPlan, {
+        cwd: manifest.worktree_path,
+        diagnosticContext: { state, taskId: manifest.task_id, lockToken: lock.token },
+      });
+      lock.heartbeat();
       manifest.last_verified_at = new Date().toISOString();
       manifest.last_verification_command = verifyCommand.join(" ");
       appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
@@ -2377,6 +2470,7 @@ function finishPr(argv) {
       worktreeStatus = parseStatus(manifest.worktree_path);
     }
 
+    lock.heartbeat();
     runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
     appendTaskEvent(manifest, "pushed", manifest.branch);
     manifest.pr_delivery_head_sha = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path }).stdout.trim() || null;
@@ -2388,6 +2482,7 @@ function finishPr(argv) {
       manifest.pr_url = existingPr.url;
       manifest.pr_number = existingPr.number;
     } else {
+      lock.heartbeat();
       const result = runChecked(
         "gh",
         [
@@ -2437,6 +2532,265 @@ function finishPr(argv) {
     }
   }
   console.log(`PR: ${manifest.pr_url}`);
+}
+
+function inspectTaskLockCommand(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) {
+    throw new Error("inspect-task-lock requires exactly one task id.");
+  }
+  const taskId = String(positional[0] || "").trim();
+  assertSafeTaskId(taskId);
+  const state = workspaceState(options);
+  const inspection = inspectTaskLock(state, taskId);
+  const packet = redactTaskLockInspection(inspection);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  printPlan("inspect-task-lock", [
+    `task_id=${packet.taskId}`,
+    `status=${packet.status}`,
+    `reason=${packet.reason}`,
+    `owner=${packet.owner || "unknown"}`,
+    `pid=${packet.pid ?? "unknown"}`,
+    `heartbeat_at=${packet.heartbeatAt || "unknown"}`,
+    "mutation=none; read-only lock inspection",
+  ]);
+}
+
+function recordCheckStageEvidence(argv) {
+  const { positional, options } = parseOptions(argv);
+  assertExternalCheckStageEvidenceOptions(options);
+  if (options.externalDirectSuccess !== true) {
+    throw new Error("record-check-stage-evidence requires --external-direct-success.");
+  }
+
+  const state = workspaceState(options);
+  const manifestRecord = findManifest(state, positional.join(" "), {
+    preferCurrentWorktree: true,
+  });
+  const { manifest, path: manifestPath } = manifestRecord;
+  const runnerIdentity = currentLaneOwner();
+  assertExternalCheckStageEvidenceManifest(manifest, runnerIdentity);
+  const handoff = buildExternalCheckStageEvidenceHandoff(manifest, runnerIdentity);
+
+  if (!options.apply) {
+    printPlan("record-check-stage-evidence", [
+      `record metadata-only external-direct success for ${handoff.stage}`,
+      "do not commit, push, or create/update a PR",
+    ]);
+    return;
+  }
+
+  withManifestLock(state, manifest.task_id, () => {
+    const lockedManifest = readManifest(manifestPath);
+    validateManifest(lockedManifest, manifestPath);
+    const lockedRunnerIdentity = currentLaneOwner();
+    assertExternalCheckStageEvidenceManifest(lockedManifest, lockedRunnerIdentity);
+    const lockedHandoff = buildExternalCheckStageEvidenceHandoff(lockedManifest, lockedRunnerIdentity);
+    applyExternalCheckStageEvidenceHandoff(lockedManifest, lockedHandoff);
+    writeManifest(manifestPath, lockedManifest);
+    Object.assign(manifest, lockedManifest);
+  });
+
+  printApplied("record-check-stage-evidence", [
+    `stage=${handoff.stage}`,
+    `command=${handoff.command.join(" ")}`,
+    "result=metadata-only passed evidence recorded",
+    "delivery=none; run ordinary finish-pr separately for existing delivery gates",
+  ]);
+}
+
+function assertExternalCheckStageEvidenceOptions(options = {}) {
+  const allowed = new Set(["apply", "externalDirectSuccess", "stateRoot"]);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) {
+      throw new Error(`record-check-stage-evidence does not accept --${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}.`);
+    }
+  }
+  if (options.apply !== undefined && options.apply !== true) {
+    throw new Error("record-check-stage-evidence accepts --apply only as a flag.");
+  }
+  if (options.externalDirectSuccess !== undefined && options.externalDirectSuccess !== true) {
+    throw new Error("record-check-stage-evidence accepts --external-direct-success only as a flag.");
+  }
+  if (options.stateRoot === true) {
+    throw new Error("record-check-stage-evidence option requires a value.");
+  }
+}
+
+function assertExternalCheckStageEvidenceManifest(manifest, runnerIdentity) {
+  if (manifest.owner !== runnerIdentity) {
+    throw new Error("record-check-stage-evidence requires the exact recorded lane owner.");
+  }
+  if (manifest.status !== "active") {
+    throw new Error("record-check-stage-evidence requires an active lane.");
+  }
+  assertSafeBranch(manifest.branch);
+  assertWorktreeExists(manifest);
+  assertCurrentBranch(manifest);
+}
+
+function buildExternalCheckStageEvidenceHandoff(manifest, runnerIdentity) {
+  const cwd = manifest.worktree_path;
+  const plan = resumableCheckPlan(cwd);
+  const head = git(["rev-parse", "HEAD"], { cwd }).stdout.trim();
+  const stagedInputDigest = stagedInputDigestForWorktree(cwd);
+  const packet = manifest.check_verification_packet;
+  const expected = {
+    taskId: manifest.task_id,
+    owner: runnerIdentity,
+    head,
+    plan,
+    stagedInputDigest,
+  };
+  validateTerminalCheckPacketForDiscard(packet, expected);
+  if (packet.status !== "failed") {
+    throw new Error("record-check-stage-evidence requires a terminal failed check packet.");
+  }
+  if (
+    packet.head !== head ||
+    packet.plan_digest !== plan.digest ||
+    packet.staged_input_digest !== stagedInputDigest
+  ) {
+    throw new Error("record-check-stage-evidence binding changed; refusing handoff.");
+  }
+  const recordedAt = new Date().toISOString();
+  if (Date.parse(packet.expires_at) <= Date.parse(recordedAt)) {
+    throw new Error("record-check-stage-evidence check packet expired.");
+  }
+  const targetIndex = plan.stages.indexOf(externalCheckStageEvidenceStage);
+  if (targetIndex < 0) {
+    throw new Error("record-check-stage-evidence fixed stage is not present in the current check plan.");
+  }
+  if (packet.stages.length !== targetIndex + 1 || packet.failed_stage !== externalCheckStageEvidenceStage || packet.next_stage !== externalCheckStageEvidenceStage) {
+    throw new Error("record-check-stage-evidence requires the recognized failed stage at its ordered current-plan position.");
+  }
+  if (packet.stages.some((evidence, index) => evidence.stage !== plan.stages[index])) {
+    throw new Error("record-check-stage-evidence packet history is not the current ordered plan.");
+  }
+  const failedEvidence = packet.stages.at(-1);
+  if (
+    failedEvidence.stage !== externalCheckStageEvidenceStage ||
+    (failedEvidence.status === 0 && failedEvidence.signal === null && failedEvidence.error_code === null)
+  ) {
+    throw new Error("record-check-stage-evidence requires a nonzero final-stage result.");
+  }
+  const handoff = {
+    taskId: manifest.task_id,
+    owner: runnerIdentity,
+    stage: externalCheckStageEvidenceStage,
+    command: [...externalCheckStageEvidenceCommand],
+    head,
+    planDigest: plan.digest,
+    stagedInputDigest,
+    recordedAt,
+    nextStage: plan.stages[targetIndex + 1] || null,
+  };
+  assertNoDuplicateExternalCheckStageEvidence(manifest, handoff);
+  return handoff;
+}
+
+function assertNoDuplicateExternalCheckStageEvidence(manifest, handoff) {
+  const evidence = [
+    manifest.external_check_stage_evidence,
+    ...(Array.isArray(manifest.external_check_stage_evidence_history)
+      ? manifest.external_check_stage_evidence_history
+      : []),
+  ];
+  if (evidence.some((entry) => externalCheckStageEvidenceMatchesBinding(entry, handoff))) {
+    throw new Error("external check-stage evidence was already recorded for the exact binding; refusing duplicate handoff.");
+  }
+}
+
+function externalCheckStageEvidenceMatchesBinding(evidence, handoff) {
+  return Boolean(
+    evidence &&
+      evidence.task_id === handoff.taskId &&
+      evidence.owner === handoff.owner &&
+      evidence.stage === handoff.stage &&
+      evidence.head === handoff.head &&
+      evidence.plan_digest === handoff.planDigest &&
+      evidence.staged_input_digest === handoff.stagedInputDigest &&
+      Array.isArray(evidence.command) &&
+      evidence.command.length === handoff.command.length &&
+      evidence.command.every((part, index) => part === handoff.command[index]),
+  );
+}
+
+function externalCheckStageEvidenceRecord(handoff, recordedAt) {
+  return {
+    schema_version: 1,
+    recorded_at: recordedAt,
+    task_id: handoff.taskId,
+    owner: handoff.owner,
+    stage: handoff.stage,
+    command: [...handoff.command],
+    status: 0,
+    signal: null,
+    error_code: null,
+    output: "omitted",
+    head: handoff.head,
+    plan_digest: handoff.planDigest,
+    staged_input_digest: handoff.stagedInputDigest,
+  };
+}
+
+function archiveExternalCheckStageEvidence(evidence, archivedAt) {
+  return {
+    schema_version: 1,
+    archived_at: archivedAt,
+    recorded_at: typeof evidence?.recorded_at === "string" ? evidence.recorded_at : null,
+    task_id: typeof evidence?.task_id === "string" ? evidence.task_id : null,
+    owner: typeof evidence?.owner === "string" ? evidence.owner : null,
+    stage: typeof evidence?.stage === "string" ? evidence.stage : null,
+    command: Array.isArray(evidence?.command) && evidence.command.every((part) => typeof part === "string") ? [...evidence.command] : [],
+    status: Number.isInteger(evidence?.status) ? evidence.status : null,
+    signal: typeof evidence?.signal === "string" ? evidence.signal : null,
+    error_code: typeof evidence?.error_code === "string" ? evidence.error_code : null,
+    output: "omitted",
+    head: typeof evidence?.head === "string" ? evidence.head : null,
+    plan_digest: typeof evidence?.plan_digest === "string" ? evidence.plan_digest : null,
+    staged_input_digest: typeof evidence?.staged_input_digest === "string" ? evidence.staged_input_digest : null,
+  };
+}
+
+function applyExternalCheckStageEvidenceHandoff(manifest, handoff) {
+  const packet = manifest.check_verification_packet;
+  const completedAt = handoff.recordedAt;
+  packet.stages = [
+    ...packet.stages.slice(0, -1),
+    {
+      stage: handoff.stage,
+      completed_at: completedAt,
+      status: 0,
+      signal: null,
+      error_code: null,
+      output: "omitted",
+    },
+  ];
+  packet.status = handoff.nextStage ? "partial" : "passed";
+  packet.next_stage = handoff.nextStage;
+  packet.updated_at = completedAt;
+  if (handoff.nextStage) {
+    delete packet.completed_at;
+  } else {
+    packet.completed_at = completedAt;
+  }
+  delete packet.failed_stage;
+  if (manifest.external_check_stage_evidence) {
+    const history = Array.isArray(manifest.external_check_stage_evidence_history)
+      ? manifest.external_check_stage_evidence_history
+      : [];
+    manifest.external_check_stage_evidence_history = [
+      ...history,
+      archiveExternalCheckStageEvidence(manifest.external_check_stage_evidence, completedAt),
+    ];
+    appendTaskEvent(manifest, "external_check_stage_evidence_superseded", `${handoff.stage}: stale binding archived`);
+  }
+  manifest.external_check_stage_evidence = externalCheckStageEvidenceRecord(handoff, completedAt);
+  appendTaskEvent(manifest, "external_check_stage_evidence_recorded", `${handoff.stage}: external-direct-success`);
 }
 
 function verifyPrGates(argv) {
@@ -7655,7 +8009,245 @@ function verificationCommand(profile) {
 }
 
 function verificationTimeoutMs(profile) {
+  if (profile === "check") return checkVerificationTimeoutMs;
   return profile === "codex-workspace" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;
+}
+
+function resumableCheckPlan(cwd) {
+  const scripts = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).scripts || {};
+  const check = scripts.check;
+  const sourceStages = String(check || "")
+    .split("&&")
+    .map((part) => part.trim())
+    .map((part) => /^pnpm run ([A-Za-z0-9:_-]+)$/.exec(part)?.[1]);
+  if (!sourceStages.length || sourceStages.some((stage) => !stage)) throw new Error("check profile stage plan is not allowlisted.");
+  const stages = [];
+  const legacyStages = [...sourceStages];
+  const firstSourceByStage = new Map();
+  for (const sourceStage of sourceStages) {
+    if (typeof scripts[sourceStage] !== "string") throw new Error("check profile stage plan is not allowlisted.");
+    for (const stage of expandResumableCheckStage(sourceStage)) {
+      if (typeof scripts[stage] !== "string") throw new Error("check profile stage plan is not allowlisted.");
+      const firstSource = firstSourceByStage.get(stage);
+      if (firstSource) {
+        const isIntentionalTrailingWorkspaceDuplicate = sourceStage === stage && firstSource === "check:fast" && resumableCheckTrailingWorkspaceDuplicates.has(stage);
+        if (isIntentionalTrailingWorkspaceDuplicate) continue;
+        throw new Error("check profile stage plan contains duplicate stages.");
+      }
+      firstSourceByStage.set(stage, sourceStage);
+      stages.push(stage);
+    }
+  }
+  const digest = resumableCheckPlanDigest(stages);
+  return { stages, digest, legacyStages };
+}
+
+function resumableCheckPlanDigest(stages) {
+  return createHash("sha256").update(stages.join("\n")).digest("hex");
+}
+
+function resumableCheckObsoleteSupervisorAggregatePlan(plan) {
+  const firstLeaf = plan.stages.indexOf(resumableCheckSupervisorLeaves[0]);
+  const lastLeaf = plan.stages.lastIndexOf(resumableCheckSupervisorLeaves.at(-1));
+  if (firstLeaf < 0 || lastLeaf < firstLeaf) return null;
+  return [...plan.stages.slice(0, firstLeaf), "test:supervisor", ...plan.stages.slice(lastLeaf + 1)];
+}
+
+function expandResumableCheckStage(stage) {
+  const expansion = resumableCheckNestedStageExpansions[stage];
+  return expansion ? expansion.flatMap((nestedStage) => expandResumableCheckStage(nestedStage)) : [stage];
+}
+
+function runResumableCheckVerification(manifest, manifestPath, verificationPlan, options) {
+  const plan = resumableCheckPlan(options.cwd);
+  const head = git(["rev-parse", "HEAD"], { cwd: options.cwd }).stdout.trim();
+  const stagedInputDigest = stagedInputDigestForWorktree(options.cwd);
+  const prior = manifest.check_verification_packet;
+  let packet = prior;
+  if (prior) {
+    try {
+      validateResumableCheckPacket(prior, { taskId: manifest.task_id, owner: options.owner, head, plan, stagedInputDigest });
+    } catch (error) {
+      if (!discardRecoverableTerminalCheckPacket(manifest, manifestPath, prior, { taskId: manifest.task_id, owner: options.owner, head, plan, stagedInputDigest }, options)) throw error;
+      packet = null;
+    }
+  }
+  if (!packet) {
+    packet = createResumableCheckPacket({ taskId: manifest.task_id, owner: options.owner, head, planDigest: plan.digest, stagedInputDigest, nextStage: plan.stages[0] });
+    manifest.check_verification_packet = packet;
+    writeManifest(manifestPath, manifest);
+  }
+  const started = Date.now();
+  for (let index = packet.stages.length; index < plan.stages.length; index += 1) {
+    const stage = plan.stages[index];
+    const remainingMs = resumableCheckInvocationBudgetMs - (Date.now() - started);
+    const needsSupervisorLeafReserve = resumableCheckSupervisorLeafSet.has(stage);
+    if (remainingMs <= 0 || (needsSupervisorLeafReserve && remainingMs < resumableCheckSupervisorLeafExecutionReserveMs)) {
+      packet.status = "partial"; packet.next_stage = stage; packet.updated_at = new Date().toISOString(); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest);
+      throw new Error(`Check verification packet paused before ${packet.next_stage}; resume finish-pr to continue.`);
+    }
+    const timeout = needsSupervisorLeafReserve ? resumableCheckSupervisorLeafExecutionReserveMs : remainingMs;
+    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL" });
+    const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
+    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: checkVerificationTimeoutMs, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${checkVerificationTimeoutMs}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
+    packet.stages.push(evidence);
+    packet.updated_at = new Date().toISOString();
+    if (index + 1 === plan.stages.length) {
+      packet.status = "passed";
+      packet.next_stage = null;
+      packet.completed_at = packet.updated_at;
+    } else {
+      packet.status = "partial";
+      packet.next_stage = plan.stages[index + 1];
+    }
+    manifest.check_verification_packet = packet;
+    writeManifest(manifestPath, manifest);
+  }
+}
+
+function discardRecoverableTerminalCheckPacket(manifest, manifestPath, packet, expected, options = {}) {
+  if (!options.allowTerminalPacketRecovery) return false;
+  validateTerminalCheckPacketForDiscard(packet, expected);
+  if (packet.head === expected.head && packet.plan_digest === expected.plan.digest && packet.staged_input_digest === expected.stagedInputDigest) return false;
+  appendTaskEvent(
+    manifest,
+    "check_verification_packet_discarded",
+    `explicit-stage-all terminal ${packet.status} packet discarded after head-plan-or-staged-input binding changed`,
+  );
+  manifest.check_verification_packet = null;
+  writeManifest(manifestPath, manifest);
+  return true;
+}
+
+function validateTerminalCheckPacketForDiscard(packet, expected) {
+  const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage"];
+  if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
+  if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
+  if (packet.task_id !== expected.taskId || packet.owner !== expected.owner) invalid("binding changed");
+  if (typeof packet.head !== "string" || !/^[a-f0-9]{40,64}$/i.test(packet.head) || typeof packet.plan_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.plan_digest)) invalid("packet binding is malformed");
+  if (Object.hasOwn(packet, "staged_input_digest") && (typeof packet.staged_input_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.staged_input_digest))) invalid("staged input binding is malformed");
+  if (!["passed", "failed"].includes(packet.status)) invalid("explicit recovery requires a terminal packet");
+  const now = Date.now();
+  const timestamp = (value, label, { allowFuture = false } = {}) => {
+    if (typeof value !== "string" || value.length > 80 || !Number.isFinite(Date.parse(value))) invalid(`${label} is malformed`);
+    const parsed = Date.parse(value);
+    if (!allowFuture && parsed > now + resumableCheckPacketFutureSkewMs) invalid(`${label} is in the future`);
+    return parsed;
+  };
+  const createdAt = timestamp(packet.created_at, "created_at");
+  const updatedAt = timestamp(packet.updated_at, "updated_at");
+  const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
+  const seenStages = new Set();
+  const history = [];
+  let previousCompletedAt = createdAt;
+  for (let index = 0; index < packet.stages.length; index += 1) {
+    const evidence = packet.stages[index];
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) invalid("stage evidence is malformed");
+    const allowedEvidenceKeys = ["completed_at", "error_code", "output", "signal", "stage", "status"];
+    if (Object.keys(evidence).some((key) => !allowedEvidenceKeys.includes(key))) invalid("stage evidence contains unbounded fields");
+    if (typeof evidence.stage !== "string" || !/^[A-Za-z0-9:_-]{1,120}$/.test(evidence.stage) || seenStages.has(evidence.stage)) invalid("stage evidence stage is malformed");
+    seenStages.add(evidence.stage);
+    history.push(evidence.stage);
+    const completedAt = timestamp(evidence.completed_at, "stage completed_at");
+    const legacyTerminalFailureTimestamp = packet.status === "failed" && index === packet.stages.length - 1 && completedAt > updatedAt;
+    if (completedAt < previousCompletedAt || completedAt > expiresAt || (completedAt > updatedAt && !legacyTerminalFailureTimestamp) || evidence.output !== "omitted") invalid("stage evidence is malformed");
+    previousCompletedAt = completedAt;
+    if (!(evidence.status === null || Number.isInteger(evidence.status)) || !(evidence.signal === null || (typeof evidence.signal === "string" && evidence.signal.length <= 120)) || !(evidence.error_code === null || (typeof evidence.error_code === "string" && evidence.error_code.length <= 120))) invalid("stage evidence is malformed");
+  }
+  const candidatePlans = [expected.plan.stages, expected.plan.legacyStages].filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
+  const digestMatchedPlans = candidatePlans.filter((plan) => resumableCheckPlanDigest(plan) === packet.plan_digest);
+  const obsoleteSupervisorAggregatePlan = resumableCheckObsoleteSupervisorAggregatePlan(expected.plan);
+  const obsoletePlanMatches = Array.isArray(obsoleteSupervisorAggregatePlan) && packet.plan_digest === resumableCheckPlanDigest(obsoleteSupervisorAggregatePlan) && history.every((stage, index) => obsoleteSupervisorAggregatePlan[index] === stage);
+  if (digestMatchedPlans.length === 0 && !obsoletePlanMatches) invalid("plan digest is not current or a recognized legacy plan");
+  const matchingPlans = [...digestMatchedPlans, ...(digestMatchedPlans.length === 0 && obsoletePlanMatches ? [obsoleteSupervisorAggregatePlan] : [])].filter((plan) => history.every((stage, index) => plan[index] === stage));
+  if (matchingPlans.length === 0) invalid("stage evidence is not an ordered plan prefix");
+  if (packet.status === "passed") {
+    if (packet.stages.length === 0 || !matchingPlans.some((plan) => plan.length === history.length) || packet.next_stage !== null || !Object.hasOwn(packet, "completed_at")) invalid("passed packet completion is invalid");
+    const completedAt = timestamp(packet.completed_at, "completed_at");
+    if (completedAt < createdAt || completedAt > updatedAt || packet.stages.some((evidence) => evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null)) invalid("passed packet completion is invalid");
+  } else {
+    const failedEvidence = packet.stages.at(-1);
+    if (typeof packet.failed_stage !== "string" || packet.stages.length === 0 || packet.next_stage !== packet.failed_stage || failedEvidence.stage !== packet.failed_stage || (failedEvidence.status === 0 && failedEvidence.signal === null && failedEvidence.error_code === null) || packet.stages.slice(0, -1).some((evidence) => evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null)) invalid("failed packet stage is malformed");
+  }
+}
+
+function stagedInputDigestForWorktree(cwd) {
+  const indexTree = git(["write-tree"], { cwd });
+  const tree = indexTree.stdout.trim();
+  if (indexTree.code !== 0 || !/^[a-f0-9]{40,64}$/i.test(tree)) throw new Error("Cannot bind check verification packet to the staged input snapshot.");
+  return createHash("sha256").update(`index-tree:${tree}`).digest("hex");
+}
+
+function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInputDigest, nextStage }) {
+  const createdAt = new Date();
+  return {
+    schema_version: resumableCheckPacketSchemaVersion,
+    task_id: taskId,
+    owner,
+    head,
+    plan_digest: planDigest,
+    staged_input_digest: stagedInputDigest,
+    stages: [],
+    status: "partial",
+    next_stage: nextStage,
+    created_at: createdAt.toISOString(),
+    updated_at: createdAt.toISOString(),
+    expires_at: new Date(createdAt.getTime() + resumableCheckPacketTtlMs).toISOString(),
+  };
+}
+
+function validateResumableCheckPacket(packet, expected) {
+  const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage"];
+  if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
+  if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
+  if (typeof packet.staged_input_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.staged_input_digest)) invalid("staged input binding is malformed");
+  if (packet.task_id !== expected.taskId || packet.owner !== expected.owner || packet.head !== expected.head || packet.plan_digest !== expected.plan.digest || packet.staged_input_digest !== expected.stagedInputDigest) {
+    invalid("binding changed");
+  }
+  if (!["partial", "passed", "failed"].includes(packet.status)) invalid("status is unsupported");
+  if (packet.status === "failed") throw new Error("check verification packet previously failed; refusing to resume.");
+  if (!Array.isArray(packet.stages) || packet.stages.length > expected.plan.stages.length) invalid("stage evidence is not an ordered plan prefix");
+
+  const now = Date.now();
+  const timestamp = (value, label, { allowNull = false, allowFuture = false } = {}) => {
+    if (allowNull && value === null) return null;
+    if (typeof value !== "string" || value.length > 80) invalid(`${label} is malformed`);
+    const parsed = Date.parse(value);
+    if (!Number.isFinite(parsed)) invalid(`${label} is malformed`);
+    if (!allowFuture && parsed > now + resumableCheckPacketFutureSkewMs) invalid(`${label} is in the future`);
+    return parsed;
+  };
+  const createdAt = timestamp(packet.created_at, "created_at");
+  const updatedAt = timestamp(packet.updated_at, "updated_at");
+  const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
+  if (updatedAt < createdAt || expiresAt <= createdAt) invalid("timestamp ordering is invalid");
+  if (expiresAt <= now) invalid("packet expired");
+  if (expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("expiry exceeds packet lifetime");
+
+  for (let index = 0; index < packet.stages.length; index += 1) {
+    const evidence = packet.stages[index];
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) invalid("stage evidence is malformed");
+    const allowedKeys = ["completed_at", "error_code", "output", "signal", "stage", "status"];
+    if (Object.keys(evidence).some((key) => !allowedKeys.includes(key))) invalid("stage evidence contains unbounded fields");
+    if (evidence.stage !== expected.plan.stages[index]) invalid("stage evidence is not an ordered plan prefix");
+    const completedAt = timestamp(evidence.completed_at, `stage ${index} completed_at`);
+    if (completedAt < createdAt || completedAt > updatedAt) invalid("stage evidence timestamp is invalid");
+    if (evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null || evidence.output !== "omitted") invalid("stage evidence is not a successful metadata-only result");
+  }
+  if (packet.status === "partial") {
+    if (packet.stages.length >= expected.plan.stages.length || packet.next_stage !== expected.plan.stages[packet.stages.length]) invalid("partial packet next stage is invalid");
+    if (Object.hasOwn(packet, "completed_at")) invalid("partial packet cannot be complete");
+  } else {
+    if (packet.stages.length !== expected.plan.stages.length || packet.next_stage !== null) invalid("passed packet completion is invalid");
+    const completedAt = timestamp(packet.completed_at, "completed_at");
+    if (completedAt < createdAt || completedAt > updatedAt) invalid("completion timestamp is invalid");
+  }
 }
 
 function runBoundedVerification(verificationPlan, options = {}) {
@@ -7673,10 +8265,70 @@ function runBoundedVerification(verificationPlan, options = {}) {
     return result;
   }
 
+  const diagnostic = persistVerificationDiagnostic({
+    context: options.diagnosticContext,
+    profile,
+    command,
+    elapsedMs,
+    timeoutMs,
+    outcome,
+    result,
+  });
+
   throw new Error(
-    `Verification ${outcome}: profile=${profile}; command=${command.join(" ")}; elapsed_ms=${elapsedMs}; timeout_ms=${timeoutMs}; child_output=omitted. ` +
+    `Verification ${outcome}: profile=${profile}; command=${command.join(" ")}; elapsed_ms=${elapsedMs}; timeout_ms=${timeoutMs}; child_output=omitted; diagnostic=${diagnostic.status}${diagnostic.id ? `:${diagnostic.id}` : ""}. ` +
       "No verification or PR delivery evidence was recorded. Inspect the bounded child diagnostic, then rerun the selected verification after the cause is resolved.",
   );
+}
+
+function persistVerificationDiagnostic({ context, profile, command, elapsedMs, timeoutMs, outcome, result }) {
+  if (!context?.state || !context?.taskId) return { status: "unavailable" };
+  try {
+    assertSafeTaskId(context.taskId);
+    const diagnosticsDir = join(context.state.tasksDir, ".diagnostics");
+    mkdirSync(diagnosticsDir, { recursive: true });
+    const record = {
+      schema_version: 1,
+      recorded_at: new Date().toISOString(),
+      operation: "finish-pr-verification",
+      task_id: context.taskId,
+      profile,
+      command: command.map((value) => String(value)),
+      outcome,
+      elapsed_ms: elapsedMs,
+      timeout_ms: timeoutMs,
+      child: {
+        status: Number.isInteger(result?.status) ? result.status : null,
+        signal: result?.signal || null,
+        error_code: result?.errorCode || null,
+        stdout_bytes: Buffer.byteLength(String(result?.stdout || "")),
+        stderr_bytes: Buffer.byteLength(String(result?.stderr || "")),
+        output: "omitted",
+      },
+      check_projection: boundedCheckProjection(profile, result),
+      lock: redactTaskLockInspection(inspectTaskLock(context.state, context.taskId)),
+    };
+    const fileName = `${context.taskId}-${record.recorded_at.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
+    writeFileSync(join(diagnosticsDir, fileName), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
+    return { status: "recorded", id: fileName };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+function boundedCheckProjection(profile, result) {
+  if (profile !== "check") return null;
+  const output = `${String(result?.stdout || "")}\n${String(result?.stderr || "")}`;
+  let stage = null;
+  for (const match of output.matchAll(/(?:^|\n)\s*>\s+pnpm run ([A-Za-z0-9:_-]+)/g)) {
+    stage = match[1];
+  }
+  return {
+    stage,
+    stage_observed: Boolean(stage),
+    result_status: Number.isInteger(result?.status) ? result.status : null,
+    raw_output: "omitted",
+  };
 }
 
 function verificationOutcome(result) {
@@ -10602,24 +11254,177 @@ function branchCleanupSafety(branch, baseRef) {
   return { safe: true, reason: `patch-equivalent to ${baseRef}` };
 }
 
-function withManifestLock(state, taskId, fn) {
+function taskLockPath(state, taskId) {
+  assertSafeTaskId(taskId);
+  return join(state.tasksDir, `${taskId}.lock`);
+}
+
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    const startTicks = fields[19];
+    return /^\d+$/.test(startTicks || "") ? `linux-proc-start-ticks:${startTicks}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function isIsoTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function validTaskLockMetadata(metadata, taskId) {
+  return Boolean(
+    metadata &&
+      metadata.schema_version === taskLockSchemaVersion &&
+      metadata.task_id === taskId &&
+      typeof metadata.owner === "string" && metadata.owner.trim() &&
+      Number.isInteger(metadata.pid) && metadata.pid > 0 &&
+      typeof metadata.process_start_identity === "string" && metadata.process_start_identity &&
+      isIsoTimestamp(metadata.acquired_at) &&
+      isIsoTimestamp(metadata.heartbeat_at) &&
+      typeof metadata.token === "string" && /^[0-9a-f-]{36}$/i.test(metadata.token),
+  );
+}
+
+function inspectTaskLock(state, taskId) {
+  const lockPath = taskLockPath(state, taskId);
+  if (!existsSync(lockPath)) {
+    return { taskId, lockPath, status: "absent", reason: "lock_not_present", metadata: null };
+  }
+  try {
+    const stats = lstatSync(lockPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      return { taskId, lockPath, status: "ambiguous", reason: "lock_not_regular_file", metadata: null };
+    }
+    if (stats.size > 16_384) {
+      return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_too_large", metadata: null };
+    }
+    const metadata = JSON.parse(readFileSync(lockPath, "utf8"));
+    if (!validTaskLockMetadata(metadata, taskId)) {
+      return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_invalid", metadata: null };
+    }
+    const observedStart = processStartIdentity(metadata.pid);
+    if (observedStart === metadata.process_start_identity) {
+      return { taskId, lockPath, status: "active", reason: "owner_process_identity_matches", metadata };
+    }
+    if (observedStart) {
+      return { taskId, lockPath, status: "ambiguous", reason: "pid_start_identity_mismatch", metadata };
+    }
+    try {
+      process.kill(metadata.pid, 0);
+      return { taskId, lockPath, status: "ambiguous", reason: "owner_process_identity_unavailable", metadata };
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return { taskId, lockPath, status: "stale", reason: "owner_process_not_present", metadata };
+      }
+      return { taskId, lockPath, status: "ambiguous", reason: "owner_process_probe_denied", metadata };
+    }
+  } catch {
+    return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_unreadable", metadata: null };
+  }
+}
+
+function redactTaskLockInspection(inspection) {
+  const metadata = inspection?.metadata;
+  return {
+    taskId: inspection?.taskId || null,
+    lockPath: inspection?.lockPath || null,
+    status: inspection?.status || "ambiguous",
+    reason: inspection?.reason || "lock_inspection_unavailable",
+    owner: metadata?.owner || null,
+    pid: metadata?.pid ?? null,
+    processStartIdentityPresent: Boolean(metadata?.process_start_identity),
+    acquiredAt: metadata?.acquired_at || null,
+    heartbeatAt: metadata?.heartbeat_at || null,
+    tokenPresent: Boolean(metadata?.token),
+    mutation: "none; read-only lock inspection",
+  };
+}
+
+function recoverStaleTaskLock(state, taskId) {
+  const before = inspectTaskLock(state, taskId);
+  if (before.status !== "stale" || !before.metadata?.token) {
+    return { recovered: false, inspection: before };
+  }
+  const reread = inspectTaskLock(state, taskId);
+  if (reread.status !== "stale" || reread.metadata?.token !== before.metadata.token) {
+    return { recovered: false, inspection: reread };
+  }
+  const historyDir = join(state.tasksDir, ".lock-history");
+  mkdirSync(historyDir, { recursive: true });
+  const archivePath = join(historyDir, `${taskId}-${before.metadata.token}.stale-lock`);
+  try {
+    renameSync(before.lockPath, archivePath);
+    return { recovered: true, inspection: before, archivePath };
+  } catch {
+    return { recovered: false, inspection: inspectTaskLock(state, taskId) };
+  }
+}
+
+function withManifestLock(state, taskId, fn, options = {}) {
   mkdirSync(state.tasksDir, { recursive: true });
-  const lockPath = join(state.tasksDir, `${taskId}.lock`);
+  const lockPath = taskLockPath(state, taskId);
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) {
+    throw new Error("Task lock ownership cannot be established because the current process start identity is unavailable.");
+  }
+  const metadata = {
+    schema_version: taskLockSchemaVersion,
+    task_id: taskId,
+    owner: String(options.owner || currentLaneOwner(options)),
+    pid: process.pid,
+    process_start_identity: processStart,
+    acquired_at: new Date().toISOString(),
+    heartbeat_at: new Date().toISOString(),
+    token: randomUUID(),
+  };
   let fd;
   try {
     fd = openSync(lockPath, "wx");
   } catch (error) {
-    if (error?.code !== "EEXIST") {
-      throw error;
+    if (error?.code !== "EEXIST") throw error;
+    const recovery = recoverStaleTaskLock(state, taskId);
+    if (!recovery.recovered) {
+      const inspected = redactTaskLockInspection(recovery.inspection);
+      throw new Error(`Task lock cannot be recovered: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
     }
-    throw new Error(`Task is locked by another session: ${lockPath}`);
+    try {
+      fd = openSync(lockPath, "wx");
+    } catch (retryError) {
+      throw new Error(`Task lock could not be acquired after exact-task stale recovery: ${retryError?.code || "unknown"}.`);
+    }
   }
 
   try {
-    return fn();
-  } finally {
+    writeFileSync(fd, `${JSON.stringify(metadata)}\n`);
+  } catch (error) {
     closeSync(fd);
     rmSync(lockPath, { force: true });
+    throw error;
+  }
+
+  const heartbeat = () => {
+    const current = inspectTaskLock(state, taskId);
+    if (current.status !== "active" || current.metadata?.token !== metadata.token) {
+      throw new Error("Task lock ownership changed before heartbeat; refusing to continue.");
+    }
+    metadata.heartbeat_at = new Date().toISOString();
+    writeFileSync(lockPath, `${JSON.stringify(metadata)}\n`);
+  };
+
+  try {
+    return fn({ token: metadata.token, heartbeat });
+  } finally {
+    closeSync(fd);
+    const current = inspectTaskLock(state, taskId);
+    if (current.metadata?.token === metadata.token) {
+      rmSync(lockPath, { force: true });
+    }
   }
 }
 
