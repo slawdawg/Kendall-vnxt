@@ -51,6 +51,9 @@ It authorizes, for the named lane only:
 - Run scoped verification, then broader checks when the changed surface
   requires it.
 - Commit, push, open or update the lane PR, and address review or CI feedback.
+- Resolve current, fully satisfied GitHub review threads under the bounded
+  delivery-thread rule below; this is not standing permission to close unclear
+  or merely old conversations.
 - Merge low-risk PRs when the merge evidence checklist is satisfied.
 - Clean up the merged local worktree, local lane branch, and remote lane branch
   after a valid dry run names only expected lane resources.
@@ -224,12 +227,30 @@ publisher.
    If merge is blocked after checks are green, inspect thread-aware review
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
-   thread-aware review-thread check before merge. As part of this delivery
-   gate, the delegated worker may resolve only threads whose feedback has been
-   addressed by the current diff, test evidence, or explicit operator
-   decision. Record each resolved thread ID and its supporting evidence, then
-   rerun the thread-aware check; any unaddressed or ambiguous thread remains a
-   hold.
+   thread-aware review-thread check before merge. A named lane under
+   `standard-delivery` grants the delegated delivery worker standing authority
+   to resolve a **current, fully satisfied** thread without a new per-thread
+   prompt only when all of the following are proven for the current PR head:
+
+   - The feedback is fully addressed by the current diff and supported by the
+     relevant local verification and required code review.
+   - Fresh GitHub thread-aware data shows the thread is current and
+     unambiguous, with no requested change or pending review request.
+   - Required and reported checks for the exact head are successful or
+     intentionally skipped by documented policy as non-required. A required,
+     failed, unknown, or ambiguously skipped check is always a stop line.
+   - The worker records the thread ID plus bounded feedback/head,
+     verification/review, and check evidence; it resolves without replying by
+     default, then re-audits thread-aware review state.
+
+   Stop rather than resolve a disputed, unclear, unfixed, outdated-only, or
+   newly arrived-after-audit thread; any requested change; any thread paired
+   with failing or ambiguous checks; or any high-risk lane. Any thread found by
+   the post-resolution re-audit blocks merge and requires a fresh full
+   evaluation before it can be resolved. These stop lines do not weaken the
+   separate merge checklist: every unresolved applicable thread remains a hold.
+   An outdated-only thread is a hold for this automatic authority and must be
+   separately adjudicated; it cannot be closed by this grant.
    Use exact-head merge protection for GitHub CLI merges, such as
    `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
@@ -589,7 +610,8 @@ These surfaces are not automatically covered by `standard-delivery`:
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
 - GitHub Actions or automation with write permissions.
-- Review-thread mutation, branch protection changes, or merge automation.
+- Review-thread mutation outside the bounded current-thread rule above, branch
+  protection changes, or merge automation.
 - Destructive cleanup outside the managed lane.
 - Lane ownership takeover without operator confirmation.
 - Broad policy expansion or evidence-retention changes.

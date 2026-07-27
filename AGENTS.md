@@ -408,6 +408,28 @@ durable, milestone-driven workflow rather than a single unbounded task.
   process, or network access and cite the standing lane authority. Stop only if
   the action exceeds the lane scope, touches a high-risk surface, or lacks the
   required verification evidence.
+- A named end-to-end lane using `standard-delivery` also grants its owning
+  delivery worker standing GitHub authority to resolve a **current, fully
+  satisfied** review thread without a new per-thread operator prompt. Exercise
+  that authority only when the current PR head fully addresses the feedback;
+  the relevant local verification and required code review have completed;
+  fresh thread-aware GitHub data shows the thread is current, unambiguous, and
+  not a requested change; and checks for that exact head are successful or
+  intentionally skipped by documented policy as non-required. A required,
+  failed, unknown, or ambiguously skipped check is always a stop line. The
+  worker must record the thread ID and bounded
+  evidence linking the feedback, current head, verification/review, and check
+  state, resolve without replying by default, then re-audit thread-aware review
+  state before any merge decision. For the GitHub review-comment workflow, this
+  documented named-lane grant is the required lane-specific explicit
+  authorization for that resolution only. Stop rather than resolve when feedback is
+  disputed, unclear, unfixed, outdated-only, new after the audit, a requested
+  change, or paired with failing/ambiguous checks or a high-risk lane. Any
+  thread discovered by the post-resolution re-audit blocks merge and requires
+  a fresh full evaluation before it can be resolved. An outdated-only thread is
+  a hold for this automatic authority and must be separately adjudicated; it
+  cannot be closed by this grant. This authority never weakens the separate
+  exact-head merge criteria.
 - Treat a PR merge under that standing approval as policy-approved low-risk
   delivery only when all of these are true: the PR belongs to the current lane,
   targets the expected base branch, is not a draft, is mergeable at the exact
@@ -604,9 +626,14 @@ surface is `node ./scripts/codex-workspace.mjs`.
 - Before merge, always perform a thread-aware review-comment check from the PR
   branch worktree. Do not treat a green check rollup or an empty flat comment
   list as proof that there are no unresolved review threads. Repeat this check
-  after every PR head update or amend before merge; resolve only review threads
-  that were actually addressed by code, docs, tests, or an explicit operator
-  decision.
+  after every PR head update or amend before merge. Under a named
+  `standard-delivery` lane, the owning delivery worker may resolve without a
+  new per-thread prompt only a current, unambiguous, fully satisfied thread
+  after relevant local verification, required review, and exact-head checks
+  pass; record its ID/evidence, do not reply by default, and re-audit. Hold
+  disputed, unclear, unfixed, outdated-only, newly arrived, requested-change,
+  failed/ambiguous-check, or high-risk cases for the normal stop line. A new
+  post-resolution re-audit thread blocks merge until a fresh full evaluation.
 - When the operator says "clean up merged work", run
   `node ./scripts/codex-workspace.mjs cleanup-current --delete-remote` from
   inside the lane, or `node ./scripts/codex-workspace.mjs cleanup-merged

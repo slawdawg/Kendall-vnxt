@@ -58,6 +58,7 @@ function assertExactList(actual, expected, label) {
 
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const files = {
+  "AGENTS.md": readWorkspaceFile("AGENTS.md"),
   "README.md": readWorkspaceFile("README.md"),
   "docs/workflows/end-to-end-lane-runner.md": readWorkspaceFile("docs/workflows/end-to-end-lane-runner.md"),
   "docs/workflows/current-session-runbook.md": readWorkspaceFile("docs/workflows/current-session-runbook.md"),
@@ -146,6 +147,41 @@ assertCondition(
   "End-to-end lane runner must document heartbeat decision rationale evidence",
   failures,
 );
+assertCondition(
+  files["AGENTS.md"].includes("standing GitHub authority to resolve a **current, fully\n  satisfied** review thread without a new per-thread operator prompt"),
+  "AGENTS.md must define bounded standing authority for fully satisfied current review threads",
+  failures,
+);
+for (const requiredText of [
+  "required,\n  failed, unknown, or ambiguously skipped check is always a stop line",
+  "disputed, unclear, unfixed, outdated-only, new after the audit, a requested\n  change",
+  "thread discovered by the post-resolution re-audit blocks merge and requires\n  a fresh full evaluation",
+  "outdated-only thread is\n  a hold for this automatic authority and must be separately adjudicated",
+  "resolve without replying by default, then re-audit thread-aware review\n  state before any merge decision",
+]) {
+  assertCondition(
+    files["AGENTS.md"].includes(requiredText),
+    `AGENTS.md must retain bounded review-thread resolution policy text: ${requiredText}`,
+    failures,
+  );
+}
+for (const requiredText of [
+  "A named lane under\n   `standard-delivery` grants the delegated delivery worker standing authority",
+  "without a new per-thread\n   prompt",
+  "verification/review, and check evidence; it resolves without replying by\n     default, then re-audits thread-aware review state.",
+  "disputed, unclear, unfixed, outdated-only, or\n   newly arrived-after-audit thread",
+  "failing or ambiguous checks; or any high-risk lane",
+  "required,\n     failed, unknown, or ambiguously skipped check is always a stop line",
+  "post-resolution re-audit blocks merge and requires a fresh full\n   evaluation",
+  "outdated-only thread is a hold for this automatic authority and must be\n   separately adjudicated",
+  "do not weaken the\n   separate merge checklist",
+]) {
+  assertCondition(
+    files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
+    `End-to-end lane runner must retain bounded review-thread resolution policy text: ${requiredText}`,
+    failures,
+  );
+}
 assertCondition(
   files["scripts/codex-workspace.mjs"].includes("best_judgment_decisions"),
   "codex workspace command must persist best-judgment decision evidence",
