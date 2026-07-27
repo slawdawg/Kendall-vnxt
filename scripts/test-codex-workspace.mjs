@@ -12,6 +12,33 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
 const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
 const testFilter = String(process.env.CODEX_WORKSPACE_TEST_FILTER || "").trim().toLowerCase();
+const routingPreviewCheckLeafStages = Object.freeze([
+  "test:supervisor:check-routing-preview-01",
+  "test:supervisor:check-routing-preview-02",
+  "test:supervisor:check-routing-preview-03",
+  "test:supervisor:check-routing-preview-04",
+  "test:supervisor:check-routing-preview-05",
+  "test:supervisor:check-routing-preview-06",
+  "test:supervisor:check-routing-preview-07",
+  "test:supervisor:check-routing-preview-08",
+]);
+const supervisorCheckLeaves = Object.freeze([
+  "test:supervisor:check:preflight",
+  "test:supervisor:check:non-integration",
+  "test:supervisor:check:integration:orchestrator-fake-workers",
+  "test:supervisor:check:integration:operational-action-v1-pause-drain",
+  "test:supervisor:check:integration:work-packets",
+  "test:supervisor:check:integration:bmad-import-parser",
+  "test:supervisor:check:integration:epic25-evidence-chain",
+  ...routingPreviewCheckLeafStages,
+  "test:supervisor:check:integration:review-route-packet",
+  "test:supervisor:check:integration:manager-source-intake-adapter",
+  "test:supervisor:check:integration:operational-action-v1-retry-reassign",
+  "test:supervisor:check:integration:candidate-work-api",
+  "test:supervisor:check:integration:local-dogfood-attestation",
+  "test:supervisor:check:integration:manager-terminal-events",
+  "test:supervisor:check:integration:supervisor-flow",
+]);
 let executedTestCount = 0;
 
 const nestedNodeProbe = spawnSync(process.execPath, ["-e", ""], {
@@ -41,6 +68,41 @@ try {
     assert(guarded.stderr.includes("exitCode=1"), guarded.stderr);
     assert(guarded.stderr.includes("node ./scripts/codex-workspace.mjs list --summary-json"), guarded.stderr);
     assert(guarded.stderr.includes("rerun the exact same read-only command outside the sandbox"), guarded.stderr);
+  });
+
+  test("test harness emits a deterministic sanitized failure marker", () => {
+    const markers = [];
+    let caught = null;
+    try {
+      invokeTest("fixture failure marker probe", () => {
+        throw new Error("fixture-secret-token-123");
+      }, (marker) => markers.push(marker));
+    } catch (error) {
+      caught = error;
+    }
+
+    assert(caught instanceof Error, "fixture failure probe did not rethrow its error");
+    assert(markers.length === 1, JSON.stringify(markers));
+    assert(markers[0] === 'TEST_FAILURE={"test":"fixture failure marker probe"}', JSON.stringify(markers));
+    assert(!markers[0].includes("fixture-secret-token-123"), markers[0]);
+  });
+
+  test("resumable check fixture requires explicit declarations for source stages outside its executable plan", () => {
+    let message = "";
+    try {
+      installFixtureResumableCheckPlan({}, ["check:leaf"], {}, ["check:aggregate"]);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    assert(message.includes("explicit declared source stages"), message);
+  });
+
+  test("record-check-stage-evidence help derives owner identity instead of advertising a caller owner option", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const usage = source.match(/record-check-stage-evidence options:[\s\S]*?inspect-task-lock options:/)?.[0] || "";
+    assert(usage.includes("Runner identity is derived from the current runner"), usage);
+    assert(!usage.includes("--owner <id>"), usage);
   });
 
   test("child JSON command guard reports fixture child empty stdout", () => {
@@ -1088,15 +1150,24 @@ try {
     assert(!source.includes("function workspaceKey"), "codex-workspace must not define workspaceKey inline");
   });
 
-  test("finish-pr invokes anti-churn finalization before delivery mutation", () => {
+  test("finish-pr permits snapshot staging before verification but finalizes anti-churn before commit delivery", () => {
     const source = readFileSync(scriptPath, "utf8");
     const match = source.match(/function finishPr[\s\S]*?function runAntiChurnFinalization/);
     assert(match, "finishPr source or anti-churn finalization helper not found");
     assert(match[0].includes('plan.push("anti-churn hook evaluate --apply-safe --format json")'), "finish-pr dry-run plan must include anti-churn hook invocation");
     assert(match[0].includes("const antiChurn = runAntiChurnFinalization(manifest, state, { worktreeStatus, pr: existingPr });"), "finish-pr must invoke anti-churn finalization with concrete PR evidence");
+    const snapshotStage = match[0].indexOf('runChecked("git", ["add", "--all"]');
+    const checkVerification = match[0].indexOf("runResumableCheckVerification");
+    const antiChurnFinalization = match[0].indexOf("const antiChurn = runAntiChurnFinalization");
+    const deliveryStage = match[0].indexOf('runChecked("git", ["add", "--all"]', antiChurnFinalization);
+    const commit = match[0].indexOf('runChecked("git", ["commit", "-m", commitMessage]');
     assert(
-      match[0].indexOf("const antiChurn = runAntiChurnFinalization") < match[0].indexOf('runChecked("git", ["add", "--all"]'),
-      "anti-churn finalization must run before staging/commit delivery mutation",
+      snapshotStage >= 0 && snapshotStage < checkVerification && checkVerification < antiChurnFinalization,
+      "finish-pr must stage the exact snapshot before verification when --stage-all is used",
+    );
+    assert(
+      antiChurnFinalization < deliveryStage && antiChurnFinalization < commit,
+      "anti-churn finalization must run before post-finalization staging/commit delivery mutation",
     );
   });
 
@@ -6906,6 +6977,7 @@ try {
       const source = readFileSync(scriptPath, "utf8");
       assert(source.includes("const checkVerificationTimeoutMs = 900_000;"), "check profile must retain its reviewed fixed 900s budget");
       assert(source.includes('if (profile === "check") return checkVerificationTimeoutMs;'), "check profile timeout selection must be explicit and fixed");
+      assert(source.includes('["check:ci-fast", "check:workspace-fast", "check:sandbox-fast", "check:dashboard-fast"]'), "resumable check plan must split check:fast into bounded allowlisted suites");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -6939,6 +7011,286 @@ try {
       const completed = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       assert(completed.check_verification_packet?.status === "passed", JSON.stringify(completed.check_verification_packet));
       assert(completed.pr_delivery_evidence, "completed packet did not enter the existing delivery path");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr expands check:fast into its bounded suites before packet execution", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const suites = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+      ];
+      const stageLog = installFixtureResumableCheckPlan(fixture, suites, {}, ["check:fast"], ["check:fast"]);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === suites.join(","), "check:fast was not expanded into the bounded suite order");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.check_verification_packet?.status === "passed", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.stages?.map((stage) => stage.stage).join(",") === suites.join(","), JSON.stringify(manifest.check_verification_packet));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr expands supervisor aggregate into exact fixed check-profile leaves without changing direct scripts", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const supervisorLeaves = supervisorCheckLeaves;
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, supervisorLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === supervisorLeaves.join(","), "supervisor aggregate was not expanded into its fixed leaf order");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.check_verification_packet?.stages?.map((stage) => stage.stage).join(",") === supervisorLeaves.join(","), JSON.stringify(manifest.check_verification_packet));
+      const packageScripts = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")).scripts;
+      assert(packageScripts["test:supervisor"] === "node ./scripts/run-supervisor-tests.mjs", packageScripts["test:supervisor"]);
+      assert(packageScripts["test:supervisor:review-route"] === "node ./scripts/run-supervisor-tests.mjs tests/integration/test_review_route_packet.py -q", packageScripts["test:supervisor:review-route"]);
+      for (const stage of supervisorLeaves) {
+        assert(packageScripts[stage]?.includes("--timeout-ms=150000"), `supervisor leaf lacks the fixed 150s child timeout: ${stage}`);
+      }
+      const routingSource = readFileSync(join(rootDir, "services", "supervisor", "tests", "integration", "test_routing_preview.py"), "utf8");
+      const routingSourceNames = [...routingSource.matchAll(/^def (test_[A-Za-z0-9_]+)\(/gm)].map((match) => match[1]);
+      assert(routingSourceNames.length === 172, `routing source test count drifted: ${routingSourceNames.length}`);
+      const routingLeafNodeIds = routingPreviewCheckLeafStages.map((stage) => {
+        const script = packageScripts[stage] || "";
+        assert(script.startsWith("node ./scripts/run-supervisor-tests.mjs --no-preflight --timeout-ms=150000 -q "), `routing leaf command is not fixed: ${stage}`);
+        return [...script.matchAll(/test_routing_preview\.py::(test_[A-Za-z0-9_]+)/g)].map((match) => match[1]);
+      });
+      assert(routingLeafNodeIds.map((nodeIds) => nodeIds.length).join(",") === "22,22,22,22,21,21,21,21", JSON.stringify(routingLeafNodeIds.map((nodeIds) => nodeIds.length)));
+      const flattenedRoutingNodeIds = routingLeafNodeIds.flat();
+      assert(new Set(flattenedRoutingNodeIds).size === flattenedRoutingNodeIds.length, "routing leaf node IDs contain duplicates");
+      assert(flattenedRoutingNodeIds.join(",") === routingSourceNames.join(","), "routing leaf node IDs do not exactly match source order");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr pauses before an under-reserved supervisor leaf and resumes only that fixed leaf", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const supervisorLeaves = supervisorCheckLeaves;
+    const stages = ["check:packet-one", ...supervisorLeaves];
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:packet-one", "test:supervisor"], ["check:packet-one", "test:supervisor"]);
+      installFixtureResumableCheckSupervisorReserveSeam(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "under-reserved supervisor packet unexpectedly completed");
+      assert(first.stderr.includes(`packet paused before ${supervisorLeaves[0]}`), first.stderr || first.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one", "under-reserved supervisor leaf was launched");
+      const paused = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(paused.check_verification_packet?.next_stage === supervisorLeaves[0], JSON.stringify(paused.check_verification_packet));
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "0" } },
+      );
+      assert(second.code === 0, second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "resumed supervisor packet reran a completed stage or skipped a fixed leaf");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rejects a stale aggregate supervisor packet before launching check-profile leaves", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const supervisorLeaves = supervisorCheckLeaves;
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, supervisorLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, ["test:supervisor"]);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "stale aggregate supervisor packet unexpectedly resumed");
+      assert(result.stderr.includes("binding changed"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "stale aggregate supervisor packet launched a leaf");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr normalizes aggregate trailing workspace duplicates without rerunning a leaf", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+      ];
+      const stageLog = installFixtureResumableCheckPlan(
+        fixture,
+        stages,
+        {},
+        ["check:fast", "test:codex-workspace", "test:codex-workspace-state", "test:workspace-command-resolution"],
+        ["check:fast", "test:codex-workspace", "test:codex-workspace-state", "test:workspace-command-resolution"],
+      );
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "aggregate check reran a workspace leaf after nested expansion");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr resumes a nested workspace expansion without rerunning the committed leaf", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = [
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+      ];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:workspace-fast"], ["check:workspace-fast"]);
+      installFixtureResumableCheckInterruptAfterStageWrite(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "nested workspace interruption unexpectedly completed");
+      assert(readFixtureStageLog(stageLog).join(",") === stages[0], "nested workspace interruption did not commit exactly its first leaf");
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE: "0" } },
+      );
+      assert(second.code === 0, second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "nested workspace resume reran a committed leaf");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr fails closed when check:fast expansion overlaps an explicit suite", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const suites = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+      ];
+      const stageLog = installFixtureResumableCheckPlan(fixture, suites, {}, ["check:fast", "check:ci-fast"], ["check:fast", "check:ci-fast"]);
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "ambiguous check plan unexpectedly ran");
+      assert(result.stderr.includes("contains duplicate stages"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "ambiguous check plan ran a stage");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "ambiguous check plan reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "ambiguous check plan reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr fails closed before execution for an undeclared check stage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const suites = ["check:ci-fast", "check:workspace-fast", "check:sandbox-fast", "check:dashboard-fast"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, suites, {}, ["check:undeclared"], []);
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "undeclared check stage unexpectedly ran");
+      assert(result.stderr.includes("not allowlisted"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "undeclared check stage ran a stage");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "undeclared check stage reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "undeclared check stage reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr fails closed before expansion for an undeclared aggregate source stage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+      ];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:fast"], []);
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "undeclared aggregate source unexpectedly ran");
+      assert(result.stderr.includes("not allowlisted"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "undeclared aggregate source ran a leaf");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "undeclared aggregate source reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "undeclared aggregate source reached PR creation");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -7032,8 +7384,426 @@ try {
       assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-failure", "nonzero stage evidence did not preserve execution order");
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "nonzero packet stage reached git push");
       assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "nonzero packet stage reached PR creation");
+
+      const retry = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(retry.code !== 0, "failed packet unexpectedly resumed");
+      assert(retry.stderr.includes("previously failed; refusing to resume"), retry.stderr || retry.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-failure", "failed packet retry reran a stage");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "failed packet retry reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "failed packet retry reached PR creation");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr records a fixed supervisor leaf timeout without launching later leaves or delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const timeoutStage = "test:supervisor:check:integration:orchestrator-fake-workers";
+    const stages = supervisorCheckLeaves;
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["test:supervisor"], ["test:supervisor"]);
+      installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage);
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "timed-out supervisor leaf unexpectedly passed");
+      assert(result.stderr.includes(`check stage=${timeoutStage}`), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const evidence = manifest.check_verification_packet?.stages?.at(-1);
+      assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.failed_stage === timeoutStage, JSON.stringify(manifest.check_verification_packet));
+      assert(evidence?.stage === timeoutStage && evidence.status === null && evidence.signal === "SIGKILL" && evidence.error_code === "ETIMEDOUT" && evidence.output === "omitted", JSON.stringify(evidence));
+      assert(readFixtureStageLog(stageLog).join(",") === `test:supervisor:check:preflight,test:supervisor:check:non-integration,${timeoutStage}`, "timeout launched a later supervisor leaf");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "timeout reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "timeout reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all explicitly discards only a safe terminal packet with a changed binding", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+        head: "f".repeat(40),
+        expires_at: new Date(Date.now() - 200).toISOString(),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "recovered packet did not run a fresh plan from its first stage");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("explicit-stage-all")), JSON.stringify(updated.events));
+      assert(!JSON.stringify(updated).includes("fixture-packet-secret"), "recovery retained raw packet output");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all migrates a safely owned obsolete supervisor aggregate packet into the full current plan", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, supervisorCheckLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, ["test:supervisor"], { plan_digest: createHash("sha256").update("test:supervisor").digest("hex") });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === supervisorCheckLeaves.join(","), "obsolete packet did not start the newly bound full plan from its first leaf");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.stages?.[0]?.stage === supervisorCheckLeaves[0], JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all rejects a forged obsolete supervisor aggregate digest", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, supervisorCheckLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, ["test:supervisor"], { plan_digest: "f".repeat(64) });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "forged obsolete digest unexpectedly recovered");
+      assert(result.stderr.includes("plan digest is not current or a recognized legacy plan"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "forged obsolete digest launched the new plan");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all re-verifies a safe passed packet when its plan binding changes", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixturePassedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "changed passed packet did not run a fresh plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all discards a terminal packet when its staged input snapshot changes", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const prior = fixtureFailedResumableCheckPacket(fixture, stages);
+      manifest.check_verification_packet = prior;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "changed staged snapshot did not start a fresh plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.staged_input_digest !== prior.staged_input_digest, JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("staged-input")), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr permits a legacy terminal packet missing staged input only with explicit stage-all recovery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const legacy = fixtureFailedResumableCheckPacket(fixture, stages);
+      delete legacy.staged_input_digest;
+      manifest.check_verification_packet = legacy;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "explicit legacy staged-input migration did not run a fresh plan");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all recovers a legacy failed packet whose final evidence postdates stale updated_at", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureLegacyFailedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "legacy recovery did not begin a fresh plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all recovers the recognized pre-expansion workspace composite plan into the workspace leaf plan", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = [
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+      ];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:workspace-fast"], ["check:workspace-fast"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const failedAt = new Date(Date.now() - 500).toISOString();
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+        plan_digest: createHash("sha256").update("check:workspace-fast").digest("hex"),
+        stages: [{ stage: "check:workspace-fast", completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }],
+        updated_at: failedAt,
+        next_stage: "check:workspace-fast",
+        failed_stage: "check:workspace-fast",
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "workspace composite recovery did not run the fresh leaf plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all recovers only the recognized baseline raw check:fast plan into the expanded plan", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
+      const legacyRawStages = ["check:fast", "check:handoff-later"];
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const failedAt = new Date(Date.now() - 500).toISOString();
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+        plan_digest: createHash("sha256").update(legacyRawStages.join("\n")).digest("hex"),
+        stages: [{ stage: "check:fast", completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }],
+        updated_at: failedAt,
+        next_stage: "check:fast",
+        failed_stage: "check:fast",
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "recognized raw check:fast recovery did not run the full expanded plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all rejects mixed legacy digest and expanded history packet shapes", () => {
+    for (const scenario of [
+      {
+        name: "raw digest with expanded history",
+        planDigest: (legacyRawStages) => createHash("sha256").update(legacyRawStages.join("\n")).digest("hex"),
+        failedStage: "check:ci-fast",
+      },
+      {
+        name: "expanded digest with raw history",
+        planDigest: null,
+        failedStage: "check:fast",
+      },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
+        const legacyRawStages = ["check:fast", "check:handoff-later"];
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        const failedAt = new Date(Date.now() - 500).toISOString();
+        manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+          ...(scenario.planDigest ? { plan_digest: scenario.planDigest(legacyRawStages) } : {}),
+          stages: [{ stage: scenario.failedStage, completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }],
+          updated_at: failedAt,
+          next_stage: scenario.failedStage,
+          failed_stage: scenario.failedStage,
+        });
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.name} hybrid packet unexpectedly recovered`);
+        assert(result.stderr.includes("stage evidence is not an ordered plan prefix"), result.stderr || result.stdout);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} hybrid packet ran a stage`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("finish-pr recovery persists a fresh packet before a budget pause can run a stage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "budget-paused recovery unexpectedly completed");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "budget-paused recovery ran a stage");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "partial", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.stages?.length === 0, JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.plan_digest !== "f".repeat(64), JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr terminal packet recovery rejects implicit, nonterminal, mismatched-owner, and malformed resets", () => {
+    for (const scenario of [
+      { name: "implicit", args: [], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) }), expected: "binding changed" },
+      { name: "legacy missing staged snapshot implicit", args: [], packet: (fixture, stages) => { const packet = fixtureFailedResumableCheckPacket(fixture, stages); delete packet.staged_input_digest; return packet; }, expected: "staged input binding is malformed" },
+      { name: "unrecognized historical plan", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64), head: "f".repeat(40) }), expected: "plan digest is not current or a recognized legacy plan" },
+      { name: "partial", args: ["--stage-all"], packet: (fixture, stages) => fixtureResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64) }), expected: "explicit recovery requires a terminal packet" },
+      { name: "owner", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { owner: "other-runner" }), expected: "binding changed" },
+      { name: "malformed", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureFailedResumableCheckPacket(fixture, stages), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },
+      { name: "failed history", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[0], completed_at: new Date(Date.now() - 800).toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }, { stage: stages[1], completed_at: new Date(Date.now() - 700).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }] }), expected: "failed packet stage is malformed" },
+      { name: "passed duplicate history", args: ["--stage-all"], packet: (fixture, stages) => fixturePassedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[0], completed_at: new Date(Date.now() - 800).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }, { stage: stages[0], completed_at: new Date(Date.now() - 700).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }] }), expected: "stage evidence stage is malformed" },
+      { name: "passed legacy timestamp", args: ["--stage-all"], packet: (fixture, stages) => fixtureLegacyPassedResumableCheckPacket(fixture, stages), expected: "stage evidence is malformed" },
+      { name: "failure after expiry", args: ["--stage-all"], packet: (fixture, stages) => fixtureLegacyFailedResumableCheckPacket(fixture, stages, { expires_at: new Date(Date.now() - 26 * 60_000).toISOString() }), expected: "stage evidence is malformed" },
+      { name: "intermediate legacy timestamp", args: ["--stage-all"], packet: (fixture, stages) => { const packet = fixtureLegacyFailedResumableCheckPacket(fixture, stages); packet.stages[0].completed_at = new Date(Date.parse(packet.updated_at) + 60_000).toISOString(); return packet; }, expected: "stage evidence is malformed" },
+      { name: "unknown legacy stage", args: ["--stage-all"], packet: (fixture, stages) => { const failedAt = new Date(Date.now() - 500).toISOString(); return fixtureFailedResumableCheckPacket(fixture, stages, { stages: [{ stage: "check:unknown-legacy", completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }], updated_at: failedAt, next_stage: "check:unknown-legacy", failed_stage: "check:unknown-legacy" }); }, expected: "stage evidence is not an ordered plan prefix" },
+      { name: "incomplete passed history", args: ["--stage-all"], packet: (fixture, stages) => fixturePassedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[0], completed_at: new Date(Date.now() - 500).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }] }), expected: "passed packet completion is invalid" },
+      { name: "reordered failed history", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[1], completed_at: new Date(Date.now() - 800).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }, { stage: stages[0], completed_at: new Date(Date.now() - 700).toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }], updated_at: new Date(Date.now() - 500).toISOString(), next_stage: stages[0], failed_stage: stages[0] }), expected: "stage evidence is not an ordered plan prefix" },
+      { name: "unchanged staged snapshot", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages), expected: "previously failed; refusing to resume" },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["check:packet-one", "check:packet-two"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.check_verification_packet = scenario.packet(fixture, stages);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", ...scenario.args, "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.name} packet reset unexpectedly ran`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} packet reset ran a stage`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} packet reset reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.name} packet reset reached PR creation`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
   });
 
@@ -7096,6 +7866,286 @@ try {
     }
   });
 
+  test("external check stage handoff records the fixed leaf in the production-shaped plan and resumes every later stage before delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const beforeDryRun = readFileSync(manifestPath, "utf8");
+      const dryRun = runFixtureScript(
+        fixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      assert(dryRun.stdout.includes("DRY RUN: record-check-stage-evidence"), dryRun.stdout || dryRun.stderr);
+      assert(readFileSync(manifestPath, "utf8") === beforeDryRun, "handoff dry-run mutated the manifest");
+
+      const applied = runFixtureScript(
+        fixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      assert(applied.stdout.includes("APPLY: record-check-stage-evidence"), applied.stdout || applied.stderr);
+      assert(readFixtureStageLog(stageLog).length === 0, "handoff reran a check stage");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "handoff reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "handoff reached PR creation");
+
+      const recorded = readJson(manifestPath);
+      const packet = recorded.check_verification_packet;
+      const targetIndex = stages.indexOf("test:codex-workspace");
+      assert(packet?.status === "partial" && packet.next_stage === stages[targetIndex + 1], JSON.stringify(packet));
+      assert(packet.stages?.map((entry) => entry.stage).join(",") === stages.slice(0, targetIndex + 1).join(","), JSON.stringify(packet));
+      assert(packet.stages?.at(-1)?.status === 0 && packet.stages?.at(-1)?.signal === null && packet.stages?.at(-1)?.error_code === null && packet.stages?.at(-1)?.output === "omitted", JSON.stringify(packet));
+      assert(recorded.external_check_stage_evidence?.stage === "test:codex-workspace", JSON.stringify(recorded.external_check_stage_evidence));
+      assert(recorded.external_check_stage_evidence?.command?.join(" ") === "pnpm run test:codex-workspace", JSON.stringify(recorded.external_check_stage_evidence));
+      assert(recorded.external_check_stage_evidence?.output === "omitted", JSON.stringify(recorded.external_check_stage_evidence));
+      assert(recorded.events?.some((event) => event.type === "external_check_stage_evidence_recorded"), JSON.stringify(recorded.events));
+      assert(!JSON.stringify(recorded).includes("fixture-handoff-secret"), "handoff retained raw caller evidence");
+
+      const finish = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(finish.code === 0, finish.stderr || finish.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.slice(targetIndex + 1).join(","), "ordinary finish-pr did not run every remaining planned stage in order");
+      assert(existsSync(join(fixture.root, "git-push-called.txt")), "ordinary finish-pr did not own downstream push");
+      assert(existsSync(join(fixture.root, "gh-pr-create-called.txt")), "ordinary finish-pr did not own downstream PR creation");
+      const delivered = readJson(manifestPath);
+      assert(delivered.last_verified_at && delivered.last_verification_command === "pnpm run check" && delivered.pr_url, JSON.stringify(delivered));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("external check stage handoff rejects unsafe input, packet state, binding, and ownership before delivery", () => {
+    const scenarios = [
+      { name: "missing attestation", args: [], mutate: () => {} },
+      { name: "arbitrary stage", args: ["--external-direct-success", "--stage", "check:packet-one"], mutate: () => {} },
+      { name: "arbitrary command", args: ["--external-direct-success", "--command", "fixture-handoff-secret"], mutate: () => {} },
+      { name: "caller receipt", args: ["--external-direct-success", "--receipt", "fixture-handoff-secret"], mutate: () => {} },
+      { name: "caller-controlled owner", args: ["--external-direct-success", "--owner", "runner-a"], mutate: () => {} },
+      { name: "owner spoof", args: ["--external-direct-success", "--owner", "other-runner"], mutate: () => {} },
+      { name: "takeover", args: ["--external-direct-success", "--take-ownership", "--takeover-reason", "fixture takeover must never be accepted"], mutate: () => {} },
+      { name: "partial", args: ["--external-direct-success"], mutate: (packet) => { packet.status = "partial"; delete packet.failed_stage; packet.stages = packet.stages.slice(0, -1); packet.next_stage = "test:codex-workspace"; } },
+      { name: "passed", args: ["--external-direct-success"], mutate: (packet) => { packet.status = "passed"; packet.stages[1] = { ...packet.stages[1], status: 0, signal: null, error_code: null }; packet.next_stage = null; packet.completed_at = packet.updated_at; delete packet.failed_stage; } },
+      { name: "expired", args: ["--external-direct-success"], mutate: (packet) => { packet.expires_at = new Date(Date.now() - 60_000).toISOString(); } },
+      { name: "task drift", args: ["--external-direct-success"], mutate: (packet) => { packet.task_id = "other-task"; } },
+      { name: "owner drift", args: ["--external-direct-success"], mutate: (packet) => { packet.owner = "other-owner"; } },
+      { name: "head drift", args: ["--external-direct-success"], mutate: (packet) => { packet.head = "f".repeat(40); } },
+      { name: "plan drift", args: ["--external-direct-success"], mutate: (packet) => { packet.plan_digest = "f".repeat(64); } },
+      { name: "staged input drift", args: ["--external-direct-success"], mutate: (packet) => { packet.staged_input_digest = "f".repeat(64); } },
+      { name: "unordered history", args: ["--external-direct-success"], mutate: (packet) => { packet.stages.reverse(); packet.failed_stage = "check:packet-one"; packet.next_stage = "check:packet-one"; } },
+      { name: "unbounded packet", args: ["--external-direct-success"], mutate: (packet) => { packet.raw_output = "fixture-handoff-secret"; } },
+      { name: "nonfinal failure", args: ["--external-direct-success"], mutate: (packet) => { packet.stages[0] = { ...packet.stages[0], status: 1 }; packet.stages[1] = { ...packet.stages[1], status: 0, signal: null, error_code: null }; packet.failed_stage = "check:packet-one"; packet.next_stage = "check:packet-one"; } },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["check:packet-one", "test:codex-workspace"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(fixture, stages);
+        scenario.mutate(manifest.check_verification_packet);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["record-check-stage-evidence", "resumed-task", ...scenario.args, "--apply", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} handoff unexpectedly succeeded`);
+        assert(readFileSync(manifestPath, "utf8") === before, `${scenario.name} handoff mutated the manifest`);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} handoff ran a stage`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} handoff reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.name} handoff reached PR creation`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("external check stage handoff revalidates packet bindings under the manifest lock and rejects duplicate use", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "test:codex-workspace"];
+      installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      installFixtureExternalCheckStageEvidenceLockDrift(fixture);
+      const before = readFileSync(manifestPath, "utf8");
+
+      const drifted = runFixtureScript(
+        fixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(drifted.code !== 0, "lock-drift handoff unexpectedly succeeded");
+      const afterDrift = readFileSync(manifestPath, "utf8");
+      assert(afterDrift !== before && readJson(manifestPath).check_verification_packet?.plan_digest === "f".repeat(64), "fixture lock drift did not reach locked revalidation");
+      assert(!readJson(manifestPath).external_check_stage_evidence, "lock-drift handoff recorded evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+
+    const expiryFixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "test:codex-workspace"];
+      installFixtureResumableCheckPlan(expiryFixture, stages);
+      const manifestPath = join(expiryFixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(expiryFixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      installFixtureExternalCheckStageEvidenceLockDrift(expiryFixture, { expirePacket: true });
+      const before = readFileSync(manifestPath, "utf8");
+
+      const expiredUnderLock = runFixtureScript(
+        expiryFixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", expiryFixture.stateRoot],
+        { cwd: expiryFixture.worktree, env: expiryFixture.env },
+      );
+      assert(expiredUnderLock.code !== 0, "lock-expired handoff unexpectedly succeeded");
+      const afterExpiry = readFileSync(manifestPath, "utf8");
+      assert(afterExpiry !== before && Date.parse(readJson(manifestPath).check_verification_packet?.expires_at) <= Date.now(), "fixture lock expiry did not reach locked revalidation");
+      assert(!readJson(manifestPath).external_check_stage_evidence, "lock-expired handoff recorded evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(expiryFixture);
+    }
+
+    const duplicateFixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "test:codex-workspace"];
+      installFixtureResumableCheckPlan(duplicateFixture, stages);
+      const manifestPath = join(duplicateFixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(duplicateFixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const args = ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", duplicateFixture.stateRoot];
+      const first = runFixtureScript(duplicateFixture, args, { cwd: duplicateFixture.worktree, env: duplicateFixture.env });
+      assert(first.code === 0, first.stderr || first.stdout);
+      const afterFirst = readFileSync(manifestPath, "utf8");
+      const duplicate = runFixtureScript(duplicateFixture, args, { cwd: duplicateFixture.worktree, env: duplicateFixture.env });
+      assert(duplicate.code !== 0, "duplicate handoff unexpectedly succeeded");
+      assert(readFileSync(manifestPath, "utf8") === afterFirst, "duplicate handoff mutated the manifest");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(duplicateFixture);
+    }
+  });
+
+  test("external check stage handoff supersedes only stale binding evidence and never lets it authorize a mismatched packet", () => {
+    const resetFixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "test:codex-workspace"];
+      installFixtureResumableCheckPlan(resetFixture, stages);
+      const manifestPath = join(resetFixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const packet = fixtureExternalCheckStageHandoffPacket(resetFixture, stages);
+      manifest.check_verification_packet = packet;
+      manifest.external_check_stage_evidence = {
+        schema_version: 1,
+        recorded_at: new Date(Date.now() - 60_000).toISOString(),
+        task_id: packet.task_id,
+        owner: packet.owner,
+        stage: "test:codex-workspace",
+        command: ["pnpm", "run", "test:codex-workspace"],
+        status: 0,
+        signal: null,
+        error_code: null,
+        output: "fixture-stale-raw-output-must-not-survive",
+        head: packet.head,
+        plan_digest: packet.plan_digest,
+        staged_input_digest: "f".repeat(64),
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        resetFixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", resetFixture.stateRoot],
+        { cwd: resetFixture.worktree, env: resetFixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.external_check_stage_evidence?.task_id === "resumed-task", JSON.stringify(updated.external_check_stage_evidence));
+      assert(updated.external_check_stage_evidence?.owner === "runner-a", JSON.stringify(updated.external_check_stage_evidence));
+      assert(updated.external_check_stage_evidence?.staged_input_digest === packet.staged_input_digest, JSON.stringify(updated.external_check_stage_evidence));
+      assert(updated.external_check_stage_evidence_history?.length === 1, JSON.stringify(updated.external_check_stage_evidence_history));
+      assert(updated.external_check_stage_evidence_history[0]?.staged_input_digest === "f".repeat(64), JSON.stringify(updated.external_check_stage_evidence_history));
+      assert(updated.external_check_stage_evidence_history[0]?.output === "omitted", JSON.stringify(updated.external_check_stage_evidence_history));
+      assert(!JSON.stringify(updated).includes("fixture-stale-raw-output-must-not-survive"), "stale evidence retained raw output");
+      assert(updated.events?.some((event) => event.type === "external_check_stage_evidence_superseded"), JSON.stringify(updated.events));
+
+      const replay = readJson(manifestPath);
+      replay.check_verification_packet = fixtureExternalCheckStageHandoffPacket(resetFixture, stages);
+      replay.external_check_stage_evidence_history = [
+        ...replay.external_check_stage_evidence_history,
+        replay.external_check_stage_evidence,
+      ];
+      replay.external_check_stage_evidence = replay.external_check_stage_evidence_history[0];
+      writeFileSync(manifestPath, `${JSON.stringify(replay, null, 2)}\n`);
+      const beforeReplay = readFileSync(manifestPath, "utf8");
+      const replayResult = runFixtureScript(
+        resetFixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", resetFixture.stateRoot],
+        { cwd: resetFixture.worktree, env: resetFixture.env },
+      );
+      assert(replayResult.code !== 0, "exact history binding replay unexpectedly succeeded");
+      assert(readFileSync(manifestPath, "utf8") === beforeReplay, "exact history binding replay mutated the manifest");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(resetFixture);
+    }
+
+    const mismatchFixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "test:codex-workspace"];
+      installFixtureResumableCheckPlan(mismatchFixture, stages);
+      const manifestPath = join(mismatchFixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const packet = fixtureExternalCheckStageHandoffPacket(mismatchFixture, stages, { staged_input_digest: "e".repeat(64) });
+      manifest.check_verification_packet = packet;
+      manifest.external_check_stage_evidence = {
+        schema_version: 1,
+        recorded_at: new Date(Date.now() - 60_000).toISOString(),
+        task_id: packet.task_id,
+        owner: packet.owner,
+        stage: "test:codex-workspace",
+        command: ["pnpm", "run", "test:codex-workspace"],
+        status: 0,
+        signal: null,
+        error_code: null,
+        output: "omitted",
+        head: packet.head,
+        plan_digest: packet.plan_digest,
+        staged_input_digest: "f".repeat(64),
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = runFixtureScript(
+        mismatchFixture,
+        ["record-check-stage-evidence", "resumed-task", "--external-direct-success", "--apply", "--state-root", mismatchFixture.stateRoot],
+        { cwd: mismatchFixture.worktree, env: mismatchFixture.env },
+      );
+      assert(result.code !== 0, "mismatched packet accepted stale evidence");
+      assert(readFileSync(manifestPath, "utf8") === before, "mismatched packet or stale evidence mutated the manifest");
+      assert(readJson(manifestPath).check_verification_packet?.status === "failed", "mismatched evidence passed the packet");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(mismatchFixture);
+    }
+  });
+
   test("finish-pr check diagnostic projects a later aggregate stage without retaining child output", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -7130,6 +8180,7 @@ try {
       assert(activeInspection.code === 0, activeInspection.stderr || activeInspection.stdout);
       const activePacket = JSON.parse(activeInspection.stdout);
       assert(activePacket.status === "active", activeInspection.stdout);
+      assert(activePacket.processStartIdentityPresent === true, activeInspection.stdout);
       assert(activePacket.mutation === "none; read-only lock inspection", activeInspection.stdout);
       assert(!activeInspection.stdout.includes("11111111-1111-4111-8111-111111111111"), "inspection leaked lock token");
 
@@ -10062,15 +11113,20 @@ try {
   });
 
   test("cleanup-orphans removes targeted orphan directory when applied", () => {
-    const orphanPath = join(stateRoot, "worktrees", "remove-this-orphan");
-    mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
-    writeFileSync(join(orphanPath, "services", "supervisor", ".pytest_cache", "README.md"), "cache\n");
+    const isolatedStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-targeted-state-"));
+    try {
+      const orphanPath = join(isolatedStateRoot, "worktrees", "remove-this-orphan");
+      mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
+      writeFileSync(join(orphanPath, "services", "supervisor", ".pytest_cache", "README.md"), "cache\n");
 
-    const result = run(["cleanup-orphans", "remove-this", "--apply", "--state-root", stateRoot]);
+      const result = run(["cleanup-orphans", "remove-this", "--apply", "--state-root", isolatedStateRoot]);
 
-    assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("Removed orphan directory"));
-    assert(!existsSync(orphanPath), "cleanup-orphans did not remove targeted orphan directory");
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("Removed orphan directory"));
+      assert(!existsSync(orphanPath), "cleanup-orphans did not remove targeted orphan directory");
+    } finally {
+      rmSync(isolatedStateRoot, { recursive: true, force: true });
+    }
   });
   if (testFilter && executedTestCount === 0) {
     throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
@@ -10206,7 +11262,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const fakeBin = join(fixtureRoot, "bin");
   const branch = "codex/resumed-task";
   const worktree = join(stateRootFixture, "worktrees", "resumed-task");
-  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
+  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}`, CODEX_WORKSPACE_OWNER: "runner-a" };
 
   copyWorkspaceScriptFixture(fixtureRoot);
   mkdirSync(fakeBin, { recursive: true });
@@ -10416,14 +11472,29 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
   chmodSync(verificationCommand, 0o755);
 }
 
-function installFixtureResumableCheckPlan(fixture, stages, stageModes = {}) {
+function installFixtureResumableCheckPlan(fixture, stages, stageModes = {}, checkStages = stages, declaredCheckStages) {
   assert(Array.isArray(stages) && stages.length > 0, "resumable check fixture requires at least one stage");
+  assert(Array.isArray(checkStages) && checkStages.length > 0, "resumable check fixture requires a check script");
+  if (declaredCheckStages === undefined) {
+    assert(
+      checkStages.every((stage) => stages.includes(stage)),
+      "resumable check fixture requires explicit declared source stages when a check source is outside its executable plan",
+    );
+    declaredCheckStages = checkStages;
+  }
+  assert(Array.isArray(declaredCheckStages), "resumable check fixture requires declared source scripts");
   const stageLog = join(fixture.stateRoot, "resumable-check-stages.log");
   const scripts = {
-    check: stages.map((stage) => `pnpm run ${stage}`).join(" && "),
+    check: checkStages.map((stage) => `pnpm run ${stage}`).join(" && "),
   };
   for (const stage of stages) {
     scripts[stage] = `fixture-resumable-stage ${stage}`;
+  }
+  for (const sourceStage of declaredCheckStages) {
+    if (!scripts[sourceStage]) scripts[sourceStage] = `fixture-resumable-stage ${sourceStage}`;
+  }
+  if (scripts["check:fast"] && !scripts["check:workspace-fast"]) {
+    scripts["check:workspace-fast"] = "fixture-resumable-stage check:workspace-fast";
   }
   writeFileSync(join(fixture.worktree, "package.json"), `${JSON.stringify({ scripts })}\n`);
   writeFileSync(join(fixture.worktree, ".gitignore"), "node_modules/\npnpm-lock.yaml\n");
@@ -10455,6 +11526,27 @@ function installFixtureResumableCheckPlan(fixture, stages, stageModes = {}) {
   return stageLog;
 }
 
+function installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture) {
+  const stages = [
+    "check:ci-fast",
+    "test:codex-workspace-state",
+    "test:workspace-command-resolution",
+    "test:base-checkout-recovery",
+    "test:mutation-admission",
+    "test:mutation-admission-workspace-handoff",
+    "test:mutation-admission-prewrite-guard",
+    "test:codex-workspace",
+    "check:sandbox-fast",
+    "check:dashboard-fast",
+    "check:handoff-later",
+  ];
+  const checkStages = ["check:fast", "check:handoff-later"];
+  return {
+    stages,
+    stageLog: installFixtureResumableCheckPlan(fixture, stages, {}, checkStages, checkStages),
+  };
+}
+
 function readFixtureStageLog(path) {
   return existsSync(path) ? readFileSync(path, "utf8").trim().split(/\r?\n/).filter(Boolean) : [];
 }
@@ -10462,9 +11554,8 @@ function readFixtureStageLog(path) {
 function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const stageBudgetCheck = "if (Date.now() - started >= resumableCheckInvocationBudgetMs)";
-  const stageTimeout = "timeout: resumableCheckInvocationBudgetMs - (Date.now() - started)";
-  assert(source.includes(started) && source.includes(stageBudgetCheck) && source.includes(stageTimeout), "fixture did not contain the resumable check clock seams");
+  const remaining = "    const remainingMs = resumableCheckInvocationBudgetMs - (Date.now() - started);";
+  assert(source.includes(started) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
   const patched = source
     .replace(
       started,
@@ -10472,19 +11563,56 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
         "  let fixturePacketClockCalls = 0;",
         "  const fixturePacketNow = () => {",
         "    const now = Date.now();",
-        '    return process.env.CODEX_WORKSPACE_FIXTURE_PACKET_PAUSE_AFTER_STAGE === "1" && fixturePacketClockCalls++ >= 3',
+        '    return process.env.CODEX_WORKSPACE_FIXTURE_PACKET_PAUSE_AFTER_STAGE === "1" && fixturePacketClockCalls++ >= 2',
         "      ? now + resumableCheckInvocationBudgetMs",
         "      : now;",
         "  };",
         "  const started = fixturePacketNow();",
       ].join("\n"),
     )
-    .replace(stageBudgetCheck, "if (fixturePacketNow() - started >= resumableCheckInvocationBudgetMs)")
-    .replace(stageTimeout, "timeout: resumableCheckInvocationBudgetMs - (fixturePacketNow() - started)");
+    .replace(remaining, "    const remainingMs = resumableCheckInvocationBudgetMs - (fixturePacketNow() - started);");
   writeFileSync(fixture.script, patched);
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pause clock"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_PAUSE_AFTER_STAGE: "1" };
+}
+
+function installFixtureResumableCheckSupervisorReserveSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const started = "  const started = Date.now();";
+  assert(source.includes(started), "fixture did not contain the resumable check start clock seam");
+  const replacement = [
+    '  const started = process.env.CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE === "1"',
+    "    ? Date.now() - (resumableCheckInvocationBudgetMs - resumableCheckSupervisorLeafExecutionReserveMs + 1)",
+    "    : Date.now();",
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(started, replacement));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable supervisor reserve clock"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "1" };
+}
+
+function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const started = "  const started = Date.now();";
+  assert(source.includes(started), "fixture did not contain the resumable check start clock seam");
+  writeFileSync(fixture.script, source.replace(started, "  const started = Date.now() - resumableCheckInvocationBudgetMs;"));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pre-stage pause clock"]);
+}
+
+function installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage) {
+  const source = readFileSync(fixture.script, "utf8");
+  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
+  assert(source.includes(invocation), "fixture did not contain the resumable check stage invocation seam");
+  const replacement = [
+    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+    '    if (process.env.CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE === stage) result = { status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" };',
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(invocation, replacement));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable supervisor timeout result"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE: timeoutStage };
 }
 
 function installFixtureResumableCheckInterruptAfterStageWrite(fixture) {
@@ -10493,22 +11621,52 @@ function installFixtureResumableCheckInterruptAfterStageWrite(fixture) {
     "    manifest.check_verification_packet = packet;",
     "    writeManifest(manifestPath, manifest);",
   ].join("\n");
-  assert(source.includes(persistedTransition), "fixture did not contain the persisted resumable stage transition");
+  const persistedTransitionIndex = source.lastIndexOf(persistedTransition);
+  assert(persistedTransitionIndex >= 0, "fixture did not contain the persisted resumable stage transition");
+  const interruption = [
+    persistedTransition,
+    '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE === "1" && packet.status === "partial") {',
+    '      throw new Error("fixture packet interruption after committed stage");',
+    "    }",
+  ].join("\n");
   writeFileSync(
     fixture.script,
-    source.replace(
-      persistedTransition,
-      [
-        persistedTransition,
-        '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE === "1" && packet.status === "partial") {',
-        '      throw new Error("fixture packet interruption after committed stage");',
-        "    }",
-      ].join("\n"),
-    ),
+    `${source.slice(0, persistedTransitionIndex)}${interruption}${source.slice(persistedTransitionIndex + persistedTransition.length)}`,
   );
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable packet interruption seam"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE: "1" };
+}
+
+function installFixtureExternalCheckStageEvidenceLockDrift(fixture, { expirePacket = false } = {}) {
+  const source = readFileSync(fixture.script, "utf8");
+  const functionStart = source.indexOf("function recordCheckStageEvidence(argv)");
+  const lockRead = "    const lockedManifest = readManifest(manifestPath);";
+  const lockReadIndex = source.indexOf(lockRead, functionStart);
+  assert(functionStart >= 0 && lockReadIndex >= functionStart, "fixture did not contain the external handoff lock seam");
+  const replacement = [
+    lockRead,
+    '    if (process.env.CODEX_WORKSPACE_FIXTURE_EXTERNAL_HANDOFF_LOCK_DRIFT === "1") {',
+    '      lockedManifest.check_verification_packet.plan_digest = "f".repeat(64);',
+    "      writeManifest(manifestPath, lockedManifest);",
+    "    }",
+    '    if (process.env.CODEX_WORKSPACE_FIXTURE_EXTERNAL_HANDOFF_LOCK_EXPIRY === "1") {',
+    '      lockedManifest.check_verification_packet.expires_at = new Date(Date.now() - 1).toISOString();',
+    "      writeManifest(manifestPath, lockedManifest);",
+    "    }",
+  ].join("\n");
+  writeFileSync(
+    fixture.script,
+    `${source.slice(0, lockReadIndex)}${replacement}${source.slice(lockReadIndex + lockRead.length)}`,
+  );
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture external handoff lock drift"]);
+  fixture.env = {
+    ...fixture.env,
+    ...(expirePacket
+      ? { CODEX_WORKSPACE_FIXTURE_EXTERNAL_HANDOFF_LOCK_EXPIRY: "1" }
+      : { CODEX_WORKSPACE_FIXTURE_EXTERNAL_HANDOFF_LOCK_DRIFT: "1" }),
+  };
 }
 
 function fixtureResumableCheckPacket(fixture, stages, overrides = {}) {
@@ -10522,6 +11680,7 @@ function fixtureResumableCheckPacket(fixture, stages, overrides = {}) {
     owner: "runner-a",
     head,
     plan_digest: planDigest,
+    staged_input_digest: fixtureStagedInputDigest(fixture),
     stages: [],
     status: "partial",
     next_stage: stages[0],
@@ -10532,7 +11691,97 @@ function fixtureResumableCheckPacket(fixture, stages, overrides = {}) {
   };
 }
 
-function installFixtureDeliveryProbes(fixture) {
+function fixtureStagedInputDigest(fixture) {
+  const tree = runGit(fixture.worktree, ["write-tree"]).stdout;
+  return createHash("sha256").update(`index-tree:${tree}`).digest("hex");
+}
+
+function fixtureFailedResumableCheckPacket(fixture, stages, overrides = {}) {
+  const now = new Date(Date.now() - 500).toISOString();
+  return fixtureResumableCheckPacket(fixture, stages, {
+    status: "failed",
+    stages: [{ stage: stages[0], completed_at: now, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }],
+    next_stage: stages[0],
+    updated_at: now,
+    failed_stage: stages[0],
+    ...overrides,
+  });
+}
+
+function fixtureExternalCheckStageHandoffPacket(fixture, stages, overrides = {}) {
+  const targetIndex = stages.indexOf("test:codex-workspace");
+  assert(targetIndex >= 0, "external handoff fixture requires test:codex-workspace in the check plan");
+  const now = new Date(Date.now() - 500).toISOString();
+  return fixtureResumableCheckPacket(fixture, stages, {
+    status: "failed",
+    stages: stages.slice(0, targetIndex + 1).map((stage, index) => ({
+      stage,
+      completed_at: now,
+      status: index === targetIndex ? 1 : 0,
+      signal: null,
+      error_code: null,
+      output: "omitted",
+    })),
+    next_stage: stages[targetIndex],
+    updated_at: now,
+    failed_stage: stages[targetIndex],
+    ...overrides,
+  });
+}
+
+function fixturePassedResumableCheckPacket(fixture, stages, overrides = {}) {
+  const now = new Date(Date.now() - 500).toISOString();
+  return fixtureResumableCheckPacket(fixture, stages, {
+    status: "passed",
+    stages: stages.map((stage) => ({ stage, completed_at: now, status: 0, signal: null, error_code: null, output: "omitted" })),
+    next_stage: null,
+    updated_at: now,
+    completed_at: now,
+    ...overrides,
+  });
+}
+
+function fixtureLegacyFailedResumableCheckPacket(fixture, stages, overrides = {}) {
+  const createdAt = new Date(Date.now() - 31 * 60_000);
+  const updatedAt = new Date(createdAt.getTime() + 60_000);
+  const failedAt = new Date(createdAt.getTime() + 6 * 60_000);
+  const expiresAt = new Date(createdAt.getTime() + 30 * 60_000);
+  const packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+    created_at: createdAt.toISOString(),
+    updated_at: updatedAt.toISOString(),
+    expires_at: expiresAt.toISOString(),
+    stages: [
+      { stage: stages[0], completed_at: updatedAt.toISOString(), status: 0, signal: null, error_code: null, output: "omitted" },
+      { stage: stages[1], completed_at: failedAt.toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" },
+    ],
+    next_stage: stages[1],
+    failed_stage: stages[1],
+  });
+  delete packet.staged_input_digest;
+  return { ...packet, ...overrides };
+}
+
+function fixtureLegacyPassedResumableCheckPacket(fixture, stages, overrides = {}) {
+  const createdAt = new Date(Date.now() - 31 * 60_000);
+  const updatedAt = new Date(createdAt.getTime() + 60_000);
+  const completedAt = new Date(createdAt.getTime() + 6 * 60_000);
+  const expiresAt = new Date(createdAt.getTime() + 30 * 60_000);
+  const packet = fixturePassedResumableCheckPacket(fixture, stages, {
+    created_at: createdAt.toISOString(),
+    updated_at: updatedAt.toISOString(),
+    expires_at: expiresAt.toISOString(),
+    completed_at: completedAt.toISOString(),
+    stages: [
+      { stage: stages[0], completed_at: updatedAt.toISOString(), status: 0, signal: null, error_code: null, output: "omitted" },
+      { stage: stages[1], completed_at: completedAt.toISOString(), status: 0, signal: null, error_code: null, output: "omitted" },
+    ],
+    next_stage: null,
+  });
+  delete packet.staged_input_digest;
+  return { ...packet, ...overrides };
+}
+
+function installFixtureDeliveryProbes(fixture, { allowDelivery = false } = {}) {
   const pushProbe = join(fixture.root, "git-push-called.txt");
   const prProbe = join(fixture.root, "gh-pr-create-called.txt");
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
@@ -10543,7 +11792,7 @@ function installFixtureDeliveryProbes(fixture) {
       "import { spawnSync } from 'node:child_process';",
       "import { writeFileSync } from 'node:fs';",
       "const args = process.argv.slice(2);",
-      `if (args[0] === 'push') { writeFileSync(${JSON.stringify(pushProbe)}, 'called\\n'); process.exit(1); }`,
+      `if (args[0] === 'push') { writeFileSync(${JSON.stringify(pushProbe)}, 'called\\n'); if (!${allowDelivery}) process.exit(1); }`,
       `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
       "process.exit(result.status ?? 1);",
       "",
@@ -10558,7 +11807,7 @@ function installFixtureDeliveryProbes(fixture) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
-      `if (args[0] === 'pr' && args[1] === 'create') { writeFileSync(${JSON.stringify(prProbe)}, 'called\\n'); process.exit(1); }`,
+      `if (args[0] === 'pr' && args[1] === 'create') { writeFileSync(${JSON.stringify(prProbe)}, 'called\\n'); if (${allowDelivery}) { console.log('https://example.test/pull/456'); process.exit(0); } process.exit(1); }`,
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
       "process.exit(1);",
       "",
@@ -11930,8 +13179,17 @@ function test(name, fn) {
     return;
   }
   executedTestCount += 1;
-  fn();
+  invokeTest(name, fn, (marker) => console.error(marker));
   console.log(`OK: ${name}`);
+}
+
+function invokeTest(name, fn, reportFailure) {
+  try {
+    fn();
+  } catch (error) {
+    reportFailure(`TEST_FAILURE=${JSON.stringify({ test: name })}`);
+    throw error;
+  }
 }
 
 function assert(condition, message = "assertion failed") {

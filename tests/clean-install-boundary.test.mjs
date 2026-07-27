@@ -140,6 +140,24 @@ test("rejects active Windows execution branches in scripts and tests", () => {
   );
 });
 
+test("allows guarded proc identity fallback without a platform branch exemption", () => {
+  const result = evaluateCleanInstallContent(
+    ["scripts/codex-workspace.mjs"],
+    () => [
+      "function processStartIdentity(pid) {",
+      "  if (!Number.isInteger(pid) || pid <= 0) return null;",
+      "  try {",
+      '    return readFileSync(`/proc/${pid}/stat`, "utf8");',
+      "  } catch {",
+      "    return null;",
+      "  }",
+      "}",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(result, []);
+});
+
 test("rejects Windows user-profile session paths in runtime source", () => {
   assert.deepEqual(
     evaluateCleanInstallContent(

@@ -216,6 +216,19 @@ Tool Churn RCA Packet
 - Durable fix recommendation: Keep the filter opt-in so default full-suite coverage is unchanged, and add focused contracts whenever a new expensive workspace lifecycle path is introduced.
 ```
 
+## External Direct Workspace-Test Capture Boundary
+
+```text
+Tool Churn RCA Packet
+- What failed: The exact direct command `pnpm run test:codex-workspace` completed through the external runner, but the captured result was empty or truncated before a numeric exit status was returned.
+- Failure class: external verification capture boundary.
+- Most likely cause: The nested/direct workspace fixture emits more output than the capture bridge retains, or the bridge loses the terminal PTY/session result; this is not evidence that the test passed or failed.
+- Evidence: The command emits no final `exit=<code>`, or its result is truncated after passing lines without a reported process status.
+- Retry stop line: After two capture attempts for this direct command, do not repeat a fire-and-forget or status-suppressed shape through the same bridge. Never attest `--external-direct-success` without a confirmed numeric zero exit.
+- One next safe action: In an operator-local terminal with output intentionally suppressed, run `bash -c 'pnpm run test:codex-workspace >/dev/null 2>&1; code=$?; printf "exit=%s\\n" "$code"; exit "$code"'` and retain only `exit=<code>`.
+- Durable fix recommendation: Route a confirmed `exit=0` to the owner-bound metadata-only handoff once; otherwise retain the bounded capture failure, inspect the runner/session capture path, and do not retry, record a handoff, or start delivery.
+```
+
 ## Dashboard Auth/Projection Nested Server Tests In Sandbox
 
 ```text
