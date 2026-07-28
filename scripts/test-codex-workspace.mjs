@@ -6460,6 +6460,26 @@ try {
     assert(result.stderr.includes("Unknown verification profile"));
   });
 
+  test("finish-pr workspace-fast verification plans the workspace wrapper without raw or recursive profiles", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "workspace-fast", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("pnpm run check:workspace-fast"), result.stdout);
+      assert(!result.stdout.includes("node ./scripts/test-codex-workspace.mjs"), result.stdout);
+      assert(!result.stdout.includes("pnpm run check:fast"), result.stdout);
+      assert(result.stdout.includes("anti-churn hook evaluate --apply-safe --format json"), result.stdout);
+      assert(result.stdout.includes("git push -u origin"), result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("managed admission, worker CWD, pre-write guard, and finish-pr eligibility share one lane while recovery stops before GitHub", () => {
     const fixture = createFinishPrExistingCommitFixture();
     const ghProbe = join(fixture.root, "gh-called.txt");

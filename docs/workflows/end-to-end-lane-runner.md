@@ -198,6 +198,13 @@ publisher.
    passes, classify it as a no-source refresh lane: preserve the evidence
    packet, do not create an empty PR, and close or clean up only through an
    explicit supported lifecycle path.
+
+   When the full raw `codex-workspace` fixture command has a documented
+   capture-duration boundary but `pnpm run check:workspace-fast` has completed
+   successfully for the same workspace surface, use the explicit
+   `finish-pr --verify workspace-fast` profile. It runs that wrapper while
+   retaining the normal manifest lock, anti-churn, commit, push, and PR gates;
+   it is not `--no-verify`, `codex-workspace`, or `check-fast`.
 7. **Deliver PR.** A delegated delivery worker or subagent commits intended
    files, pushes the lane branch, opens or updates the PR, and monitors checks
    and review state. The manager records compact delivery evidence and does not
