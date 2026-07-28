@@ -1095,7 +1095,8 @@ export function consumeWorkerLocalDeliveryInstruction(options = {}, context = {}
   // Keep an injected reader inside the locked acknowledgement plan: test and
   // adapter readers may observe a concurrent ledger change, which must remain
   // a conflict rather than becoming an idempotent acknowledgement.
-  const observedHead = typeof context.workerLocalHeadReader === "function" ? "" : readWorkerLocalDeliveryHead(worker?.worktreePath || "", context);
+  const hasDeferredHeadReader = typeof context.workerLocalHeadReader === "function";
+  const observedHead = hasDeferredHeadReader ? "" : readWorkerLocalDeliveryHead(worker?.worktreePath || "", context);
   const taskCandidates = instructions.value
     .filter((item) => isValidActiveDeliveryInstruction(item, runId))
     .filter((item) => item.binding.workerId === workerId && item.binding.taskId === taskId && item.binding.leaseId === leaseId && item.status !== "unknown");
@@ -1108,9 +1109,15 @@ export function consumeWorkerLocalDeliveryInstruction(options = {}, context = {}
       : !observedHead && taskCandidates.filter((item) => item.status === "pending").length === 1
         ? taskCandidates.filter((item) => item.status === "pending")[0]
         : null;
+  // A deferred reader must run under the acknowledgement lock so an injected
+  // adapter cannot turn a concurrent instruction change into an idempotent
+  // acknowledgement. Its unique, validated candidate only supplies a
+  // provisional structural HEAD here; the locked plan reads and verifies the
+  // local HEAD before it can acknowledge anything.
+  const identityHead = observedHead || (hasDeferredHeadReader ? candidate?.binding.head || "" : "");
   const unsupportedInputs = [options.sessionName, options.worktreePath, options.head, options.command].some(Boolean);
   const leaseMatches = worker?.currentLease?.state === "active" && worker.currentLease?.leaseId === leaseId && worker.currentLease?.taskId === taskId && (!worker.assignmentId || worker.currentLease?.assignmentId === worker.assignmentId);
-  if (!paths.proof.ok || !options.stateRoot || unsupportedInputs || instructions.warning || loadedWorkers.warning || loadedWorkers.value.some((item) => !isPlainObject(item)) || !observedHead || !candidate || !worker || worker.state !== "active" || !leaseId || !leaseMatches || worker.sessionName !== candidate?.binding.sessionName || worker.paneId !== candidate?.binding.paneId || worker.paneTarget !== candidate?.binding.paneId || canonicalDeliveryReceiptWorktree(worker.worktreePath || "", context) !== candidate?.binding.worktreePath) {
+  if (!paths.proof.ok || !options.stateRoot || unsupportedInputs || instructions.warning || loadedWorkers.warning || loadedWorkers.value.some((item) => !isPlainObject(item)) || !identityHead || !candidate || !worker || worker.state !== "active" || !leaseId || !leaseMatches || worker.sessionName !== candidate?.binding.sessionName || worker.paneId !== candidate?.binding.paneId || worker.paneTarget !== candidate?.binding.paneId || canonicalDeliveryReceiptWorktree(worker.worktreePath || "", context) !== candidate?.binding.worktreePath) {
     if (options.apply === true && paths.proof.ok && !unsupportedInputs && !instructions.warning && !loadedWorkers.warning && !loadedWorkers.value.some((item) => !isPlainObject(item))) persistWorkerLocalDeliveryUnknown(paths, runId, workerId, taskId, leaseId);
     return packet({ ok: false, status: "unknown", summary: { runId, workerId, taskId, deliveryClaim: "none", execution: "none", rawPayloadRetained: false }, blockers: [{ code: "worker-local-delivery-identity-unproven", message: "Worker-local instruction identity, explicit state root, or active lease is unproven.", nextAction: "Inspect the existing manager instruction and active worker lease; do not run finish-pr." }] });
   }
