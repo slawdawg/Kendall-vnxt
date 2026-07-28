@@ -587,6 +587,12 @@ surface is `node ./scripts/codex-workspace.mjs`.
   runner, do not mutate that lane unless the operator confirms the other session
   is idle; only then pass `--take-ownership --takeover-reason "<reason>"` and
   record the previous owner.
+- A dirty foreign-owned lane stays blocked by default. Use the exceptional
+  `takeover --allow-dirty-in-lane --dirty-paths <exact,relative,paths>` route
+  only after explicit operator approval is recorded in `--approval`, and only
+  when its stale-owner, exact manifest/worktree/branch, no-PR, no-retained-lock,
+  and stable path-fingerprint gates all pass. It transfers ownership evidence
+  only; it must not commit, reset, clean up, copy files, or perform GitHub work.
 - When the operator says "finish this as a PR", run the smallest relevant verification,
   then use `node ./scripts/codex-workspace.mjs finish-pr --verify scoped` from the task
   worktree or pass a task query from another worktree. Stage intended files
