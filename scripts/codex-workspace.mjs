@@ -531,6 +531,7 @@ adjudicate-current-thread options:
   --verification-exit-code <0> Required successful verification result.
   --review-summary <text>   Required independent code-review evidence.
   --reviewer-id <id>        Required reviewer or audit identity.
+  --risk-authority <text>   Required recorded operator authority when the exact PR diff has a high-risk surface.
   --apply                   Record adjudication evidence in the manifest. Never resolves GitHub threads.
   --summary-json            Without --apply, print the adjudication packet.
   Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
@@ -3521,6 +3522,7 @@ function adjudicateOutdatedThread(argv) {
     assertLaneOwner(lockedManifest, options);
     claimLaneOwner(lockedManifest, options);
     assertCurrentBranch(lockedManifest);
+    assertCleanManagedResolutionWorktree(lockedManifest);
     reconcileManifest(lockedManifest, { refreshPr: true });
     const lockedPacket = buildOutdatedThreadAdjudicationEvidence(lockedManifest, { options, threadId });
     if (!lockedPacket.ready) {
@@ -3548,17 +3550,20 @@ function resolveAdjudicatedThread(argv) {
   assertLaneOwner(manifest, options);
   requireGh("resolve-adjudicated-thread");
   assertCurrentBranch(manifest);
+  assertCleanManagedResolutionWorktree(manifest);
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
-    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); assertCurrentBranch(locked);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
     const retained = (locked.outdated_thread_adjudications || []).find((entry) => entry?.threadId === threadId && entry?.ready === true);
     if (!retained) throw new Error("No ready retained adjudication exists for the target thread.");
+    assertNoUnrecoveredResolutionAttempt(locked.outdated_thread_resolution_outcomes, threadId, "outdated");
     const mapping = retained.mapping || {};
     const fresh = buildOutdatedThreadAdjudicationEvidence(locked, { threadId, options: {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: (mapping.files || []).join(","), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
       verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
+      riskAuthority: mapping.riskAuthority,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
@@ -3568,9 +3573,9 @@ function resolveAdjudicatedThread(argv) {
     // A second audit immediately before the write is deliberate.  The persisted
     // adjudication is useful provenance, but it must never be treated as a
     // substitute for a mutation-time snapshot of GitHub's mutable state.
+    const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationPr = prViewForGates(locked);
     const preMutationHead = prGateHeadState(locked);
-    const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationBlockers = reviewThreadResolutionPreMutationBlockers(preMutationPr, preMutationHead, preMutationAudit, fresh);
     if (preMutationBlockers.length) {
       throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
@@ -3588,7 +3593,7 @@ function resolveAdjudicatedThread(argv) {
       metadataOnly: true,
       rawPayloadRetained: false,
     };
-    locked.outdated_thread_resolution_outcomes = [...(locked.outdated_thread_resolution_outcomes || []), attempt].slice(-20);
+    locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(locked.outdated_thread_resolution_outcomes, attempt);
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     appendTaskEvent(locked, "outdated_review_thread_resolution_attempted", `${threadId} ${fresh.expectedHeadSha}`);
     writeManifest(manifestPath, locked);
@@ -3658,6 +3663,7 @@ function adjudicateCurrentThread(argv) {
   const state = workspaceState(options);
   const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
   assertLaneOwner(manifest, options); requireGh("adjudicate-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  assertCleanManagedResolutionWorktree(manifest);
   reconcileManifest(manifest, { refreshPr: true });
   const packet = buildCurrentThreadAdjudicationEvidence(manifest, { options, threadId });
   if (options.summaryJson) return console.log(JSON.stringify(packet, null, 2));
@@ -3672,7 +3678,7 @@ function adjudicateCurrentThread(argv) {
   }
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
-    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
     const lockedPacket = buildCurrentThreadAdjudicationEvidence(locked, { options, threadId });
     if (!lockedPacket.ready) {
@@ -3698,12 +3704,14 @@ function resolveAdjudicatedCurrentThread(argv) {
   const state = workspaceState(options);
   const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
   assertLaneOwner(manifest, options); requireGh("resolve-adjudicated-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  assertCleanManagedResolutionWorktree(manifest);
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
-    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); assertCurrentBranch(locked);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
     const retained = (locked.current_thread_adjudications || []).find((entry) => entry?.threadId === threadId && entry?.ready === true);
     if (!retained) throw new Error("No ready retained current-thread adjudication exists for the target thread.");
+    assertNoUnrecoveredResolutionAttempt(locked.current_thread_resolution_outcomes, threadId, "current");
     const mapping = retained.mapping || {};
     const fresh = buildCurrentThreadAdjudicationEvidence(locked, { threadId, options: {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
@@ -3714,9 +3722,9 @@ function resolveAdjudicatedCurrentThread(argv) {
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh current-thread adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
+    const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationPr = prViewForGates(locked);
     const preMutationHead = prGateHeadState(locked);
-    const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationBlockers = currentThreadResolutionPreMutationBlockers(preMutationPr, preMutationHead, preMutationAudit, fresh);
     if (preMutationBlockers.length) throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
     const attempt = {
@@ -3726,7 +3734,7 @@ function resolveAdjudicatedCurrentThread(argv) {
       recoveryPath: "Do not retry blindly. Re-audit the exact PR head and thread state, then resume only through resolve-adjudicated-current-thread.",
       metadataOnly: true, rawPayloadRetained: false,
     };
-    locked.current_thread_resolution_outcomes = [...(locked.current_thread_resolution_outcomes || []), attempt].slice(-20);
+    locked.current_thread_resolution_outcomes = appendResolutionOutcome(locked.current_thread_resolution_outcomes, attempt);
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     appendTaskEvent(locked, "current_review_thread_resolution_attempted", `${threadId} ${fresh.expectedHeadSha}`);
     writeManifest(manifestPath, locked);
@@ -3805,6 +3813,30 @@ function reviewThreadResolutionHolds(audit) {
     pendingRequests: audit.pendingReviewRequestCount,
     mergeReady: audit.unresolvedNonOutdatedCount === 0 && audit.unresolvedOutdatedCount === 0 && audit.pendingReviewRequestCount === 0,
   };
+}
+
+function appendResolutionOutcome(existing, attempt) {
+  const outcomes = Array.isArray(existing) ? existing : [];
+  const retainedRecovery = outcomes.filter((entry) => entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded");
+  const terminal = outcomes.filter((entry) => !retainedRecovery.includes(entry)).slice(-19);
+  return [...retainedRecovery, ...terminal, attempt];
+}
+
+function retainedResolutionOutcomes(outcomes) {
+  const entries = Array.isArray(outcomes) ? outcomes : [];
+  const recovery = entries.filter((entry) => entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded");
+  const terminal = entries.filter((entry) => !recovery.includes(entry)).slice(-20);
+  return [...recovery, ...terminal];
+}
+
+function isHighRiskReviewThreadPath(path) {
+  const value = String(path || "");
+  return value === "AGENTS.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
+}
+
+function assertNoUnrecoveredResolutionAttempt(outcomes, threadId, kind) {
+  const prior = (Array.isArray(outcomes) ? outcomes : []).find((entry) => entry?.threadId === threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"));
+  if (prior) throw new Error(`A prior ${kind} review-thread resolution attempt is unrecovered; do not retry blindly.`);
 }
 
 function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) {
@@ -4727,6 +4759,7 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   else if (!context.target.requestFingerprint) blockers.push("Target review thread has no request fingerprint");
   else if (context.mapping?.requestFingerprint !== context.target.requestFingerprint) blockers.push("Current-thread request fingerprint does not match the target review thread");
   else if (context.target.path && !context.mapping?.files?.includes(context.target.path)) blockers.push(`Current-thread mapping omits target review path: ${context.target.path}`);
+  if (context.mapping?.highRiskPaths?.length && !context.mapping?.riskAuthority) blockers.push(`High-risk current-thread resolution requires recorded operator authority: ${context.mapping.highRiskPaths.join(", ")}`);
   blockers.push(...(context.mapping?.blockers || []));
   return blockers;
 }
@@ -4751,7 +4784,9 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   const reviewSummary = safeMetadataText(options.reviewSummary, 500);
   const reviewerId = safeMetadataText(options.reviewerId, 120);
   const requestFingerprint = safeMetadataText(options.requestFingerprint, 80).toLowerCase();
+  const riskAuthority = safeMetadataText(options.riskAuthority, 500);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
+  const highRiskPaths = changedPaths.filter(isHighRiskReviewThreadPath);
   const changedPathError = safeMetadataText(context.changedPathError, 500);
   const uncoveredFiles = files.filter((path) => !changedPaths.includes(path));
   const blockers = [];
@@ -4782,6 +4817,8 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     reviewSummary: reviewSummary || null,
     reviewerId: reviewerId || null,
     requestFingerprint: requestFingerprint || null,
+    riskAuthority: riskAuthority || null,
+    highRiskPaths,
     expectedHeadSha: safeMetadataText(context.expectedHeadSha, 80) || null,
     inspectedHeadSha: safeMetadataText(context.inspectedHeadSha, 80) || null,
     postInspectionHeadSha: safeMetadataText(context.postInspectionHeadSha, 80) || null,
@@ -5103,6 +5140,10 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
   const errors = Array.isArray(parsed?.errors) ? parsed.errors : [];
   const connection = parsed?.data?.repository?.pullRequest?.reviewThreads;
   const reviewRequests = parsed?.data?.repository?.pullRequest?.reviewRequests;
+  const connectionComplete = Array.isArray(connection?.nodes)
+    && typeof connection?.pageInfo?.hasNextPage === "boolean"
+    && Array.isArray(reviewRequests?.nodes)
+    && typeof reviewRequests?.pageInfo?.hasNextPage === "boolean";
   const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
   const threadRefs = nodes.map((thread) => {
     const comments = reviewThreadCommentAudit(thread.comments);
@@ -5121,7 +5162,7 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
   const unresolvedNonOutdated = threadRefs.filter((thread) => !thread.isResolved && !thread.isOutdated);
   const unresolvedOutdated = threadRefs.filter((thread) => !thread.isResolved && thread.isOutdated);
   return {
-    querySucceeded: Boolean(connection && reviewRequests),
+    querySucceeded: connectionComplete,
     errorCount: errors.length,
     errorMessages: errors.map((error) => String(error?.message || "GraphQL error")).filter(Boolean).slice(0, 5),
     totalCount: threadRefs.length,
@@ -5582,15 +5623,11 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
     outdated_thread_adjudications: Array.isArray(manifest.outdated_thread_adjudications)
       ? manifest.outdated_thread_adjudications.slice(-20)
       : [],
-    outdated_thread_resolution_outcomes: Array.isArray(manifest.outdated_thread_resolution_outcomes)
-      ? manifest.outdated_thread_resolution_outcomes.slice(-20)
-      : [],
+    outdated_thread_resolution_outcomes: retainedResolutionOutcomes(manifest.outdated_thread_resolution_outcomes),
     current_thread_adjudications: Array.isArray(manifest.current_thread_adjudications)
       ? manifest.current_thread_adjudications.slice(-20)
       : [],
-    current_thread_resolution_outcomes: Array.isArray(manifest.current_thread_resolution_outcomes)
-      ? manifest.current_thread_resolution_outcomes.slice(-20)
-      : [],
+    current_thread_resolution_outcomes: retainedResolutionOutcomes(manifest.current_thread_resolution_outcomes),
     delivery_subagent_audit: deliverySubagentAudit,
     cleanup: cleanupAuthorityDecision,
     authority_decisions: shapeLaneAuthorityDecisions(manifest, {
@@ -16249,6 +16286,13 @@ function mainWorktreePath() {
 function assertWorktreeExists(manifest) {
   if (!existsSync(manifest.worktree_path) || !statSync(manifest.worktree_path).isDirectory()) {
     throw new Error(`Worktree path is missing: ${manifest.worktree_path}`);
+  }
+}
+
+function assertCleanManagedResolutionWorktree(manifest) {
+  const status = parseStatus(manifest.worktree_path);
+  if (status.any) {
+    throw new Error("Managed review-thread adjudication and resolution require a clean worktree.");
   }
 }
 
