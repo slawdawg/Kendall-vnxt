@@ -344,10 +344,15 @@ the operator's approval is present:
 node ./scripts/codex-workspace.mjs takeover <task-id> --dry-run \
   --takeover-reason "stale owner handoff reviewed" \
   --approval "operator approved bounded dirty in-lane takeover" \
-  --allow-dirty-in-lane --dirty-paths "path/one,path/two"
+  --allow-dirty-in-lane \
+  --dirty-paths "path/one" \
+  --dirty-paths "path/two"
 ```
 
-The explicit path list is exact, not a glob. The runner rejects a missing,
+Repeat `--dirty-paths` once for every literal repository-relative path; do not
+comma-join paths. A comma is a valid filename character, so
+`--dirty-paths "notes,review.md"` names one file. The explicit path list is
+exact, not a glob. The runner rejects a missing,
 unexpected, unsafe, unreadable, symlinked, renamed, copied, or out-of-worktree
 path. It also rejects a non-stale or same owner, an active or retained task
 lock, an absent worktree, a manifest/checkout branch mismatch, and any recorded

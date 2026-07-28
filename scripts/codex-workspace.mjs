@@ -8,6 +8,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -10607,12 +10608,59 @@ function takeoverWorktreeEvidence(target) {
     };
   }
   const status = parseStatus(worktreePath);
+  const registration = takeoverRegisteredWorktreeEvidence(worktreePath);
   return {
     path: worktreePath,
     exists: true,
     required: true,
     status: status.any ? "dirty" : "clean",
     dirty_lines: status.lines,
+    registration,
+  };
+}
+
+function canonicalGitCommonDir(cwd) {
+  const result = git(["rev-parse", "--git-common-dir"], { cwd });
+  if (result.code !== 0 || !result.stdout.trim()) return null;
+  const candidate = result.stdout.trim();
+  return canonicalExistingPath(candidate.startsWith("/") ? candidate : resolve(cwd, candidate));
+}
+
+function takeoverRegisteredWorktreeEvidence(worktreePath) {
+  const primaryWorktree = canonicalExistingPath(mainWorktreePath());
+  const canonicalWorktree = canonicalExistingPath(worktreePath);
+  if (!primaryWorktree || !canonicalWorktree) {
+    return { status: "unavailable", reason: "primary or recorded worktree canonical identity is unavailable" };
+  }
+  const listing = git(["worktree", "list", "--porcelain"], { cwd: primaryWorktree });
+  if (listing.code !== 0) {
+    return { status: "unavailable", reason: "primary Git worktree registration is unavailable" };
+  }
+  const registered = parseWorktreePorcelain(listing.stdout)
+    .map((entry) => canonicalExistingPath(entry.path))
+    .filter(Boolean);
+  const primaryCommonDir = canonicalGitCommonDir(primaryWorktree);
+  const worktreeCommonDir = canonicalGitCommonDir(canonicalWorktree);
+  if (!primaryCommonDir || !worktreeCommonDir) {
+    return { status: "unavailable", reason: "Git common-directory identity is unavailable" };
+  }
+  if (!registered.includes(canonicalWorktree)) {
+    return {
+      status: "mismatch",
+      reason: "recorded worktree is not registered by the primary repository",
+      metadata_only: true,
+    };
+  }
+  if (primaryCommonDir !== worktreeCommonDir) {
+    return {
+      status: "mismatch",
+      reason: "recorded worktree does not share the primary repository Git common directory",
+      metadata_only: true,
+    };
+  }
+  return {
+    status: "matched",
+    metadata_only: true,
   };
 }
 
@@ -10721,6 +10769,8 @@ function dirtyInLanePathSnapshot(worktreePath, requestedPaths) {
     }
     observed.push({ path, status_code: statusCode });
   }
+  assertNoHiddenDirtyInLanePaths(canonicalWorktree, requested.paths);
+
   if (observed.length === 0) {
     throw new Error("dirty in-lane takeover requires a currently dirty worktree");
   }
@@ -10751,13 +10801,31 @@ function dirtyInLanePathSnapshot(worktreePath, requestedPaths) {
       if (!canonicalPath || canonicalRelative.startsWith(`..${sep}`) || canonicalRelative === "..") {
         throw new Error(`dirty path resolves outside the recorded worktree: ${entry.path}`);
       }
-      const bytes = readFileSync(canonicalPath);
       const index = git(["ls-files", "--stage", "--", entry.path], { cwd: canonicalWorktree });
+      if (index.code !== 0) {
+        throw new Error(`could not inspect index state for dirty path: ${entry.path}`);
+      }
+      const indexFlags = git(["ls-files", "-v", "--", entry.path], { cwd: canonicalWorktree });
+      if (indexFlags.code !== 0) {
+        throw new Error(`could not inspect index flags for dirty path: ${entry.path}`);
+      }
+      const indexEntry = dirtyInLaneIndexEntry(index.stdout, entry.path);
+      const hiddenIndexFlags = dirtyInLaneHiddenIndexFlags(indexFlags.stdout, entry.path);
+      if (indexEntry && hiddenIndexFlags.length > 0) {
+        const worktreeBlob = git(["hash-object", "--no-filters", "--", entry.path], { cwd: canonicalWorktree });
+        if (worktreeBlob.code !== 0 || !/^[0-9a-f]{40,64}$/i.test(worktreeBlob.stdout.trim())) {
+          throw new Error(`could not compare hidden index state for dirty path: ${entry.path}`);
+        }
+        if (worktreeBlob.stdout.trim() !== indexEntry.object_id) {
+          throw new Error(`hidden assume-unchanged or skip-worktree edit differs from the index: ${entry.path}`);
+        }
+      }
       return {
         path: entry.path,
         status_code: entry.status_code,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-        index_sha256: createHash("sha256").update(index.code === 0 ? index.stdout : "").digest("hex"),
+        mode: stat.mode & 0o7777,
+        sha256: streamingFileSha256(canonicalPath),
+        index_sha256: createHash("sha256").update(index.stdout).digest("hex"),
       };
     })
     .sort((left, right) => left.path.localeCompare(right.path));
@@ -10766,6 +10834,69 @@ function dirtyInLanePathSnapshot(worktreePath, requestedPaths) {
     captured_at: new Date().toISOString(),
     paths,
   };
+}
+
+function dirtyInLaneIndexEntry(rawIndex, path) {
+  const entries = String(rawIndex || "").split(/\r?\n/).filter(Boolean);
+  if (entries.length === 0) return null;
+  if (entries.length !== 1) {
+    throw new Error(`index state for dirty path is ambiguous: ${path}`);
+  }
+  const match = entries[0].match(/^(\d{6}) ([0-9a-f]{40,64}) 0\t/);
+  if (!match) {
+    throw new Error(`index state for dirty path is malformed: ${path}`);
+  }
+  return { mode: match[1], object_id: match[2] };
+}
+
+function assertNoHiddenDirtyInLanePaths(worktreePath, requestedPaths) {
+  for (const path of requestedPaths) {
+    const index = git(["ls-files", "--stage", "--", path], { cwd: worktreePath });
+    if (index.code !== 0) {
+      throw new Error(`could not inspect index state for dirty path: ${path}`);
+    }
+    const indexEntry = dirtyInLaneIndexEntry(index.stdout, path);
+    if (!indexEntry) continue;
+    const indexFlags = git(["ls-files", "-v", "--", path], { cwd: worktreePath });
+    if (indexFlags.code !== 0) {
+      throw new Error(`could not inspect index flags for dirty path: ${path}`);
+    }
+    if (dirtyInLaneHiddenIndexFlags(indexFlags.stdout, path).length === 0) continue;
+    const worktreeBlob = git(["hash-object", "--no-filters", "--", path], { cwd: worktreePath });
+    if (worktreeBlob.code !== 0 || !/^[0-9a-f]{40,64}$/i.test(worktreeBlob.stdout.trim())) {
+      throw new Error(`could not compare hidden index state for dirty path: ${path}`);
+    }
+    if (worktreeBlob.stdout.trim() !== indexEntry.object_id) {
+      throw new Error(`hidden assume-unchanged or skip-worktree edit differs from the index: ${path}`);
+    }
+  }
+}
+
+function dirtyInLaneHiddenIndexFlags(rawFlags, path) {
+  const entries = String(rawFlags || "").split(/\r?\n/).filter(Boolean);
+  if (entries.length === 0) return [];
+  if (entries.length !== 1 || entries[0].length < 3 || entries[0][1] !== " ") {
+    throw new Error(`index flags for dirty path are malformed: ${path}`);
+  }
+  const flag = entries[0][0];
+  return flag === "h" || flag === "S" ? [flag] : [];
+}
+
+function streamingFileSha256(path) {
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let descriptor = null;
+  try {
+    descriptor = openSync(path, "r");
+    while (true) {
+      const bytesRead = readSync(descriptor, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
 }
 
 function takeoverDirtyInLaneEvidence(target, context, evidence) {
@@ -10784,15 +10915,25 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   if (!requested) return result;
   if (target.kind !== "workspace") result.errors.push("dirty in-lane takeover is limited to workspace manifests");
   if (!evidence.dirty.dirty) result.errors.push("dirty in-lane takeover requires a dirty workspace worktree");
+  if (evidence.worktree.registration?.status !== "matched") result.errors.push(evidence.worktree.registration?.reason || "recorded worktree registration is unavailable");
   if (evidence.branch.status !== "matched") result.errors.push("manifest branch does not exactly match the worktree checkout");
   if (evidence.pr.status !== "none") result.errors.push("dirty in-lane takeover is forbidden when a PR is recorded");
   if (!lock || lock.status !== "absent") result.errors.push("dirty in-lane takeover requires proof that no task lock is active or retained");
   if (!validTakeoverReason(context.approval)) result.errors.push("explicit operator approval evidence is required");
-  if (result.errors.length > 0) return result;
-  try {
-    result.before = dirtyInLanePathSnapshot(evidence.worktree.path, context.dirtyPaths);
-  } catch (error) {
-    result.errors.push(error instanceof Error ? error.message : String(error));
+  if (evidence.worktree.exists && evidence.branch.branch) {
+    result.live_no_pr_evidence = strictGithubNoPrProof({ branch: evidence.branch.branch }, evidence.worktree.path);
+    if (result.live_no_pr_evidence.status !== "matched") {
+      result.errors.push(result.live_no_pr_evidence.reason || "live GitHub no-PR proof did not match");
+    }
+  } else {
+    result.errors.push("live GitHub no-PR proof requires an existing branch worktree");
+  }
+  if (target.kind === "workspace" && evidence.worktree.exists) {
+    try {
+      result.before = dirtyInLanePathSnapshot(evidence.worktree.path, context.dirtyPaths);
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+    }
   }
   return result;
 }
@@ -10802,6 +10943,14 @@ function finalizeDirtyInLaneTakeover(packet) {
   if (!evidence || evidence.mode !== "requested") return;
   if (evidence.errors.length > 0 || !evidence.before) {
     throw new Error("Dirty in-lane takeover evidence is incomplete.");
+  }
+  const finalBranch = takeoverBranchEvidence({ branch: packet.branch_evidence.branch }, packet.worktree_evidence);
+  if (
+    finalBranch.status !== "matched" ||
+    finalBranch.local_sha !== packet.branch_evidence.local_sha ||
+    finalBranch.manifest_branch_sha !== packet.branch_evidence.manifest_branch_sha
+  ) {
+    throw new Error("Dirty in-lane takeover branch or HEAD changed while the manifest lock was held.");
   }
   const after = dirtyInLanePathSnapshot(packet.worktree_evidence.path, evidence.requested_paths);
   const beforePaths = JSON.stringify(evidence.before.paths);
@@ -10913,6 +11062,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
     writeManifest(path, manifest);
     try {
       finalizeDirtyInLaneTakeover(packet);
+      writeManifest(path, manifest);
     } catch (error) {
       writeFileSync(path, `${manifestBeforeTakeover}\n`);
       throw error;
