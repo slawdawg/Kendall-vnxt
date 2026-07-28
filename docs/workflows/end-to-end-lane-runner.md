@@ -274,6 +274,34 @@ the matching check name; every other skipped or neutral result blocks delivery.
 - `javascript`
 - `supervisor`
 
+### Explicit Delivery-Head Refresh
+
+When a managed lane has a recorded delivery head and a later verified push has
+advanced the same PR, do not edit its manifest or treat the new local head as
+implicitly accepted. First inspect the bounded packet from:
+
+```bash
+node ./scripts/codex-workspace.mjs refresh-pr-head <lane> \
+  --reason "why the exact reviewed head advanced" \
+  --non-required-checks full,javascript,supervisor \
+  --non-required-check-policy AGENTS.md#documented-non-required-checks \
+  --summary-json
+```
+
+Only `--apply` records the rebind. It requires the exact lane owner (or a
+recorded operator-approved takeover), an absent task lock before acquisition,
+the canonical Kendall_Nxt repository, matching managed PR URL/number/base,
+open non-draft state, one matching local/origin/GitHub head, terminal checks,
+and a complete thread-aware audit with no pending review request. It retains
+only prior/new heads, bounded reason, timestamp, check summary, and thread
+counts. Existing unresolved current or outdated threads remain explicit holds;
+the refresh neither resolves them nor makes the PR merge-ready. An active,
+stale, or ambiguous lock; a remote mismatch; a failing/pending check; or an
+incomplete audit blocks the rebind. A successful rebind marks older PR-gate
+and delivery-audit evidence stale, so a fresh exact-head gate packet is still
+required before merge. Resume normal adjudication only after a successful
+refresh packet; never rewrite manifest JSON by hand.
+
 9. **Cleanup.** The delegated delivery/cleanup worker should prefer
    `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry

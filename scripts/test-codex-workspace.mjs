@@ -10200,6 +10200,106 @@ try {
     }
   });
 
+  test("refresh-pr-head explicitly rebinds a stale managed delivery head and accepts the canonical AGENTS skipped-check policy", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      const before = readFileSync(manifestPath, "utf8");
+      const staleGate = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(staleGate.code !== 0, "normal PR gate unexpectedly rewrote the stale delivery head");
+      assert(staleGate.stderr.includes("does not match expected head"), staleGate.stderr || staleGate.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "normal PR gate mutated stale-head evidence");
+
+      const refreshed = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+          "--reason", "Verified later source repair advanced the exact delivery head.",
+          "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(refreshed.code === 0, refreshed.stderr || refreshed.stdout);
+      assert(refreshed.stdout.includes("APPLY: refresh-pr-head"), refreshed.stdout || refreshed.stderr);
+      const manifest = readJson(manifestPath);
+      const localHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      assert(manifest.pr_delivery_head_sha === localHead, "refresh did not rebind the delivery head");
+      assert(manifest.pr_head_rebinds?.length === 1, "refresh did not retain a rebind record");
+      assert(manifest.pr_head_rebinds[0].priorHeadSha === "a".repeat(40), "refresh lost the prior head");
+      assert(manifest.pr_head_rebinds[0].reason.includes("later source repair"), "refresh lost the bounded reason");
+      assert(manifest.pr_head_rebinds[0].checks.failing.length === 0, "canonical skipped check was not accepted");
+      assert(manifest.pr_gate_evidence?.status === "stale" && manifest.pr_gate_evidence.lowRiskReady === false, "refresh did not invalidate stale PR-gate evidence");
+      assert(manifest.delivery_subagent_audit?.status === "stale", "refresh did not invalidate the stale delivery audit");
+      assert(manifest.lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "refresh-pr-head"), "lane evidence missed refresh authority evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head fails closed for an active lock, remote mismatch, and arbitrary policy reference", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      const lockPath = join(fixture.stateRoot, "tasks", "resumed-task.lock");
+      writeFileSync(lockPath, `${JSON.stringify(activeFixtureTaskLock("resumed-task"))}\n`);
+      const activeLock = runFixtureScript(
+        fixture,
+        ["refresh-pr-head", "resumed-task", "--owner", "runner-a", "--reason", "Attempt while another worker has the lane lock.", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(activeLock.code !== 0, "active lock unexpectedly allowed refresh");
+      assert(activeLock.stderr.includes("Task lock is active"), activeLock.stderr || activeLock.stdout);
+      rmSync(lockPath, { force: true });
+
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const mismatchedPr = readJson(prStatePath);
+      mismatchedPr.headRefOid = "b".repeat(40);
+      writeFileSync(prStatePath, `${JSON.stringify(mismatchedPr)}\n`);
+      const remoteMismatch = runFixtureScript(
+        fixture,
+        ["refresh-pr-head", "resumed-task", "--owner", "runner-a", "--reason", "Remote PR mismatch must prevent a manifest rebind.", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(remoteMismatch.code !== 0, "remote mismatch unexpectedly allowed refresh");
+      assert(remoteMismatch.stderr.includes("Local worktree HEAD does not match the live PR head"), remoteMismatch.stderr || remoteMismatch.stdout);
+
+      mismatchedPr.headRefOid = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(prStatePath, `${JSON.stringify(mismatchedPr)}\n`);
+      const arbitraryPolicy = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--owner", "runner-a", "--reason", "Arbitrary policy references must remain invalid.",
+          "--non-required-checks", "full", "--non-required-check-policy", "docs/unsafe-policy.md", "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(arbitraryPolicy.code !== 0, "arbitrary policy reference unexpectedly allowed refresh");
+      assert(arbitraryPolicy.stderr.includes("Non-required skipped checks do not match the source-owned policy"), arbitraryPolicy.stderr || arbitraryPolicy.stdout);
+      assert(readJson(manifestPath).pr_delivery_head_sha === "a".repeat(40), "blocked refresh rewrote the stale delivery head");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("adjudicate-outdated-thread records bounded exact-head evidence without resolving GitHub state", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
@@ -14179,6 +14279,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const branch = "codex/resumed-task";
   const worktree = join(stateRootFixture, "worktrees", "resumed-task");
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}`, CODEX_WORKSPACE_OWNER: "runner-a" };
+  const repository = options.repository || { owner: "slaw-dawg", name: "fixture" };
 
   copyWorkspaceScriptFixture(fixtureRoot);
   mkdirSync(fakeBin, { recursive: true });
@@ -14192,7 +14293,11 @@ function createFinishPrExistingCommitFixture(options = {}) {
     join(fixtureRoot, "docs", "workflows", "end-to-end-lane-runner.md"),
     "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
   );
-  runGit(fixtureRoot, ["add", "base.txt", "scripts", "docs"]);
+  writeFileSync(
+    join(fixtureRoot, "AGENTS.md"),
+    "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
+  );
+  runGit(fixtureRoot, ["add", "base.txt", "scripts", "docs", "AGENTS.md"]);
   runGit(fixtureRoot, ["commit", "-q", "-m", "base"]);
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
@@ -14302,7 +14407,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
-      "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: 'slaw-dawg' }, name: 'fixture' })); process.exit(0); }",
+      `if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: ${JSON.stringify(repository.owner)} }, name: ${JSON.stringify(repository.name)} })); process.exit(0); }`,
       "if (args[0] === 'api' && args[1] === 'graphql') {",
       `  const statePath = ${JSON.stringify(reviewThreadsStatePath)};`,
       `  const countPath = ${JSON.stringify(graphqlQueryCountPath)};`,
@@ -14386,6 +14491,32 @@ function cleanupFinishPrExistingCommitFixture(fixture) {
   rmSync(fixture.worktree, { recursive: true, force: true });
   rmSync(fixture.remoteRoot, { recursive: true, force: true });
   rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function prepareFixtureForPrHeadRefresh(fixture) {
+  const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+  const manifest = readJson(manifestPath);
+  manifest.status = "pr_open";
+  manifest.pr_number = 456;
+  manifest.pr_url = "https://example.test/pull/456";
+  manifest.pr_delivery_head_sha = "a".repeat(40);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifestPath;
+}
+
+function activeFixtureTaskLock(taskId) {
+  const raw = readFileSync(`/proc/${process.pid}/stat`, "utf8");
+  const fields = raw.slice(raw.lastIndexOf(")") + 1).trim().split(/\s+/);
+  return {
+    schema_version: 1,
+    task_id: taskId,
+    owner: "runner-other",
+    pid: process.pid,
+    process_start_identity: `linux-proc-start-ticks:${fields[19]}`,
+    acquired_at: new Date().toISOString(),
+    heartbeat_at: new Date().toISOString(),
+    token: "11111111-1111-4111-8111-111111111111",
+  };
 }
 
 function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {

@@ -514,6 +514,18 @@ durable, milestone-driven workflow rather than a single unbounded task.
   blockers, failed checks, scope expansion, scarce paid/review resources, or
   unsafe behavior.
 
+## Documented Non-Required Checks
+
+The following changed-area jobs are the only `SKIPPED` checks that a bounded
+Kendall_Nxt PR gate may accept. The caller must name this exact source-owned
+reference, `AGENTS.md#documented-non-required-checks`, or the equivalent
+runner-workflow reference; every other skipped or neutral check remains a stop
+line.
+
+- `full`
+- `javascript`
+- `supervisor`
+
 ### Checkpoint Budget
 
 Within an explicitly authorized lane, carry routine work through to its next
