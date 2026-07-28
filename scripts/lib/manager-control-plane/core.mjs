@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -302,6 +302,16 @@ export function parseCommonArgs(argv = []) {
     sessionName: "",
     assignmentId: "",
     taskId: "",
+    worktreePath: "",
+    head: "",
+    deliverySessionReceipt: false,
+    deliveryInstruction: false,
+    deliveryAck: false,
+    workerLocalDeliveryInstruction: false,
+    leaseId: "",
+    receiptRunning: false,
+    terminalExitCode: null,
+    terminalCompletedAt: "",
     authorityBasis: "",
     recoveryPath: "",
     sourceRefs: [],
@@ -409,6 +419,52 @@ export function parseCommonArgs(argv = []) {
     } else if (arg.startsWith("--task-id=")) {
       claimSingletonTargetFlag(singletonTargetFlags, "--task-id");
       options.taskId = arg.slice("--task-id=".length);
+    } else if (arg === "--worktree-path") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--worktree-path");
+      options.worktreePath = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--worktree-path=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--worktree-path");
+      options.worktreePath = arg.slice("--worktree-path=".length);
+    } else if (arg === "--head") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--head");
+      options.head = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--head=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--head");
+      options.head = arg.slice("--head=".length);
+    } else if (arg === "--result-head") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--result-head");
+      options.resultHead = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--result-head=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--result-head");
+      options.resultHead = arg.slice("--result-head=".length);
+    } else if (arg === "--delivery-session-receipt") {
+      options.deliverySessionReceipt = true;
+    } else if (arg === "--delivery-instruction") {
+      options.deliveryInstruction = true;
+    } else if (arg === "--delivery-ack") {
+      options.deliveryAck = true;
+    } else if (arg === "--worker-local-delivery-instruction") {
+      options.workerLocalDeliveryInstruction = true;
+    } else if (arg === "--lease-id") {
+      options.leaseId = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--lease-id=")) {
+      options.leaseId = arg.slice("--lease-id=".length);
+    } else if (arg === "--receipt-running") {
+      options.receiptRunning = true;
+    } else if (arg === "--terminal-exit-code") {
+      options.terminalExitCodeProvided = true;
+      options.terminalExitCode = strictNonNegativeInteger(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--terminal-exit-code=")) {
+      options.terminalExitCodeProvided = true;
+      options.terminalExitCode = strictNonNegativeInteger(arg.slice("--terminal-exit-code=".length));
+    } else if (arg === "--terminal-completed-at") {
+      options.terminalCompletedAt = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--terminal-completed-at=")) {
+      options.terminalCompletedAt = arg.slice("--terminal-completed-at=".length);
+    } else if (arg === "--command") {
+      options.command = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--command=")) {
+      options.command = arg.slice("--command=".length);
     } else if (arg === "--authority-basis") {
       options.authorityBasis = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--authority-basis=")) {
@@ -677,7 +733,7 @@ export function parseCommonArgs(argv = []) {
       positionals.push(arg);
     }
   }
-  options.command = positionals[0] || "";
+  options.command = options.command || positionals[0] || "";
   if (options.supervisorUrl) resolveLoopbackSourceIntakeEndpoint(options.supervisorUrl);
   return options;
 }
@@ -883,7 +939,547 @@ export function managerRunPaths(runId = defaultRunId(), options = {}, context = 
     resourceSnapshots: join(root, "resource-snapshots.ndjson"),
     usageSnapshots: join(root, "usage-snapshots.ndjson"),
     recoveryHousekeepingEvidence: join(root, "recovery-housekeeping-evidence.json"),
+    deliverySessionReceipts: join(root, "delivery-session-receipts.json"),
+    deliveryInstructions: join(root, "delivery-instructions.json"),
   };
+}
+
+// Worker-local acknowledgement must not call the workspace-state proof helper:
+// that helper can run Git while deciding whether an in-repo state root is
+// ignored. This narrower path accepts only an explicit root outside source and
+// performs all further identity proof from the existing durable ledgers.
+function workerLocalManagerRunPaths(runId = defaultRunId(), stateRoot = "") {
+  const safeId = safeRunId(runId);
+  let rootState = "";
+  try {
+    rootState = stateRoot ? realpathSync(resolve(String(stateRoot))) : "";
+  } catch {
+    rootState = "";
+  }
+  let managerRoot = rootState ? join(rootState, "manager-runs") : "";
+  let root = managerRoot ? join(managerRoot, safeId) : "";
+  let validRoot = Boolean(rootState) && !isInsideOrSame(rootState, repoRoot) && isInsideOrSame(root, managerRoot);
+  if (validRoot) {
+    try {
+      // Worker-local acknowledgement can write only to an already-initialized
+      // run. Resolve existing child directories before constructing ledger
+      // paths so a nested manager-runs/run symlink cannot escape stateRoot.
+      managerRoot = realpathSync(managerRoot);
+      root = realpathSync(root);
+      validRoot = isInsideOrSame(managerRoot, rootState) && isInsideOrSame(root, managerRoot)
+        && ["workers.json", "delivery-session-receipts.json", "delivery-instructions.json"]
+          .every((name) => {
+            const path = join(root, name);
+            return !existsSync(path) || realpathSync(path) === path;
+          });
+    } catch {
+      validRoot = false;
+    }
+  }
+  const proof = validRoot
+    ? { ok: true, state: { root: rootState }, proof: { proof: "explicit-worker-local-external-state-root" } }
+    : { ok: false, state: { root: rootState }, error: "Worker-local delivery requires an explicit, contained manager state root with non-symlinked receipt ledgers.", code: "WORKER_LOCAL_STATE_ROOT_UNSAFE" };
+  return {
+    runId: safeId,
+    proof,
+    root,
+    mission: join(root, "mission.json"),
+    workers: join(root, "workers.json"),
+    throughputProof: join(root, "throughput-proof.json"),
+    dispatcherSummary: join(root, "dispatcher-summary.json"),
+    capabilityPosture: join(root, "capability-posture.json"),
+    events: join(root, "events.ndjson"),
+    checkpoints: join(root, "checkpoints.json"),
+    questions: join(root, "questions.ndjson"),
+    resourceSnapshots: join(root, "resource-snapshots.ndjson"),
+    usageSnapshots: join(root, "usage-snapshots.ndjson"),
+    recoveryHousekeepingEvidence: join(root, "recovery-housekeeping-evidence.json"),
+    deliverySessionReceipts: join(root, "delivery-session-receipts.json"),
+    deliveryInstructions: join(root, "delivery-instructions.json"),
+  };
+}
+
+// Metadata-only bridge for an already-active worker. It deliberately has no
+// tmux input, process, finish-pr, GitHub, or delivery-proof path.
+export function buildActiveWorkerDeliveryInstructionPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || context.runId || defaultRunId());
+  const paths = context.workerLocalDeliveryInstruction === true ? workerLocalManagerRunPaths(runId, options.stateRoot) : managerRunPaths(runId, options, context);
+  const apply = options.apply === true;
+  const taskId = sanitizeLedgerField(options.taskId || "", "", 140);
+  const workerId = sanitizeLedgerField(options.workerId || "", "", 100);
+  const sessionName = sanitizeLedgerField(options.sessionName || "", "", 100);
+  const worktreePath = canonicalDeliveryReceiptWorktree(options.worktreePath || "", context);
+  const head = sanitizeLedgerField(options.head || "", "", 80).toLowerCase();
+  const command = sanitizeLedgerField(options.command || "", "", 320);
+  const commandDigest = command ? ledgerValueDigest(command) : "";
+  const blockers = [];
+  const receiptRead = readJsonArray(paths.deliverySessionReceipts);
+  const instructionRead = readJsonArray(paths.deliveryInstructions);
+  if (!paths.proof.ok || receiptRead.warning || instructionRead.warning) blockers.push({ code: "active-delivery-state-unsafe", message: "Manager receipt or instruction state is unavailable; delivery state is unknown.", nextAction: "Repair the existing manager ledger before requesting or acknowledging delivery." });
+  if (receiptRead.value.some((item) => !isPlainObject(item)) || instructionRead.value.some((item) => !isPlainObject(item))) blockers.push({ code: "active-delivery-state-unsafe", message: "Manager receipt or instruction ledger contains malformed entries; delivery state is unknown.", nextAction: "Preserve and repair the existing manager ledger before requesting or acknowledging delivery." });
+  const loadedWorkers = Array.isArray(context.workers) ? { value: context.workers, warning: null } : readJsonArray(paths.workers);
+  if (loadedWorkers.warning || loadedWorkers.value.some((item) => !isPlainObject(item))) blockers.push({ code: "active-delivery-state-unsafe", message: "Manager worker ledger is malformed or unreadable; delivery state is unknown.", nextAction: "Preserve and repair the manager worker ledger before requesting or acknowledging delivery." });
+  const workers = loadedWorkers.value.filter(isPlainObject).map(projectWorker);
+  const worker = workers.find((candidate) => candidate.workerId === workerId && candidate.sessionName === sessionName && candidate.runId === runId);
+  const binding = { taskId, workerId, sessionName, paneId: worker?.paneId || "", worktreePath, head, commandDigest, leaseId: worker?.currentLease?.leaseId || "" };
+  const matchingReceipts = receiptRead.value.filter((item) => isValidDeliverySessionReceipt(item, runId) && sameDeliveryBinding(item.binding, binding));
+  const receipt = matchingReceipts.length === 1 ? matchingReceipts[0] : null;
+  if (!receipt || !["requested", "running"].includes(receipt.status)) blockers.push({ code: "active-delivery-receipt-mismatch", message: "Active-worker delivery requires one exact requested or running delivery-session receipt.", nextAction: "Inspect the existing receipt and worker identity; do not infer delivery." });
+  if (matchingReceipts.length > 1) blockers.push({ code: "active-delivery-receipt-ambiguous", message: "Multiple delivery receipts share the same immutable binding; delivery state is unknown.", nextAction: "Preserve and repair the manager receipt ledger before acknowledgement." });
+  if (!isCurrentDeliveryWorker(worker, binding, runId, context) || !isExactFinishPrCommand(command, taskId)) blockers.push({ code: "active-delivery-worker-mismatch", message: "Delivery instruction requires the exact already-active owned worker, task, lease, pane, and canonical finish-pr command.", nextAction: "Inspect the existing active worker; do not restart, rebind, or send terminal input." });
+  const admitted = canonicalDeliveryReceiptWorktree(context.manifestWorktreePath || taskManifestWorktreePath(paths.proof.state?.root || "", taskId), context);
+  const observedHead = context.workerLocalDeliveryInstruction === true ? readWorkerLocalDeliveryHead(worktreePath, context) : readDeliveryReceiptHead(worktreePath, context);
+  const identityProven = Boolean(admitted && admitted === worktreePath && canonicalDeliveryReceiptWorktree(worker?.worktreePath || "", context) === worktreePath && observedHead === head);
+  if (!identityProven) blockers.push({ code: "active-delivery-identity-mismatch", message: "Manifest, worker worktree, or HEAD no longer matches the receipt identity.", nextAction: "Persist/inspect unknown state; do not execute delivery." });
+  const pane = blockers.length === 0
+    ? context.workerLocalDeliveryInstruction === true
+      ? { ok: worker?.sessionName === sessionName && worker?.paneId === binding.paneId && worker?.paneTarget === binding.paneId, worktreePath }
+      : inspectDeliveryReceiptPane(worker, context.tmuxRunner || spawnSync, context)
+    : { ok: false };
+  if (!pane.ok || canonicalDeliveryReceiptWorktree(pane.worktreePath || "", context) !== worktreePath) blockers.push({ code: "active-delivery-pane-mismatch", message: "Active worker pane identity is missing, recycled, or outside the admitted worktree.", nextAction: "Inspect the worker and receipt; do not use tmux input." });
+  const receiptId = receipt ? ledgerValueDigest({ runId, binding: receipt.binding, startedAt: receipt.startedAt }) : "";
+  const instructionRecords = instructionRead.value.filter(isPlainObject);
+  if (instructionRecords.some((item) => !isValidActiveDeliveryInstruction(item, runId))) blockers.push({ code: "active-delivery-instruction-malformed", message: "Existing delivery instruction record is malformed or belongs to another manager run; delivery state is unknown.", nextAction: "Preserve and repair the manager instruction ledger before acknowledgement." });
+  const matchingInstructions = instructionRecords.filter((item) => isValidActiveDeliveryInstruction(item, runId) && item.receiptId === receiptId && sameDeliveryBinding(item.binding, binding));
+  const existing = matchingInstructions.length === 1 ? matchingInstructions[0] : null;
+  if (matchingInstructions.length > 1) blockers.push({ code: "active-delivery-instruction-ambiguous", message: "Multiple delivery instructions share the same immutable binding; delivery state is unknown.", nextAction: "Preserve and repair the manager instruction ledger before acknowledgement." });
+  if (options.deliveryAck && !existing) blockers.push({ code: "active-delivery-ack-without-request", message: "A worker acknowledgement requires a prior matching delivery instruction.", nextAction: "Request and inspect the metadata-only instruction first." });
+  const unknown = blockers.length > 0;
+  const instruction = { schemaVersion: 2, recordType: "active_worker_delivery_instruction", runId, receiptId, binding, command, status: unknown ? "unknown" : options.deliveryAck ? "acknowledged" : existing?.status || "pending", requestedAt: existing?.requestedAt || new Date().toISOString(), acknowledgedAt: options.deliveryAck ? existing?.acknowledgedAt || new Date().toISOString() : existing?.acknowledgedAt || null, rawPayloadRetained: false, deliveryClaim: "none" };
+  if (apply && blockers.length === 0) {
+    const persisted = withWorkerAssignmentLock(paths, context, () => withLedgerAppendLock(paths, () => {
+      const fresh = readJsonArray(paths.deliveryInstructions); if (fresh.warning) return { malformed: true };
+      const freshReceipts = readJsonArray(paths.deliverySessionReceipts);
+      const freshWorkers = readJsonArray(paths.workers);
+      if (fresh.value.some((item) => !isPlainObject(item)) || freshReceipts.warning || freshReceipts.value.some((item) => !isPlainObject(item)) || freshWorkers.warning || freshWorkers.value.some((item) => !isPlainObject(item))) return { malformed: true };
+      const freshMatchingReceipts = freshReceipts.value.filter((item) => isValidDeliverySessionReceipt(item, runId) && sameDeliveryBinding(item.binding, binding));
+      const freshReceipt = freshMatchingReceipts.length === 1 ? freshMatchingReceipts[0] : null;
+      const freshWorker = freshWorkers.value.filter(isPlainObject).map(projectWorker).find((item) => item.workerId === workerId && item.sessionName === sessionName && item.runId === runId);
+      const freshObservedHead = context.workerLocalDeliveryInstruction === true ? readWorkerLocalDeliveryHead(worktreePath, context) : readDeliveryReceiptHead(worktreePath, context);
+      const freshPane = context.workerLocalDeliveryInstruction === true
+        ? { ok: freshWorker?.sessionName === sessionName && freshWorker?.paneId === binding.paneId && freshWorker?.paneTarget === binding.paneId, worktreePath }
+        : inspectDeliveryReceiptPane(freshWorker, context.tmuxRunner || spawnSync, context);
+      const freshIdentityProven = Boolean(isCurrentDeliveryWorker(freshWorker, binding, runId, context) && freshObservedHead === head && freshPane.ok && canonicalDeliveryReceiptWorktree(freshPane.worktreePath || "", context) === worktreePath);
+      if (!freshReceipt || freshReceipt.status === "unknown" || ledgerValueDigest(freshReceipt) !== ledgerValueDigest(receipt) || !freshIdentityProven) return { stale: true };
+      if (freshMatchingReceipts.length !== 1) return { malformed: true };
+      const rows = fresh.value.filter(isPlainObject); const freshMatchingInstructions = rows.filter((item) => isValidActiveDeliveryInstruction(item, runId) && item.receiptId === receiptId && sameDeliveryBinding(item.binding, binding)); const prior = freshMatchingInstructions.length === 1 ? freshMatchingInstructions[0] : null;
+      if (freshMatchingInstructions.length > 1) return { malformed: true };
+      if (ledgerValueDigest(prior || null) !== ledgerValueDigest(existing || null)) {
+        if (prior && ledgerValueDigest(prior) === ledgerValueDigest(instruction)) return { instruction: prior, idempotent: true };
+        return { conflict: true };
+      }
+      const next = prior ? rows.map((item) => item === prior ? instruction : item) : [...rows, instruction];
+      writeLedgerJsonAtomically(paths.deliveryInstructions, next); return { instruction };
+    }));
+    if (persisted?.packet) return persisted.packet;
+    if (persisted?.status === "blocked" && Array.isArray(persisted.blockers)) return persisted;
+    if (persisted?.conflict || persisted?.stale) return packet({ ok: false, status: "unknown", summary: { runId, apply, instruction, instructionPath: paths.deliveryInstructions, deliveryClaim: "none", execution: "none", rawPayloadRetained: false }, blockers: [{ code: persisted.stale ? "active-delivery-stale-identity" : "active-delivery-concurrent-write", message: persisted.stale ? "Receipt, worker, lease, pane, or HEAD identity changed before persistence; delivery state is unknown." : "Delivery instruction changed during persistence; delivery state is unknown.", nextAction: "Inspect the existing instruction and manager identity before retrying acknowledgement." }] });
+    if (persisted?.malformed) return packet({ ok: false, status: "unknown", summary: { runId, apply, instruction: { ...instruction, status: "unknown", acknowledgedAt: null }, instructionPath: paths.deliveryInstructions, deliveryClaim: "none", execution: "none", rawPayloadRetained: false }, blockers: [{ code: "active-delivery-instruction-malformed", message: "Instruction state became malformed during persistence; delivery state is unknown.", nextAction: "Inspect manager ledger state." }] });
+  }
+  return packet({ ok: blockers.length === 0, status: blockers.length ? "unknown" : "ready", summary: { runId, apply, instruction, instructionPath: paths.deliveryInstructions, idempotent: Boolean(existing) && ledgerValueDigest(existing) === ledgerValueDigest(instruction), deliveryClaim: "none", execution: "none", rawPayloadRetained: false }, blockers, nextActions: [{ code: "active-delivery-inspect", summary: "Worker must read and acknowledge the durable instruction; finish-pr remains worker-local and separately gated.", nextAction: "Do not send terminal input or infer delivery from acknowledgement." }] });
+}
+
+// Worker-local, one-shot consumption: derives its identity from the existing
+// instruction and delegates the same acknowledgement transition. No polling,
+// tmux, process, git, GitHub, or finish-pr path is present here.
+export function consumeWorkerLocalDeliveryInstruction(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || context.runId || defaultRunId());
+  const paths = workerLocalManagerRunPaths(runId, options.stateRoot);
+  const workerId = sanitizeLedgerField(options.workerId || "", "", 100);
+  const taskId = sanitizeLedgerField(options.taskId || "", "", 140);
+  const leaseId = sanitizeLedgerField(options.leaseId || "", "", 140);
+  const instructions = readJsonArray(paths.deliveryInstructions);
+  const loadedWorkers = Array.isArray(context.workers) ? { value: context.workers, warning: null } : readJsonArray(paths.workers);
+  const workers = loadedWorkers.value.filter(isPlainObject).map(projectWorker);
+  const worker = workers.find((item) => item.workerId === workerId && item.runId === runId && item.taskId === taskId);
+  // Keep an injected reader inside the locked acknowledgement plan: test and
+  // adapter readers may observe a concurrent ledger change, which must remain
+  // a conflict rather than becoming an idempotent acknowledgement.
+  const hasDeferredHeadReader = typeof context.workerLocalHeadReader === "function";
+  const observedHead = hasDeferredHeadReader ? "" : readWorkerLocalDeliveryHead(worker?.worktreePath || "", context);
+  const taskCandidates = instructions.value
+    .filter((item) => isValidActiveDeliveryInstruction(item, runId))
+    .filter((item) => item.binding.workerId === workerId && item.binding.taskId === taskId && item.binding.leaseId === leaseId && item.status !== "unknown");
+  const candidates = observedHead ? taskCandidates.filter((item) => item.binding.head === observedHead) : taskCandidates;
+  const pendingCandidates = candidates.filter((item) => item.status === "pending");
+  const candidate = pendingCandidates.length === 1
+    ? pendingCandidates[0]
+    : candidates.length === 1
+      ? candidates[0]
+      : !observedHead && taskCandidates.filter((item) => item.status === "pending").length === 1
+        ? taskCandidates.filter((item) => item.status === "pending")[0]
+        : null;
+  // A deferred reader must run under the acknowledgement lock so an injected
+  // adapter cannot turn a concurrent instruction change into an idempotent
+  // acknowledgement. Its unique, validated candidate only supplies a
+  // provisional structural HEAD here; the locked plan reads and verifies the
+  // local HEAD before it can acknowledge anything.
+  const identityHead = observedHead || (hasDeferredHeadReader ? candidate?.binding.head || "" : "");
+  const unsupportedInputs = [options.sessionName, options.worktreePath, options.head, options.command].some(Boolean);
+  const leaseMatches = worker?.currentLease?.state === "active" && worker.currentLease?.leaseId === leaseId && worker.currentLease?.taskId === taskId && (!worker.assignmentId || worker.currentLease?.assignmentId === worker.assignmentId);
+  if (!paths.proof.ok || !options.stateRoot || unsupportedInputs || instructions.warning || loadedWorkers.warning || loadedWorkers.value.some((item) => !isPlainObject(item)) || !identityHead || !candidate || !worker || worker.state !== "active" || !leaseId || !leaseMatches || worker.sessionName !== candidate?.binding.sessionName || worker.paneId !== candidate?.binding.paneId || worker.paneTarget !== candidate?.binding.paneId || canonicalDeliveryReceiptWorktree(worker.worktreePath || "", context) !== candidate?.binding.worktreePath) {
+    if (options.apply === true && paths.proof.ok && !unsupportedInputs && !instructions.warning && !loadedWorkers.warning && !loadedWorkers.value.some((item) => !isPlainObject(item))) persistWorkerLocalDeliveryUnknown(paths, runId, workerId, taskId, leaseId);
+    return packet({ ok: false, status: "unknown", summary: { runId, workerId, taskId, deliveryClaim: "none", execution: "none", rawPayloadRetained: false }, blockers: [{ code: "worker-local-delivery-identity-unproven", message: "Worker-local instruction identity, explicit state root, or active lease is unproven.", nextAction: "Inspect the existing manager instruction and active worker lease; do not run finish-pr." }] });
+  }
+  const result = buildActiveWorkerDeliveryInstructionPlan({ ...options, runId, taskId, workerId, sessionName: candidate.binding.sessionName, worktreePath: candidate.binding.worktreePath, head: candidate.binding.head, command: candidate.command, deliveryInstruction: true, deliveryAck: true }, { ...context, workerLocalDeliveryInstruction: true });
+  if (options.apply === true && result.status === "unknown" && result.blockers?.some((blocker) => blocker.code === "active-delivery-identity-mismatch")) {
+    persistWorkerLocalDeliveryUnknown(paths, runId, workerId, taskId, leaseId);
+  }
+  return { ...result, nextActions: [{ code: "worker-local-delivery-next-action", summary: "Acknowledgement is advisory only; run normal verification and review gates before any separate worker-local finish-pr decision.", nextAction: "Do not poll or execute finish-pr from this command." }] };
+}
+
+// A delivery-session receipt is deliberately only a manager-ledger handoff
+// record.  It never executes its command and therefore cannot substitute for
+// codex-workspace finish-pr or any GitHub gate.
+export function buildDeliverySessionReceiptPlan(options = {}, context = {}) {
+  const runId = safeRunId(options.runId || context.runId || defaultRunId());
+  const paths = managerRunPaths(runId, options, context);
+  const apply = options.apply === true;
+  const now = deliveryReceiptTimestamp(context.now);
+  const taskId = sanitizeLedgerField(options.taskId || context.taskId || "", "", 140);
+  const workerId = sanitizeLedgerField(options.workerId || context.workerId || "", "", 100);
+  const sessionName = sanitizeLedgerField(options.sessionName || context.sessionName || "", "", 100);
+  const requestedWorktree = sanitizeLedgerField(context.worktreePath || options.worktreePath || "", "", 320);
+  const worktreePath = canonicalDeliveryReceiptWorktree(requestedWorktree, context);
+  const head = sanitizeLedgerField(context.head || options.head || "", "", 80).toLowerCase();
+  const command = sanitizeLedgerField(context.command || options.command || "", "", 320);
+  const commandDigest = command ? ledgerValueDigest(command) : "";
+  const suppliedTerminalInput = isPlainObject(context.terminalReceipt) ? context.terminalReceipt : null;
+  const requestedResultHead = sanitizeLedgerField(context.resultHead || options.resultHead || suppliedTerminalInput?.resultHead || "", "", 80).toLowerCase();
+  const blockers = [];
+  if (!paths.proof.ok) blockers.push({ code: "delivery-session-workspace-state-unsafe", message: paths.proof.error, nextAction: "Choose a safe manager workspace state root." });
+  if (!now || !taskId || !workerId || !sessionName || !worktreePath || !/^[a-f0-9]{40}$/i.test(head) || !commandDigest) {
+    blockers.push({ code: "delivery-session-binding-invalid", message: "Delivery session receipt requires exact task, worker, session, canonical managed worktree, full HEAD, command binding, and start time.", nextAction: "Inspect the admitted lane handoff and retry with its exact metadata." });
+  }
+  if (!isExactFinishPrCommand(command, taskId)) {
+    blockers.push({ code: "delivery-session-command-not-finish-pr", message: "Delivery session receipt accepts only the existing codex-workspace finish-pr command for the admitted task, without shell controls.", nextAction: "Use the existing finish-pr lifecycle command without a shell wrapper." });
+  }
+  if (options.terminalExitCodeProvided === true && !Number.isInteger(options.terminalExitCode)) {
+    blockers.push({ code: "delivery-session-terminal-exit-invalid", message: "An explicit terminal exit code must be a non-negative integer.", nextAction: "Provide a non-negative integer exit code or omit terminal metadata." });
+  }
+  const loadedReceipts = readJsonArray(paths.deliverySessionReceipts);
+  if (loadedReceipts.warning || loadedReceipts.value.some((receipt) => !isPlainObject(receipt))) {
+    blockers.push({ code: "delivery-session-receipt-malformed", message: "Existing delivery receipt state is malformed or unreadable; delivery result is unknown.", nextAction: "Preserve the receipt evidence and repair it through the manager recovery route before requesting another receipt." });
+  }
+  const receiptRecords = loadedReceipts.value.filter(isPlainObject);
+  if (receiptRecords.some((receipt) => !isValidDeliverySessionReceipt(receipt, runId))) {
+    blockers.push({ code: "delivery-session-receipt-malformed", message: "Existing delivery receipt record is malformed or belongs to another manager run; delivery result is unknown.", nextAction: "Preserve the receipt evidence and repair it through the manager recovery route before requesting another receipt." });
+  }
+  const loadedWorkers = Array.isArray(context.workers) ? { value: context.workers, warning: null } : readJsonArray(paths.workers);
+  if (loadedWorkers.warning || loadedWorkers.value.some((worker) => !isPlainObject(worker))) blockers.push({ code: "delivery-session-worker-state-unreadable", message: "Manager worker state is malformed or unreadable; delivery result is unknown.", nextAction: "Preserve the worker record and repair it through the existing manager recovery route before requesting a receipt." });
+  const workers = loadedWorkers.value.filter(isPlainObject).map(projectWorker);
+  const worker = workers.find((candidate) => candidate.workerId === workerId && candidate.sessionName === sessionName && candidate.runId === runId);
+  const binding = { taskId, workerId, sessionName, paneId: worker?.paneId || "", worktreePath, head, commandDigest, leaseId: worker?.currentLease?.leaseId || "" };
+  const matchingReceipts = receiptRecords.filter((receipt) => isValidDeliverySessionReceipt(receipt, runId) && sameDeliveryBinding(receipt.binding, binding));
+  const matchingLegacyReceipts = receiptRecords.filter(
+    (receipt) => receipt.schemaVersion === 1 && isValidDeliverySessionReceipt(receipt, runId) && sameLegacyDeliveryBinding(receipt.binding, binding),
+  );
+  const existing = matchingReceipts.length === 1 ? matchingReceipts[0] : null;
+  const legacyBindingAmbiguous = matchingReceipts.length === 0 && matchingLegacyReceipts.length > 0;
+  if (matchingReceipts.length > 1) blockers.push({ code: "delivery-session-receipt-ambiguous", message: "Multiple delivery receipts share the same immutable binding; delivery result is unknown.", nextAction: "Preserve and repair the manager receipt ledger before retrying." });
+  if (legacyBindingAmbiguous) blockers.push({ code: "delivery-session-receipt-legacy-ambiguous", message: "A legacy delivery receipt matches the current binding except for lease identity; delivery result is unknown.", nextAction: "Preserve the legacy receipt and repair or migrate it through the manager recovery route before retrying." });
+  if (!worker || !isManagerOwnedWorker(worker, runId) || worker.state !== "active" || worker.taskId !== taskId || worker.currentLease?.state !== "active" || worker.currentLease?.taskId !== taskId || !worker.currentLease?.leaseId || !worker.paneTarget || !worker.paneId) {
+    blockers.push({ code: "delivery-session-worker-unowned", message: "Delivery session receipt requires the exact post-handoff manager-owned active worker, task lease, and pane identity.", nextAction: "Inspect the active managed handoff and lease before requesting delivery evidence." });
+  }
+  const admittedWorktree = canonicalDeliveryReceiptWorktree(context.manifestWorktreePath || taskManifestWorktreePath(paths.proof.state?.root || "", taskId), context);
+  if (!admittedWorktree || admittedWorktree !== worktreePath || canonicalDeliveryReceiptWorktree(worker?.worktreePath || "", context) !== worktreePath) {
+    blockers.push({ code: "delivery-session-worktree-mismatch", message: "Worker worktree does not match the exact admitted delivery worktree.", nextAction: "Rebind the managed worker through the existing handoff route before requesting a receipt." });
+  }
+  const terminalRequested = Boolean(suppliedTerminalInput || options.terminalExitCodeProvided || options.terminalCompletedAt);
+  const observedHead = readDeliveryReceiptHead(worktreePath, context);
+  const expectedObservedHead = terminalRequested ? requestedResultHead : head;
+  if (!observedHead || !/^[a-f0-9]{40}$/i.test(expectedObservedHead) || observedHead !== expectedObservedHead) blockers.push({ code: "delivery-session-head-mismatch", message: terminalRequested ? "Managed worktree HEAD does not match the exact terminal result HEAD." : "Managed worktree HEAD does not match the exact admitted delivery binding.", nextAction: "Inspect the manifest-backed worktree and rerun the existing delivery gates before requesting a receipt." });
+  const runner = context.tmuxRunner || spawnSync;
+  const pane = blockers.length === 0 ? inspectDeliveryReceiptPane(worker, runner, context) : { ok: false, status: "unknown" };
+  if (!pane.ok) blockers.push({ code: pane.status === "missing" ? "delivery-session-missing" : "delivery-session-pane-mismatch", message: pane.message || "Manager-owned tmux session/pane identity is unavailable; delivery result is unknown.", nextAction: "Inspect the durable receipt and worker record; do not retry finish-pr or infer delivery success." });
+  if (pane.ok && canonicalDeliveryReceiptWorktree(pane.worktreePath, context) !== worktreePath) blockers.push({ code: "delivery-session-pane-worktree-mismatch", message: "Manager-owned tmux pane is not at the admitted delivery worktree; delivery result is unknown.", nextAction: "Use the existing managed-worker handoff route to repair the pane before requesting a receipt." });
+  const terminalInput = suppliedTerminalInput || (Number.isInteger(options.terminalExitCode) || options.terminalCompletedAt
+    ? { status: "terminal", taskId, head, resultHead: requestedResultHead, commandDigest, paneId: binding.paneId, exitCode: options.terminalExitCode, completedAt: options.terminalCompletedAt }
+    : null);
+  const terminalMatches = terminalInput && terminalInput.status === "terminal" && terminalInput.taskId === taskId && terminalInput.head === head && terminalInput.resultHead === requestedResultHead && /^[a-f0-9]{40}$/i.test(terminalInput.resultHead || "") && terminalInput.commandDigest === commandDigest && terminalInput.paneId === binding.paneId && Number.isInteger(terminalInput.exitCode) && typeof terminalInput.completedAt === "string" && Number.isFinite(Date.parse(terminalInput.completedAt)) && (!existing || Date.parse(terminalInput.completedAt) >= Date.parse(existing.startedAt));
+  if (terminalInput && !terminalMatches) blockers.push({ code: "delivery-session-terminal-mismatch", message: "Terminal delivery receipt is incomplete or does not match the admitted task binding; result is unknown.", nextAction: "Inspect the existing codex-workspace and GitHub gates; do not infer delivery success." });
+  if (terminalMatches && !existing) blockers.push({ code: "delivery-session-request-missing", message: "Terminal delivery metadata has no matching requested receipt; delivery result is unknown.", nextAction: "Inspect the existing manager ledger and codex-workspace gates; do not synthesize a delivery start." });
+  const terminalConflict = Boolean(existing?.status === "terminal" && terminalInput && (!terminalMatches || JSON.stringify(existing.terminal) !== JSON.stringify({ exitCode: terminalInput.exitCode, completedAt: terminalInput.completedAt, resultHead: terminalInput.resultHead })));
+  if (terminalConflict) {
+    blockers.push({ code: "delivery-session-terminal-immutable", message: "A terminal delivery receipt is immutable and conflicts with the supplied terminal metadata.", nextAction: "Inspect the original terminal receipt; do not rewrite delivery evidence." });
+  }
+  if (existing?.status === "terminal") {
+    if (!terminalConflict) {
+      // A later commit advances the managed checkout after a terminal receipt;
+      // that stale live HEAD cannot invalidate immutable terminal evidence.
+      // Integrity, retention, worker, and ledger blockers still fail closed.
+      const terminalReplayBlockers = blockers.filter((blocker) => blocker.code !== "delivery-session-head-mismatch" && !(blocker.code === "delivery-session-pane-mismatch" && blockers.some((candidate) => candidate.code === "delivery-session-head-mismatch")));
+      if (terminalReplayBlockers.length > 0) {
+        return packet({
+          ok: false,
+          status: "unknown",
+          summary: { runId, apply, mutation: "none", receipt: existing, receiptPath: paths.deliverySessionReceipts, idempotent: false, deliveryClaim: "none", rawPayloadRetained: false },
+          blockers: terminalReplayBlockers,
+        });
+      }
+      return packet({
+        ok: true,
+        status: "ready",
+        summary: { runId, apply, mutation: "none", receipt: existing, receiptPath: paths.deliverySessionReceipts, idempotent: true, deliveryClaim: "none", rawPayloadRetained: false },
+        nextActions: [{ code: "delivery-session-inspect", summary: "Inspect the immutable metadata-only terminal receipt before any follow-up delivery action.", nextAction: "Use the existing manager worker status and codex-workspace gates; do not infer terminal delivery from this receipt." }],
+      });
+    }
+  }
+  const receiptRunning = context.running === true || options.receiptRunning === true;
+  if (receiptRunning && existing?.status !== "requested") blockers.push({ code: "delivery-session-running-transition-invalid", message: "A delivery receipt may move to running only from an existing requested receipt.", nextAction: "Create and inspect the requested receipt before recording a running transition." });
+  const unknown = blockers.some((blocker) => blocker.code.startsWith("delivery-session-") && blocker.code !== "delivery-session-binding-invalid" && blocker.code !== "delivery-session-command-not-finish-pr") || existing?.status === "unknown";
+  const nextStatus = unknown ? "unknown" : existing?.status === "terminal" ? "terminal" : terminalMatches ? "terminal" : receiptRunning ? "running" : existing?.status || "requested";
+  const receipt = {
+    schemaVersion: 2,
+    recordType: "manager_owned_delivery_session_receipt",
+    runId,
+    binding,
+    status: nextStatus,
+    startedAt: existing?.startedAt || now,
+    terminal: nextStatus === "terminal" ? existing?.terminal || { exitCode: terminalInput.exitCode, completedAt: terminalInput.completedAt, resultHead: terminalInput.resultHead } : null,
+    rawPayloadRetained: false,
+  };
+  let persistedReceipt = receipt;
+  let mutation = "none";
+  let idempotent = Boolean(existing) && ledgerValueDigest(existing) === ledgerValueDigest(receipt);
+  const terminalImmutable = blockers.some((blocker) => blocker.code === "delivery-session-terminal-immutable");
+  if (apply && !terminalImmutable && (blockers.length === 0 || (existing && unknown))) {
+    const missing = ensureManagerRunExists(paths);
+    if (missing) return missing;
+    const persisted = withWorkerAssignmentLock(paths, context, () => withLedgerAppendLock(paths, () => {
+      const fresh = readJsonArray(paths.deliverySessionReceipts);
+      if (fresh.warning || fresh.value.some((item) => !isPlainObject(item))) return { malformed: true };
+      const freshWorkers = readJsonArray(paths.workers);
+      if (freshWorkers.warning || freshWorkers.value.some((item) => !isPlainObject(item))) return { malformed: true };
+      const freshReceipts = fresh.value.filter(isPlainObject);
+      if (freshReceipts.some((item) => !isValidDeliverySessionReceipt(item, runId))) return { malformed: true };
+      const freshMatches = freshReceipts.filter((item) => sameDeliveryBinding(item.binding, binding));
+      const freshLegacyMatches = freshReceipts.filter(
+        (item) => item.schemaVersion === 1 && sameLegacyDeliveryBinding(item.binding, binding),
+      );
+      const freshExisting = freshMatches.length === 1 ? freshMatches[0] : null;
+      const freshWorker = freshWorkers.value.filter(isPlainObject).map(projectWorker).find((item) => item.workerId === workerId && item.sessionName === sessionName && item.runId === runId);
+      const freshAdmittedWorktree = canonicalDeliveryReceiptWorktree(context.manifestWorktreePath || taskManifestWorktreePath(paths.proof.state?.root || "", taskId), context);
+      const freshObservedHead = readDeliveryReceiptHead(worktreePath, context);
+      const freshPane = inspectDeliveryReceiptPane(freshWorker, context.tmuxRunner || spawnSync, context);
+      const freshIdentityProven = Boolean(
+        isCurrentDeliveryWorker(freshWorker, binding, runId, context)
+          && freshAdmittedWorktree === worktreePath
+          && freshObservedHead === expectedObservedHead
+          && freshPane.ok
+          && canonicalDeliveryReceiptWorktree(freshPane.worktreePath || "", context) === worktreePath,
+      );
+      if (freshMatches.length > 1) return { malformed: true };
+      if (freshMatches.length === 0 && freshLegacyMatches.length > 0) return { legacyAmbiguous: true };
+      if (!freshIdentityProven) return { stale: true };
+      if (ledgerValueDigest(freshExisting || null) !== ledgerValueDigest(existing || null)) {
+        if (freshExisting && ledgerValueDigest(freshExisting) === ledgerValueDigest(receipt)) return { receipt: freshExisting, idempotent: true };
+        return { conflict: true };
+      }
+      if (freshExisting && ledgerValueDigest(freshExisting) === ledgerValueDigest(receipt)) return { receipt: freshExisting, idempotent: true };
+      const nextReceipts = freshExisting ? freshReceipts.map((item) => item === freshExisting ? receipt : item) : [...freshReceipts, receipt];
+      writeLedgerJsonAtomically(paths.deliverySessionReceipts, nextReceipts);
+      return { receipt, mutation: "manager-ledger-delivery-session-receipt-only" };
+    }));
+    if (persisted?.packet) return persisted.packet;
+    if (persisted?.status === "blocked" && Array.isArray(persisted.blockers)) return persisted;
+    if (persisted?.legacyAmbiguous) {
+      return packet({
+        ok: false,
+        status: "unknown",
+        summary: { runId, apply, mutation: "none", receipt, receiptPath: paths.deliverySessionReceipts, idempotent: false, deliveryClaim: "none", rawPayloadRetained: false },
+        blockers: [{ code: "delivery-session-receipt-legacy-ambiguous", message: "A matching legacy delivery receipt appeared before persistence; delivery result is unknown.", nextAction: "Preserve the legacy receipt and repair or migrate it through the manager recovery route before retrying." }],
+      });
+    }
+    if (persisted?.malformed || persisted?.conflict || persisted?.stale) {
+      return packet({
+        ok: false,
+        status: "unknown",
+        summary: { runId, apply, mutation: "none", receipt, receiptPath: paths.deliverySessionReceipts, idempotent: false, deliveryClaim: "none", rawPayloadRetained: false },
+        blockers: [{ code: persisted.malformed ? "delivery-session-receipt-malformed" : persisted.stale ? "delivery-session-stale-identity" : "delivery-session-concurrent-write", message: persisted.malformed ? "Delivery receipt state became malformed during persistence; delivery result is unknown." : persisted.stale ? "Worker, lease, pane, worktree, or HEAD authority changed before receipt persistence; delivery result is unknown." : "Delivery receipt state changed during persistence; delivery result is unknown.", nextAction: "Inspect the existing manager-ledger receipt before retrying; do not infer delivery success." }],
+      });
+    }
+    persistedReceipt = persisted?.receipt || receipt;
+    mutation = persisted?.mutation || "none";
+    idempotent = persisted?.idempotent === true;
+  }
+  return packet({
+    ok: blockers.length === 0,
+    status: unknown ? "unknown" : blockers.length > 0 ? "blocked" : "ready",
+    summary: { runId, apply, mutation, receipt: persistedReceipt, receiptPath: paths.deliverySessionReceipts, idempotent, deliveryClaim: "none", rawPayloadRetained: false },
+    blockers,
+    nextActions: [{ code: "delivery-session-inspect", summary: "Inspect the metadata-only delivery session receipt before any finish-pr retry.", nextAction: "Use the existing manager worker status and codex-workspace gates; do not infer terminal delivery from this receipt." }],
+  });
+}
+
+function deliveryReceiptTimestamp(value) {
+  const date = new Date(value || new Date());
+  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
+}
+
+function canonicalDeliveryReceiptWorktree(value, context = {}) {
+  if (!value) return "";
+  try {
+    const resolver = context.worktreeResolver || realpathSync;
+    return resolve(resolver(resolve(value)));
+  } catch {
+    return "";
+  }
+}
+
+function isExactFinishPrCommand(command = "", taskId = "") {
+  if (!command || !taskId || /[;&|`$()<>\\\n\r]/.test(command)) return false;
+  const parts = tokenizeDeliveryCommand(command);
+  if (!parts) return false;
+  if (parts.includes("--stage-all")) return false;
+  if (parts[0] !== "node" || parts[1] !== "./scripts/codex-workspace.mjs" || parts[2] !== "finish-pr" || parts[3] !== taskId) return false;
+  let verified = false;
+  const seenFlags = new Set();
+  for (let index = 4; index < parts.length; index += 1) {
+    const flag = parts[index];
+    if (flag === "--stage-all") return false;
+    if (!["--verify", "--message", "--title", "--body"].includes(flag) || index + 1 >= parts.length) return false;
+    if (seenFlags.has(flag)) return false;
+    seenFlags.add(flag);
+    if (flag === "--verify") {
+      if (verified || parts[index + 1] !== "scoped") return false;
+      verified = true;
+    }
+    index += 1;
+  }
+  return verified;
+}
+
+function tokenizeDeliveryCommand(command = "") {
+  const tokens = [];
+  let token = "";
+  let quote = "";
+  for (const character of command.trim()) {
+    if (quote) {
+      if (character === quote) quote = "";
+      else token += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (token) tokens.push(token);
+      token = "";
+      continue;
+    }
+    token += character;
+  }
+  if (quote) return null;
+  if (token) tokens.push(token);
+  return tokens;
+}
+
+const DELIVERY_BINDING_FIELDS = ["taskId", "workerId", "sessionName", "paneId", "worktreePath", "head", "commandDigest", "leaseId"];
+const LEGACY_DELIVERY_BINDING_FIELDS = DELIVERY_BINDING_FIELDS.filter((field) => field !== "leaseId");
+
+function sameDeliveryBinding(left = {}, right = {}) {
+  return isPlainObject(left) && isPlainObject(right)
+    && Object.keys(left).length === DELIVERY_BINDING_FIELDS.length
+    && Object.keys(right).length === DELIVERY_BINDING_FIELDS.length
+    && DELIVERY_BINDING_FIELDS.every((field) => left[field] === right[field]);
+}
+
+function sameLegacyDeliveryBinding(left = {}, right = {}) {
+  return isPlainObject(left) && isPlainObject(right)
+    && Object.keys(left).length === LEGACY_DELIVERY_BINDING_FIELDS.length
+    && LEGACY_DELIVERY_BINDING_FIELDS.every((field) => left[field] === right[field]);
+}
+
+function isCurrentDeliveryWorker(worker = {}, binding = {}, runId = "", context = {}) {
+  const lease = worker?.currentLease;
+  return Boolean(
+    worker
+      && isManagerOwnedWorker(worker, runId)
+      && worker.state === "active"
+      && worker.taskId === binding.taskId
+      && worker.sessionName === binding.sessionName
+      && worker.paneId === binding.paneId
+      && worker.paneTarget === binding.paneId
+      && canonicalDeliveryReceiptWorktree(worker.worktreePath || "", context) === binding.worktreePath
+      && lease?.state === "active"
+      && lease.taskId === binding.taskId
+      && lease.leaseId === binding.leaseId
+      && (!worker.assignmentId || lease.assignmentId === worker.assignmentId),
+  );
+}
+
+function isValidDeliverySessionReceipt(receipt = {}, expectedRunId = "") {
+  if (!isPlainObject(receipt) || ![1, 2].includes(receipt.schemaVersion) || receipt.recordType !== "manager_owned_delivery_session_receipt" || !validRunId(receipt.runId) || (expectedRunId && receipt.runId !== expectedRunId) || !["requested", "running", "terminal", "unknown"].includes(receipt.status) || typeof receipt.startedAt !== "string" || !Number.isFinite(Date.parse(receipt.startedAt)) || receipt.rawPayloadRetained !== false) return false;
+  const binding = receipt.binding;
+  const expectedBindingFields = receipt.schemaVersion === 1 ? DELIVERY_BINDING_FIELDS.filter((field) => field !== "leaseId") : DELIVERY_BINDING_FIELDS;
+  if (!isPlainObject(binding) || Object.keys(binding).length !== expectedBindingFields.length || !expectedBindingFields.every((field) => Object.hasOwn(binding, field)) || !binding.taskId || !binding.workerId || !binding.sessionName || !binding.paneId || !binding.worktreePath || !/^[a-f0-9]{40}$/i.test(binding.head || "") || !/^[a-f0-9]{64}$/i.test(binding.commandDigest || "") || (receipt.schemaVersion === 2 && !binding.leaseId)) return false;
+  if (receipt.status === "terminal") return isPlainObject(receipt.terminal) && Number.isInteger(receipt.terminal.exitCode) && receipt.terminal.exitCode >= 0 && typeof receipt.terminal.completedAt === "string" && Number.isFinite(Date.parse(receipt.terminal.completedAt)) && (receipt.schemaVersion === 1 || (Date.parse(receipt.terminal.completedAt) >= Date.parse(receipt.startedAt) && /^[a-f0-9]{40}$/i.test(receipt.terminal.resultHead || "")));
+  return receipt.terminal === null || receipt.terminal === undefined;
+}
+
+function isValidActiveDeliveryInstruction(value = {}, expectedRunId = "") {
+  const expectedBindingFields = value.schemaVersion === 1 ? DELIVERY_BINDING_FIELDS.filter((field) => field !== "leaseId") : DELIVERY_BINDING_FIELDS;
+  return isPlainObject(value) && [1, 2].includes(value.schemaVersion) && value.recordType === "active_worker_delivery_instruction" && validRunId(value.runId) && (!expectedRunId || value.runId === expectedRunId) && /^[a-f0-9]{64}$/i.test(value.receiptId || "") && isPlainObject(value.binding) && Object.keys(value.binding).length === expectedBindingFields.length && expectedBindingFields.every((field) => Object.hasOwn(value.binding, field)) && value.binding.taskId && value.binding.workerId && value.binding.sessionName && value.binding.paneId && typeof value.binding.worktreePath === "string" && value.binding.worktreePath.length > 0 && /^[a-f0-9]{40}$/i.test(value.binding.head || "") && /^[a-f0-9]{64}$/i.test(value.binding.commandDigest || "") && (value.schemaVersion === 1 || Boolean(value.binding.leaseId)) && isExactFinishPrCommand(value.command || "", value.binding.taskId) && ledgerValueDigest(value.command) === value.binding.commandDigest && ["pending", "acknowledged", "unknown"].includes(value.status) && typeof value.requestedAt === "string" && Number.isFinite(Date.parse(value.requestedAt)) && (value.status !== "acknowledged" || (typeof value.acknowledgedAt === "string" && Number.isFinite(Date.parse(value.acknowledgedAt)))) && value.rawPayloadRetained === false && value.deliveryClaim === "none";
+}
+
+function readDeliveryReceiptHead(worktreePath = "", context = {}) {
+  if (!worktreePath) return "";
+  const runner = context.gitRunner || spawnSync;
+  const result = runner("git", ["-C", worktreePath, "rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  return result?.status === 0 && /^[a-f0-9]{40}$/i.test(String(result.stdout || "").trim()) ? String(result.stdout).trim().toLowerCase() : "";
+}
+
+// The worker-local path deliberately does not invoke git. It reads only the
+// already-admitted worktree's Git metadata (or an injected read-only test
+// reader) to compare the current HEAD with the durable instruction binding.
+function readWorkerLocalDeliveryHead(worktreePath = "", context = {}) {
+  if (!worktreePath) return "";
+  if (typeof context.workerLocalHeadReader === "function") {
+    const value = String(context.workerLocalHeadReader(worktreePath) || "").trim().toLowerCase();
+    return /^[a-f0-9]{40}$/.test(value) ? value : "";
+  }
+  try {
+    const dotGit = readFileSync(join(worktreePath, ".git"), "utf8").trim();
+    const gitDirMatch = dotGit.match(/^gitdir:\s*(.+)$/);
+    const gitDir = gitDirMatch ? resolve(worktreePath, gitDirMatch[1].trim()) : join(worktreePath, ".git");
+    const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+    if (/^[a-f0-9]{40}$/i.test(head)) return head.toLowerCase();
+    const refMatch = head.match(/^ref:\s*(refs\/[^\s]+)$/);
+    if (!refMatch || !isSafeGitSymbolicRef(refMatch[1])) return "";
+    const commonDirPointer = join(gitDir, "commondir");
+    const commonGitDir = existsSync(commonDirPointer)
+      ? resolve(gitDir, readFileSync(commonDirPointer, "utf8").trim())
+      : gitDir;
+    const looseRefPath = join(commonGitDir, refMatch[1]);
+    if (existsSync(looseRefPath)) {
+      const ref = readFileSync(looseRefPath, "utf8").trim();
+      if (/^[a-f0-9]{40}$/i.test(ref)) return ref.toLowerCase();
+      return "";
+    }
+    const packedRefsPath = join(commonGitDir, "packed-refs");
+    if (!existsSync(packedRefsPath)) return "";
+    const packedRef = readFileSync(packedRefsPath, "utf8").split(/\r?\n/)
+      .find((line) => line.endsWith(` ${refMatch[1]}`) && /^[a-f0-9]{40}\s/.test(line));
+    return packedRef ? packedRef.slice(0, 40).toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+function isSafeGitSymbolicRef(ref = "") {
+  if (!ref.startsWith("refs/") || ref.endsWith("/") || ref.includes("..") || ref.includes("@{") || /[\u0000-\u0020~^:?*\\[\\]/.test(ref)) return false;
+  return ref.split("/").every((part) => part && part !== "." && part !== ".." && part !== "@" && !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock"));
+}
+
+function inspectDeliveryReceiptPane(worker = {}, runner = spawnSync, context = {}) {
+  const target = resolveTmuxPaneTarget(worker.sessionName, runner, { ...context, requireExactSession: true, requireSinglePane: true });
+  if (!target.ok) return { ok: false, status: target.status === 1 ? "missing" : "unknown", message: target.error };
+  if (target.target !== worker.paneTarget || target.paneId !== worker.paneId || target.currentCommand !== "codex") return { ok: false, status: "unknown", message: "Manager worker pane identity does not match the expected single Codex pane." };
+  const cwd = runner("tmux", ["display-message", "-p", "-t", target.target, "#{pane_current_path}"], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", timeout: context.timeoutMs || 10000 });
+  if (cwd?.status !== 0) return { ok: false, status: "unknown", message: "Manager worker pane CWD inspection failed." };
+  return { ok: true, worktreePath: sanitizeLedgerField(String(cwd.stdout || "").trim(), "", 320) };
 }
 
 export function buildRecoveryHousekeepingEvidenceRecord(options = {}, context = {}) {
@@ -1855,6 +2451,8 @@ function overlayWorkerAssignmentEvidence(workers = [], assignment = {}, options 
         ...worker,
         state: "warm",
         assignmentState: "reassignable",
+        leaseId: null,
+        leaseState: "released",
         currentLease: null,
         laneOwner: sanitizeLedgerField(lane.owner || worker.laneOwner || "", "", 160),
         recoveryState: "released",
@@ -1866,6 +2464,8 @@ function overlayWorkerAssignmentEvidence(workers = [], assignment = {}, options 
         ...worker,
         state: "warm",
         assignmentState: "closed",
+        leaseId: null,
+        leaseState: "released",
         currentLease: null,
         laneOwner: sanitizeLedgerField(lane.owner || worker.laneOwner || "", "", 160),
         recoveryState: "released",
@@ -3152,9 +3752,14 @@ export function buildWorkerHandoffPlan(options = {}, context = {}) {
       target.assignmentState = "active";
       target.assignmentId = pairing.assignmentId;
       target.taskId = pairing.taskId;
+      const leaseNonce = typeof context.leaseNonce === "function" ? context.leaseNonce(pairing, target) : randomUUID();
+      const leaseId = ledgerValueDigest({ runId, workerId: pairing.workerId, assignmentId: pairing.assignmentId, taskId: pairing.taskId, leaseNonce });
       target.currentLease = {
         assignmentId: pairing.assignmentId,
         taskId: pairing.taskId,
+        leaseId,
+        state: "active",
+        issuedAt: timestamp,
         source: "dispatcher_lease_state",
       };
       target.worktreePath = pairing.worktreePath || target.worktreePath || repoRoot;
@@ -29858,6 +30463,7 @@ function projectWorker(worker) {
       taskId: sanitizeIdentifierField((worker.currentLease || worker.current_lease).taskId || (worker.currentLease || worker.current_lease).task_id || "", "", 140) || null,
       leaseId: sanitizeIdentifierField((worker.currentLease || worker.current_lease).leaseId || (worker.currentLease || worker.current_lease).lease_id || worker.leaseId || worker.lease_id || "", "", 140) || null,
       state: sanitizeLedgerField((worker.currentLease || worker.current_lease).state || worker.leaseState || worker.lease_state || "", "", 80) || null,
+      issuedAt: sanitizeLedgerField((worker.currentLease || worker.current_lease).issuedAt || (worker.currentLease || worker.current_lease).issued_at || "", "", 80) || null,
       source: sanitizeLedgerField((worker.currentLease || worker.current_lease).source || "dispatcher_lease_state", "dispatcher_lease_state", 80),
     } : null,
     reviewReservation: isPlainObject(worker.reviewReservation || worker.review_reservation) ? {
@@ -30201,6 +30807,30 @@ function reconcileHandoffLedgerDuplicate(paths, runId, pairings = [], record = {
 
 function writeNdjson(path, records = []) {
   writeFileSync(path, records.map((record) => JSON.stringify(record)).join("\n") + (records.length > 0 ? "\n" : ""));
+}
+
+function writeLedgerJsonAtomically(path, value) {
+  const temporaryPath = join(dirname(path), `.${basename(path)}.${process.pid}.${process.hrtime.bigint().toString(36)}.tmp`);
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`);
+    renameSync(temporaryPath, path);
+  } finally {
+    if (existsSync(temporaryPath)) rmSync(temporaryPath, { force: true });
+  }
+}
+
+function persistWorkerLocalDeliveryUnknown(paths, runId, workerId, taskId, leaseId) {
+  return withLedgerAppendLock(paths, () => {
+    const fresh = readJsonArray(paths.deliveryInstructions);
+    if (fresh.warning || fresh.value.some((item) => !isPlainObject(item))) return { malformed: true };
+    const candidates = fresh.value.filter((item) => isValidActiveDeliveryInstruction(item, runId) && item.binding.workerId === workerId && item.binding.taskId === taskId && item.binding.leaseId === leaseId && item.status !== "unknown");
+    if (candidates.length !== 1) return { conflict: true };
+    const prior = candidates[0];
+    const instruction = { ...prior, status: "unknown", acknowledgedAt: null };
+    const next = fresh.value.map((item) => item === prior ? instruction : item);
+    writeLedgerJsonAtomically(paths.deliveryInstructions, next);
+    return { instruction };
+  });
 }
 
 function withLedgerAppendLock(paths, fn, options = {}) {
