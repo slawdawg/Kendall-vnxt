@@ -13828,6 +13828,12 @@ export function buildRefillPlan(options = {}, context = {}) {
       closedStoryStatuses,
     )
     : null;
+  const selectedTrackerClosedStoryStatuses = sourcePlanning?.sprintStatus
+    ? closedStoryStatusOverlayForTracker(
+      sourcePlanningSprintStoryStatuses(sourcePlanning.sprintStatus),
+      closedStoryStatuses,
+    )
+    : {};
   const sourceWarnings =
     sourceEvidence.rejected.length > 0
       ? [
@@ -14021,7 +14027,7 @@ export function buildRefillPlan(options = {}, context = {}) {
     sourceSlice,
     sourcePlanning,
     bmadRequestPacketPlan?.summary?.validation || null,
-    { closedStoryStatuses },
+    { closedStoryStatuses: selectedTrackerClosedStoryStatuses },
   );
   const splitPlan = starvation && sourceSlice ? buildSplitPlan(context.splitHints || options.splitHints || null) : null;
   const parallelSuitability = buildParallelSuitabilityReport(options, {
@@ -14094,7 +14100,7 @@ export function buildRefillPlan(options = {}, context = {}) {
       sourceSlice,
       sourcePlanning,
       workCreationStep,
-    }, { ...context, closedStoryStatuses });
+    }, { ...context, closedStoryStatuses: selectedTrackerClosedStoryStatuses });
     return refillApply;
   }
   return packet({
@@ -15210,7 +15216,7 @@ function applyCourseCorrectionRefill(step = {}, context = {}) {
     };
   }
   const source = readFileSync(sprintAbsolute, "utf8");
-  const storyStatuses = mergeStoryStatusOverlays(
+  const storyStatuses = mergeClosedStoryStatusOverlayForTracker(
     countSprintStories(source, { artifactDir: dirname(sprintAbsolute) }).storyStatuses || {},
     context.closedStoryStatuses,
   );
@@ -15356,7 +15362,7 @@ function backlogStoryKeysFromSprintStatus(content = "") {
 }
 
 export function courseCorrectionBacklogItemsForStatus(draft = {}, storyStatuses = {}, options = {}) {
-  const effectiveStoryStatuses = mergeStoryStatusOverlays(storyStatuses, options.closedStoryStatuses);
+  const effectiveStoryStatuses = mergeClosedStoryStatusOverlayForTracker(storyStatuses, options.closedStoryStatuses);
   const existingIds = new Set(Object.keys(effectiveStoryStatuses || {}));
   const artifactDir = options.artifactDir || "";
   const explicitItems = [
@@ -15928,6 +15934,25 @@ function mergeStoryStatusOverlays(base = {}, overlay = {}) {
   };
 }
 
+function closedStoryStatusOverlayForTracker(trackerStoryStatuses = {}, closedStoryStatuses = {}) {
+  if (!isPlainObject(trackerStoryStatuses) || !isPlainObject(closedStoryStatuses)) return {};
+  const trackerStoryKeys = new Set(
+    Object.keys(trackerStoryStatuses).filter((storyKey) => isBmadStoryKey(storyKey)),
+  );
+  return Object.fromEntries(
+    Object.entries(closedStoryStatuses)
+      .map(([storyKey, status]) => [normalizeBmadStoryAssignmentId(storyKey), status])
+      .filter(([storyKey]) => trackerStoryKeys.has(storyKey)),
+  );
+}
+
+function mergeClosedStoryStatusOverlayForTracker(trackerStoryStatuses = {}, closedStoryStatuses = {}) {
+  return mergeStoryStatusOverlays(
+    trackerStoryStatuses,
+    closedStoryStatusOverlayForTracker(trackerStoryStatuses, closedStoryStatuses),
+  );
+}
+
 function applyClosedStoryStatusOverlayToSourcePlanning(sourcePlanning = null, closedStoryStatuses = {}) {
   if (!sourcePlanning?.sprintStatus || !isPlainObject(closedStoryStatuses) || Object.keys(closedStoryStatuses).length === 0) {
     return sourcePlanning;
@@ -15935,7 +15960,7 @@ function applyClosedStoryStatusOverlayToSourcePlanning(sourcePlanning = null, cl
   const sprintStatus = sourcePlanning.sprintStatus;
   const storyStatuses = sourcePlanningSprintStoryStatuses(sprintStatus);
   if (Object.keys(storyStatuses).length === 0) return sourcePlanning;
-  const effectiveStoryStatuses = mergeStoryStatusOverlays(storyStatuses, closedStoryStatuses);
+  const effectiveStoryStatuses = mergeClosedStoryStatusOverlayForTracker(storyStatuses, closedStoryStatuses);
   const counts = summarizeStoryStatuses(effectiveStoryStatuses);
   return {
     ...sourcePlanning,
@@ -17639,15 +17664,21 @@ export function buildBmadCodeReviewRequestPlan(options = {}, context = {}) {
     context.cyclePacket?.summary?.assignmentSummary ||
     readAssignmentSummaryFile(options.assignmentSummaryFile) ||
     {};
-  const closedStoryStatuses = mergeStoryStatusOverlays(
-    context.closedStoryStatuses,
-    closedAssignmentStoryStatusOverlay(
-      assignmentEvidence,
-      options,
+  const trackerStoryStatuses = Object.fromEntries(
+    rows.map((row) => [row.storyKey, normalizeSprintStoryStatus(row.status) || row.status]),
+  );
+  const closedStoryStatuses = closedStoryStatusOverlayForTracker(
+    trackerStoryStatuses,
+    mergeStoryStatusOverlays(
+      context.closedStoryStatuses,
+      closedAssignmentStoryStatusOverlay(
+        assignmentEvidence,
+        options,
+      ),
     ),
   );
   const effectiveStoryStatuses = mergeStoryStatusOverlays(
-    Object.fromEntries(rows.map((row) => [row.storyKey, normalizeSprintStoryStatus(row.status) || row.status])),
+    trackerStoryStatuses,
     closedStoryStatuses,
   );
   const effectiveRows = rows.map((row) => ({
@@ -18116,7 +18147,7 @@ function buildRefillMaterializationGate(workCreationStep = null, sourceSlice = n
   const draft = packet.courseCorrectionDraft || null;
   const storyInputs = packet.storyCreationInputs || null;
   const sprintStatusPath = sanitizeLedgerField(packet.sprintStatusPath || storyInputs?.sprintStatusPath || sourcePlanning?.sprintStatus?.path || "", "", 220);
-  const storyStatuses = mergeStoryStatusOverlays(
+  const storyStatuses = mergeClosedStoryStatusOverlayForTracker(
     courseCorrectionStoryStatusesForGate(sourcePlanning, sprintStatusPath),
     options.closedStoryStatuses,
   );
