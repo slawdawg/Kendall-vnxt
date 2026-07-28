@@ -178,6 +178,31 @@ assertCondition(
   failures,
 );
 for (const requiredText of [
+  "## Documented Non-Required Checks",
+  "`AGENTS.md#documented-non-required-checks`",
+  "- `full`",
+  "- `javascript`",
+  "- `supervisor`",
+]) {
+  assertCondition(
+    files["AGENTS.md"].includes(requiredText),
+    `AGENTS.md must retain canonical non-required-check policy evidence: ${requiredText}`,
+    failures,
+  );
+}
+for (const requiredText of [
+  "### Explicit Delivery-Head Refresh",
+  "refresh-pr-head <lane>",
+  "never rewrite manifest JSON by hand",
+  "Existing unresolved current or outdated threads remain explicit holds",
+]) {
+  assertCondition(
+    files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
+    `End-to-end lane runner must retain explicit delivery-head refresh guidance: ${requiredText}`,
+    failures,
+  );
+}
+for (const requiredText of [
   "`adjudicate-current-thread`",
   "`resolve-adjudicated-current-thread`",
   "exact repository, PR, and head",

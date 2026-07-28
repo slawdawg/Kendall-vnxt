@@ -164,6 +164,9 @@ try {
     case "verify-pr-gates":
       verifyPrGates(commandArgs);
       break;
+    case "refresh-pr-head":
+      refreshPrHead(commandArgs);
+      break;
     case "adjudicate-outdated-thread":
       adjudicateOutdatedThread(commandArgs);
       break;
@@ -236,6 +239,7 @@ Commands:
   inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
+  refresh-pr-head [query]   Explicitly rebind a stale managed PR delivery head after fresh remote proof.
   adjudicate-outdated-thread [query] Record evidence for one satisfied outdated review thread; never resolves it.
   resolve-adjudicated-thread [query] Resolve exactly one freshly revalidated adjudicated thread, then re-audit.
   adjudicate-current-thread [query] Record exact-head evidence for one fully satisfied current review thread; never resolves it.
@@ -385,6 +389,12 @@ verify-pr-gates options:
   --diff-risk-summary <text> Exact-head diff-risk assessment summary.
   --diff-risk-files <list> Comma-separated changed paths covered by the assessment.
   --diff-risk-verification <text> Focused verification evidence for the assessment.
+
+refresh-pr-head options:
+  --reason <text>           Required bounded reason for the explicit stale-head rebind.
+  --apply                   Record the rebind under the task lock. Without this, print a dry-run plan.
+  --summary-json            Without --apply, print the bounded rebind evidence packet.
+  Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
 
 adjudicate-outdated-thread options:
   --thread-id <id>          Required unresolved outdated GitHub review-thread id.
@@ -2956,6 +2966,230 @@ function verifyPrGates(argv) {
   printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
 }
 
+function refreshPrHead(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (options.summaryJson && options.apply) {
+    throw new Error("refresh-pr-head --summary-json is only supported without --apply.");
+  }
+  const reason = safeMetadataText(options.reason, 500);
+  if (!validTakeoverReason(reason)) {
+    throw new Error("refresh-pr-head requires --reason with at least 10 non-whitespace characters.");
+  }
+
+  const state = workspaceState(options);
+  const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), {
+    preferCurrentWorktree: true,
+  });
+  assertLaneOwner(manifest, options);
+  requireGh("refresh-pr-head");
+  assertSafeBranch(manifest.branch);
+  assertWorktreeExists(manifest);
+  assertCurrentBranch(manifest);
+
+  const lockInspection = inspectTaskLock(state, manifest.task_id);
+  const packet = buildPrHeadRefreshEvidence(manifest, { options, reason, lockInspection });
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  if (!packet.ready) {
+    printBlocked("refresh-pr-head", renderPrHeadRefreshEvidence(packet));
+    throw new Error(`PR-head refresh is not ready: ${packet.blockers.join("; ")}`);
+  }
+  if (!options.apply) {
+    printPlan("refresh-pr-head", renderPrHeadRefreshEvidence(packet));
+    console.log("Add --apply to record this explicit metadata-only stale-head rebind. It does not resolve threads, merge, or clean up.");
+    return;
+  }
+
+  withManifestLock(state, manifest.task_id, (lock) => {
+    const locked = readManifest(manifestPath);
+    validateManifest(locked, manifestPath);
+    assertLaneOwner(locked, options);
+    claimLaneOwner(locked, options);
+    assertCurrentBranch(locked);
+    lock.heartbeat();
+    const lockedPacket = buildPrHeadRefreshEvidence(locked, {
+      options,
+      reason,
+      lockInspection: { status: "owned", owner: currentLaneOwner(options) },
+    });
+    if (!lockedPacket.ready) {
+      printBlocked("refresh-pr-head", renderPrHeadRefreshEvidence(lockedPacket));
+      throw new Error(`PR-head refresh changed under lock: ${lockedPacket.blockers.join("; ")}`);
+    }
+    const rebind = {
+      schemaVersion: 1,
+      priorHeadSha: lockedPacket.priorHeadSha,
+      newHeadSha: lockedPacket.newHeadSha,
+      reason: lockedPacket.reason,
+      checkedAt: lockedPacket.checkedAt,
+      repository: lockedPacket.repository,
+      pr: lockedPacket.pr,
+      checks: compactStatusCheckEvidence(lockedPacket.checks),
+      reviewThreads: compactReviewThreadAudit(lockedPacket.reviewThreads),
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+    locked.pr_delivery_head_sha = lockedPacket.newHeadSha;
+    locked.pr_url = lockedPacket.pr.url || locked.pr_url;
+    locked.pr_number = lockedPacket.pr.number || locked.pr_number;
+    locked.pr_head_rebinds = [...copyJsonArray(locked.pr_head_rebinds), rebind];
+    locked.pr_gate_evidence = stalePrGateEvidenceAfterHeadRebind(lockedPacket, rebind);
+    locked.delivery_subagent_audit = staleDeliveryAuditAfterHeadRebind(lockedPacket, rebind);
+    locked.delivery_subagent_audit_checked_at = lockedPacket.checkedAt;
+    locked.pr_head_rebind_checked_at = lockedPacket.checkedAt;
+    appendAuthorityDecision(locked, lockedPacket.authorityDecision);
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {}, {
+      prGateEvidence: locked.pr_gate_evidence,
+      deliverySubagentAudit: locked.delivery_subagent_audit,
+    });
+    locked.updated_at = lockedPacket.checkedAt;
+    appendTaskEvent(locked, "pr_delivery_head_rebound", `${lockedPacket.priorHeadSha} -> ${lockedPacket.newHeadSha}: ${lockedPacket.reason}`);
+    writeManifest(manifestPath, locked);
+    Object.assign(manifest, locked);
+  });
+
+  printApplied("refresh-pr-head", renderPrHeadRefreshEvidence(manifest.pr_head_rebinds.at(-1)));
+}
+
+function buildPrHeadRefreshEvidence(manifest, context = {}) {
+  const checkedAt = new Date().toISOString();
+  const options = context.options || {};
+  const reason = safeMetadataText(context.reason, 500);
+  const lockInspection = context.lockInspection || { status: "ambiguous", reason: "lock_inspection_missing" };
+  const priorHeadSha = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha) || null;
+  const localHeadResult = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
+  const localHeadSha = localHeadResult.code === 0 ? exactGitObjectIdOrNull(localHeadResult.stdout.trim()) : null;
+  const remoteHeadResult = git(["rev-parse", `origin/${manifest.branch}`], { cwd: manifest.worktree_path });
+  const remoteHeadSha = remoteHeadResult.code === 0 ? exactGitObjectIdOrNull(remoteHeadResult.stdout.trim()) : null;
+  const repositoryRef = githubRepository(manifest);
+  const repository = { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` };
+  const pr = prViewForGates(manifest);
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, { expectedHeadSha: pr?.headRefOid || "" });
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : emptyReviewThreadState();
+  const blockers = [];
+  if (manifest.status !== "pr_open") blockers.push(`Manifest status is ${manifest.status || "missing"}; only pr_open lanes may refresh a delivery head`);
+  if (lockInspection.status !== "absent" && lockInspection.status !== "owned") blockers.push(`Task lock is ${lockInspection.status || "ambiguous"}; explicit refresh requires an idle or owned lane lock`);
+  if (!priorHeadSha) blockers.push("Recorded delivery head is missing or invalid; refresh cannot silently establish an initial delivery binding");
+  if (!reason) blockers.push("Explicit stale-head refresh reason is missing");
+  if (priorHeadSha && priorHeadSha === pr?.headRefOid) blockers.push("Recorded delivery head already matches the live PR head; refresh is unnecessary");
+  if (repository.owner !== "slawdawg" || repository.name !== "Kendall-vnxt") blockers.push("PR-head refresh only accepts the canonical Kendall_Nxt repository");
+  if (!pr?.number || !pr?.url) blockers.push("Live PR identity is incomplete");
+  if (manifest.pr_number && pr?.number !== manifest.pr_number) blockers.push("Live PR number does not match the managed manifest");
+  if (manifest.pr_url && pr?.url !== manifest.pr_url) blockers.push("Live PR URL does not match the managed manifest");
+  if (pr?.state !== "OPEN" || pr?.isDraft || pr?.mergedAt) blockers.push("Live PR must be open and non-draft for an explicit head refresh");
+  if (pr?.baseRefName !== manifest.base_branch) blockers.push(`Live PR base is ${pr?.baseRefName || "missing"}, expected ${manifest.base_branch}`);
+  if (!pr?.headRefOid || !exactGitObjectIdOrNull(pr.headRefOid)) blockers.push("Live PR head is missing or invalid");
+  if (!localHeadSha || localHeadSha !== pr?.headRefOid) blockers.push("Local worktree HEAD does not match the live PR head");
+  if (!remoteHeadSha || remoteHeadSha !== pr?.headRefOid) blockers.push("origin branch HEAD does not match the live PR head");
+  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
+  if (checks.total === 0) blockers.push("No status checks reported for live PR head");
+  if (checks.pending.length) blockers.push(`Pending checks: ${checks.pending.map((check) => check.name).join(", ")}`);
+  if (checks.failing.length) blockers.push(`Failing checks: ${checks.failing.map((check) => check.name).join(", ")}`);
+  blockers.push(...(nonRequiredCheckPolicy.blockers || []));
+  if (!reviewThreads.querySucceeded) blockers.push("Review-thread query did not return thread-aware evidence");
+  if (reviewThreads.errorCount > 0) blockers.push(`Review-thread query returned ${reviewThreads.errorCount} GraphQL error(s)`);
+  if (reviewThreads.hasNextPage || reviewThreads.reviewRequestHasNextPage) blockers.push("Review-thread audit is incomplete");
+  if (reviewThreads.pendingReviewRequestCount > 0) blockers.push(`Pending review requests: ${reviewThreads.pendingReviewRequestCount}`);
+  const requiredGates = [
+    "exact managed owner plus absent or owned task lock",
+    "canonical Kendall_Nxt repository and matching managed PR identity",
+    "open non-draft PR at one exact local, origin, and GitHub head",
+    "terminal successful checks or canonical policy-bound non-required skipped checks",
+    "complete thread-aware review audit with no pending review request",
+    "explicit prior/new head and reason retained as metadata only",
+  ];
+  const ready = blockers.length === 0;
+  return {
+    schemaVersion: 1,
+    status: ready ? "ready" : "blocked",
+    ready,
+    checkedAt,
+    taskId: manifest.task_id,
+    reason: reason || null,
+    priorHeadSha,
+    newHeadSha: pr?.headRefOid || null,
+    localHeadSha,
+    remoteHeadSha,
+    repository,
+    pr: {
+      number: pr?.number || null,
+      url: pr?.url || null,
+      state: pr?.state || null,
+      isDraft: Boolean(pr?.isDraft),
+      baseRefName: pr?.baseRefName || null,
+      headRefOid: pr?.headRefOid || null,
+      reviewDecision: pr?.reviewDecision || null,
+    },
+    lock: { status: lockInspection.status || "ambiguous", reason: lockInspection.reason || null },
+    checks,
+    nonRequiredCheckPolicy,
+    reviewThreads,
+    blockers,
+    requiredGates,
+    authorityDecision: shapeAuthorityDecisionEvidence({
+      operation: "refresh-pr-head",
+      authorityFamily: "delivery-evidence-rebind",
+      decision: ready ? "ready" : "blocked",
+      allowed: ready,
+      requiredGates,
+      satisfiedGates: ready ? requiredGates : [],
+      blockedReasons: blockers,
+      stopLines: [
+        "explicit metadata-only manifest rebind; no source, review-thread, merge, or cleanup mutation",
+        "active, stale, or ambiguous task locks block refresh",
+        "remote/local/PR identity mismatch, pending or failing checks, or incomplete review evidence block refresh",
+      ],
+      evidenceRefs: [`task:${manifest.task_id}`, `repository:${repository.fullName}`, pr?.number ? `pr:${pr.number}` : "", priorHeadSha ? `prior-head:${priorHeadSha}` : "", pr?.headRefOid ? `new-head:${pr.headRefOid}` : ""],
+      nextSafeAction: ready ? "Apply the one explicit delivery-head rebind under lock, then rerun the normal thread adjudication workflow." : "Do not alter the manifest manually; fix the named evidence mismatch and rerun refresh-pr-head.",
+      recoveryPath: "Keep the prior delivery-head binding unchanged. Re-run the read-only refresh packet after the ambiguous state is resolved.",
+      generatedAt: checkedAt,
+    }),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function renderPrHeadRefreshEvidence(packet = {}) {
+  return [
+    `prior head ${packet.priorHeadSha || "missing"}`,
+    `new head ${packet.newHeadSha || "missing"}`,
+    `repository ${packet.repository?.fullName || "unknown"} pr=${packet.pr?.number || "unknown"}`,
+    `lock ${packet.lock?.status || "unknown"}`,
+    `checks total=${packet.checks?.total ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0}`,
+    `reviewThreads current=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} outdated=${packet.reviewThreads?.unresolvedOutdatedCount ?? "unknown"} pendingRequests=${packet.reviewThreads?.pendingReviewRequestCount ?? "unknown"}`,
+  ];
+}
+
+function stalePrGateEvidenceAfterHeadRebind(packet, rebind) {
+  return {
+    schemaVersion: 1,
+    status: "stale",
+    lowRiskReady: false,
+    expectedHeadSha: rebind.priorHeadSha,
+    supersededByHeadSha: rebind.newHeadSha,
+    supersededAt: packet.checkedAt,
+    reason: "Explicit delivery-head refresh requires a new exact-head PR gate packet before merge.",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function staleDeliveryAuditAfterHeadRebind(packet, rebind) {
+  return {
+    schemaVersion: 1,
+    status: "stale",
+    headSha: rebind.priorHeadSha,
+    supersededByHeadSha: rebind.newHeadSha,
+    checkedAt: packet.checkedAt,
+    reason: "Exact-head delivery audit must be repeated after an explicit delivery-head refresh.",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function adjudicateOutdatedThread(argv) {
   const { positional, options } = parseOptions(argv);
   if (options.summaryJson && options.apply) {
@@ -3307,6 +3541,30 @@ function reviewThreadResolutionPostMutationBlockers(audit, target) {
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads after resolution: ${audit.unresolvedNonOutdatedCount}`);
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   return blockers;
+}
+
+function emptyReviewThreadState() {
+  return {
+    querySucceeded: false,
+    errorCount: 1,
+    hasNextPage: false,
+    reviewRequestHasNextPage: false,
+    pendingReviewRequestCount: 0,
+    unresolvedNonOutdatedCount: 0,
+    unresolvedOutdatedCount: 0,
+    threadRefs: [],
+  };
+}
+
+function compactStatusCheckEvidence(checks) {
+  return {
+    total: Number(checks?.total || 0),
+    passed: (checks?.passed || []).map((check) => ({ name: check.name, status: check.status, conclusion: check.conclusion })),
+    pending: (checks?.pending || []).map((check) => ({ name: check.name, status: check.status, conclusion: check.conclusion })),
+    failing: (checks?.failing || []).map((check) => ({ name: check.name, status: check.status, conclusion: check.conclusion })),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function compactReviewThreadAudit(audit) {
@@ -4624,13 +4882,19 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
 }
 
 function validateSourceOwnedSkipPolicy(policyRef, names) {
-  if (!policyRef || names.length === 0 || policyRef !== "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks") {
+  const canonicalPolicies = {
+    "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks": join(repoRoot, "docs", "workflows", "end-to-end-lane-runner.md"),
+    "AGENTS.md#documented-non-required-checks": join(repoRoot, "AGENTS.md"),
+  };
+  const policyPath = canonicalPolicies[policyRef];
+  if (!policyPath || names.length === 0) {
     return false;
   }
-  const policyPath = join(repoRoot, "docs", "workflows", "end-to-end-lane-runner.md");
   try {
     const policyText = readFileSync(policyPath, "utf8");
-    return names.every((name) => policyText.includes(`- \`${name}\``));
+    const heading = "## Documented Non-Required Checks";
+    const section = policyText.slice(policyText.indexOf(heading), policyText.indexOf("\n## ", policyText.indexOf(heading) + heading.length) || policyText.length);
+    return policyText.includes(heading) && names.every((name) => ["full", "javascript", "supervisor"].includes(name) && section.includes(`- \`${name}\``));
   } catch {
     return false;
   }
