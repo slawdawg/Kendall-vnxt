@@ -6470,6 +6470,164 @@ try {
     }
   });
 
+  test("takeover dirty-lane path preserves a leading porcelain status column", () => {
+    const fixture = createDirtyTakeoverFixture("leading-status");
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "unstaged change retains the leading status column\n");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["tracked.txt"]));
+
+      assert(result.code === 0, JSON.stringify(result));
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
+      const evidence = manifest.takeover_decisions.at(-1).dirty_in_lane_evidence;
+      assert(evidence.before.paths[0].status_code === " M", JSON.stringify(evidence));
+      assert(evidence.after.paths[0].status_code === " M", JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path discovers nested untracked files with untracked=all", () => {
+    const fixture = createDirtyTakeoverFixture("nested-untracked");
+    try {
+      mkdirSync(join(fixture.worktree, "nested"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "nested", "untracked.txt"), "nested untracked lane work\n");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["nested/untracked.txt"]));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readFixtureDirtyTakeoverManifest(fixture).takeover_decisions.at(-1).dirty_in_lane_evidence;
+      assert(evidence.before.paths[0].path === "nested/untracked.txt", JSON.stringify(evidence));
+      assert(evidence.after.paths[0].path === "nested/untracked.txt", JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path requires positive stale-owner evidence", () => {
+    const fixture = createDirtyTakeoverFixture("missing-stale-proof", { heartbeat: null });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "untrusted owner time must not become stale\n");
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "takeover unexpectedly accepted a missing owner heartbeat");
+      assert(result.stdout.includes("owner heartbeat is not stale"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "missing stale proof mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path records the exact index fingerprint separately from file content", () => {
+    const fixture = createDirtyTakeoverFixture("index-fingerprint");
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "staged index content\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      const expectedIndex = createHash("sha256").update(runGit(fixture.worktree, ["ls-files", "--stage", "--", "tracked.txt"]).stdout).digest("hex");
+      const expectedContent = createHash("sha256").update("staged index content\n").digest("hex");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["tracked.txt"]));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readFixtureDirtyTakeoverManifest(fixture).takeover_decisions.at(-1).dirty_in_lane_evidence;
+      assert(evidence.before.paths[0].sha256 === expectedContent, JSON.stringify(evidence));
+      assert(evidence.before.paths[0].index_sha256 === expectedIndex, JSON.stringify(evidence));
+      assert(evidence.before.paths[0].index_sha256 === evidence.after.paths[0].index_sha256, JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path treats commas as literal exact filename characters", () => {
+    const fixture = createDirtyTakeoverFixture("comma-path");
+    try {
+      const commaPath = "comma,name.txt";
+      writeFileSync(join(fixture.worktree, commaPath), "comma is part of this exact filename\n");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, [commaPath]));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readFixtureDirtyTakeoverManifest(fixture).takeover_decisions.at(-1).dirty_in_lane_evidence;
+      assert(evidence.before.paths[0].path === commaPath, JSON.stringify(evidence));
+      assert(evidence.requested_paths.length === 1 && evidence.requested_paths[0] === commaPath, JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path preserves literal leading whitespace in an exact filename", () => {
+    const fixture = createDirtyTakeoverFixture("leading-whitespace-path");
+    try {
+      const whitespacePath = " leading-space.txt";
+      writeFileSync(join(fixture.worktree, whitespacePath), "leading whitespace is a literal filename character\n");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, [whitespacePath]));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readFixtureDirtyTakeoverManifest(fixture).takeover_decisions.at(-1).dirty_in_lane_evidence;
+      assert(evidence.before.paths[0].path === whitespacePath, JSON.stringify(evidence));
+      assert(evidence.requested_paths[0] === whitespacePath, JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path rolls back manifest ownership when post-write fingerprints drift", () => {
+    const fixture = createDirtyTakeoverFixture("post-write-drift");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "original pre-write evidence\n");
+      const source = readFileSync(fixture.script, "utf8");
+      const seam = [
+        "    writeManifest(path, manifest);",
+        "    try {",
+        "      finalizeDirtyInLaneTakeover(packet);",
+      ].join("\n");
+      assert(source.includes(seam), "fixture did not expose the dirty takeover post-write revalidation seam");
+      const replacement = [
+        "    writeManifest(path, manifest);",
+        '    writeFileSync(join(packet.worktree_evidence.path, "dirty.txt"), "drift after manifest persistence\\n");',
+        "    try {",
+        "      finalizeDirtyInLaneTakeover(packet);",
+      ].join("\n");
+      writeFileSync(fixture.script, source.replace(seam, replacement));
+      runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture post-write dirty drift seam"]);
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "post-write dirty drift unexpectedly succeeded");
+      assert(result.stderr.includes("fingerprints changed while the manifest lock was held"), result.stderr || result.stdout);
+      const restored = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+      const original = JSON.parse(before);
+      assert(restored.owner === original.owner, "post-write drift left ownership persisted");
+      assert(!Array.isArray(restored.takeover_decisions), "post-write drift retained a takeover decision");
+      assert(!Array.isArray(restored.ownership_takeovers), "post-write drift retained ownership takeover evidence");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path rechecks a retained lock after preflight", () => {
+    const fixture = createDirtyTakeoverFixture("retained-lock-recheck");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "dirty work guarded by lock recheck\n");
+      const source = readFileSync(fixture.script, "utf8");
+      const seam = "  const applied = applyTakeover(state, target, {";
+      assert(source.includes(seam), "fixture did not expose the dirty takeover lock recheck seam");
+      const replacement = [
+        '  writeFileSync(taskLockPath(state, target.record.task_id), "{}\\n");',
+        seam,
+      ].join("\n");
+      writeFileSync(fixture.script, source.replace(seam, replacement));
+      runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture retained lock recheck seam"]);
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "post-preflight retained lock unexpectedly succeeded");
+      assert(result.stderr.includes("Task lock is retained during dirty in-lane takeover"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "retained-lock recheck mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
   test("takeover apply reassigns stale clean workspace manifest with approval evidence", () => {
     const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-clean-manifest-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-clean-worktree-"));
@@ -12954,6 +13112,81 @@ function runFixtureScript(fixture, args, options = {}) {
   }, {
     commandPrefix: ["node", fixture.script],
   });
+}
+
+function createDirtyTakeoverFixture(name, options = {}) {
+  const root = mkdtempSync(join(tmpdir(), `codex-dirty-takeover-${name}-`));
+  const taskId = `stale-${name}`;
+  const branch = `codex/${taskId}`;
+  const stateRoot = `${root}-state`;
+  const tasksDir = join(stateRoot, "tasks");
+  const manifestPath = join(tasksDir, `${taskId}.json`);
+  const worktree = root;
+  copyWorkspaceScriptFixture(root);
+  runGit(root, ["init", "-q"]);
+  runGit(root, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(root, ["config", "user.name", "Codex Workspace Test"]);
+  writeFileSync(join(root, "tracked.txt"), "base\n");
+  runGit(root, ["add", "tracked.txt", "scripts"]);
+  runGit(root, ["commit", "-q", "-m", "fixture base"]);
+  runGit(root, ["checkout", "-q", "-b", branch]);
+  mkdirSync(tasksDir, { recursive: true });
+  const heartbeat = options.heartbeat === undefined ? "2026-06-21T00:00:00.000Z" : options.heartbeat;
+  const manifest = {
+    task_id: taskId,
+    branch,
+    worktree_path: worktree,
+    base_branch: "main",
+    status: "active",
+    owner: "runner-b",
+    owner_updated_at: heartbeat,
+    ...(heartbeat ? { last_heartbeat_at: heartbeat } : {}),
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return {
+    root,
+    script: join(root, "scripts", "codex-workspace.mjs"),
+    stateRoot,
+    taskId,
+    branch,
+    worktree,
+    manifestPath,
+    env: {
+      ...process.env,
+      CODEX_WORKSPACE_TEST_MODE: "1",
+      CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
+    },
+  };
+}
+
+function cleanupDirtyTakeoverFixture(fixture) {
+  if (!fixture) return;
+  if (fixture.root) rmSync(fixture.root, { recursive: true, force: true });
+  if (fixture.stateRoot) rmSync(fixture.stateRoot, { recursive: true, force: true });
+}
+
+function dirtyTakeoverArgs(fixture, dirtyPaths) {
+  return [
+    "takeover",
+    fixture.taskId,
+    "--apply",
+    "--owner",
+    "runner-a",
+    "--takeover-reason",
+    "stale owner evidence reviewed",
+    "--approval",
+    "operator explicitly approved the bounded dirty lane takeover",
+    "--allow-dirty-in-lane",
+    ...dirtyPaths.flatMap((path) => ["--dirty-paths", path]),
+    "--stale-after-seconds",
+    "60",
+    "--state-root",
+    fixture.stateRoot,
+  ];
+}
+
+function readFixtureDirtyTakeoverManifest(fixture) {
+  return JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
 }
 
 function copyWorkspaceScriptFixture(fixtureRoot) {

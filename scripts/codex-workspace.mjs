@@ -10679,8 +10679,7 @@ function takeoverDirtyStateEvidence(worktreeEvidence) {
 function dirtyInLaneRequestedPaths(rawValue) {
   const requested = (Array.isArray(rawValue) ? rawValue : [rawValue])
     .map((value) => String(value || ""))
-    .map((value) => value.trim())
-    .filter(Boolean);
+    .filter((value) => value.trim().length > 0);
   const unique = [...new Set(requested)];
   const invalid = unique.filter(
     (path) =>
