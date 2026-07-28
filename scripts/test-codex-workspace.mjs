@@ -1441,6 +1441,9 @@ try {
     assert(unmanagedGate, "unmanaged PR evidence command not found");
     assert(unmanagedGate[0].includes("metadata-only and does not support --apply"), "unmanaged PR evidence must remain non-mutating");
     assert(!unmanagedGate[0].includes("writeManifest"), "unmanaged PR evidence must not write a manifest");
+    for (const expected of ["only produces Kendall_Nxt evidence", "requires a detached checkout", "requires a clean detached checkout", "requires --merge-method", "requires --rollback-path"]) {
+      assert(unmanagedGate[0].includes(expected), `unmanaged PR evidence must fail closed on ${expected}`);
+    }
 
     const outdatedAdjudication = source.match(/function adjudicateOutdatedThread[\s\S]*?function verifyUnmanagedPrGates/);
     assert(outdatedAdjudication, "outdated-thread adjudication command not found");

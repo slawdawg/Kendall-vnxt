@@ -397,6 +397,8 @@ verify-unmanaged-pr-gates options:
   --pr <number>             Required pull-request number in this repository.
   --base <branch>           Required expected base branch.
   --expected-head <sha>     Required exact detached-worktree and PR head SHA.
+  --merge-method <text>     Required planned exact-head merge method.
+  --rollback-path <text>    Required bounded revert or recovery path.
   --summary-json            Print the bounded external evidence packet.
   Supports the verify-pr-gates delivery-audit, non-required-check, and diff-risk options.
 
@@ -3150,6 +3152,8 @@ function verifyUnmanagedPrGates(argv) {
   const prNumber = Number(options.pr);
   const baseBranch = safeMetadataText(options.base, 250);
   const expectedHeadSha = safeMetadataText(options.expectedHead, 80);
+  const plannedMergeMethod = safeMetadataText(options.mergeMethod, 80);
+  const rollbackPath = safeMetadataText(options.rollbackPath, 500);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     throw new Error("verify-unmanaged-pr-gates requires --pr <number>.");
   }
@@ -3160,12 +3164,29 @@ function verifyUnmanagedPrGates(argv) {
   if (!exactGitObjectIdOrNull(expectedHeadSha)) {
     throw new Error("verify-unmanaged-pr-gates requires --expected-head <exact sha>.");
   }
+  if (!plannedMergeMethod) {
+    throw new Error("verify-unmanaged-pr-gates requires --merge-method <planned exact-head method>.");
+  }
+  if (!rollbackPath) {
+    throw new Error("verify-unmanaged-pr-gates requires --rollback-path <revert or recovery path>.");
+  }
   requireGh("verify-unmanaged-pr-gates");
   const cwdResult = git(["rev-parse", "--show-toplevel"], { cwd: process.cwd() });
   if (cwdResult.code !== 0 || !cwdResult.stdout.trim()) {
     throw new Error("verify-unmanaged-pr-gates must run from a Git worktree.");
   }
   const worktreePath = cwdResult.stdout.trim();
+  const repository = githubRepository({ worktree_path: worktreePath });
+  if (repository.owner !== "slawdawg" || repository.name !== "Kendall-vnxt") {
+    throw new Error("verify-unmanaged-pr-gates only produces Kendall_Nxt evidence.");
+  }
+  const detached = git(["symbolic-ref", "-q", "HEAD"], { cwd: worktreePath });
+  if (detached.code === 0) {
+    throw new Error("verify-unmanaged-pr-gates requires a detached checkout.");
+  }
+  if (parseStatus(worktreePath).any) {
+    throw new Error("verify-unmanaged-pr-gates requires a clean detached checkout.");
+  }
   const manifest = {
     task_id: `unmanaged-pr-${prNumber}`,
     branch: `unmanaged-pr-${prNumber}`,
@@ -3177,6 +3198,8 @@ function verifyUnmanagedPrGates(argv) {
   const packet = buildPrGateEvidence(manifest, { options });
   const externalPacket = {
     ...packet,
+    plannedMergeMethod,
+    rollbackPath,
     authorityProfile: "unmanaged-pr-evidence",
     unmanaged: true,
     metadataOnly: true,
@@ -3486,7 +3509,17 @@ function shapeRetainedPreMergeGateEvidence(manifest, expectedHeadSha) {
   const gate = manifest.pr_gate_evidence && typeof manifest.pr_gate_evidence === "object" ? manifest.pr_gate_evidence : null;
   const blockers = [];
   if (!gate) {
-    blockers.push("Retained exact-head pre-merge gate evidence is missing");
+    // Older merged lanes predate gate packets.  Reconciliation is post-merge
+    // metadata recovery, not a merge authorization; its caller independently
+    // proves the live merged PR, exact branch heads, and cleanup audit.
+    return {
+      status: "legacy-reconciled",
+      checkedAt: null,
+      expectedHeadSha: expectedHeadSha || null,
+      legacy: true,
+      blockers,
+      metadataOnly: true,
+    };
   } else {
     if (gate.status !== "passed" || gate.lowRiskReady !== true) {
       blockers.push("Retained pre-merge gate evidence was not passed");
@@ -4309,7 +4342,10 @@ function validateSourceOwnedSkipPolicy(policyRef, names) {
 
 function shapeDiffRiskEvidence(options = {}, context = {}) {
   const summary = safeMetadataText(options.diffRiskSummary, 500);
-  const files = commaSeparatedMetadata(options.diffRiskFiles);
+  // Diff-risk evidence is an exact-head coverage set, not a display list.  Do
+  // not apply the general CLI metadata cap here or a PR with more than 80 files
+  // becomes impossible to prove even when every path was supplied.
+  const files = commaSeparatedMetadata(options.diffRiskFiles, Number.MAX_SAFE_INTEGER);
   const verification = safeMetadataText(options.diffRiskVerification, 500);
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
