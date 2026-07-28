@@ -9370,6 +9370,114 @@ try {
     }
   });
 
+  test("reconcile-merged-pr rejects valueless cleanup audit fields without writing reconciliation metadata", () => {
+    for (const option of ["--delivery-audit-agent", "--delivery-audit-summary"]) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runMergedCleanupFixtureScript(fixture, [
+          "reconcile-merged-pr",
+          "cleanup-task",
+          "--apply",
+          "--owner",
+          "runner-a",
+          option,
+          "--state-root",
+          fixture.stateRoot,
+        ]);
+
+        assert(result.code !== 0, `${option} without a value unexpectedly reconciled metadata`);
+        assert(result.stderr.includes(`${option} requires a non-empty value`), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${option} without a value wrote reconciliation metadata`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("reconcile-merged-pr rejects --dry-run with --apply without writing reconciliation metadata", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr",
+        "cleanup-task",
+        "--dry-run",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+
+      assert(result.code !== 0, "--dry-run --apply unexpectedly reconciled metadata");
+      assert(result.stderr.includes("accepts either --dry-run or --apply, not both"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "--dry-run --apply wrote reconciliation metadata");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("reconcile-merged-pr rejects valued mutation switches without writing reconciliation metadata", () => {
+    for (const option of ["--apply=false", "--apply=1", "--dry-run=false", "--dry-run=1"]) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runMergedCleanupFixtureScript(fixture, [
+          "reconcile-merged-pr",
+          "cleanup-task",
+          option,
+          "--owner",
+          "runner-a",
+          "--state-root",
+          fixture.stateRoot,
+        ]);
+
+        assert(result.code !== 0, `${option} unexpectedly reconciled metadata`);
+        assert(result.stderr.includes("must be a bare flag without a value"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${option} wrote reconciliation metadata`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("reconcile-merged-pr rejects duplicate mutation switches that hide an earlier value without writing reconciliation metadata", () => {
+    const cases = [
+      ["--apply=false", "--apply"],
+      ["--dry-run=false", "--dry-run"],
+      ["--apply", "false"],
+      ["--dry-run", "false"],
+      ["--apply", ""],
+      ["--dry-run", ""],
+    ];
+    for (const args of cases) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runMergedCleanupFixtureScript(fixture, [
+          "reconcile-merged-pr",
+          "cleanup-task",
+          ...args,
+          "--owner",
+          "runner-a",
+          "--state-root",
+          fixture.stateRoot,
+        ]);
+
+        assert(result.code !== 0, `${args.join(" ")} unexpectedly reconciled metadata`);
+        assert(result.stderr.includes("must be a bare flag without a value"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${args.join(" ")} wrote reconciliation metadata`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
   test("reconcile-merged-pr fails closed on retained delivery-head mismatch", () => {
     const fixture = createMergedCleanupFixture();
     try {
