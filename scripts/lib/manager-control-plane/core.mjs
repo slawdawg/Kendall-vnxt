@@ -1164,8 +1164,13 @@ export function buildDeliverySessionReceiptPlan(options = {}, context = {}) {
   const worker = workers.find((candidate) => candidate.workerId === workerId && candidate.sessionName === sessionName && candidate.runId === runId);
   const binding = { taskId, workerId, sessionName, paneId: worker?.paneId || "", worktreePath, head, commandDigest, leaseId: worker?.currentLease?.leaseId || "" };
   const matchingReceipts = receiptRecords.filter((receipt) => isValidDeliverySessionReceipt(receipt, runId) && sameDeliveryBinding(receipt.binding, binding));
+  const matchingLegacyReceipts = receiptRecords.filter(
+    (receipt) => receipt.schemaVersion === 1 && isValidDeliverySessionReceipt(receipt, runId) && sameLegacyDeliveryBinding(receipt.binding, binding),
+  );
   const existing = matchingReceipts.length === 1 ? matchingReceipts[0] : null;
+  const legacyBindingAmbiguous = matchingReceipts.length === 0 && matchingLegacyReceipts.length > 0;
   if (matchingReceipts.length > 1) blockers.push({ code: "delivery-session-receipt-ambiguous", message: "Multiple delivery receipts share the same immutable binding; delivery result is unknown.", nextAction: "Preserve and repair the manager receipt ledger before retrying." });
+  if (legacyBindingAmbiguous) blockers.push({ code: "delivery-session-receipt-legacy-ambiguous", message: "A legacy delivery receipt matches the current binding except for lease identity; delivery result is unknown.", nextAction: "Preserve the legacy receipt and repair or migrate it through the manager recovery route before retrying." });
   if (!worker || !isManagerOwnedWorker(worker, runId) || worker.state !== "active" || worker.taskId !== taskId || worker.currentLease?.state !== "active" || worker.currentLease?.taskId !== taskId || !worker.currentLease?.leaseId || !worker.paneTarget || !worker.paneId) {
     blockers.push({ code: "delivery-session-worker-unowned", message: "Delivery session receipt requires the exact post-handoff manager-owned active worker, task lease, and pane identity.", nextAction: "Inspect the active managed handoff and lease before requesting delivery evidence." });
   }
@@ -1242,6 +1247,9 @@ export function buildDeliverySessionReceiptPlan(options = {}, context = {}) {
       const freshReceipts = fresh.value.filter(isPlainObject);
       if (freshReceipts.some((item) => !isValidDeliverySessionReceipt(item, runId))) return { malformed: true };
       const freshMatches = freshReceipts.filter((item) => sameDeliveryBinding(item.binding, binding));
+      const freshLegacyMatches = freshReceipts.filter(
+        (item) => item.schemaVersion === 1 && sameLegacyDeliveryBinding(item.binding, binding),
+      );
       const freshExisting = freshMatches.length === 1 ? freshMatches[0] : null;
       const freshWorker = freshWorkers.value.filter(isPlainObject).map(projectWorker).find((item) => item.workerId === workerId && item.sessionName === sessionName && item.runId === runId);
       const freshAdmittedWorktree = canonicalDeliveryReceiptWorktree(context.manifestWorktreePath || taskManifestWorktreePath(paths.proof.state?.root || "", taskId), context);
@@ -1255,6 +1263,7 @@ export function buildDeliverySessionReceiptPlan(options = {}, context = {}) {
           && canonicalDeliveryReceiptWorktree(freshPane.worktreePath || "", context) === worktreePath,
       );
       if (freshMatches.length > 1) return { malformed: true };
+      if (freshMatches.length === 0 && freshLegacyMatches.length > 0) return { legacyAmbiguous: true };
       if (!freshIdentityProven) return { stale: true };
       if (ledgerValueDigest(freshExisting || null) !== ledgerValueDigest(existing || null)) {
         if (freshExisting && ledgerValueDigest(freshExisting) === ledgerValueDigest(receipt)) return { receipt: freshExisting, idempotent: true };
@@ -1267,6 +1276,14 @@ export function buildDeliverySessionReceiptPlan(options = {}, context = {}) {
     }));
     if (persisted?.packet) return persisted.packet;
     if (persisted?.status === "blocked" && Array.isArray(persisted.blockers)) return persisted;
+    if (persisted?.legacyAmbiguous) {
+      return packet({
+        ok: false,
+        status: "unknown",
+        summary: { runId, apply, mutation: "none", receipt, receiptPath: paths.deliverySessionReceipts, idempotent: false, deliveryClaim: "none", rawPayloadRetained: false },
+        blockers: [{ code: "delivery-session-receipt-legacy-ambiguous", message: "A matching legacy delivery receipt appeared before persistence; delivery result is unknown.", nextAction: "Preserve the legacy receipt and repair or migrate it through the manager recovery route before retrying." }],
+      });
+    }
     if (persisted?.malformed || persisted?.conflict || persisted?.stale) {
       return packet({
         ok: false,
@@ -1353,12 +1370,19 @@ function tokenizeDeliveryCommand(command = "") {
 }
 
 const DELIVERY_BINDING_FIELDS = ["taskId", "workerId", "sessionName", "paneId", "worktreePath", "head", "commandDigest", "leaseId"];
+const LEGACY_DELIVERY_BINDING_FIELDS = DELIVERY_BINDING_FIELDS.filter((field) => field !== "leaseId");
 
 function sameDeliveryBinding(left = {}, right = {}) {
   return isPlainObject(left) && isPlainObject(right)
     && Object.keys(left).length === DELIVERY_BINDING_FIELDS.length
     && Object.keys(right).length === DELIVERY_BINDING_FIELDS.length
     && DELIVERY_BINDING_FIELDS.every((field) => left[field] === right[field]);
+}
+
+function sameLegacyDeliveryBinding(left = {}, right = {}) {
+  return isPlainObject(left) && isPlainObject(right)
+    && Object.keys(left).length === LEGACY_DELIVERY_BINDING_FIELDS.length
+    && LEGACY_DELIVERY_BINDING_FIELDS.every((field) => left[field] === right[field]);
 }
 
 function isCurrentDeliveryWorker(worker = {}, binding = {}, runId = "", context = {}) {
