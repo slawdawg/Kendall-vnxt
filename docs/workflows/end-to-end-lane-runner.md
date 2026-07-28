@@ -224,13 +224,15 @@ publisher.
    Kendall_Nxt PRs. The delegated delivery worker merges only at the exact
    reviewed head when the bounded checklist is proven: expected repository and
    base branch, non-draft state, clean mergeability, terminal successful or
-   policy-documented non-required skipped checks, zero unresolved non-outdated
-   current threads and no requested changes, relevant local verification, and
+   policy-documented non-required skipped checks, zero unresolved current
+   threads (including unadjudicated outdated threads), no requested changes or
+   pending review requests, relevant local verification, and
    reviewed diff-risk assessment. The manager inspects the evidence and
    enforces the gate but does not merge from the manager session. Record the PR
    URL, exact head/base, checks, review state, verification, diff-risk review,
-   merge method/result, and rollback path. This authority never includes
-   cleanup.
+   planned merge method, and rollback path. Record the actual merge result
+   after the merge and before any cleanup decision. This authority never
+   includes cleanup.
    If merge is blocked after checks are green, inspect thread-aware review
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
@@ -246,9 +248,31 @@ publisher.
    `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
    detached worktree from the PR head so dirty local work does not contaminate
-   merge evidence.
+   merge evidence. Retain a bounded unmanaged-PR evidence packet with every
+   gate above—repository/base/draft/mergeability, thread-aware review and
+   pending-review state, terminal check outcomes plus named skip policy, local
+   verification, diff-risk review, planned method, and rollback—rather than a
+   managed manifest-owner record. This is an alternate evidence carrier, not a
+   bypass of any merge criterion. Generate it without mutation from the
+   detached worktree with `node ./scripts/codex-workspace.mjs
+   verify-unmanaged-pr-gates --pr <number> --base <branch> --expected-head
+   <sha> --summary-json` plus the same delivery-audit, skip-policy, and
+   diff-risk evidence fields required by the managed gate.
    Use `doctor --summary-json` when automation needs a bounded readiness packet
    instead of human-readable doctor output.
+
+### Documented Non-Required Checks
+
+The only check names that may be accepted as a non-required `SKIPPED` result by
+`verify-pr-gates` are the changed-area jobs below. The exact-head gate requires
+both the named source-owned policy reference
+`docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks` and
+the matching check name; every other skipped or neutral result blocks delivery.
+
+- `full`
+- `javascript`
+- `supervisor`
+
 9. **Cleanup.** The delegated delivery/cleanup worker should prefer
    `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
@@ -559,8 +583,9 @@ Worker launch prompts must make the stop lines explicit:
 - Set `CODEX_WORKSPACE_OWNER` to the matching `codex-#` value.
 - Claim exactly one lane with `dispatch-next --apply`.
 - Use the returned worktree and follow this end-to-end lane workflow.
-- Merge is default-authorized for normal low-risk lane delivery, but only after
-  exact-head, check, review-thread, and cleanup evidence is collected.
+- Merge is permanently bounded-authorized for Kendall_Nxt PR delivery, but only
+  after exact-head, check, review-thread, diff-risk, and merge evidence is
+  collected. Cleanup remains a separate authority and evidence path.
 - Stop for secrets, credential changes, destructive migrations, unsafe provider
   or worker authority expansion, failed checks the worker cannot fix,
   unresolved requested changes, ambiguous exact-head merge state, unsafe
@@ -583,28 +608,31 @@ state changes rather than streaming raw output. Relay only blockers, questions,
 failed checks, PR links, merge results, cleanup results, and extreme-risk
 findings to the operator.
 
-## Low-Risk Merge Checklist
+## Bounded Merge Checklist
 
 Merge under `standard-delivery` only when current evidence proves all of these:
 
-- The PR belongs to the current lane and targets the expected base branch.
-- The workspace manifest owner matches the current runner, or ownership was
-  explicitly taken over with operator confirmation.
+- The PR belongs to the current lane and targets the expected base branch, or
+  an unmanaged detached-worktree evidence packet proves the same repository and
+  expected base binding.
+- For a managed lane, the workspace manifest owner matches the current runner,
+  or ownership was explicitly taken over with operator confirmation.
 - The PR is not a draft.
 - The PR is in Kendall_Nxt, targets the expected base branch, and is mergeable
   at the exact reviewed head SHA.
 - Required and reported checks for that exact head are terminal and successful,
   or policy-documented as non-required skipped.
-- There are zero unresolved non-outdated current review threads and no
-  requested changes or pending review requests. This must be proven with
+- There are zero unresolved current review threads—including unadjudicated
+  outdated threads—and no requested changes or pending review requests. This must be proven with
   thread-aware review data, such as GraphQL `reviewThreads`; flat PR comments
   or check rollups are not enough. The evidence must be collected after the
   latest pushed PR head.
 - Relevant local verification and a reviewed diff-risk assessment cover the
-  current exact head; the evidence records the PR URL, head/base, checks,
-  review state, verification, diff-risk review, merge method/result, and
-  rollback path. Re-audit every bounded merge criterion immediately before the
-  merge mutation; changed, missing, or newly ambiguous evidence aborts it.
+  current exact head; the pre-merge evidence records the PR URL, head/base,
+  checks, review state, verification, diff-risk review, planned merge method,
+  and rollback path. Re-audit every bounded merge criterion immediately before
+  the merge mutation; changed, missing, or newly ambiguous evidence aborts it.
+  Record the actual merge result only after that mutation succeeds.
 - Local verification has completed for the changed surface.
 - The changed-file list has a diff-risk review that identifies the
   risk-appropriate verification and recovery evidence for the current head.
@@ -614,11 +642,14 @@ Merge under `standard-delivery` only when current evidence proves all of these:
   package that changed.
 
 If any evidence source is stale, unavailable, ambiguous, failing, or too narrow
-for the changed surface, do not classify the merge as low risk.
+for the changed surface, do not allow the bounded merge.
 
 ## High-Risk Surfaces
 
-These surfaces are not automatically covered by `standard-delivery`:
+These surfaces require risk-appropriate verification and review before a
+bounded merge; they do not by themselves create a second merge-approval gate.
+They remain separate authority gates for implementation, provider use, launch,
+and cleanup operations:
 
 - Secrets, credentials, tokens, or authentication state.
 - Provider calls, paid execution, model selection, or budget changes outside

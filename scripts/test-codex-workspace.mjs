@@ -1412,11 +1412,35 @@ try {
     const evidence = source.match(/function buildPrGateEvidence[\s\S]*?function prGateHeadState/);
     assert(evidence, "buildPrGateEvidence source not found");
     assert(evidence[0].includes('"exact PR head matches local delivery head"'), "gate evidence must require exact-head proof");
-    assert(evidence[0].includes('"thread-aware review query returned no unresolved non-outdated threads"'), "gate evidence must require thread-aware review proof");
-    assert(evidence[0].includes('"all reported checks completed successfully"'), "gate evidence must require check proof");
+    assert(evidence[0].includes('"thread-aware review query returned no unresolved or pending review state"'), "gate evidence must require complete thread-aware review proof");
+    assert(evidence[0].includes('"all reported checks completed successfully or are exact-head documented non-required skips"'), "gate evidence must require explicit skipped-check policy proof");
     assert(evidence[0].includes('"delivery subagent audit recommends merge-ready for exact head"'), "gate evidence must require delivery subagent audit proof");
+    assert(evidence[0].includes('"exact-head diff-risk assessment and focused verification evidence are recorded"'), "gate evidence must require exact-head diff-risk proof");
     assert(evidence[0].includes("shapeDeliverySubagentAuditEvidence"), "gate evidence must shape delivery subagent audit metadata");
     assert(evidence[0].includes("metadataOnly: true"), "gate evidence must be metadata-only");
+
+    const blockers = source.match(/function prGateBlockers[\s\S]*?function renderPrGateEvidence/);
+    assert(blockers, "prGateBlockers source not found");
+    for (const expected of [
+      "Unresolved outdated review threads require adjudication",
+      "Pending review requests",
+      "Review-request query returned additional pages",
+      "context.nonRequiredCheckPolicy?.blockers",
+      "context.diffRiskEvidence?.blockers",
+    ]) {
+      assert(blockers[0].includes(expected), `PR gate blockers must fail closed on ${expected}`);
+    }
+
+    const checkNormalizer = source.match(/function normalizeStatusCheckRollup[\s\S]*?function statusContextConclusion/);
+    assert(checkNormalizer, "status check normalizer source not found");
+    assert(checkNormalizer[0].includes('check.conclusion === "SUCCESS" || acceptedSkipped(check)'), "only success or policy-bound skipped checks may pass");
+    assert(!checkNormalizer[0].includes('"NEUTRAL"].includes'), "neutral checks must not be classified as passed");
+    assert(checkNormalizer[0].includes("terminalCheckStatus(check.status)"), "check success must require a terminal status");
+
+    const unmanagedGate = source.match(/function verifyUnmanagedPrGates[\s\S]*?function reconcileMergedPr/);
+    assert(unmanagedGate, "unmanaged PR evidence command not found");
+    assert(unmanagedGate[0].includes("metadata-only and does not support --apply"), "unmanaged PR evidence must remain non-mutating");
+    assert(!unmanagedGate[0].includes("writeManifest"), "unmanaged PR evidence must not write a manifest");
 
     const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
     assert(packetBlock, "lane evidence packet source not found");
@@ -9881,6 +9905,12 @@ try {
           "merge-ready",
           "--delivery-audit-summary",
           "Exact-head delivery audit passed.",
+          "--diff-risk-summary",
+          "Policy-only authority update with fail-closed gate coverage.",
+          "--diff-risk-files",
+          "feature.txt",
+          "--diff-risk-verification",
+          "pnpm run check:runbooks",
           "--state-root",
           fixture.stateRoot,
         ],
@@ -9896,7 +9926,10 @@ try {
       assert(manifest.pr_gate_evidence.checks.total === 1, "gate evidence missing check rollup");
       assert(manifest.pr_gate_evidence.checks.passed.length === 1, "gate evidence did not classify passed check");
       assert(manifest.pr_gate_evidence.reviewThreads.unresolvedNonOutdatedCount === 0, "gate evidence did not prove resolved review threads");
+      assert(manifest.pr_gate_evidence.reviewThreads.unresolvedOutdatedCount === 0, "gate evidence did not prove outdated-thread clearance");
+      assert(manifest.pr_gate_evidence.reviewThreads.pendingReviewRequestCount === 0, "gate evidence did not prove pending-review clearance");
       assert(manifest.pr_gate_evidence.deliverySubagentAudit.status === "merge-ready", "gate evidence missing delivery audit status");
+      assert(manifest.pr_gate_evidence.diffRiskEvidence.status === "recorded", "gate evidence missing diff-risk evidence");
       assert(manifest.delivery_subagent_audit?.agent === "Wegener", "manifest missing delivery subagent audit agent");
       assert(manifest.delivery_subagent_audit?.headSha === manifest.pr_gate_evidence.expectedHeadSha, "delivery audit must bind to exact head");
       assert(manifest.delivery_subagent_audit_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing delivery audit freshness timestamp");
@@ -10029,6 +10062,108 @@ try {
     }
   });
 
+  test("verify-pr-gates fails closed on unresolved outdated threads and pending review requests", () => {
+    for (const scenario of [
+      {
+        name: "outdated-thread",
+        options: {
+          existingPr: true,
+          reviewThreads: [{ id: "RT_outdated", isResolved: false, isOutdated: true, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated" }] } }],
+        },
+        expected: "Unresolved outdated review threads require adjudication: 1",
+      },
+      {
+        name: "pending-review-request",
+        options: { existingPr: true, reviewRequests: [{ id: "RR_pending" }] },
+        expected: "Pending review requests: 1",
+      },
+      {
+        name: "pending-review-request-pagination",
+        options: { existingPr: true, reviewRequestsHasNextPage: true },
+        expected: "Review-request query returned additional pages",
+      },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture(scenario.options);
+      try {
+        const result = runFixtureScript(
+          fixture,
+          [
+            "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+            "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+            "--delivery-audit-summary", "Exact-head delivery audit passed.",
+            "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+            "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+            "--state-root", fixture.stateRoot,
+          ],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} unexpectedly passed`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("verify-pr-gates rejects undocumented skipped and neutral checks", () => {
+    for (const scenario of [
+      { name: "skipped", check: { name: "full", status: "COMPLETED", conclusion: "SKIPPED" } },
+      { name: "neutral", check: { name: "unit", status: "COMPLETED", conclusion: "NEUTRAL" } },
+      { name: "nonterminal-success", check: { name: "unit", status: "IN_PROGRESS", conclusion: "SUCCESS" }, expected: "Pending checks: unit" },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture({ existingPr: true, statusCheckRollup: [scenario.check] });
+      try {
+        const result = runFixtureScript(
+          fixture,
+          [
+            "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+            "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+            "--delivery-audit-summary", "Exact-head delivery audit passed.",
+            "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+            "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+            "--state-root", fixture.stateRoot,
+          ],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} unexpectedly passed`);
+        assert(result.stderr.includes(scenario.expected || `Failing checks: ${scenario.check.name}`), result.stderr || result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("verify-pr-gates accepts only exact-head policy-bound skipped checks", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--non-required-checks", "full", "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+          "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.pr_gate_evidence.nonRequiredCheckPolicy.names.includes("full"), "gate evidence lost the allowed skipped check");
+      assert(manifest.pr_gate_evidence.checks.passed.some((check) => check.name === "full"), "policy-bound skipped check did not pass");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates fails closed without positive base merge review and check evidence", () => {
     for (const scenario of [
       {
@@ -10071,6 +10206,12 @@ try {
             "merge-ready",
             "--delivery-audit-summary",
             "Exact-head delivery audit passed.",
+            "--diff-risk-summary",
+            "Focused gate fixture.",
+            "--diff-risk-files",
+            "feature.txt",
+            "--diff-risk-verification",
+            "node ./scripts/test-codex-workspace.mjs",
             "--state-root",
             fixture.stateRoot,
           ],
@@ -10107,6 +10248,11 @@ try {
         options: { existingPr: true, reviewThreadsHasNextPage: true },
         expected: "Review-thread query returned additional pages",
       },
+      {
+        name: "missing-review-requests",
+        options: { existingPr: true, omitReviewRequests: true },
+        expected: "Review-thread query did not return thread-aware evidence",
+      },
     ]) {
       const fixture = createFinishPrExistingCommitFixture(scenario.options);
       try {
@@ -10127,6 +10273,12 @@ try {
             "merge-ready",
             "--delivery-audit-summary",
             "Exact-head delivery audit passed.",
+            "--diff-risk-summary",
+            "Focused gate fixture.",
+            "--diff-risk-files",
+            "feature.txt",
+            "--diff-risk-verification",
+            "node ./scripts/test-codex-workspace.mjs",
             "--state-root",
             fixture.stateRoot,
           ],
@@ -10140,6 +10292,31 @@ try {
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+  });
+
+  test("verify-pr-gates fails closed when diff-risk evidence omits a changed PR path", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      changedPaths: ["feature.txt", "sensitive-policy.txt"],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--diff-risk-summary", "Incomplete fixture coverage.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "verify-pr-gates unexpectedly accepted incomplete diff-risk coverage");
+      assert(result.stderr.includes("Diff-risk evidence omits changed paths: sensitive-policy.txt"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
@@ -13757,7 +13934,12 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\n");
   writeFileSync(join(fixtureRoot, "base.txt"), "base\n");
-  runGit(fixtureRoot, ["add", "base.txt", "scripts"]);
+  mkdirSync(join(fixtureRoot, "docs", "workflows"), { recursive: true });
+  writeFileSync(
+    join(fixtureRoot, "docs", "workflows", "end-to-end-lane-runner.md"),
+    "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
+  );
+  runGit(fixtureRoot, ["add", "base.txt", "scripts", "docs"]);
   runGit(fixtureRoot, ["commit", "-q", "-m", "base"]);
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
@@ -13806,7 +13988,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
               },
               {
                 id: "RT_outdated",
-                isResolved: false,
+                isResolved: true,
                 isOutdated: true,
                 comments: { nodes: [{ url: "https://example.test/pull/456#discussion_r2" }] },
               },
@@ -13816,6 +13998,12 @@ function createFinishPrExistingCommitFixture(options = {}) {
               endCursor: options.reviewThreadsHasNextPage ? "cursor-1" : null,
             },
           },
+          reviewRequests: {
+            nodes: options.reviewRequests || [],
+            pageInfo: {
+              hasNextPage: Boolean(options.reviewRequestsHasNextPage),
+            },
+          },
         },
       },
     },
@@ -13823,6 +14011,10 @@ function createFinishPrExistingCommitFixture(options = {}) {
   if (options.reviewThreadErrors) {
     reviewThreadsPayload.errors = options.reviewThreadErrors;
   }
+  if (options.omitReviewRequests) {
+    delete reviewThreadsPayload.data.repository.pullRequest.reviewRequests;
+  }
+  const changedPaths = options.changedPaths || [options.featurePath || "feature.txt"];
   const fakeGh = join(fakeBin, "gh");
   writeFileSync(
     fakeGh,
@@ -13833,6 +14025,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.existingPr
         ? `if (args[0] === 'pr' && args[1] === 'view') { console.log(${JSON.stringify(JSON.stringify(prViewPayload))}); process.exit(0); }`
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
+      `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`,
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",

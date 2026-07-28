@@ -414,7 +414,7 @@ durable, milestone-driven workflow rather than a single unbounded task.
   that authority only when the current PR head fully addresses the feedback;
   the relevant local verification and required code review have completed;
   fresh thread-aware GitHub data shows the thread is current, unambiguous, and
-  not a requested change; and checks for that exact head are successful or
+  not a requested change with no pending review request; and checks for that exact head are successful or
   intentionally skipped by documented policy as non-required. A required,
   failed, unknown, or ambiguously skipped check is always a stop line. The
   worker must record the thread ID and bounded
@@ -434,17 +434,20 @@ durable, milestone-driven workflow rather than a single unbounded task.
   Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
   reviewed head when the PR is in this repository and its expected base branch,
   is not a draft, is cleanly mergeable, has terminal successful checks or
-  policy-documented non-required skipped checks, has zero unresolved
-  non-outdated current review threads and no requested changes, has completed
+  policy-documented non-required skipped checks, has zero unresolved current
+  review threads (including unadjudicated outdated threads), no requested changes,
+  and no pending review requests, has completed
   relevant local verification, and has a reviewed diff-risk assessment. Record
   the PR URL, head SHA, base branch, check/review state, verification command,
-  diff-risk review, merge method, merge result, and rollback path before any
-  cleanup decision. This authority is for merge only and never authorizes
+  diff-risk review, planned merge method, and rollback path before the merge;
+  record the actual merge result afterward and before any cleanup decision.
+  This authority is for merge only and never authorizes
   cleanup.
 - Prove the bounded merge criteria with concrete evidence from GitHub PR
   metadata for base branch, mergeability, draft state, and exact head SHA;
-  GitHub review-thread and review-request state for unresolved conversations or
-  requested changes; GitHub status/check results for the exact head SHA; local
+  GitHub review-thread and review-request state for unresolved conversations,
+  unadjudicated outdated threads, pending reviews, or requested changes; GitHub
+  status/check results for the exact head SHA; local
   verification command output for repo-specific checks; and a reviewed
   diff-risk assessment. Fail closed and do not merge on an unknown, failed,
   ambiguous, or nonterminal state; new feedback; missing evidence; an exact-head
@@ -458,10 +461,15 @@ durable, milestone-driven workflow rather than a single unbounded task.
   dirty or unrelated. Use supported installed `gh` commands such as
   `gh pr diff <number> --name-only`, collect the exact `headRefOid`, run focused
   package verification, and merge only with exact-head protection such as
-  `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+  `gh pr merge <number> --merge --match-head-commit <headRefOid>`.
   If a broad verification suite hangs or becomes inconclusive, record that
   result and run focused verification for the changed surface rather than
-  treating the broad run as passed.
+  treating the broad run as passed. For an unmanaged PR, retain the same
+  exact-head audit as an external evidence packet from a detached worktree:
+  repository/base/draft/mergeability, thread-aware review state, terminal check
+  outcomes and non-required-skip policy, local verification, diff-risk review,
+  planned method, and rollback. The managed manifest-owner requirement does not
+  apply to that packet, but every other bounded merge gate does.
 - If GitHub reports a merge state such as `BLOCKED`, `UNKNOWN`, or otherwise
   refuses a merge while checks appear green, inspect thread-aware review state
   before any other hypothesis. Use the `github:gh-address-comments` workflow or
