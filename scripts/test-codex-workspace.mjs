@@ -6301,6 +6301,99 @@ try {
     }
   });
 
+  test("malformed zero-byte dirty lock recovers only the Story 36.5-shaped approved lane", () => {
+    const fixture = createDirtyTakeoverFixture("story-36-5-zero-byte-lock");
+    try {
+      const corePath = join(fixture.worktree, "scripts", "lib", "manager-control-plane", "core.mjs");
+      const testPath = join(fixture.worktree, "tests", "manager-control-plane.test.mjs");
+      mkdirSync(dirname(corePath), { recursive: true });
+      mkdirSync(dirname(testPath), { recursive: true });
+      writeFileSync(corePath, "export const recovered = true;\n");
+      writeFileSync(testPath, "export const covered = true;\n");
+      const lockPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`);
+      writeFileSync(lockPath, "");
+
+      const result = runFixtureScript(
+        fixture,
+        dirtyTakeoverArgs(fixture, ["scripts/lib/manager-control-plane/core.mjs", "tests/manager-control-plane.test.mjs"]),
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
+      const recovery = manifest.takeover_decisions.at(-1).dirty_in_lane_evidence.malformed_lock_recovery;
+      assert(recovery.status === "recovered", JSON.stringify(recovery));
+      assert(recovery.classification === "zero_byte", JSON.stringify(recovery));
+      const archives = readdirSync(join(fixture.stateRoot, "tasks", ".lock-history"));
+      assert(archives.length === 1, JSON.stringify(archives));
+      assert(readFileSync(join(fixture.stateRoot, "tasks", ".lock-history", archives[0]), "utf8") === "", "recovery did not archive the exact zero-byte lock");
+      assert(!existsSync(lockPath), "recovered zero-byte lock remained after takeover");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("malformed nonempty dirty lock remains blocked without archival or ownership mutation", () => {
+    const fixture = createDirtyTakeoverFixture("nonempty-malformed-lock");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "must remain blocked\n");
+      const lockPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`);
+      writeFileSync(lockPath, "not-json\n");
+      const before = readFileSync(fixture.manifestPath, "utf8");
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "nonempty malformed lock unexpectedly recovered");
+      assert(readFileSync(lockPath, "utf8") === "not-json\n", "nonempty malformed lock changed");
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "blocked recovery mutated ownership");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "blocked recovery archived a nonempty lock");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("zero-byte dirty lock remains blocked without explicit approval or archival", () => {
+    const fixture = createDirtyTakeoverFixture("zero-byte-missing-approval");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "must remain blocked\n");
+      const lockPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`);
+      writeFileSync(lockPath, "");
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const args = dirtyTakeoverArgs(fixture, ["dirty.txt"]);
+      const approvalIndex = args.indexOf("--approval");
+      args.splice(approvalIndex, 2);
+
+      const result = runFixtureScript(fixture, args);
+
+      assert(result.code !== 0, "zero-byte lock unexpectedly recovered without approval");
+      assert(existsSync(lockPath), "zero-byte lock was archived without approval");
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "missing-approval recovery mutated ownership");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "missing-approval recovery archived a lock");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("zero-byte dirty lock remains blocked when live GitHub evidence finds a PR", () => {
+    const fixture = createDirtyTakeoverFixture("zero-byte-live-pr", {
+      prListJson: JSON.stringify([{ number: 81, state: "OPEN", headRefName: "codex/stale-zero-byte-live-pr" }]),
+    });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "must remain blocked\n");
+      const lockPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`);
+      writeFileSync(lockPath, "");
+      const before = readFileSync(fixture.manifestPath, "utf8");
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "zero-byte lock unexpectedly recovered with a live PR");
+      assert(existsSync(lockPath), "zero-byte lock was archived with a live PR");
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "live-PR recovery mutated ownership");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "live-PR recovery archived a lock");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
   test("takeover dirty-lane path rejects unexpected and unsafe path declarations without mutation", () => {
     const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-reject-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-reject-worktree-"));

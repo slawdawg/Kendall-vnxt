@@ -2115,6 +2115,7 @@ function takeover(argv) {
   const target = resolveTakeoverTarget(state, query);
   const preflightLockInspection = target.kind === "workspace" ? inspectTaskLock(state, target.record.task_id) : null;
   const packet = takeoverPacket(target, {
+    state,
     currentOwner,
     generatedAt,
     staleAfterSeconds,
@@ -10449,7 +10450,7 @@ function takeoverPacket(target, context) {
   const branch = takeoverBranchEvidence(record, worktree);
   const pr = takeoverPrEvidence(record);
   const dirty = takeoverDirtyStateEvidence(worktree);
-  const dirtyInLane = takeoverDirtyInLaneEvidence(target, context, { worktree, branch, pr, dirty });
+  const dirtyInLane = takeoverDirtyInLaneEvidence(target, context, { stale, worktree, branch, pr, dirty });
   const blockers = takeoverBlockers(target, context, {
     stale,
     worktree,
@@ -10919,7 +10920,6 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   if (evidence.worktree.registration?.status !== "matched") result.errors.push(evidence.worktree.registration?.reason || "recorded worktree registration is unavailable");
   if (evidence.branch.status !== "matched") result.errors.push("manifest branch does not exactly match the worktree checkout");
   if (evidence.pr.status !== "none") result.errors.push("dirty in-lane takeover is forbidden when a PR is recorded");
-  if (!lock || lock.status !== "absent") result.errors.push("dirty in-lane takeover requires proof that no task lock is active or retained");
   if (!validTakeoverReason(context.approval)) result.errors.push("explicit operator approval evidence is required");
   if (evidence.worktree.exists && evidence.branch.branch) {
     result.live_no_pr_evidence = strictGithubNoPrProof({ branch: evidence.branch.branch }, evidence.worktree.path);
@@ -10929,6 +10929,13 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   } else {
     result.errors.push("live GitHub no-PR proof requires an existing branch worktree");
   }
+  const malformedLockRecovery = malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, lock, result.live_no_pr_evidence);
+  if (lock?.status !== "absent") {
+    result.malformed_lock_recovery = malformedLockRecovery;
+  }
+  if (!lock || (lock.status !== "absent" && malformedLockRecovery.status !== "eligible")) {
+    result.errors.push(malformedLockRecovery.reason || "dirty in-lane takeover requires proof that no task lock is active or retained");
+  }
   if (target.kind === "workspace" && evidence.worktree.exists) {
     try {
       result.before = dirtyInLanePathSnapshot(evidence.worktree.path, context.dirtyPaths);
@@ -10936,6 +10943,53 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
       result.errors.push(error instanceof Error ? error.message : String(error));
     }
   }
+  return result;
+}
+
+function malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, lock, liveNoPr) {
+  const result = {
+    status: "not_needed",
+    classification: lock?.status || "missing",
+    lock_path: lock?.lockPath || null,
+    owner_process_identity: {
+      status: lock?.metadata ? "recorded" : "absent_from_malformed_lock",
+      matching_live_process: false,
+      matching_descendant_process: false,
+    },
+    reason: null,
+  };
+  if (!context.allowDirtyInLane || !lock || lock.status === "absent") return result;
+  if (lock.status !== "malformed_zero_byte") {
+    result.status = "blocked";
+    result.reason = "dirty in-lane takeover requires proof that no task lock is active or retained";
+    return result;
+  }
+  const expectedLockPath = target.kind === "workspace" && context.state
+    ? taskLockPath(context.state, String(target.record.task_id || ""))
+    : null;
+  if (!expectedLockPath || resolve(lock.lockPath) !== resolve(expectedLockPath) || dirname(resolve(lock.lockPath)) !== resolve(context.state.tasksDir)) {
+    result.status = "blocked";
+    result.reason = "zero-byte lock recovery requires the exact contained task lock path";
+    return result;
+  }
+  if (!evidence.stale.is_stale || !target.record.owner || target.record.owner === context.currentOwner) {
+    result.status = "blocked";
+    result.reason = "zero-byte lock recovery requires a stale foreign manifest owner";
+    return result;
+  }
+  if (
+    evidence.worktree.registration?.status !== "matched" ||
+    evidence.branch.status !== "matched" ||
+    evidence.pr.status !== "none" ||
+    liveNoPr?.status !== "matched" ||
+    !validTakeoverReason(context.approval)
+  ) {
+    result.status = "blocked";
+    result.reason = "zero-byte lock recovery requires matching worktree/branch, no PR, and explicit approval";
+    return result;
+  }
+  result.status = "eligible";
+  result.reason = "exact contained zero-byte lock has no recorded live owner or descendant identity";
   return result;
 }
 
@@ -11033,6 +11087,14 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
   }
 
   const taskId = String(target.record.task_id || "");
+  const recovery = preflightLockInspection?.status === "malformed_zero_byte"
+    ? recoverApprovedZeroByteDirtyTaskLock(state, target, {
+        currentOwner,
+        options,
+        staleAfterSeconds,
+      })
+    : null;
+  const postRecoveryLockInspection = inspectTaskLock(state, taskId);
   return withManifestLock(state, taskId, () => {
     const path = target.path;
     const manifest = readManifest(path);
@@ -11045,17 +11107,21 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
       },
       {
         currentOwner,
+        state,
         generatedAt: new Date(),
         staleAfterSeconds,
         reason: String(options.takeoverReason || "").trim(),
         approval: String(options.approval || "").trim(),
         allowDirtyInLane: options.allowDirtyInLane === true,
         dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
-        preflightLockInspection,
+        preflightLockInspection: postRecoveryLockInspection,
       },
     );
     if (!packet.allowed) {
       throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
+    }
+    if (recovery) {
+      packet.dirty_in_lane_evidence.malformed_lock_recovery = recovery;
     }
     finalizeDirtyInLaneTakeover(packet);
     const manifestBeforeTakeover = JSON.stringify(manifest);
@@ -11070,6 +11136,34 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
     }
     return { path, packet };
   }, { recoverStale: options.allowDirtyInLane !== true });
+}
+
+function recoverApprovedZeroByteDirtyTaskLock(state, target, { currentOwner, options, staleAfterSeconds }) {
+  if (target.kind !== "workspace" || options.allowDirtyInLane !== true) return null;
+  const taskId = String(target.record.task_id || "");
+  const path = target.path;
+  const manifest = readManifest(path);
+  validateManifest(manifest, path);
+  const packet = takeoverPacket(
+    { kind: "workspace", path, record: manifest },
+    {
+      state,
+      currentOwner,
+      generatedAt: new Date(),
+      staleAfterSeconds,
+      reason: String(options.takeoverReason || "").trim(),
+      approval: String(options.approval || "").trim(),
+      allowDirtyInLane: true,
+      dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
+      preflightLockInspection: inspectTaskLock(state, taskId),
+    },
+  );
+  const eligibility = packet.dirty_in_lane_evidence?.malformed_lock_recovery;
+  if (eligibility?.status !== "eligible") return null;
+  if (!packet.allowed) {
+    throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
+  }
+  return archiveApprovedZeroByteTaskLock(state, taskId, eligibility);
 }
 
 function applyAssignmentTakeover(assignment, packet) {
@@ -11657,6 +11751,9 @@ function inspectTaskLock(state, taskId) {
     if (stats.size > 16_384) {
       return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_too_large", metadata: null };
     }
+    if (stats.size === 0) {
+      return { taskId, lockPath, status: "malformed_zero_byte", reason: "lock_file_zero_bytes", metadata: null };
+    }
     const metadata = JSON.parse(readFileSync(lockPath, "utf8"));
     if (!validTaskLockMetadata(metadata, taskId)) {
       return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_invalid", metadata: null };
@@ -11717,6 +11814,51 @@ function recoverStaleTaskLock(state, taskId) {
   } catch {
     return { recovered: false, inspection: inspectTaskLock(state, taskId) };
   }
+}
+
+function archiveApprovedZeroByteTaskLock(state, taskId, eligibility) {
+  const expectedLockPath = taskLockPath(state, taskId);
+  const containedTasksDir = resolve(state.tasksDir);
+  if (
+    eligibility?.status !== "eligible" ||
+    resolve(eligibility.lock_path || "") !== resolve(expectedLockPath) ||
+    dirname(resolve(expectedLockPath)) !== containedTasksDir
+  ) {
+    throw new Error("Zero-byte lock recovery proof is incomplete; mutation refused.");
+  }
+  const before = inspectTaskLock(state, taskId);
+  if (before.status !== "malformed_zero_byte" || resolve(before.lockPath) !== resolve(expectedLockPath)) {
+    throw new Error("Zero-byte lock changed before approved recovery; mutation refused.");
+  }
+  const stats = lstatSync(expectedLockPath);
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.size !== 0) {
+    throw new Error("Zero-byte lock file changed shape before approved recovery; mutation refused.");
+  }
+  const reread = inspectTaskLock(state, taskId);
+  if (reread.status !== "malformed_zero_byte" || resolve(reread.lockPath) !== resolve(expectedLockPath)) {
+    throw new Error("Zero-byte lock changed during approved recovery proof; mutation refused.");
+  }
+  const historyDir = join(state.tasksDir, ".lock-history");
+  mkdirSync(historyDir, { recursive: true });
+  const archivePath = join(historyDir, `${taskId}-${randomUUID()}.zero-byte-lock`);
+  try {
+    renameSync(expectedLockPath, archivePath);
+  } catch (error) {
+    throw new Error(`Zero-byte lock archival failed without ownership mutation: ${error?.code || "unknown"}.`);
+  }
+  return {
+    status: "recovered",
+    classification: "zero_byte",
+    lock_path: expectedLockPath,
+    archive_name: basename(archivePath),
+    recovered_at: new Date().toISOString(),
+    owner_process_identity: {
+      status: "absent_from_malformed_lock",
+      matching_live_process: false,
+      matching_descendant_process: false,
+    },
+    reason: "approved exact-task zero-byte lock archived before dirty in-lane takeover",
+  };
 }
 
 function withManifestLock(state, taskId, fn, options = {}) {

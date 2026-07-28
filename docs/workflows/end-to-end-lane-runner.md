@@ -363,8 +363,13 @@ exact, not a glob. The runner rejects a missing,
 unexpected, unsafe, unreadable, symlinked, renamed, copied, or out-of-worktree
 path. It also rejects a non-stale or same owner, an active or retained task
 lock, an absent worktree, a manifest/checkout branch mismatch, and any recorded
-PR. Under the exact task lock it fingerprints every allowed file before and
-after the transfer; a changed path or digest aborts without ownership mutation.
+PR. The sole retained-lock exception is a zero-byte task lock: only this
+explicitly approved dirty takeover may archive that exact contained file into
+`.lock-history` after all other handoff gates pass. Every nonempty malformed,
+unknown, active, or path-escaping lock remains blocked; never delete a lock
+manually. Under the exact task lock it fingerprints every allowed file before
+and after the transfer; a changed path or digest aborts without ownership
+mutation.
 
 The applied manifest records the prior and new owner, reason, approval text,
 timestamps, exact paths, status codes, and SHA-256 fingerprints. This route
