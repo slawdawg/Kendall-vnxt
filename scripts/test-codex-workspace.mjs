@@ -6276,6 +6276,200 @@ try {
     }
   });
 
+  test("takeover apply transfers a stale dirty lane only with exact path fingerprints", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-allowed-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-allowed-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+      runGit(worktreePath, ["checkout", "-q", "-b", "codex/stale-dirty-workspace"]);
+      writeFileSync(join(worktreePath, "dirty.txt"), "preserve this intended lane work\n");
+
+      const tasksDir = join(takeoverStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "stale-dirty-workspace.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "stale-dirty-workspace",
+            branch: "codex/stale-dirty-workspace",
+            worktree_path: worktreePath,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_updated_at: "2026-06-21T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "takeover",
+        "stale-dirty-workspace",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator explicitly approved the bounded dirty lane takeover",
+        "--allow-dirty-in-lane",
+        "--dirty-paths",
+        "dirty.txt",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      assert(manifest.owner === "runner-a", "dirty takeover did not update workspace owner");
+      const decision = manifest.takeover_decisions.at(-1);
+      const dirtyEvidence = decision.dirty_in_lane_evidence;
+      const expectedDigest = createHash("sha256").update("preserve this intended lane work\n").digest("hex");
+      assert(dirtyEvidence.mode === "requested", JSON.stringify(dirtyEvidence));
+      assert(dirtyEvidence.lock_evidence.status === "absent", JSON.stringify(dirtyEvidence));
+      assert(dirtyEvidence.status === "stable", JSON.stringify(dirtyEvidence));
+      assert(dirtyEvidence.before.paths[0].path === "dirty.txt", JSON.stringify(dirtyEvidence));
+      assert(dirtyEvidence.before.paths[0].sha256 === expectedDigest, JSON.stringify(dirtyEvidence));
+      assert(dirtyEvidence.after.paths[0].sha256 === expectedDigest, JSON.stringify(dirtyEvidence));
+      assert(decision.previous_owner === "runner-b" && decision.requesting_owner === "runner-a", JSON.stringify(decision));
+      assert(decision.reason === "stale owner evidence reviewed", JSON.stringify(decision));
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover dirty-lane path rejects unexpected and unsafe path declarations without mutation", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-reject-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-reject-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+      runGit(worktreePath, ["checkout", "-q", "-b", "codex/stale-dirty-reject"]);
+      writeFileSync(join(worktreePath, "dirty.txt"), "dirty\n");
+
+      const tasksDir = join(takeoverStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "stale-dirty-reject.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({
+          task_id: "stale-dirty-reject",
+          branch: "codex/stale-dirty-reject",
+          worktree_path: worktreePath,
+          base_branch: "main",
+          status: "active",
+          owner: "runner-b",
+          owner_updated_at: "2026-06-21T00:00:00.000Z",
+          last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+        }, null, 2)}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      for (const dirtyPaths of ["dirty.txt,unlisted.txt", "../outside.txt"]) {
+        const result = run([
+          "takeover",
+          "stale-dirty-reject",
+          "--apply",
+          "--owner",
+          "runner-a",
+          "--takeover-reason",
+          "stale owner evidence reviewed",
+          "--approval",
+          "operator explicitly approved the bounded dirty lane takeover",
+          "--allow-dirty-in-lane",
+          "--dirty-paths",
+          dirtyPaths,
+          "--stale-after-seconds",
+          "60",
+          "--state-root",
+          takeoverStateRoot,
+        ]);
+        assert(result.code !== 0, `dirty takeover unexpectedly passed for ${dirtyPaths}`);
+        assert(readFileSync(manifestPath, "utf8") === before, "rejected dirty takeover changed the manifest");
+      }
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover dirty-lane path rejects a retained active task lock without mutation", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-lock-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-lock-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+      runGit(worktreePath, ["checkout", "-q", "-b", "codex/stale-dirty-lock"]);
+      writeFileSync(join(worktreePath, "dirty.txt"), "dirty\n");
+
+      const tasksDir = join(takeoverStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "stale-dirty-lock.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({
+          task_id: "stale-dirty-lock",
+          branch: "codex/stale-dirty-lock",
+          worktree_path: worktreePath,
+          base_branch: "main",
+          status: "active",
+          owner: "runner-b",
+          owner_updated_at: "2026-06-21T00:00:00.000Z",
+          last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+        }, null, 2)}\n`,
+      );
+      writeFileSync(
+        join(tasksDir, "stale-dirty-lock.lock"),
+        `${JSON.stringify(fixtureTaskLockMetadata("stale-dirty-lock"))}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "stale-dirty-lock",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator explicitly approved the bounded dirty lane takeover",
+        "--allow-dirty-in-lane",
+        "--dirty-paths",
+        "dirty.txt",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      assert(result.code !== 0, "dirty takeover unexpectedly passed with an active task lock");
+      assert(result.stdout.includes("requires proof that no task lock is active or retained"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "active-lock dirty takeover changed the manifest");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
   test("takeover apply reassigns stale clean workspace manifest with approval evidence", () => {
     const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-clean-manifest-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-clean-worktree-"));
