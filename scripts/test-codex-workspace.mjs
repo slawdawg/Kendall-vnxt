@@ -9699,12 +9699,15 @@ try {
   test("current-thread resolver records symmetric exact-head evidence and handles success, ambiguity, pre-mutation races, and post-audit holds", () => {
     for (const scenario of [
       { name: "success", options: {}, expectedCode: 0, status: "resolved" },
+      { name: "stable-outdated-hold", options: {}, expectedCode: 0, status: "resolved", extraThreads: [{ id: "PRRT_known_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_outdated", body: "Older separate request." }] } }] },
       { name: "known-current-hold", options: {}, expectedCode: 1, status: "needs-recovery", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }] },
+      { name: "known-current-and-outdated-holds", options: {}, expectedCode: 1, status: "needs-recovery", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }, { id: "PRRT_known_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_outdated", body: "Older separate request." }] } }] },
       { name: "ambiguous", options: { resolveMutationFailure: "ambiguous-resolved" }, expectedCode: 1, status: "needs-recovery" },
       { name: "race", options: { preMutationCurrentThreadDrift: true }, expectedCode: 1, status: null },
       { name: "mutation-time-check-drift", options: { preMutationCheckDrift: true }, expectedCode: 1, status: null },
       { name: "mutation-time-review-decision-drift", options: { preMutationReviewDecisionDrift: true }, expectedCode: 1, status: null },
       { name: "mutation-time-review-request-drift", options: { preMutationReviewRequestDrift: true }, expectedCode: 1, status: null },
+      { name: "mutation-time-outdated-audit-drift", options: { preMutationOutdatedThreadDrift: true }, expectedCode: 1, status: null },
       { name: "post-audit-current-hold", options: { postResolutionCurrentThreadDrift: true }, expectedCode: 1, status: "needs-recovery" },
     ]) {
       const fixture = createFinishPrExistingCommitFixture({
@@ -9746,9 +9749,36 @@ try {
           assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_current").isResolved === false, `${scenario.name}: mutation ran after drift`);
           assert(!manifest.current_thread_resolution_outcomes, `${scenario.name}: resolver recorded a mutation attempt after drift`);
         }
+        if (scenario.name === "stable-outdated-hold") {
+          const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(outcome.status === "resolved", JSON.stringify(outcome));
+          assert(JSON.stringify(outcome.postResolutionHolds.unresolvedOutdatedThreadIds) === JSON.stringify(["PRRT_known_outdated"]), JSON.stringify(outcome));
+          const gate = runFixtureScript(fixture, [
+            "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+            "--delivery-audit-agent", "reviewer-a", "--delivery-audit-status", "merge-ready", "--delivery-audit-summary", "Exact-head review passed.",
+            "--diff-risk-summary", "Focused fixture.", "--diff-risk-files", "feature.txt", "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+            "--state-root", fixture.stateRoot,
+          ], { cwd: fixture.worktree, env: fixture.env });
+          assert(gate.code !== 0, "merge gate unexpectedly passed with a retained outdated hold");
+          assert(gate.stderr.includes("Unresolved outdated review threads require adjudication: 1"), gate.stderr || gate.stdout);
+        }
         if (scenario.name === "known-current-hold") {
           const [outcome] = manifest.current_thread_resolution_outcomes;
           assert(JSON.stringify(outcome.postResolutionHolds.unresolvedCurrentThreadIds) === JSON.stringify(["PRRT_known_current"]), JSON.stringify(outcome));
+        }
+        if (scenario.name === "known-current-and-outdated-holds") {
+          const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(JSON.stringify(outcome.postResolutionHolds.unresolvedCurrentThreadIds) === JSON.stringify(["PRRT_known_current"]), JSON.stringify(outcome));
+          assert(JSON.stringify(outcome.postResolutionHolds.unresolvedOutdatedThreadIds) === JSON.stringify(["PRRT_known_outdated"]), JSON.stringify(outcome));
+          const gate = runFixtureScript(fixture, [
+            "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+            "--delivery-audit-agent", "reviewer-a", "--delivery-audit-status", "merge-ready", "--delivery-audit-summary", "Exact-head review passed.",
+            "--diff-risk-summary", "Focused fixture.", "--diff-risk-files", "feature.txt", "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+            "--state-root", fixture.stateRoot,
+          ], { cwd: fixture.worktree, env: fixture.env });
+          assert(gate.code !== 0, "merge gate unexpectedly passed with retained current and outdated holds");
+          assert(gate.stderr.includes("Unresolved non-outdated review threads: 1"), gate.stderr || gate.stdout);
+          assert(gate.stderr.includes("Unresolved outdated review threads require adjudication: 1"), gate.stderr || gate.stdout);
         }
         if (scenario.name === "post-audit-current-hold") {
           const [outcome] = manifest.current_thread_resolution_outcomes;
@@ -12858,6 +12888,9 @@ function createFinishPrExistingCommitFixture(options = {}) {
         : "",
       options.preMutationCurrentThreadDrift
         ? "  if (count === 4) { payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_raced_current', isResolved: false, isOutdated: false, comments: { nodes: [{ id: 'PRRC_raced_current', url: 'https://example.test/pull/456#discussion_raced', body: 'New review request.' }], pageInfo: { hasNextPage: false } } }); fs.writeFileSync(statePath, JSON.stringify(payload)); }"
+        : "",
+      options.preMutationOutdatedThreadDrift
+        ? "  if (count === 4) { payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_raced_outdated', isResolved: false, isOutdated: true, path: 'feature.txt', comments: { nodes: [{ id: 'PRRC_raced_outdated', url: 'https://example.test/pull/456#discussion_raced_outdated', body: 'New outdated request.' }], pageInfo: { hasNextPage: false } } }); fs.writeFileSync(statePath, JSON.stringify(payload)); }"
         : "",
       "  console.log(JSON.stringify(payload)); process.exit(0);",
       "}",

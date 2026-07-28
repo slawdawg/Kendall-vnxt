@@ -214,6 +214,8 @@ for (const requiredText of [
   "revalidates the exact repository/PR/head, terminal\n   check policy, no pending request or requested change, target fingerprint",
   "post-resolution audit including remaining current/outdated holds",
   "Any ambiguity or race is recovery-only: do not retry blindly",
+  "Existing outdated-only holds do\n   not block this named current-thread resolution",
+  "outdated-only threads are instead processed after current threads clear",
 ]) {
   assertCondition(
     files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
@@ -249,13 +251,13 @@ for (const requiredText of [
   "disputed, unclear, unfixed, or\n   newly arrived-after-audit thread",
   "failing or ambiguous checks; or any high-risk lane",
   "required,\n     failed, unknown, or ambiguously skipped check is always a stop line",
-  "post-resolution re-audit blocks merge and requires a fresh full\n   evaluation",
+  "post-resolution re-audit blocks merge. A new/current thread also blocks\n   a later named resolution until it receives a fresh full evaluation",
   "outdated-only thread is a hold for the current-thread rule. It can be\n   closed only after `adjudicate-outdated-thread` records a bounded exact-head",
   "Only after its packet is ready may\n   `resolve-adjudicated-thread` revalidate and resolve that one thread without\n   replying by default, then immediately repeat the",
   "binds the changed-path inspection to the exact PR head and\n   fingerprints every comment in the target thread canonically",
   "retains the mutation result, post-resolution current/outdated-thread holds,\n   and a recovery path even when GitHub returns an ambiguous failure",
   "Do not\n   retry that mutation blindly",
-  "do not weaken the\n   separate merge checklist",
+  "do not weaken the separate merge checklist",
 ]) {
   assertCondition(
     files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),

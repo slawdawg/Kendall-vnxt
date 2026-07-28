@@ -450,14 +450,17 @@ durable, milestone-driven workflow rather than a single unbounded task.
   command and exit code, independent-review attestation, terminal check state,
   and review-request state. It resolves only the named target from a complete
   fresh audit; other current or outdated threads remain explicit merge holds
-  and require a fresh evaluation before a later named resolution. The second
+  and require a fresh evaluation before a later named resolution. Stable
+  outdated-only holds do not block that named current-thread resolution; they
+  are retained for the current-first, outdated-second sequence. The second
   command locks the manifest, revalidates the complete thread-aware fingerprint
   plus exact repository/PR/head, terminal check policy, no pending request or
   requested change immediately before its one no-reply GraphQL resolution mutation, records the
   attempt before mutation, and immediately records the post-audit. Any mutation
-  ambiguity, head/repository/PR race, incomplete audit, or remaining current or
-  outdated thread is a recovery hold; retain only bounded metadata and never
-  retry blindly.
+  ambiguity, head/repository/PR race, incomplete audit, or remaining current
+  thread is a recovery hold. Remaining outdated-only threads are explicit merge
+  holds, not permission to merge or a reason to retry blindly; retain only
+  bounded metadata and process them after current threads clear.
 - The operator has granted permanent bounded merge authority for **all
   Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
   reviewed head when the PR is in this repository and its expected base branch,

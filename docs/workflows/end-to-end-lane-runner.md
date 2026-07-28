@@ -259,7 +259,10 @@ publisher.
    attestation; and requires terminal checks plus no pending review request.
    It resolves only that named target from a complete fresh audit; every other
    unresolved current or outdated thread remains a hold and requires a fresh
-   evaluation before a later named resolution. Then use
+   evaluation before a later named resolution. Existing outdated-only holds do
+   not block this named current-thread resolution when the full audit remains
+   stable; they are retained as explicit post-audit merge holds and are handled
+   only after current threads reach zero. Then use
    `resolve-adjudicated-current-thread` for exactly one no-reply GraphQL
    mutation. It locks and revalidates the exact repository/PR/head, terminal
    check policy, no pending request or requested change, target fingerprint,
@@ -270,9 +273,11 @@ publisher.
    Stop rather than resolve a disputed, unclear, unfixed, or
    newly arrived-after-audit thread; any requested change; any thread paired
    with failing or ambiguous checks; or any high-risk lane. Any thread found by
-   the post-resolution re-audit blocks merge and requires a fresh full
-   evaluation before it can be resolved. These stop lines do not weaken the
-   separate merge checklist: every unresolved applicable thread remains a hold.
+   the post-resolution re-audit blocks merge. A new/current thread also blocks
+   a later named resolution until it receives a fresh full evaluation; retained
+   outdated-only threads are instead processed after current threads clear.
+   These stop lines do not weaken the separate merge checklist: every unresolved
+   applicable thread remains a hold.
    An outdated-only thread is a hold for the current-thread rule. It can be
    closed only after `adjudicate-outdated-thread` records a bounded exact-head
    packet proving that the still-unresolved outdated thread's request
