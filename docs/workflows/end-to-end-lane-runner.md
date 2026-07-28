@@ -336,6 +336,41 @@ takeover or cleanup decision.
 Use `resume --json` when an automation runner needs the matched worktree,
 branch, owner, PR, and owner-warning evidence without parsing human text.
 
+### Exceptional dirty in-lane takeover
+
+A dirty lane remains blocked by default. Do not create a replacement worktree,
+copy its changes, reset it, commit it, or use this route for a lane with a PR.
+The only exception is an operator-authorized handoff of the *same* stale,
+unpublished workspace manifest when its named dirty files are the intended
+in-lane work.
+
+First record a dry-run packet, then apply the same bounded request only after
+the operator's approval is present:
+
+```bash
+node ./scripts/codex-workspace.mjs takeover <task-id> --dry-run \
+  --takeover-reason "stale owner handoff reviewed" \
+  --approval "operator approved bounded dirty in-lane takeover" \
+  --allow-dirty-in-lane \
+  --dirty-paths "path/one" \
+  --dirty-paths "path/two"
+```
+
+Repeat `--dirty-paths` once for every literal repository-relative path; do not
+comma-join paths. A comma is a valid filename character, so
+`--dirty-paths "notes,review.md"` names one file. The explicit path list is
+exact, not a glob. The runner rejects a missing,
+unexpected, unsafe, unreadable, symlinked, renamed, copied, or out-of-worktree
+path. It also rejects a non-stale or same owner, an active or retained task
+lock, an absent worktree, a manifest/checkout branch mismatch, and any recorded
+PR. Under the exact task lock it fingerprints every allowed file before and
+after the transfer; a changed path or digest aborts without ownership mutation.
+
+The applied manifest records the prior and new owner, reason, approval text,
+timestamps, exact paths, status codes, and SHA-256 fingerprints. This route
+does not perform GitHub actions, commits, resets, cleanup, or source mutation;
+normal verification and delivery gates resume only after the ownership handoff.
+
 ## Parallel Suitability Report (Read Only)
 
 Before considering more than one independent lane, obtain the manager refill
