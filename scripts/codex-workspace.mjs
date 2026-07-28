@@ -302,7 +302,7 @@ takeover options:
   --takeover-reason <text>  Required. Explains takeover in at least 10 non-whitespace characters.
   --approval <text>         Required with --apply. Operator approval evidence.
   --allow-dirty-in-lane     Opt in to the narrowly gated dirty-worktree takeover path.
-  --dirty-paths <a,b>       Exact dirty relative paths required by --allow-dirty-in-lane.
+  --dirty-paths <path>      Repeat for each exact dirty relative path required by --allow-dirty-in-lane.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 dispatch-next options:
@@ -452,7 +452,7 @@ function parseOptions(argv) {
     const inlineValue = inlineParts.length > 0 ? inlineParts.join("=") : undefined;
     const key = rawKey.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     if (inlineValue !== undefined) {
-      options[key] = inlineValue;
+      options[key] = key === "dirtyPaths" ? [...(options[key] || []), inlineValue] : inlineValue;
       continue;
     }
 
@@ -462,7 +462,7 @@ function parseOptions(argv) {
       continue;
     }
 
-    options[key] = next;
+    options[key] = key === "dirtyPaths" ? [...(options[key] || []), next] : next;
     index += 1;
   }
 
@@ -2101,7 +2101,7 @@ function takeover(argv) {
     throw new Error("--allow-dirty-in-lane requires explicit operator approval evidence in --approval.");
   }
   if (options.dirtyPaths !== undefined && options.dirtyPaths === true) {
-    throw new Error("--dirty-paths requires a comma-separated value.");
+    throw new Error("--dirty-paths requires a value.");
   }
   if (options.dirtyPaths !== undefined && !options.allowDirtyInLane) {
     throw new Error("--dirty-paths is only valid with --allow-dirty-in-lane.");
@@ -2120,7 +2120,7 @@ function takeover(argv) {
     reason: String(options.takeoverReason || "").trim(),
     approval: options.approval ? String(options.approval).trim() : "",
     allowDirtyInLane: options.allowDirtyInLane === true,
-    dirtyPaths: options.dirtyPaths === undefined ? "" : String(options.dirtyPaths),
+    dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
     preflightLockInspection,
   });
 
@@ -10584,7 +10584,7 @@ function takeoverHeartbeatEvidence(record, context) {
     timestamp: value || null,
     age_seconds: ageSeconds,
     stale_after_seconds: context.staleAfterSeconds,
-    is_stale: ageSeconds === null ? true : ageSeconds > context.staleAfterSeconds,
+    is_stale: ageSeconds !== null && ageSeconds > context.staleAfterSeconds,
   };
 }
 
@@ -10677,8 +10677,8 @@ function takeoverDirtyStateEvidence(worktreeEvidence) {
 }
 
 function dirtyInLaneRequestedPaths(rawValue) {
-  const requested = String(rawValue || "")
-    .split(",")
+  const requested = (Array.isArray(rawValue) ? rawValue : [rawValue])
+    .map((value) => String(value || ""))
     .map((value) => value.trim())
     .filter(Boolean);
   const unique = [...new Set(requested)];
@@ -10705,7 +10705,7 @@ function dirtyInLanePathSnapshot(worktreePath, requestedPaths) {
     throw new Error(`--dirty-paths contains unsafe relative path(s): ${requested.invalid.join(", ")}`);
   }
 
-  const status = git(["status", "--porcelain=v1", "-z"], { cwd: canonicalWorktree });
+  const status = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: canonicalWorktree, preserveStdout: true });
   if (status.code !== 0) {
     throw new Error(status.stderr || "could not inspect dirty paths");
   }
@@ -10753,10 +10753,12 @@ function dirtyInLanePathSnapshot(worktreePath, requestedPaths) {
         throw new Error(`dirty path resolves outside the recorded worktree: ${entry.path}`);
       }
       const bytes = readFileSync(canonicalPath);
+      const index = git(["ls-files", "--stage", "--", entry.path], { cwd: canonicalWorktree });
       return {
         path: entry.path,
         status_code: entry.status_code,
         sha256: createHash("sha256").update(bytes).digest("hex"),
+        index_sha256: createHash("sha256").update(index.code === 0 ? index.stdout : "").digest("hex"),
       };
     })
     .sort((left, right) => left.path.localeCompare(right.path));
@@ -10802,7 +10804,7 @@ function finalizeDirtyInLaneTakeover(packet) {
   if (evidence.errors.length > 0 || !evidence.before) {
     throw new Error("Dirty in-lane takeover evidence is incomplete.");
   }
-  const after = dirtyInLanePathSnapshot(packet.worktree_evidence.path, evidence.requested_paths.join(","));
+  const after = dirtyInLanePathSnapshot(packet.worktree_evidence.path, evidence.requested_paths);
   const beforePaths = JSON.stringify(evidence.before.paths);
   const afterPaths = JSON.stringify(after.paths);
   if (beforePaths !== afterPaths) {
@@ -10868,7 +10870,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
           reason: String(options.takeoverReason || "").trim(),
           approval: String(options.approval || "").trim(),
           allowDirtyInLane: options.allowDirtyInLane === true,
-          dirtyPaths: options.dirtyPaths === undefined ? "" : String(options.dirtyPaths),
+          dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
           preflightLockInspection: null,
         },
       );
@@ -10899,7 +10901,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
         reason: String(options.takeoverReason || "").trim(),
         approval: String(options.approval || "").trim(),
         allowDirtyInLane: options.allowDirtyInLane === true,
-        dirtyPaths: options.dirtyPaths === undefined ? "" : String(options.dirtyPaths),
+        dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
         preflightLockInspection,
       },
     );
@@ -10907,10 +10909,17 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
       throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
     }
     finalizeDirtyInLaneTakeover(packet);
+    const manifestBeforeTakeover = JSON.stringify(manifest);
     applyManifestTakeover(manifest, packet);
     writeManifest(path, manifest);
+    try {
+      finalizeDirtyInLaneTakeover(packet);
+    } catch (error) {
+      writeFileSync(path, `${manifestBeforeTakeover}\n`);
+      throw error;
+    }
     return { path, packet };
-  });
+  }, { recoverStale: options.allowDirtyInLane !== true });
 }
 
 function applyAssignmentTakeover(assignment, packet) {
@@ -11582,6 +11591,10 @@ function withManifestLock(state, taskId, fn, options = {}) {
     fd = openSync(lockPath, "wx");
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+    if (options.recoverStale === false) {
+      const inspected = redactTaskLockInspection(inspectTaskLock(state, taskId));
+      throw new Error(`Task lock is retained during dirty in-lane takeover: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
+    }
     const recovery = recoverStaleTaskLock(state, taskId);
     if (!recovery.recovered) {
       const inspected = redactTaskLockInspection(recovery.inspection);
@@ -12141,7 +12154,7 @@ function runShellChecked(commandText, options = {}) {
   }
   return {
     code: result.status ?? 1,
-    stdout: (result.stdout || "").trim(),
+    stdout: options.preserveStdout ? (result.stdout || "") : (result.stdout || "").trim(),
     stderr: (result.stderr || "").trim(),
   };
 }
@@ -12166,7 +12179,7 @@ function run(commandName, commandArguments, options = {}) {
     signal: result.signal || null,
     errorCode: result.error?.code || null,
     errorMessage: result.error?.message || "",
-    stdout: (result.stdout || "").trim(),
+    stdout: options.preserveStdout ? (result.stdout || "") : (result.stdout || "").trim(),
     stderr: (result.stderr || result.error?.message || "").trim(),
   };
 }
