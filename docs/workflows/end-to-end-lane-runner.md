@@ -299,7 +299,8 @@ publisher.
    bypass of any merge criterion. Generate it without mutation from the
    detached worktree with `node ./scripts/codex-workspace.mjs
    verify-unmanaged-pr-gates --pr <number> --base <branch> --expected-head
-   <sha> --summary-json` plus the same delivery-audit, skip-policy, and
+   <sha> --merge-method <exact-head-method> --rollback-path <revert-path>
+   --summary-json` plus the same delivery-audit, skip-policy, and
    diff-risk evidence fields required by the managed gate.
    Use `doctor --summary-json` when automation needs a bounded readiness packet
    instead of human-readable doctor output.
