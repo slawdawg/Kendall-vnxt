@@ -154,6 +154,10 @@ assertCondition(
 );
 for (const requiredText of [
   "required,\n  failed, unknown, or ambiguously skipped check is always a stop line",
+  "not a requested change with no pending review request",
+  "current PR head fully addresses the feedback",
+  "relevant local verification and required code review have completed",
+  "fresh thread-aware GitHub data shows the thread is current, unambiguous",
   "disputed, unclear, unfixed, outdated-only, new after the audit, a requested\n  change",
   "thread discovered by the post-resolution re-audit blocks merge and requires\n  a fresh full evaluation",
   "outdated-only thread is\n  a hold for this automatic authority and must be separately adjudicated",
@@ -169,13 +173,15 @@ for (const requiredText of [
   "permanent bounded merge authority for **all\n  Kendall_Nxt PRs**",
   "in this repository and its expected base branch,\n  is not a draft, is cleanly mergeable",
   "terminal successful checks or\n  policy-documented non-required skipped checks",
-  "zero unresolved\n  non-outdated current review threads and no requested changes",
+  "zero unresolved current\n  review threads (including unadjudicated outdated threads), no requested changes",
   "has completed\n  relevant local verification",
   "reviewed diff-risk assessment",
   "Fail closed and do not merge on an unknown, failed,\n  ambiguous, or nonterminal state",
   "cross-repository or cross-base target; force-push,\n  bypass, or history-rewrite mechanics",
   "never authorizes\n  cleanup",
   "Re-audit every bounded merge criterion immediately before the merge\n  mutation",
+  "record the actual merge result afterward and before any cleanup decision",
+  "unmanaged PR, retain the same\n  exact-head audit as an external evidence packet",
 ]) {
   assertCondition(
     files["AGENTS.md"].includes(requiredText),
@@ -187,6 +193,7 @@ for (const requiredText of [
   "A named lane under\n   `standard-delivery` grants the delegated delivery worker standing authority",
   "without a new per-thread\n   prompt",
   "verification/review, and check evidence; it resolves without replying by\n     default, then re-audits thread-aware review state.",
+  "no requested change or pending review request",
   "disputed, unclear, unfixed, outdated-only, or\n   newly arrived-after-audit thread",
   "failing or ambiguous checks; or any high-risk lane",
   "required,\n     failed, unknown, or ambiguously skipped check is always a stop line",
@@ -204,13 +211,15 @@ for (const requiredText of [
   "permanent bounded merge authority covers all\n   Kendall_Nxt PRs",
   "expected repository and\n   base branch, non-draft state, clean mergeability",
   "terminal successful or\n   policy-documented non-required skipped checks",
-  "zero unresolved non-outdated\n   current threads and no requested changes",
+  "zero unresolved current\n   threads (including unadjudicated outdated threads), no requested changes or",
   "relevant local verification",
   "reviewed diff-risk assessment",
   "Fail closed on unknown, failed, ambiguous, or nonterminal state; new\n   feedback; missing evidence",
   "cross-repository or cross-base target; force-push, bypass, or history-rewrite\n   mechanics",
-  "authority never includes\n   cleanup",
+  "This authority never\n   includes cleanup",
   "Re-audit every bounded merge criterion immediately before that mutation",
+  "actual merge result\n   after the merge and before any cleanup decision",
+  "bounded unmanaged-PR evidence packet with every\n   gate above",
 ]) {
   assertCondition(
     files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),

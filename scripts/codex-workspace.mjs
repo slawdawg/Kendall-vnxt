@@ -164,6 +164,9 @@ try {
     case "verify-pr-gates":
       verifyPrGates(commandArgs);
       break;
+    case "verify-unmanaged-pr-gates":
+      verifyUnmanagedPrGates(commandArgs);
+      break;
     case "reconcile-merged-pr":
       reconcileMergedPr(commandArgs);
       break;
@@ -221,6 +224,7 @@ Commands:
   inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
+  verify-unmanaged-pr-gates Inspect a detached-worktree PR gate packet without manifest mutation.
   reconcile-merged-pr <query> Record verified merged-PR metadata before cleanup.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
@@ -358,8 +362,20 @@ verify-pr-gates options:
   --apply                   Record gate evidence in the manifest. Without this, gate check is dry-run.
   --summary-json            Without --apply, print a compact JSON gate packet.
   --delivery-audit-agent <id> Agent or reviewer id for independent delivery audit evidence.
-  --delivery-audit-status <status> Delivery audit recommendation. Must be merge-ready for low-risk merge.
+  --delivery-audit-status <status> Delivery audit recommendation. Must be merge-ready for bounded merge.
   --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
+  --non-required-checks <list> Comma-separated skipped check names accepted by the named policy.
+  --non-required-check-policy <ref> Required source-owned policy reference for --non-required-checks.
+  --diff-risk-summary <text> Exact-head diff-risk assessment summary.
+  --diff-risk-files <list> Comma-separated changed paths covered by the assessment.
+  --diff-risk-verification <text> Focused verification evidence for the assessment.
+
+verify-unmanaged-pr-gates options:
+  --pr <number>             Required pull-request number in this repository.
+  --base <branch>           Required expected base branch.
+  --expected-head <sha>     Required exact detached-worktree and PR head SHA.
+  --summary-json            Print the bounded external evidence packet.
+  Supports the verify-pr-gates delivery-audit, non-required-check, and diff-risk options.
 
 reconcile-merged-pr options:
   --apply                   Record verified merged-PR metadata only. Without this, inspect only.
@@ -2892,6 +2908,58 @@ function verifyPrGates(argv) {
   printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
 }
 
+function verifyUnmanagedPrGates(argv) {
+  const { options } = parseOptions(argv);
+  if (options.apply) {
+    throw new Error("verify-unmanaged-pr-gates is metadata-only and does not support --apply.");
+  }
+  const prNumber = Number(options.pr);
+  const baseBranch = safeMetadataText(options.base, 250);
+  const expectedHeadSha = safeMetadataText(options.expectedHead, 80);
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    throw new Error("verify-unmanaged-pr-gates requires --pr <number>.");
+  }
+  if (!baseBranch) {
+    throw new Error("verify-unmanaged-pr-gates requires --base <branch>.");
+  }
+  assertSafeBaseBranch(baseBranch);
+  if (!exactGitObjectIdOrNull(expectedHeadSha)) {
+    throw new Error("verify-unmanaged-pr-gates requires --expected-head <exact sha>.");
+  }
+  requireGh("verify-unmanaged-pr-gates");
+  const cwdResult = git(["rev-parse", "--show-toplevel"], { cwd: process.cwd() });
+  if (cwdResult.code !== 0 || !cwdResult.stdout.trim()) {
+    throw new Error("verify-unmanaged-pr-gates must run from a Git worktree.");
+  }
+  const worktreePath = cwdResult.stdout.trim();
+  const manifest = {
+    task_id: `unmanaged-pr-${prNumber}`,
+    branch: `unmanaged-pr-${prNumber}`,
+    base_branch: baseBranch,
+    pr_number: prNumber,
+    pr_delivery_head_sha: expectedHeadSha,
+    worktree_path: worktreePath,
+  };
+  const packet = buildPrGateEvidence(manifest, { options });
+  const externalPacket = {
+    ...packet,
+    authorityProfile: "unmanaged-pr-evidence",
+    unmanaged: true,
+    metadataOnly: true,
+    recoveryPath: "No merge or cleanup was attempted. Fix any exact-head gate blocker, rebuild this detached-worktree evidence packet, then re-audit before merge.",
+  };
+  if (options.summaryJson) {
+    console.log(JSON.stringify(externalPacket, null, 2));
+    return;
+  }
+  if (!externalPacket.lowRiskReady) {
+    printBlocked("verify-unmanaged-pr-gates", renderPrGateEvidence(externalPacket));
+    throw new Error(`Unmanaged PR gate evidence is not ready: ${externalPacket.blockers.join("; ")}`);
+  }
+  printPlan("verify-unmanaged-pr-gates", renderPrGateEvidence(externalPacket));
+  console.log("Retain this metadata-only packet with the detached-worktree delivery evidence; no merge or cleanup was performed.");
+}
+
 function reconcileMergedPr(argv) {
   assertReconciliationModeOptionOccurrences(argv);
   const { positional, options } = parseOptions(argv);
@@ -3084,6 +3152,8 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
   }
 
   const expectedHeadSha = pr?.headRefOid || "";
+  const preMergeGate = shapeRetainedPreMergeGateEvidence(manifest, expectedHeadSha);
+  blockers.push(...preMergeGate.blockers);
   const deliverySubagentAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr || {}, context.options || {}, {
     expectedHeadSha,
     checkedAt,
@@ -3097,6 +3167,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
     "local lane branch exactly matches the merged PR head",
     "live remote lane branch is absent or exactly matches the merged PR head",
     "retained PR identity and delivery metadata do not conflict",
+    "retained exact-head pre-merge gate evidence passed before the merge",
     "independent cleanup audit recommends cleanup-ready for the exact merged head",
   ];
   const status = blockers.length === 0 ? "ready" : "blocked";
@@ -3118,6 +3189,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
       `task:${manifest.task_id}`,
       pr?.number ? `pr:${pr.number}` : "",
       expectedHeadSha ? `merged-head:${expectedHeadSha}` : "",
+      preMergeGate.checkedAt ? `pre-merge-gate:${preMergeGate.checkedAt}` : "",
       deliverySubagentAudit.agent ? `delivery-audit-agent:${deliverySubagentAudit.agent}` : "",
     ],
     nextSafeAction: blockers.length === 0
@@ -3155,6 +3227,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
         }
       : null,
     deliverySubagentAudit,
+    preMergeGate,
     blockers,
     requiredGates,
     authorityDecision,
@@ -3169,9 +3242,35 @@ function renderMergedPrReconciliationEvidence(packet = {}) {
     `PR ${packet.pr?.number || "unknown"} ${packet.pr?.state || "unknown"}`,
     `head ${packet.expectedHeadSha || "unknown"} local=${packet.localHeadSha || "unknown"} remote=${packet.remoteBranch?.state || "unknown"}:${packet.remoteBranch?.headSha || "none"}`,
     `base ${packet.pr?.baseRefName || "unknown"} branch ${packet.pr?.headRefName || "unknown"}`,
+    `preMergeGate status=${packet.preMergeGate?.status || "unknown"} checkedAt=${packet.preMergeGate?.checkedAt || "unknown"}`,
     `deliveryAudit status=${packet.deliverySubagentAudit?.status || "unknown"} agent=${packet.deliverySubagentAudit?.agent || "unknown"}`,
     `status ${packet.status || "unknown"}`,
   ];
+}
+
+function shapeRetainedPreMergeGateEvidence(manifest, expectedHeadSha) {
+  const gate = manifest.pr_gate_evidence && typeof manifest.pr_gate_evidence === "object" ? manifest.pr_gate_evidence : null;
+  const blockers = [];
+  if (!gate) {
+    blockers.push("Retained exact-head pre-merge gate evidence is missing");
+  } else {
+    if (gate.status !== "passed" || gate.lowRiskReady !== true) {
+      blockers.push("Retained pre-merge gate evidence was not passed");
+    }
+    if (!gate.checkedAt) {
+      blockers.push("Retained pre-merge gate evidence timestamp is missing");
+    }
+    if (!gate.expectedHeadSha || gate.expectedHeadSha !== expectedHeadSha) {
+      blockers.push("Retained pre-merge gate evidence does not match the merged PR head");
+    }
+  }
+  return {
+    status: blockers.length === 0 ? "passed" : "blocked",
+    checkedAt: gate?.checkedAt || null,
+    expectedHeadSha: gate?.expectedHeadSha || null,
+    blockers,
+    metadataOnly: true,
+  };
 }
 
 function addReconciliationBlocker(blockers, value) {
@@ -3296,7 +3395,16 @@ function buildPrGateEvidence(manifest, context = {}) {
   const headState = prGateHeadState(manifest);
   const repository = githubRepository(manifest);
   const reviewThreadState = fetchReviewThreadState(manifest, repository, pr.number);
-  const checks = normalizeStatusCheckRollup(pr.statusCheckRollup);
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(context.options || {}, {
+    expectedHeadSha: headState.expectedHeadSha,
+  });
+  const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
+  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number);
+  const diffRiskEvidence = shapeDiffRiskEvidence(context.options || {}, {
+    expectedHeadSha: headState.expectedHeadSha,
+    changedPaths: changedPathInspection.paths,
+    changedPathError: changedPathInspection.error,
+  });
   const deliverySubagentAudit = shapeDeliverySubagentAuditEvidence(manifest, context.options || {}, {
     checkedAt,
     expectedHeadSha: headState.expectedHeadSha,
@@ -3304,17 +3412,20 @@ function buildPrGateEvidence(manifest, context = {}) {
   const blockers = prGateBlockers(manifest, pr, {
     headState,
     checks,
+    nonRequiredCheckPolicy,
     reviewThreadState,
     deliverySubagentAudit,
+    diffRiskEvidence,
   });
   const requiredGates = [
     "PR open and non-draft",
     "expected base branch",
     "exact PR head matches local delivery head",
     "GitHub merge state clean",
-    "all reported checks completed successfully",
-    "thread-aware review query returned no unresolved non-outdated threads",
+    "all reported checks completed successfully or are exact-head documented non-required skips",
+    "thread-aware review query returned no unresolved or pending review state",
     "delivery subagent audit recommends merge-ready for exact head",
+    "exact-head diff-risk assessment and focused verification evidence are recorded",
   ];
   const stopLines = [
     "metadata-only evidence; no merge",
@@ -3348,8 +3459,10 @@ function buildPrGateEvidence(manifest, context = {}) {
       reviewDecision: pr.reviewDecision || null,
     },
     checks,
+    nonRequiredCheckPolicy,
     reviewThreads: reviewThreadState,
     deliverySubagentAudit,
+    diffRiskEvidence,
     blockers,
     requiredGates,
     stopLines,
@@ -3513,6 +3626,7 @@ function prGateBlockers(manifest, pr, context) {
   if (context.checks.failing.length) {
     blockers.push(`Failing checks: ${context.checks.failing.map((check) => check.name).join(", ")}`);
   }
+  blockers.push(...(context.nonRequiredCheckPolicy?.blockers || []));
   if (!context.reviewThreadState.querySucceeded) {
     blockers.push("Review-thread query did not return thread-aware evidence");
   }
@@ -3525,7 +3639,17 @@ function prGateBlockers(manifest, pr, context) {
   if (context.reviewThreadState.unresolvedNonOutdatedCount > 0) {
     blockers.push(`Unresolved non-outdated review threads: ${context.reviewThreadState.unresolvedNonOutdatedCount}`);
   }
+  if (context.reviewThreadState.unresolvedOutdatedCount > 0) {
+    blockers.push(`Unresolved outdated review threads require adjudication: ${context.reviewThreadState.unresolvedOutdatedCount}`);
+  }
+  if (context.reviewThreadState.pendingReviewRequestCount > 0) {
+    blockers.push(`Pending review requests: ${context.reviewThreadState.pendingReviewRequestCount}`);
+  }
+  if (context.reviewThreadState.reviewRequestHasNextPage) {
+    blockers.push("Review-request query returned additional pages; complete review-request evidence is required");
+  }
   blockers.push(...(context.deliverySubagentAudit?.blockers || []));
+  blockers.push(...(context.diffRiskEvidence?.blockers || []));
   return blockers;
 }
 
@@ -3535,14 +3659,15 @@ function renderPrGateEvidence(packet = {}) {
     `head ${packet.pr?.headRefOid || "unknown"}`,
     `expected ${packet.expectedHeadSha || "unknown"}`,
     `mergeStateStatus ${packet.pr?.mergeStateStatus || "unknown"}`,
-    `checks total=${packet.checks?.total ?? 0} passed=${packet.checks?.passed?.length ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0}`,
-    `reviewThreads unresolvedNonOutdated=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} outdated=${packet.reviewThreads?.outdatedCount ?? "unknown"}`,
+    `checks total=${packet.checks?.total ?? 0} passed=${packet.checks?.passed?.length ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0} nonRequiredPolicy=${packet.nonRequiredCheckPolicy?.policyRef || "none"}`,
+    `reviewThreads unresolvedNonOutdated=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} unresolvedOutdated=${packet.reviewThreads?.unresolvedOutdatedCount ?? "unknown"} pendingRequests=${packet.reviewThreads?.pendingReviewRequestCount ?? "unknown"}`,
     `deliveryAudit status=${packet.deliverySubagentAudit?.status || "unknown"} agent=${packet.deliverySubagentAudit?.agent || "unknown"}`,
+    `diffRisk status=${packet.diffRiskEvidence?.status || "unknown"}`,
     `status ${packet.status || "unknown"}`,
   ];
 }
 
-function normalizeStatusCheckRollup(rollup) {
+function normalizeStatusCheckRollup(rollup, nonRequiredCheckPolicy = {}) {
   const nodes = Array.isArray(rollup)
     ? rollup
     : Array.isArray(rollup?.nodes)
@@ -3560,10 +3685,18 @@ function normalizeStatusCheckRollup(rollup) {
       detailsUrl: node.detailsUrl || node.targetUrl || null,
     };
   });
-  const passed = checks.filter((check) => ["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion));
-  const pending = checks.filter((check) => !check.conclusion && pendingCheckStatus(check.status));
-  const failing = checks.filter((check) => check.conclusion && !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion));
-  const unknown = checks.filter((check) => !check.conclusion && !pendingCheckStatus(check.status));
+  const terminal = (check) => terminalCheckStatus(check.status);
+  const acceptedSkipped = (check) => terminal(check) && check.conclusion === "SKIPPED"
+    && nonRequiredCheckPolicy.names?.includes(check.name)
+    && Boolean(nonRequiredCheckPolicy.policyRef)
+    && nonRequiredCheckPolicy.valid === true
+    && Boolean(nonRequiredCheckPolicy.expectedHeadSha);
+  const passed = checks.filter((check) => terminal(check) && (check.conclusion === "SUCCESS" || acceptedSkipped(check)));
+  const pending = checks.filter((check) => !terminal(check) && pendingCheckStatus(check.status));
+  const failing = checks.filter((check) => terminal(check) && (
+    !check.conclusion || (check.conclusion !== "SUCCESS" && !acceptedSkipped(check))
+  ));
+  const unknown = checks.filter((check) => !terminal(check) && !pendingCheckStatus(check.status));
   return {
     total: checks.length,
     passed,
@@ -3571,6 +3704,10 @@ function normalizeStatusCheckRollup(rollup) {
     failing: [...failing, ...unknown],
     checks,
   };
+}
+
+function terminalCheckStatus(status) {
+  return ["COMPLETED", "SUCCESS", "FAILURE", "ERROR", "NEUTRAL", "SKIPPED", "CANCELLED", "TIMED_OUT"].includes(status || "");
 }
 
 function statusContextConclusion(status) {
@@ -3605,6 +3742,7 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     "nodes{id,isResolved,isOutdated,comments(first:1){nodes{url}}}",
     "pageInfo{hasNextPage,endCursor}",
     "}",
+    "reviewRequests(first:100){nodes{id}pageInfo{hasNextPage}}",
     "}",
     "}",
     "}",
@@ -3628,6 +3766,7 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
   const parsed = parseGhJson(result.stdout, "review-thread state");
   const errors = Array.isArray(parsed?.errors) ? parsed.errors : [];
   const connection = parsed?.data?.repository?.pullRequest?.reviewThreads;
+  const reviewRequests = parsed?.data?.repository?.pullRequest?.reviewRequests;
   const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
   const threadRefs = nodes.map((thread) => ({
     id: thread.id || null,
@@ -3636,18 +3775,105 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     url: thread.comments?.nodes?.[0]?.url || null,
   }));
   const unresolvedNonOutdated = threadRefs.filter((thread) => !thread.isResolved && !thread.isOutdated);
+  const unresolvedOutdated = threadRefs.filter((thread) => !thread.isResolved && thread.isOutdated);
   return {
-    querySucceeded: Boolean(connection),
+    querySucceeded: Boolean(connection && reviewRequests),
     errorCount: errors.length,
     errorMessages: errors.map((error) => String(error?.message || "GraphQL error")).filter(Boolean).slice(0, 5),
     totalCount: threadRefs.length,
     unresolvedNonOutdatedCount: unresolvedNonOutdated.length,
+    unresolvedOutdatedCount: unresolvedOutdated.length,
     outdatedCount: threadRefs.filter((thread) => thread.isOutdated).length,
     resolvedCount: threadRefs.filter((thread) => thread.isResolved).length,
     hasNextPage: Boolean(connection?.pageInfo?.hasNextPage),
+    pendingReviewRequestCount: Array.isArray(reviewRequests?.nodes) ? reviewRequests.nodes.length : 0,
+    reviewRequestHasNextPage: Boolean(reviewRequests?.pageInfo?.hasNextPage),
     unresolvedNonOutdatedRefs: unresolvedNonOutdated.map((thread) => thread.url || thread.id).filter(Boolean),
+    unresolvedOutdatedRefs: unresolvedOutdated.map((thread) => thread.url || thread.id).filter(Boolean),
     threadRefs,
   };
+}
+
+function commaSeparatedMetadata(value, maxEntries = 80) {
+  return [...new Set(String(value || "").split(",").map((entry) => safeMetadataText(entry, 180)).filter(Boolean))].slice(0, maxEntries);
+}
+
+function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
+  const names = commaSeparatedMetadata(options.nonRequiredChecks);
+  const policyRef = safeMetadataText(options.nonRequiredCheckPolicy, 300);
+  const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
+  const valid = validateSourceOwnedSkipPolicy(policyRef, names);
+  const blockers = [];
+  if (names.length > 0 && !policyRef) {
+    blockers.push("Non-required skipped checks require a source-owned policy reference");
+  }
+  if (policyRef && names.length === 0) {
+    blockers.push("Non-required check policy reference has no named skipped checks");
+  }
+  if (names.length > 0 && !valid) {
+    blockers.push("Non-required skipped checks do not match the source-owned policy");
+  }
+  return {
+    schemaVersion: 1,
+    names,
+    policyRef: policyRef || null,
+    expectedHeadSha: expectedHeadSha || null,
+    valid,
+    blockers,
+    metadataOnly: true,
+  };
+}
+
+function validateSourceOwnedSkipPolicy(policyRef, names) {
+  if (!policyRef || names.length === 0 || policyRef !== "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks") {
+    return false;
+  }
+  const policyPath = join(repoRoot, "docs", "workflows", "end-to-end-lane-runner.md");
+  try {
+    const policyText = readFileSync(policyPath, "utf8");
+    return names.every((name) => policyText.includes(`- \`${name}\``));
+  } catch {
+    return false;
+  }
+}
+
+function shapeDiffRiskEvidence(options = {}, context = {}) {
+  const summary = safeMetadataText(options.diffRiskSummary, 500);
+  const files = commaSeparatedMetadata(options.diffRiskFiles);
+  const verification = safeMetadataText(options.diffRiskVerification, 500);
+  const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
+  const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
+  const changedPathError = safeMetadataText(context.changedPathError || "", 500);
+  const uncoveredPaths = changedPaths.filter((path) => !files.includes(path));
+  const blockers = [];
+  if (!summary) blockers.push("Diff-risk summary missing");
+  if (files.length === 0) blockers.push("Diff-risk changed-file evidence missing");
+  if (!verification) blockers.push("Diff-risk focused verification evidence missing");
+  if (!expectedHeadSha) blockers.push("Diff-risk exact head missing");
+  if (changedPathError) blockers.push(`Diff-risk changed-path inspection failed: ${changedPathError}`);
+  if (!changedPathError && changedPaths.length === 0) blockers.push("Diff-risk changed-path inspection returned no paths");
+  if (uncoveredPaths.length > 0) blockers.push(`Diff-risk evidence omits changed paths: ${uncoveredPaths.join(", ")}`);
+  return {
+    schemaVersion: 1,
+    status: blockers.length ? "missing" : "recorded",
+    summary: summary || null,
+    files,
+    verification: verification || null,
+    expectedHeadSha: expectedHeadSha || null,
+    changedPaths,
+    uncoveredPaths,
+    blockers,
+    metadataOnly: true,
+  };
+}
+
+function fetchPrChangedPaths(manifest, prNumber) {
+  const result = run("gh", ["pr", "diff", String(prNumber), "--name-only"], { cwd: manifest.worktree_path });
+  if (result.code !== 0) {
+    return { paths: [], error: safeMetadataText(result.stderr || result.stdout || "GitHub CLI changed-path inspection failed", 500) };
+  }
+  const paths = [...new Set(result.stdout.split(/\r?\n/).map((path) => path.trim()).filter(Boolean))];
+  return { paths, error: "" };
 }
 
 function parseGhJson(stdout, label) {
