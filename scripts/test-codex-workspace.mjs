@@ -9596,6 +9596,55 @@ try {
     }
   });
 
+  test("current-thread resolver records symmetric exact-head evidence and handles success, ambiguity, pre-mutation races, and post-audit holds", () => {
+    for (const scenario of [
+      { name: "success", options: {}, expectedCode: 0, status: "resolved" },
+      { name: "ambiguous", options: { resolveMutationFailure: "ambiguous-resolved" }, expectedCode: 1, status: "needs-recovery" },
+      { name: "race", options: { preMutationCurrentThreadDrift: true }, expectedCode: 1, status: null },
+      { name: "post-audit-current-hold", options: { postResolutionCurrentThreadDrift: true }, expectedCode: 1, status: "needs-recovery" },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture({
+        existingPr: true,
+        ...scenario.options,
+        reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+      });
+      const adjudicationArgs = [
+        "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
+        "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.",
+        "--diff-summary", "Current diff implements the request.", "--mapped-files", "feature.txt", "--verification", "Focused fixture passed.",
+        "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Independent review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+      ];
+      try {
+        const adjudication = runFixtureScript(fixture, adjudicationArgs, { cwd: fixture.worktree, env: fixture.env });
+        assert(adjudication.code === 0, `${scenario.name}: ${adjudication.stderr || adjudication.stdout}`);
+        const before = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        assert(before.current_thread_adjudications[0].repository.fullName === "slaw-dawg/fixture", `${scenario.name}: repository evidence missing`);
+        assert(before.current_thread_adjudications[0].targetRequestFingerprint === "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", `${scenario.name}: fingerprint missing`);
+        const resolution = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+        assert(resolution.code === scenario.expectedCode, `${scenario.name}: ${resolution.stderr || resolution.stdout}`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        if (scenario.status) {
+          const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(outcome.status === scenario.status, `${scenario.name}: ${JSON.stringify(outcome)}`);
+          assert(outcome.mutation.replyPosted === false, `${scenario.name}: resolver posted a reply`);
+          assert(outcome.preMutationAudit.rawPayloadRetained === false, `${scenario.name}: raw audit payload retained`);
+          assert(manifest.lane_evidence_packet.current_thread_resolution_outcomes?.[0]?.attemptId === outcome.attemptId, `${scenario.name}: lane evidence omitted outcome`);
+        }
+        if (scenario.name === "race") {
+          const state = readJson(join(fixture.root, "review-threads-state.json"));
+          assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_current").isResolved === false, "race mutated the named thread");
+        }
+        if (scenario.name === "post-audit-current-hold") {
+          const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(outcome.postResolutionHolds.unresolvedCurrent === 1, JSON.stringify(outcome));
+          assert(JSON.stringify(outcome.postResolutionHolds.unresolvedCurrentThreadIds) === JSON.stringify(["PRRT_post_current"]), JSON.stringify(outcome));
+        }
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
   test("verify-pr-gates fails closed without positive base merge review and check evidence", () => {
     for (const scenario of [
       {
@@ -12665,9 +12714,10 @@ function createFinishPrExistingCommitFixture(options = {}) {
       "  const payload = JSON.parse(fs.readFileSync(statePath, 'utf8'));",
       "  const query = args.find((arg) => arg.startsWith('query=')) || '';",
       "  if (query.includes('resolveReviewThread')) {",
+      "    const threadArg = args.find((arg) => arg.startsWith('threadId=')) || ''; const threadId = threadArg.slice('threadId='.length);",
       options.resolveMutationFailure
-        ? `    if (${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved")}) { const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === 'PRRT_outdated'); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload)); }`
-        : "    const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === 'PRRT_outdated'); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload));",
+        ? `    if (${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved")}) { const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === threadId); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload)); }`
+        : `    const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === threadId); if (target) target.isResolved = true; ${options.postResolutionCurrentThreadDrift ? "payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_post_current', isResolved: false, isOutdated: false, comments: { nodes: [{ id: 'PRRC_post_current', url: 'https://example.test/pull/456#discussion_post_current', body: 'New post-resolution review request.' }], pageInfo: { hasNextPage: false } } });" : ""} fs.writeFileSync(statePath, JSON.stringify(payload));`,
       options.resolveMutationFailure
         ? `    console.error(${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved" ? "simulated ambiguous resolver failure after mutation" : "simulated resolver mutation failure")}); process.exit(1);`
         : "    console.log(JSON.stringify({ data: { resolveReviewThread: { thread: target ? { id: target.id, isResolved: target.isResolved } : null } } })); process.exit(0);",

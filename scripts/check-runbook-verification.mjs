@@ -178,6 +178,24 @@ assertCondition(
   failures,
 );
 for (const requiredText of [
+  "`adjudicate-current-thread`",
+  "`resolve-adjudicated-current-thread`",
+  "exact repository, PR, and head",
+  "target-thread comments canonically; maps the request to changed PR paths",
+  "passing verification command/exit code and independent review\n   attestation",
+  "terminal checks plus no pending review request",
+  "one unresolved current thread and\n   treats every unresolved outdated thread as a hold",
+  "revalidates the exact-head audit immediately before\n   mutation",
+  "post-resolution audit including remaining current/outdated holds",
+  "Any ambiguity or race is recovery-only: do not retry blindly",
+]) {
+  assertCondition(
+    files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
+    `End-to-end lane runner must retain current-thread resolver contract text: ${requiredText}`,
+    failures,
+  );
+}
+for (const requiredText of [
   "permanent bounded merge authority for **all\n  Kendall_Nxt PRs**",
   "in this repository and its expected base branch,\n  is not a draft, is cleanly mergeable",
   "terminal successful checks or\n  policy-documented non-required skipped checks",

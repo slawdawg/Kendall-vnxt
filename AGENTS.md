@@ -443,6 +443,19 @@ durable, milestone-driven workflow rather than a single unbounded task.
   comment canonically, persists a pre-mutation audit and mutation attempt, and
   retains a post-audit/recovery record even if GitHub returns an ambiguous
   mutation failure; never retry that failure blindly.
+  The integrated current-thread route is `adjudicate-current-thread` followed
+  by `resolve-adjudicated-current-thread`. The first command records one named,
+  metadata-only exact-repository/PR/head packet: the canonical fingerprint of
+  every target-thread comment, mapped current-diff paths, a passing verification
+  command and exit code, independent-review attestation, terminal check state,
+  and review-request state. It accepts only the named target as the sole
+  unresolved current thread and no unresolved outdated thread. The second
+  command locks the manifest, revalidates the complete thread-aware fingerprint
+  immediately before its one no-reply GraphQL resolution mutation, records the
+  attempt before mutation, and immediately records the post-audit. Any mutation
+  ambiguity, head/repository/PR race, incomplete audit, or remaining current or
+  outdated thread is a recovery hold; retain only bounded metadata and never
+  retry blindly.
 - The operator has granted permanent bounded merge authority for **all
   Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
   reviewed head when the PR is in this repository and its expected base branch,
