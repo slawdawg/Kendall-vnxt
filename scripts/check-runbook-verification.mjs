@@ -184,8 +184,9 @@ for (const requiredText of [
   "target-thread comments canonically; maps the request to changed PR paths",
   "passing verification command/exit code and independent review\n   attestation",
   "terminal checks plus no pending review request",
-  "one unresolved current thread and\n   treats every unresolved outdated thread as a hold",
-  "revalidates the exact-head audit immediately before\n   mutation",
+  "unresolved current or outdated thread remains a hold and requires a fresh\n   evaluation before a later named resolution",
+  "and complete exact-head audit immediately before mutation",
+  "revalidates the exact repository/PR/head, terminal\n   check policy, no pending request or requested change, target fingerprint",
   "post-resolution audit including remaining current/outdated holds",
   "Any ambiguity or race is recovery-only: do not retry blindly",
 ]) {

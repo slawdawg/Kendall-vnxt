@@ -448,10 +448,12 @@ durable, milestone-driven workflow rather than a single unbounded task.
   metadata-only exact-repository/PR/head packet: the canonical fingerprint of
   every target-thread comment, mapped current-diff paths, a passing verification
   command and exit code, independent-review attestation, terminal check state,
-  and review-request state. It accepts only the named target as the sole
-  unresolved current thread and no unresolved outdated thread. The second
+  and review-request state. It resolves only the named target from a complete
+  fresh audit; other current or outdated threads remain explicit merge holds
+  and require a fresh evaluation before a later named resolution. The second
   command locks the manifest, revalidates the complete thread-aware fingerprint
-  immediately before its one no-reply GraphQL resolution mutation, records the
+  plus exact repository/PR/head, terminal check policy, no pending request or
+  requested change immediately before its one no-reply GraphQL resolution mutation, records the
   attempt before mutation, and immediately records the post-audit. Any mutation
   ambiguity, head/repository/PR race, incomplete audit, or remaining current or
   outdated thread is a recovery hold; retain only bounded metadata and never

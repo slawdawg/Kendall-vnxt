@@ -257,11 +257,13 @@ publisher.
    target-thread comments canonically; maps the request to changed PR paths;
    records the passing verification command/exit code and independent review
    attestation; and requires terminal checks plus no pending review request.
-   It permits only that named target as the one unresolved current thread and
-   treats every unresolved outdated thread as a hold. Then use
+   It resolves only that named target from a complete fresh audit; every other
+   unresolved current or outdated thread remains a hold and requires a fresh
+   evaluation before a later named resolution. Then use
    `resolve-adjudicated-current-thread` for exactly one no-reply GraphQL
-   mutation. It locks and revalidates the exact-head audit immediately before
-   mutation, stores the metadata-only mutation attempt first, and immediately
+   mutation. It locks and revalidates the exact repository/PR/head, terminal
+   check policy, no pending request or requested change, target fingerprint,
+   and complete exact-head audit immediately before mutation, stores the metadata-only mutation attempt first, and immediately
    stores a post-resolution audit including remaining current/outdated holds.
    Any ambiguity or race is recovery-only: do not retry blindly.
 

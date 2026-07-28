@@ -9599,14 +9599,21 @@ try {
   test("current-thread resolver records symmetric exact-head evidence and handles success, ambiguity, pre-mutation races, and post-audit holds", () => {
     for (const scenario of [
       { name: "success", options: {}, expectedCode: 0, status: "resolved" },
+      { name: "known-current-hold", options: {}, expectedCode: 1, status: "needs-recovery", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }] },
       { name: "ambiguous", options: { resolveMutationFailure: "ambiguous-resolved" }, expectedCode: 1, status: "needs-recovery" },
       { name: "race", options: { preMutationCurrentThreadDrift: true }, expectedCode: 1, status: null },
+      { name: "mutation-time-check-drift", options: { preMutationCheckDrift: true }, expectedCode: 1, status: null },
+      { name: "mutation-time-review-decision-drift", options: { preMutationReviewDecisionDrift: true }, expectedCode: 1, status: null },
+      { name: "mutation-time-review-request-drift", options: { preMutationReviewRequestDrift: true }, expectedCode: 1, status: null },
       { name: "post-audit-current-hold", options: { postResolutionCurrentThreadDrift: true }, expectedCode: 1, status: "needs-recovery" },
     ]) {
       const fixture = createFinishPrExistingCommitFixture({
         existingPr: true,
         ...scenario.options,
-        reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+        reviewThreads: [
+          { id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } },
+          ...(scenario.extraThreads || []),
+        ],
       });
       const adjudicationArgs = [
         "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
@@ -9633,6 +9640,15 @@ try {
         if (scenario.name === "race") {
           const state = readJson(join(fixture.root, "review-threads-state.json"));
           assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_current").isResolved === false, "race mutated the named thread");
+        }
+        if (scenario.name.startsWith("mutation-time-")) {
+          const state = readJson(join(fixture.root, "review-threads-state.json"));
+          assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_current").isResolved === false, `${scenario.name}: mutation ran after drift`);
+          assert(!manifest.current_thread_resolution_outcomes, `${scenario.name}: resolver recorded a mutation attempt after drift`);
+        }
+        if (scenario.name === "known-current-hold") {
+          const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(JSON.stringify(outcome.postResolutionHolds.unresolvedCurrentThreadIds) === JSON.stringify(["PRRT_known_current"]), JSON.stringify(outcome));
         }
         if (scenario.name === "post-audit-current-hold") {
           const [outcome] = manifest.current_thread_resolution_outcomes;
@@ -12593,7 +12609,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(fixtureRoot, ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
-  writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\nreview-threads-state.json\nreview-threads-query-count\n");
+  writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\nreview-threads-state.json\nreview-threads-query-count\npr-state.json\n");
   writeFileSync(join(fixtureRoot, "base.txt"), "base\n");
   mkdirSync(join(fixtureRoot, "docs", "workflows"), { recursive: true });
   writeFileSync(
@@ -12692,16 +12708,19 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const fakeGh = join(fakeBin, "gh");
   const reviewThreadsStatePath = join(fixtureRoot, "review-threads-state.json");
   const graphqlQueryCountPath = join(fixtureRoot, "review-threads-query-count");
+  const prStatePath = join(fixtureRoot, "pr-state.json");
   writeFileSync(reviewThreadsStatePath, `${JSON.stringify(reviewThreadsPayload)}\n`);
+  writeFileSync(prStatePath, `${JSON.stringify(prViewPayload)}\n`);
   writeFileSync(
     fakeGh,
     [
       "#!/usr/bin/env node",
       "const fs = require('node:fs');",
       "const args = process.argv.slice(2);",
+      `const prStatePath = ${JSON.stringify(prStatePath)};`,
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
-        ? `if (args[0] === 'pr' && args[1] === 'view') { console.log(${JSON.stringify(JSON.stringify(prViewPayload))}); process.exit(0); }`
+        ? "if (args[0] === 'pr' && args[1] === 'view') { console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
       `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`,
       options.invalidCreateOutput
@@ -12723,6 +12742,15 @@ function createFinishPrExistingCommitFixture(options = {}) {
         : "    console.log(JSON.stringify({ data: { resolveReviewThread: { thread: target ? { id: target.id, isResolved: target.isResolved } : null } } })); process.exit(0);",
       "  }",
       "  let count = 0; try { count = Number(fs.readFileSync(countPath, 'utf8')) || 0; } catch {} count += 1; fs.writeFileSync(countPath, String(count));",
+      options.preMutationCheckDrift
+        ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.statusCheckRollup.push({ name: 'raced-check', status: 'IN_PROGRESS', conclusion: null }); fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
+        : "",
+      options.preMutationReviewDecisionDrift
+        ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.reviewDecision = 'CHANGES_REQUESTED'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
+        : "",
+      options.preMutationReviewRequestDrift
+        ? "  if (count === 4) { payload.data.repository.pullRequest.reviewRequests.nodes.push({ id: 'PRRQ_raced_request' }); fs.writeFileSync(statePath, JSON.stringify(payload)); }"
+        : "",
       options.preMutationCurrentThreadDrift
         ? "  if (count === 4) { payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_raced_current', isResolved: false, isOutdated: false, comments: { nodes: [{ id: 'PRRC_raced_current', url: 'https://example.test/pull/456#discussion_raced', body: 'New review request.' }], pageInfo: { hasNextPage: false } } }); fs.writeFileSync(statePath, JSON.stringify(payload)); }"
         : "",

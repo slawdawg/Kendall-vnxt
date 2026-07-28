@@ -3247,11 +3247,13 @@ function currentThreadResolutionPreMutationBlockers(pr, headState, audit, fresh)
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, fresh.nonRequiredCheckPolicy);
+  if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
+  if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
+  if (checks.failing.length) blockers.push(`Failed or ambiguous checks immediately before the thread mutation: ${checks.failing.map((check) => check.name).join(", ")}`);
+  blockers.push(...(fresh.nonRequiredCheckPolicy?.blockers || []));
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Thread-aware audit is incomplete immediately before the thread mutation");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests immediately before the thread mutation: ${audit.pendingReviewRequestCount}`);
-  if (audit?.unresolvedOutdatedCount) blockers.push(`Unresolved outdated review threads immediately before the thread mutation: ${audit.unresolvedOutdatedCount}`);
-  const unresolvedCurrent = (audit?.threadRefs || []).filter((thread) => !thread.isResolved && !thread.isOutdated);
-  if (unresolvedCurrent.length !== 1 || unresolvedCurrent[0]?.id !== fresh.threadId) blockers.push("Unresolved current review-thread set changed after the fresh adjudication and before the thread mutation");
   if (audit?.auditFingerprint !== fresh.reviewThreads?.auditFingerprint) blockers.push("Thread-aware audit changed after the fresh adjudication and before the thread mutation");
   const target = audit?.threadRefs?.find((thread) => thread.id === fresh.threadId);
   if (!target || target.isResolved || target.isOutdated || !target.commentsComplete || target.requestFingerprint !== fresh.targetRequestFingerprint) blockers.push("Target review thread changed after the fresh adjudication and before the thread mutation");
@@ -4133,8 +4135,6 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   if (audit.reviewRequestHasNextPage) blockers.push("Review-request query returned additional pages; complete review-request evidence is required");
   if (audit.pendingReviewRequestCount > 0) blockers.push(`Pending review requests: ${audit.pendingReviewRequestCount}`);
   if (audit.unresolvedOutdatedCount > 0) blockers.push(`Unresolved outdated review threads: ${audit.unresolvedOutdatedCount}`);
-  const unresolvedCurrent = audit.threadRefs.filter((thread) => !thread.isResolved && !thread.isOutdated);
-  if (unresolvedCurrent.length !== 1 || unresolvedCurrent[0]?.id !== context.target?.id) blockers.push("Current-thread adjudication requires exactly the named target as the only unresolved current review thread");
   if (!context.target) blockers.push("Target review thread was not returned by the thread-aware audit");
   else if (context.target.isResolved) blockers.push("Target review thread is already resolved");
   else if (context.target.isOutdated) blockers.push("Target review thread is not current");
