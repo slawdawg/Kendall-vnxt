@@ -269,6 +269,22 @@ test("delivery receipt transitions and semantic bindings fail closed without dup
     writeFileSync(receiptPath, `${JSON.stringify([{ ...original, schemaVersion: 1, binding: { ...legacyBinding, head: "b".repeat(40) } }])}\n`);
     const unrelatedLegacyReplay = buildDeliverySessionReceiptPlan({ ...binding, apply: false }, deliveryReceiptContext());
     assert.equal(unrelatedLegacyReplay.status, "ready");
+    writeFileSync(receiptPath, "[]\n");
+    let legacyWrittenDuringApply = false;
+    const lockRaceContext = {
+      ...deliveryReceiptContext(),
+      get workers() {
+        if (!legacyWrittenDuringApply) {
+          legacyWrittenDuringApply = true;
+          writeFileSync(receiptPath, `${JSON.stringify([{ ...original, schemaVersion: 1, binding: legacyBinding }])}\n`);
+        }
+        return JSON.parse(readFileSync(join(stateRoot, "manager-runs", binding.runId, "workers.json"), "utf8"));
+      },
+    };
+    const legacyAppearedBeforePersistence = buildDeliverySessionReceiptPlan(binding, lockRaceContext);
+    assert.equal(legacyAppearedBeforePersistence.status, "unknown");
+    assert.ok(legacyAppearedBeforePersistence.blockers.some((blocker) => blocker.code === "delivery-session-receipt-legacy-ambiguous"));
+    assert.equal(JSON.parse(readFileSync(receiptPath, "utf8")).length, 1);
   } finally { rmSync(stateRoot, { recursive: true, force: true }); }
 });
 
