@@ -2733,6 +2733,63 @@ test("refill plan treats stale review and active sprint rows as done from closed
   assert.notEqual(plan.summary.workCreationStep.workflow, "bmad-code-review");
 });
 
+test("refill plan isolates historical closed assignment overlays to the selected tracker", () => {
+  const currentStoryKey = "36-5-deliver-only-from-the-managed-lane";
+  const deliveredStoryKey = "36-4-supported-pre-write-guard";
+  const historicalClosedAssignments = Array.from({ length: 200 }, (_, index) => {
+    const storyKey = `${index + 1}-1-historical-managed-lane`;
+    return {
+      assignmentId: `bmad-${storyKey}`,
+      taskId: `20260701-bmad-${storyKey}`,
+      branch: `codex/bmad-${storyKey}`,
+      status: "closed",
+      phase: "closed",
+      reasonCode: "assignment_closed",
+    };
+  });
+  const plan = buildRefillPlan(
+    { desiredWorkers: 6, sourceRefs: ["prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-28-manager-control-plane/prd.md"] },
+    {
+      assignmentSummary: {
+        summary: {
+          backlogStatusCounts: { assignable: 0, closed: historicalClosedAssignments.length + 1 },
+          laneAssignmentStatusCounts: { active: 1, closed: historicalClosedAssignments.length + 1 },
+          laneAssignments: [
+            ...historicalClosedAssignments,
+            {
+              assignmentId: `bmad-${deliveredStoryKey}`,
+              taskId: `20260727-bmad-${deliveredStoryKey}`,
+              branch: `codex/bmad-${deliveredStoryKey}`,
+              status: "closed",
+              phase: "closed",
+              reasonCode: "assignment_closed",
+            },
+          ],
+        },
+      },
+      dispatchPreview: { summary: { counts: { dispatchable: 0, active: 1 }, candidateStateCounts: { active: 1 } } },
+      sourcePlanningState: {
+        sourceKey: "clean-by-default-lane-admission",
+        sprintStatus: {
+          exists: true,
+          path: "",
+          storyStatuses: {
+            [deliveredStoryKey]: "ready-for-dev",
+            [currentStoryKey]: "review",
+          },
+        },
+      },
+    },
+  );
+
+  const sprintStatus = plan.summary.sourcePlanning.sprintStatus;
+  assert.deepEqual(Object.keys(sprintStatus.storyStatuses).sort(), [deliveredStoryKey, currentStoryKey].sort());
+  assert.equal(sprintStatus.storyStatuses[deliveredStoryKey], "done");
+  assert.equal(sprintStatus.storyStatuses[currentStoryKey], "review");
+  assert.equal(sprintStatus.doneStories, 1);
+  assert.equal(sprintStatus.reviewReadyStories, 1);
+});
+
 test("bmad code review request plan prepares manager runtime packet only", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-bmad-review-request-"));
   const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-review-request-test.yaml";
@@ -2851,6 +2908,52 @@ test("bmad code review request plan suppresses stale review rows closed by assig
     assert.equal(plan.summary.explicitReviewReadyCandidate, null);
     assert.match(plan.summary.dryRunCommand, /--assignment-summary-file/);
     assert.equal(plan.blockers[0].code, "bmad-code-review-no-review-work");
+  } finally {
+    rmSync(sprintPath, { force: true });
+    rmSync(storyPath, { force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("bmad code review request plan ignores historical closed assignments outside its selected tracker", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-bmad-review-tracker-isolation-"));
+  const sprintPath = "_bmad-output/implementation-artifacts/sprint-status-manager-review-tracker-isolation-test.yaml";
+  const storyKey = "36-5-deliver-only-from-the-managed-lane";
+  const storyPath = `_bmad-output/implementation-artifacts/${storyKey}.md`;
+  try {
+    writeFileSync(
+      sprintPath,
+      [
+        "generated: 2026-07-27",
+        "last_updated: 2026-07-27",
+        "development_status:",
+        "  epic-36: in-progress",
+        `  ${storyKey}: review`,
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(storyPath, `# Story ${storyKey}\n\nImplementation evidence is ready for review.\n`, "utf8");
+    const historicalClosedAssignments = Array.from({ length: 200 }, (_, index) => {
+      const historicalStoryKey = `${index + 1}-1-historical-managed-lane`;
+      return {
+        assignmentId: `bmad-${historicalStoryKey}`,
+        taskId: `20260701-bmad-${historicalStoryKey}`,
+        branch: `codex/bmad-${historicalStoryKey}`,
+        status: "closed",
+        phase: "closed",
+        reasonCode: "assignment_closed",
+      };
+    });
+    const plan = buildBmadCodeReviewRequestPlan(
+      { runId: "manager-test", stateRoot, sprintStatusPath: sprintPath },
+      { assignmentSummary: { summary: { laneAssignments: historicalClosedAssignments } } },
+    );
+
+    assert.equal(plan.status, "ready");
+    assert.equal(plan.summary.reviewStoryCount, 1);
+    assert.equal(plan.summary.candidates.length, 1);
+    assert.equal(plan.summary.staleClosedReviewStoryCount, 0);
+    assert.equal(plan.summary.selectedStory.storyKey, storyKey);
   } finally {
     rmSync(sprintPath, { force: true });
     rmSync(storyPath, { force: true });
