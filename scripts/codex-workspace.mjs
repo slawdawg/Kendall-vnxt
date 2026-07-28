@@ -332,7 +332,7 @@ resume options:
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
   --stage-all               Stage all current worktree changes before commit.
-  --verify <profile>        Verification profile: scoped, preflight, check, check-fast, manager-control-plane, docs, codex-workspace.
+  --verify <profile>        Verification profile: scoped, preflight, check, check-fast, workspace-fast, manager-control-plane, docs, codex-workspace.
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
@@ -8018,12 +8018,13 @@ function verificationCommand(profile) {
     preflight: ["node", "./scripts/preflight.mjs"],
     check: ["pnpm", "run", "check"],
     "check-fast": ["pnpm", "run", "check:fast"],
+    "workspace-fast": ["pnpm", "run", "check:workspace-fast"],
     "manager-control-plane": ["pnpm", "run", "check:manager-control-plane:delivery"],
     docs: ["pnpm", "run", "check:docs"],
     "codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],
   };
   if (!profiles[profile]) {
-    throw new Error(`Unknown verification profile: ${profile}. Use scoped, preflight, check, check-fast, manager-control-plane, docs, or codex-workspace.`);
+    throw new Error(`Unknown verification profile: ${profile}. Use scoped, preflight, check, check-fast, workspace-fast, manager-control-plane, docs, or codex-workspace.`);
   }
   return profiles[profile];
 }
