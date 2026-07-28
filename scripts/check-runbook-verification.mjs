@@ -166,6 +166,24 @@ for (const requiredText of [
   );
 }
 for (const requiredText of [
+  "permanent bounded merge authority for **all\n  Kendall_Nxt PRs**",
+  "in this repository and its expected base branch,\n  is not a draft, is cleanly mergeable",
+  "terminal successful checks or\n  policy-documented non-required skipped checks",
+  "zero unresolved\n  non-outdated current review threads and no requested changes",
+  "has completed\n  relevant local verification",
+  "reviewed diff-risk assessment",
+  "Fail closed and do not merge on an unknown, failed,\n  ambiguous, or nonterminal state",
+  "cross-repository or cross-base target; force-push,\n  bypass, or history-rewrite mechanics",
+  "never authorizes\n  cleanup",
+  "Re-audit every bounded merge criterion immediately before the merge\n  mutation",
+]) {
+  assertCondition(
+    files["AGENTS.md"].includes(requiredText),
+    `AGENTS.md must retain permanent bounded merge authority text: ${requiredText}`,
+    failures,
+  );
+}
+for (const requiredText of [
   "A named lane under\n   `standard-delivery` grants the delegated delivery worker standing authority",
   "without a new per-thread\n   prompt",
   "verification/review, and check evidence; it resolves without replying by\n     default, then re-audits thread-aware review state.",
@@ -179,6 +197,24 @@ for (const requiredText of [
   assertCondition(
     files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
     `End-to-end lane runner must retain bounded review-thread resolution policy text: ${requiredText}`,
+    failures,
+  );
+}
+for (const requiredText of [
+  "permanent bounded merge authority covers all\n   Kendall_Nxt PRs",
+  "expected repository and\n   base branch, non-draft state, clean mergeability",
+  "terminal successful or\n   policy-documented non-required skipped checks",
+  "zero unresolved non-outdated\n   current threads and no requested changes",
+  "relevant local verification",
+  "reviewed diff-risk assessment",
+  "Fail closed on unknown, failed, ambiguous, or nonterminal state; new\n   feedback; missing evidence",
+  "cross-repository or cross-base target; force-push, bypass, or history-rewrite\n   mechanics",
+  "authority never includes\n   cleanup",
+  "Re-audit every bounded merge criterion immediately before that mutation",
+]) {
+  assertCondition(
+    files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
+    `End-to-end lane runner must retain permanent bounded merge authority text: ${requiredText}`,
     failures,
   );
 }

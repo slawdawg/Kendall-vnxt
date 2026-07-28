@@ -430,24 +430,29 @@ durable, milestone-driven workflow rather than a single unbounded task.
   a hold for this automatic authority and must be separately adjudicated; it
   cannot be closed by this grant. This authority never weakens the separate
   exact-head merge criteria.
-- Treat a PR merge under that standing approval as policy-approved low-risk
-  delivery only when all of these are true: the PR belongs to the current lane,
-  targets the expected base branch, is not a draft, is mergeable at the exact
-  reviewed head SHA, has no failing required or reported checks, has no
-  unresolved review threads or requested changes, has completed the relevant
-  local verification, and the diff does not touch secrets, credential handling,
-  provider calls, deployment/release automation, database/schema migrations,
-  destructive cleanup, broad policy expansion, generated evidence retention, or
-  other high-blast-radius surfaces. Record the PR URL, head SHA, base branch,
-  check/review state, verification command, merge method, merge result, and
-  rollback path before cleanup.
-- Prove the low-risk delivery criteria with concrete evidence from GitHub PR
+- The operator has granted permanent bounded merge authority for **all
+  Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
+  reviewed head when the PR is in this repository and its expected base branch,
+  is not a draft, is cleanly mergeable, has terminal successful checks or
+  policy-documented non-required skipped checks, has zero unresolved
+  non-outdated current review threads and no requested changes, has completed
+  relevant local verification, and has a reviewed diff-risk assessment. Record
+  the PR URL, head SHA, base branch, check/review state, verification command,
+  diff-risk review, merge method, merge result, and rollback path before any
+  cleanup decision. This authority is for merge only and never authorizes
+  cleanup.
+- Prove the bounded merge criteria with concrete evidence from GitHub PR
   metadata for base branch, mergeability, draft state, and exact head SHA;
   GitHub review-thread and review-request state for unresolved conversations or
   requested changes; GitHub status/check results for the exact head SHA; local
-  verification command output for repo-specific checks; and a reviewed diff
-  file list for excluded high-blast-radius surfaces. If a source is unavailable
-  or ambiguous, the criterion is not proven.
+  verification command output for repo-specific checks; and a reviewed
+  diff-risk assessment. Fail closed and do not merge on an unknown, failed,
+  ambiguous, or nonterminal state; new feedback; missing evidence; an exact-head
+  or target mismatch; a cross-repository or cross-base target; force-push,
+  bypass, or history-rewrite mechanics; or any attempt to combine merge with
+  cleanup. If a source is unavailable or ambiguous, the criterion is not
+  proven. Re-audit every bounded merge criterion immediately before the merge
+  mutation; any changed, missing, or newly ambiguous evidence aborts the merge.
 - For dependency or bot PRs, including Dependabot security bumps, verify in a
   temporary detached worktree from the PR head when the current checkout is
   dirty or unrelated. Use supported installed `gh` commands such as
@@ -469,9 +474,11 @@ durable, milestone-driven workflow rather than a single unbounded task.
   repository supports it, prefer exact-head merges or auto-merge/merge queue
   instead of bypassing branch protections, use feature flags or staged rollout
   for behavior changes, add a documented revert path, and rerun verification
-  after base updates. If any high-risk surface remains, or if the merge tool
-  reports missing/failing/ambiguous checks or reviews, stop for explicit
-  operator approval.
+  after base updates. A higher-risk diff requires risk-appropriate verification
+  and review, but is not a separate approval gate under the operator's permanent
+  bounded merge authority. Stop when the merge tool reports missing, failing,
+  ambiguous, or nonterminal checks or reviews, or when any bounded merge
+  criterion above is unproven.
 - Use progressive authority for all automation: document intent and stop lines,
   add contracts first, preview/report, use fake adapters, dry-run real tools,
   move to read-only real integration, then bounded write integration, then
@@ -544,7 +551,7 @@ through merge and cleanup", or "see this lane through end to end".
 - Treat the default authority profile as `standard-delivery`: create or resume a
   managed worktree, research, use matching BMAD workflows and code review when
   useful, implement, verify, review, commit, push, open or update the PR, merge
-  low-risk PRs, and clean up the merged local worktree, local branch, and remote
+  PRs under the permanent bounded merge criteria, and clean up the merged local worktree, local branch, and remote
   lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
   subagents are pre-approved to run automatically when they materially improve
   discovery, planning, review, or verification for the named lane, using
@@ -619,10 +626,9 @@ surface is `node ./scripts/codex-workspace.mjs`.
   then use `node ./scripts/codex-workspace.mjs finish-pr --verify scoped` from the task
   worktree or pass a task query from another worktree. Stage intended files
   explicitly before `finish-pr`; use `--stage-all` only after confirming the
-  full worktree diff belongs to the task. Merge only when the active goal's
-  standing delivery approval covers merge and the low-risk delivery criteria
-  above are proven; otherwise wait for explicit merge approval after showing
-  the PR state.
+  full worktree diff belongs to the task. A delegated worker may merge when the
+  permanent bounded merge criteria above are proven; otherwise hold the PR and
+  report the exact failed or missing gate.
 - Before merge, always perform a thread-aware review-comment check from the PR
   branch worktree. Do not treat a green check rollup or an empty flat comment
   list as proof that there are no unresolved review threads. Repeat this check

@@ -54,7 +54,7 @@ It authorizes, for the named lane only:
 - Resolve current, fully satisfied GitHub review threads under the bounded
   delivery-thread rule below; this is not standing permission to close unclear
   or merely old conversations.
-- Merge low-risk PRs when the merge evidence checklist is satisfied.
+- Merge PRs under the permanent bounded merge checklist when it is satisfied.
 - Clean up the merged local worktree, local lane branch, and remote lane branch
   after a valid dry run names only expected lane resources.
 
@@ -220,10 +220,17 @@ publisher.
    `merge-ready`/hold status, exact head SHA, and a short summary. Do not make
    `codex-workspace.mjs` launch subagents, provider calls, or retain raw audit
    transcripts.
-8. **Merge.** The delegated delivery worker merges only when the low-risk
-   checklist is proven for the exact head SHA or when an explicit higher-risk
-   approval covers the residual risk. The manager inspects the evidence and
-   enforces the gate but does not merge from the manager session.
+8. **Merge.** The operator's permanent bounded merge authority covers all
+   Kendall_Nxt PRs. The delegated delivery worker merges only at the exact
+   reviewed head when the bounded checklist is proven: expected repository and
+   base branch, non-draft state, clean mergeability, terminal successful or
+   policy-documented non-required skipped checks, zero unresolved non-outdated
+   current threads and no requested changes, relevant local verification, and
+   reviewed diff-risk assessment. The manager inspects the evidence and
+   enforces the gate but does not merge from the manager session. Record the PR
+   URL, exact head/base, checks, review state, verification, diff-risk review,
+   merge method/result, and rollback path. This authority never includes
+   cleanup.
    If merge is blocked after checks are green, inspect thread-aware review
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
@@ -251,8 +258,14 @@ publisher.
    separate merge checklist: every unresolved applicable thread remains a hold.
    An outdated-only thread is a hold for this automatic authority and must be
    separately adjudicated; it cannot be closed by this grant.
-   Use exact-head merge protection for GitHub CLI merges, such as
-   `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+   Fail closed on unknown, failed, ambiguous, or nonterminal state; new
+   feedback; missing evidence; an exact-head or target mismatch; a
+   cross-repository or cross-base target; force-push, bypass, or history-rewrite
+   mechanics; or any attempt to combine merge with cleanup. Use exact-head
+   merge protection without branch deletion for GitHub CLI merges, such as
+   `gh pr merge <number> --merge --match-head-commit <headRefOid>`.
+   Re-audit every bounded merge criterion immediately before that mutation; any
+   changed, missing, or newly ambiguous evidence aborts the merge.
    For dependency or bot PRs outside a managed lane, verify in a temporary
    detached worktree from the PR head so dirty local work does not contaminate
    merge evidence.
@@ -576,15 +589,23 @@ Merge under `standard-delivery` only when current evidence proves all of these:
 - The workspace manifest owner matches the current runner, or ownership was
   explicitly taken over with operator confirmation.
 - The PR is not a draft.
-- The PR is mergeable at the exact reviewed head SHA.
-- Required and reported checks for that exact head are successful or
-  intentionally skipped.
-- Review threads are resolved and there are no requested changes or pending
-  review requests. This must be proven with thread-aware review data, such as
-  GraphQL `reviewThreads`; flat PR comments or check rollups are not enough.
-  The evidence must be collected after the latest pushed PR head.
+- The PR is in Kendall_Nxt, targets the expected base branch, and is mergeable
+  at the exact reviewed head SHA.
+- Required and reported checks for that exact head are terminal and successful,
+  or policy-documented as non-required skipped.
+- There are zero unresolved non-outdated current review threads and no
+  requested changes or pending review requests. This must be proven with
+  thread-aware review data, such as GraphQL `reviewThreads`; flat PR comments
+  or check rollups are not enough. The evidence must be collected after the
+  latest pushed PR head.
+- Relevant local verification and a reviewed diff-risk assessment cover the
+  current exact head; the evidence records the PR URL, head/base, checks,
+  review state, verification, diff-risk review, merge method/result, and
+  rollback path. Re-audit every bounded merge criterion immediately before the
+  merge mutation; changed, missing, or newly ambiguous evidence aborts it.
 - Local verification has completed for the changed surface.
-- The changed-file list avoids high-blast-radius surfaces.
+- The changed-file list has a diff-risk review that identifies the
+  risk-appropriate verification and recovery evidence for the current head.
 - A rollback or revert path is known.
 - For dependency/security bumps, the changed-file list is limited to the
   affected package metadata/lockfiles and focused local verification covers the
