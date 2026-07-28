@@ -252,14 +252,35 @@ publisher.
      verification/review, and check evidence; it resolves without replying by
      default, then re-audits thread-aware review state.
 
-   Stop rather than resolve a disputed, unclear, unfixed, outdated-only, or
+   Stop rather than resolve a disputed, unclear, unfixed, or
    newly arrived-after-audit thread; any requested change; any thread paired
    with failing or ambiguous checks; or any high-risk lane. Any thread found by
    the post-resolution re-audit blocks merge and requires a fresh full
    evaluation before it can be resolved. These stop lines do not weaken the
    separate merge checklist: every unresolved applicable thread remains a hold.
-   An outdated-only thread is a hold for this automatic authority and must be
-   separately adjudicated; it cannot be closed by this grant.
+   An outdated-only thread is a hold for the current-thread rule. It can be
+   closed only after `adjudicate-outdated-thread` records a bounded exact-head
+   packet proving that the still-unresolved outdated thread's request
+   fingerprint maps to
+   current diff paths, focused local verification command/result, and identified
+   code-review evidence;
+   required checks and review state are green; and there is no pending review
+   request or unresolved current feedback. The command never resolves or
+   replies to GitHub. Only after its packet is ready may
+   `resolve-adjudicated-thread` revalidate and resolve that one thread without
+   replying by default, then immediately repeat the
+   thread-aware audit before merge. Missing or ambiguous evidence is a stop
+   line; remaining outdated threads remain separate holds. Pass the same named
+   `--non-required-checks` and `--non-required-check-policy` evidence as the
+   PR gate when an exact-head changed-area check is intentionally skipped.
+   The adjudication binds the changed-path inspection to the exact PR head and
+   fingerprints every comment in the target thread canonically; a partial
+   comment page is a hold. Immediately before the mutation, the resolver takes
+   a second thread-aware audit and records a durable mutation attempt. It
+   retains the mutation result, post-resolution current/outdated-thread holds,
+   and a recovery path even when GitHub returns an ambiguous failure. Do not
+   retry that mutation blindly: re-audit the exact head and resume through the
+   integrated resolver.
    Fail closed on unknown, failed, ambiguous, or nonterminal state; new
    feedback; missing evidence; an exact-head or target mismatch; a
    cross-repository or cross-base target; force-push, bypass, or history-rewrite

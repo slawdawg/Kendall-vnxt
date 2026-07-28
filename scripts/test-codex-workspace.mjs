@@ -1442,11 +1442,44 @@ try {
     assert(unmanagedGate[0].includes("metadata-only and does not support --apply"), "unmanaged PR evidence must remain non-mutating");
     assert(!unmanagedGate[0].includes("writeManifest"), "unmanaged PR evidence must not write a manifest");
 
+    const outdatedAdjudication = source.match(/function adjudicateOutdatedThread[\s\S]*?function verifyUnmanagedPrGates/);
+    assert(outdatedAdjudication, "outdated-thread adjudication command not found");
+    assert(outdatedAdjudication[0].includes("never resolves or replies to a GitHub review thread"), "outdated-thread adjudication must remain evidence-only");
+    assert(!outdatedAdjudication[0].includes('"pr", "merge"'), "outdated-thread adjudication must not merge");
+
+    const adjudicationEvidence = source.match(/function buildOutdatedThreadAdjudicationEvidence[\s\S]*?function shapeDeliverySubagentAuditEvidence/);
+    assert(adjudicationEvidence, "outdated-thread adjudication evidence builder not found");
+    for (const expected of ["Target review thread is not outdated", "Pending review requests", "Unresolved current review threads", "Outdated-thread current-head diff mapping missing"]) {
+      assert(adjudicationEvidence[0].includes(expected), `outdated-thread adjudication must fail closed on ${expected}`);
+    }
+
+    const resolver = source.match(/function resolveAdjudicatedThread[\s\S]*?function verifyUnmanagedPrGates/);
+    assert(resolver, "integrated adjudicated-thread resolver not found");
+    assert(resolver[0].includes("resolveReviewThread"), "resolver must use GitHub's thread-resolution mutation only");
+    assert(resolver[0].includes("Post-resolution thread-aware re-audit is incomplete or unsafe"), "resolver must fail closed on post-resolution drift");
+    assert(resolver[0].includes("Fresh adjudication is not ready"), "resolver must revalidate the retained exact-head packet under lock");
+    assert(resolver[0].includes("reviewThreadResolutionPreMutationBlockers"), "resolver must audit immediately before the mutation");
+    assert(resolver[0].includes("outdated_review_thread_resolution_attempted"), "resolver must persist a mutation attempt before GitHub mutation");
+    assert(resolver[0].includes("ambiguous-or-failed"), "resolver must retain ambiguous mutation outcomes");
+    assert(resolver[0].includes("Do not retry blindly"), "resolver must retain a mutation recovery stop line");
+
+    const threadAudit = source.match(/function fetchReviewThreadState[\s\S]*?function commaSeparatedMetadata/);
+    assert(threadAudit, "thread-aware audit helper not found");
+    assert(threadAudit[0].includes("comments(first:100){nodes{id,url,body}pageInfo{hasNextPage}}"), "thread audit must detect partial comment pages");
+    assert(threadAudit[0].includes("reviewThreadCommentAudit"), "thread audit must use canonical full-comment evidence");
+    assert(threadAudit[0].includes("auditFingerprint"), "thread audit must retain a canonical audit fingerprint");
+
+    const changedPathAudit = source.match(/function fetchPrChangedPaths[\s\S]*?function parseGhJson/);
+    assert(changedPathAudit, "changed-path audit helper not found");
+    assert(changedPathAudit[0].includes("expectedHeadSha"), "changed-path inspection must bind to an exact head");
+    assert(changedPathAudit[0].includes("PR head changed during changed-path inspection"), "changed-path inspection must reject PR-head drift");
+
     const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
     assert(packetBlock, "lane evidence packet source not found");
     assert(packetBlock[0].includes("pr_gate: prGateEvidence"), "lane packet must attach PR gate evidence");
     assert(packetBlock[0].includes("delivery_subagent_audit: deliverySubagentAudit"), "lane packet must attach delivery subagent audit evidence");
     assert(packetBlock[0].includes("manifest.pr_gate_evidence || existingPacket.pr_gate"), "lane packet must preserve existing PR gate evidence");
+    assert(packetBlock[0].includes("outdated_thread_resolution_outcomes"), "lane packet must retain review-thread resolver outcomes");
   });
 
   test("manager gate packets record metadata-only authority decisions", () => {
@@ -9409,6 +9442,157 @@ try {
     }
   });
 
+  test("adjudicate-outdated-thread records bounded exact-head evidence without resolving GitHub state", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a",
+          "--thread-id", "PRRT_outdated",
+          "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a",
+          "--request-summary", "Require exact outdated-thread handling.",
+          "--diff-summary", "Current PR adds the evidence-only adjudication command.",
+          "--mapped-files", "feature.txt",
+          "--verification", "CODEX_WORKSPACE_TEST_FILTER=adjudicate-outdated-thread pnpm run test:codex-workspace",
+          "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0",
+          "--review-summary", "Bounded review verified the exact-head mapping.", "--reviewer-id", "reviewer-a",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const [packet] = manifest.outdated_thread_adjudications;
+      assert(packet.threadId === "PRRT_outdated", "adjudication did not retain the exact thread id");
+      assert(packet.ready === true, "adjudication did not retain ready evidence");
+      assert(packet.authorityDecision?.operation === "adjudicate-outdated-thread", "adjudication authority evidence missing");
+      assert(manifest.events.some((event) => event.type === "outdated_review_thread_adjudicated"), "adjudication event missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("adjudicate-outdated-thread fails closed on current feedback or incomplete mapping", () => {
+    for (const scenario of [
+      {
+        name: "current-feedback",
+        options: { existingPr: true, reviewThreads: [
+          { id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } },
+          { id: "PRRT_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current" }] } },
+        ] },
+        expected: "Unresolved current review threads: 1",
+      },
+      {
+        name: "missing-diff-mapping",
+        options: { existingPr: true, reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }] },
+        args: ["--mapped-files", "other.txt"],
+        expected: "Outdated-thread mapping names paths absent from the current PR diff: other.txt",
+      },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture(scenario.options);
+      try {
+        const result = runFixtureScript(
+          fixture,
+          [
+            "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a",
+            "--thread-id", "PRRT_outdated", "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.",
+            "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+            "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0",
+            "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a",
+            ...(scenario.args || []), "--state-root", fixture.stateRoot,
+          ],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} adjudication unexpectedly passed`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("resolve-adjudicated-thread persists mutation, post-audit, and lane evidence after the integrated resolver succeeds", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const adjudicationArgs = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.",
+      "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt", "--verification", "Focused test.",
+      "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a",
+      "--state-root", fixture.stateRoot,
+    ];
+    try {
+      const adjudication = runFixtureScript(fixture, adjudicationArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code === 0, resolution.stderr || resolution.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const [outcome] = manifest.outdated_thread_resolution_outcomes;
+      assert(outcome.status === "resolved", JSON.stringify(outcome));
+      assert(outcome.mutation.status === "confirmed-by-mutation-response", JSON.stringify(outcome));
+      assert(outcome.preMutationAudit.auditFingerprint, "pre-mutation thread audit fingerprint missing");
+      assert(outcome.postResolutionAudit.auditFingerprint, "post-resolution thread audit fingerprint missing");
+      assert(manifest.lane_evidence_packet.outdated_thread_resolution_outcomes?.[0]?.attemptId === outcome.attemptId, "lane evidence omitted resolver outcome");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("resolve-adjudicated-thread retains recovery evidence after an ambiguous GitHub mutation failure", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      resolveMutationFailure: "ambiguous-resolved",
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const args = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code !== 0, "ambiguous mutation failure unexpectedly passed");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const [outcome] = manifest.outdated_thread_resolution_outcomes;
+      assert(outcome.mutation.status === "ambiguous-or-failed", JSON.stringify(outcome));
+      assert(outcome.postResolutionAudit, "ambiguous mutation did not retain a post-resolution audit");
+      assert(outcome.recoveryPath.includes("Do not retry blindly"), outcome.recoveryPath);
+      assert(manifest.events.some((event) => event.type === "outdated_review_thread_resolution_needs_recovery"), "recovery event missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("resolve-adjudicated-thread refuses a thread-aware race before mutation", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      preMutationCurrentThreadDrift: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const args = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code !== 0, "pre-mutation review drift unexpectedly resolved the thread");
+      assert(resolution.stderr.includes("Pre-mutation review-thread audit drifted or is unsafe"), resolution.stderr || resolution.stdout);
+      const state = readJson(join(fixture.root, "review-threads-state.json"));
+      assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_outdated").isResolved === false, "resolver mutated GitHub after pre-mutation drift");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates fails closed without positive base merge review and check evidence", () => {
     for (const scenario of [
       {
@@ -12285,6 +12469,7 @@ function staleCleanupFixtureEnv(root, options = {}) {
     ghPath,
     [
       "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'list') { console.log(process.env.CODEX_WORKSPACE_TEST_GH_PR_LIST_JSON || '[]'); process.exit(0); }",
@@ -12356,7 +12541,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(fixtureRoot, ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
-  writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\n");
+  writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\nreview-threads-state.json\nreview-threads-query-count\n");
   writeFileSync(join(fixtureRoot, "base.txt"), "base\n");
   mkdirSync(join(fixtureRoot, "docs", "workflows"), { recursive: true });
   writeFileSync(
@@ -12398,25 +12583,38 @@ function createFinishPrExistingCommitFixture(options = {}) {
       },
     ],
   };
+  const normalizedReviewThreads = (options.reviewThreads || [
+    {
+      id: "RT_resolved",
+      isResolved: true,
+      isOutdated: false,
+      comments: { nodes: [{ id: "PRRC_resolved", url: "https://example.test/pull/456#discussion_r1", body: "Resolved fixture comment." }] },
+    },
+    {
+      id: "RT_outdated",
+      isResolved: true,
+      isOutdated: true,
+      comments: { nodes: [{ id: "PRRC_outdated", url: "https://example.test/pull/456#discussion_r2", body: "Outdated fixture comment." }] },
+    },
+  ]).map((thread) => ({
+    ...thread,
+    comments: {
+      nodes: (thread.comments?.nodes || []).map((comment, index) => ({
+        id: comment.id || `PRRC_${thread.id || "thread"}_${index}`,
+        url: comment.url || `https://example.test/pull/456#discussion_${thread.id || index}`,
+        body: Object.hasOwn(comment, "body") ? comment.body : "Fixture review comment.",
+      })),
+      pageInfo: {
+        hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage),
+      },
+    },
+  }));
   const reviewThreadsPayload = {
     data: {
       repository: {
         pullRequest: {
           reviewThreads: {
-            nodes: options.reviewThreads || [
-              {
-                id: "RT_resolved",
-                isResolved: true,
-                isOutdated: false,
-                comments: { nodes: [{ url: "https://example.test/pull/456#discussion_r1" }] },
-              },
-              {
-                id: "RT_outdated",
-                isResolved: true,
-                isOutdated: true,
-                comments: { nodes: [{ url: "https://example.test/pull/456#discussion_r2" }] },
-              },
-            ],
+            nodes: normalizedReviewThreads,
             pageInfo: {
               hasNextPage: Boolean(options.reviewThreadsHasNextPage),
               endCursor: options.reviewThreadsHasNextPage ? "cursor-1" : null,
@@ -12440,10 +12638,14 @@ function createFinishPrExistingCommitFixture(options = {}) {
   }
   const changedPaths = options.changedPaths || [options.featurePath || "feature.txt"];
   const fakeGh = join(fakeBin, "gh");
+  const reviewThreadsStatePath = join(fixtureRoot, "review-threads-state.json");
+  const graphqlQueryCountPath = join(fixtureRoot, "review-threads-query-count");
+  writeFileSync(reviewThreadsStatePath, `${JSON.stringify(reviewThreadsPayload)}\n`);
   writeFileSync(
     fakeGh,
     [
       "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
@@ -12454,7 +12656,25 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
       "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: 'slaw-dawg' }, name: 'fixture' })); process.exit(0); }",
-      `if (args[0] === 'api' && args[1] === 'graphql') { console.log(${JSON.stringify(JSON.stringify(reviewThreadsPayload))}); process.exit(0); }`,
+      "if (args[0] === 'api' && args[1] === 'graphql') {",
+      `  const statePath = ${JSON.stringify(reviewThreadsStatePath)};`,
+      `  const countPath = ${JSON.stringify(graphqlQueryCountPath)};`,
+      "  const payload = JSON.parse(fs.readFileSync(statePath, 'utf8'));",
+      "  const query = args.find((arg) => arg.startsWith('query=')) || '';",
+      "  if (query.includes('resolveReviewThread')) {",
+      options.resolveMutationFailure
+        ? `    if (${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved")}) { const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === 'PRRT_outdated'); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload)); }`
+        : "    const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === 'PRRT_outdated'); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload));",
+      options.resolveMutationFailure
+        ? `    console.error(${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved" ? "simulated ambiguous resolver failure after mutation" : "simulated resolver mutation failure")}); process.exit(1);`
+        : "    console.log(JSON.stringify({ data: { resolveReviewThread: { thread: target ? { id: target.id, isResolved: target.isResolved } : null } } })); process.exit(0);",
+      "  }",
+      "  let count = 0; try { count = Number(fs.readFileSync(countPath, 'utf8')) || 0; } catch {} count += 1; fs.writeFileSync(countPath, String(count));",
+      options.preMutationCurrentThreadDrift
+        ? "  if (count === 4) { payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_raced_current', isResolved: false, isOutdated: false, comments: { nodes: [{ id: 'PRRC_raced_current', url: 'https://example.test/pull/456#discussion_raced', body: 'New review request.' }], pageInfo: { hasNextPage: false } } }); fs.writeFileSync(statePath, JSON.stringify(payload)); }"
+        : "",
+      "  console.log(JSON.stringify(payload)); process.exit(0);",
+      "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
       "process.exit(1);",
       "",
@@ -12988,6 +13208,14 @@ function createMergedCleanupFixture() {
       pr_url: "https://example.test/pull/123",
       pr_number: 123,
       pr_delivery_head_sha: branchHead,
+      pr_gate_evidence: {
+        schemaVersion: 1,
+        status: "passed",
+        lowRiskReady: true,
+        checkedAt: "2026-06-20T00:00:00.000Z",
+        expectedHeadSha: branchHead,
+        metadataOnly: true,
+      },
       source_assignment_id: "cleanup-assignment",
       delivery_subagent_audit: {
         schemaVersion: 1,

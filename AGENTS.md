@@ -427,9 +427,22 @@ durable, milestone-driven workflow rather than a single unbounded task.
   change, or paired with failing/ambiguous checks or a high-risk lane. Any
   thread discovered by the post-resolution re-audit blocks merge and requires
   a fresh full evaluation before it can be resolved. An outdated-only thread is
-  a hold for this automatic authority and must be separately adjudicated; it
-  cannot be closed by this grant. This authority never weakens the separate
-  exact-head merge criteria.
+  a hold for the current-thread grant. It may be closed only through the
+  separate evidence-recording outdated-thread adjudication route: the thread
+  must still be unresolved and outdated; its exact request fingerprint must map to
+  current-head diff, focused local verification command/result, and identified
+  code-review evidence; all
+  required checks and review state must be green; and there must be no pending
+  review request or new unresolved current feedback. Record the bounded packet
+  with `adjudicate-outdated-thread`, resolve without replying by default only
+  after `resolve-adjudicated-thread` revalidates that packet and resolves only
+  its named thread without a reply, then immediately re-audits thread-aware state before
+  any merge decision. Missing or ambiguous facts stop the action. This authority
+  never weakens the separate exact-head merge criteria. The integrated resolver
+  binds path inspection to the exact head, fingerprints every target-thread
+  comment canonically, persists a pre-mutation audit and mutation attempt, and
+  retains a post-audit/recovery record even if GitHub returns an ambiguous
+  mutation failure; never retry that failure blindly.
 - The operator has granted permanent bounded merge authority for **all
   Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
   reviewed head when the PR is in this repository and its expected base branch,
@@ -645,8 +658,12 @@ surface is `node ./scripts/codex-workspace.mjs`.
   new per-thread prompt only a current, unambiguous, fully satisfied thread
   after relevant local verification, required review, and exact-head checks
   pass; record its ID/evidence, do not reply by default, and re-audit. Hold
-  disputed, unclear, unfixed, outdated-only, newly arrived, requested-change,
-  failed/ambiguous-check, or high-risk cases for the normal stop line. A new
+  disputed, unclear, unfixed, newly arrived, requested-change,
+  failed/ambiguous-check, or high-risk cases for the normal stop line. An
+  outdated-only thread requires the separately recorded exact-head adjudication
+  packet (request, diff mapping, local verification, code review, green checks,
+  no pending review, and no unresolved current feedback) before no-reply
+  closure, followed by a fresh thread-aware re-audit. A new
   post-resolution re-audit thread blocks merge until a fresh full evaluation.
 - When the operator says "clean up merged work", run
   `node ./scripts/codex-workspace.mjs cleanup-current --delete-remote` from

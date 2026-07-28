@@ -160,7 +160,8 @@ for (const requiredText of [
   "fresh thread-aware GitHub data shows the thread is current, unambiguous",
   "disputed, unclear, unfixed, outdated-only, new after the audit, a requested\n  change",
   "thread discovered by the post-resolution re-audit blocks merge and requires\n  a fresh full evaluation",
-  "outdated-only thread is\n  a hold for this automatic authority and must be separately adjudicated",
+  "An outdated-only thread is\n  a hold for the current-thread grant",
+  "after `resolve-adjudicated-thread` revalidates that packet and resolves only\n  its named thread without a reply",
   "resolve without replying by default, then re-audit thread-aware review\n  state before any merge decision",
 ]) {
   assertCondition(
@@ -194,11 +195,15 @@ for (const requiredText of [
   "without a new per-thread\n   prompt",
   "verification/review, and check evidence; it resolves without replying by\n     default, then re-audits thread-aware review state.",
   "no requested change or pending review request",
-  "disputed, unclear, unfixed, outdated-only, or\n   newly arrived-after-audit thread",
+  "disputed, unclear, unfixed, or\n   newly arrived-after-audit thread",
   "failing or ambiguous checks; or any high-risk lane",
   "required,\n     failed, unknown, or ambiguously skipped check is always a stop line",
   "post-resolution re-audit blocks merge and requires a fresh full\n   evaluation",
-  "outdated-only thread is a hold for this automatic authority and must be\n   separately adjudicated",
+  "outdated-only thread is a hold for the current-thread rule. It can be\n   closed only after `adjudicate-outdated-thread` records a bounded exact-head",
+  "Only after its packet is ready may\n   `resolve-adjudicated-thread` revalidate and resolve that one thread without\n   replying by default, then immediately repeat the",
+  "binds the changed-path inspection to the exact PR head and\n   fingerprints every comment in the target thread canonically",
+  "retains the mutation result, post-resolution current/outdated-thread holds,\n   and a recovery path even when GitHub returns an ambiguous failure",
+  "Do not\n   retry that mutation blindly",
   "do not weaken the\n   separate merge checklist",
 ]) {
   assertCondition(
