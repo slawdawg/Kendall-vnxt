@@ -169,6 +169,12 @@ test("delivery session receipt is manifest/pane-bound, dry-run safe, idempotent,
     assert.ok(bareFinishPr.blockers.some((blocker) => blocker.code === "active-delivery-worker-mismatch"));
     const stageAll = buildDeliverySessionReceiptPlan({ ...binding, apply: false, command: "node ./scripts/codex-workspace.mjs finish-pr task-delivery --stage-all --verify scoped" }, deliveryReceiptContext());
     assert.ok(stageAll.blockers.some((blocker) => blocker.code === "delivery-session-command-not-finish-pr"));
+    const quotedMetadata = buildDeliverySessionReceiptPlan({ ...binding, apply: false, command: "node ./scripts/codex-workspace.mjs finish-pr task-delivery --verify scoped --title 'Fix delivery receipt' --body \"Verification passed\"" }, deliveryReceiptContext());
+    assert.equal(quotedMetadata.status, "ready");
+    const docsOnly = buildDeliverySessionReceiptPlan({ ...binding, apply: false, command: "node ./scripts/codex-workspace.mjs finish-pr task-delivery --verify docs" }, deliveryReceiptContext());
+    assert.ok(docsOnly.blockers.some((blocker) => blocker.code === "delivery-session-command-not-finish-pr"));
+    const duplicateTitle = buildDeliverySessionReceiptPlan({ ...binding, apply: false, command: "node ./scripts/codex-workspace.mjs finish-pr task-delivery --verify scoped --title one --title two" }, deliveryReceiptContext());
+    assert.ok(duplicateTitle.blockers.some((blocker) => blocker.code === "delivery-session-command-not-finish-pr"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -189,8 +195,10 @@ test("delivery session receipts bind each active lease incarnation and retain le
     assert.equal(receipts.length, 2);
     assert.notEqual(receipts[0].binding.leaseId, receipts[1].binding.leaseId);
     const legacyTerminal = { schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId: binding.runId, binding: { ...receipts[0].binding, leaseId: undefined }, status: "terminal", startedAt: "2026-07-27T00:00:00.000Z", terminal: { exitCode: 0, completedAt: "2026-07-27T00:02:00.000Z" }, rawPayloadRetained: false };
-    writeFileSync(receiptPath, `${JSON.stringify([...receipts, legacyTerminal])}\n`);
+    const legacyRunning = { schemaVersion: 1, recordType: "manager_owned_delivery_session_receipt", runId: binding.runId, binding: { ...receipts[0].binding, leaseId: undefined }, status: "running", startedAt: "2026-07-27T00:00:00.000Z", terminal: null, rawPayloadRetained: false };
+    writeFileSync(receiptPath, `${JSON.stringify([...receipts, legacyTerminal, legacyRunning])}\n`);
     assert.equal(buildDeliverySessionReceiptPlan({ ...binding, apply: false }, deliveryReceiptContext()).status, "ready");
+    assert.equal(buildActiveWorkerDeliveryInstructionPlan({ ...binding, apply: false, deliveryInstruction: true }, deliveryReceiptContext()).status, "ready");
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -403,6 +411,9 @@ test("worker-local delivery acknowledgement resolves linked-worktree symbolic HE
     rmSync(join(commonGitDir, "refs"), { recursive: true, force: true });
     writeFileSync(join(commonGitDir, "packed-refs"), `# pack-refs with: peeled fully-peeled\n${head} refs/heads/lane+review@42\n`);
     assert.equal(consumeWorkerLocalDeliveryInstruction({ runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, localContext).status, "ready");
+    mkdirSync(join(commonGitDir, "refs", "heads"), { recursive: true });
+    writeFileSync(join(commonGitDir, "refs", "heads", "lane+review@42"), "not-an-oid\n");
+    assert.equal(consumeWorkerLocalDeliveryInstruction({ runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, localContext).status, "unknown");
     writeFileSync(join(privateGitDir, "HEAD"), "ref: refs/heads/.unsafe\n");
     assert.equal(consumeWorkerLocalDeliveryInstruction({ runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, localContext).status, "unknown");
   } finally {
@@ -456,6 +467,17 @@ test("worker-local delivery instruction fails closed and records unknown for cha
     writeFileSync(join(stateRoot, "manager-runs", binding.runId, "delivery-session-receipts.json"), `${JSON.stringify([{ schemaVersion: 2, recordType: "manager_owned_delivery_session_receipt", runId: binding.runId, binding: receiptBinding, status: "requested", startedAt: "2026-07-27T00:00:00.000Z", terminal: null, rawPayloadRetained: false }])}\n`);
     writeFileSync(workersPath, `${JSON.stringify([{ workerId: binding.workerId, owner: `${binding.runId}/${binding.workerId}`, runId: binding.runId, sessionName: binding.sessionName, paneTarget: "%7", paneId: "%7", state: "active", assignmentId: "assignment-delivery", taskId: binding.taskId, worktreePath: binding.worktreePath, currentLease: { assignmentId: "assignment-delivery", taskId: binding.taskId, leaseId: "lease-delivery", state: "active" } }])}\n`);
     assert.equal(buildActiveWorkerDeliveryInstructionPlan({ ...binding, apply: true, deliveryInstruction: true }, deliveryReceiptContext()).status, "ready");
+    const instructionsBeforeUnreadableHead = JSON.parse(readFileSync(instructionPath, "utf8"));
+    instructionsBeforeUnreadableHead.push({ ...instructionsBeforeUnreadableHead[0], receiptId: "b".repeat(64), binding: { ...instructionsBeforeUnreadableHead[0].binding, leaseId: "lease-stale" }, status: "acknowledged", acknowledgedAt: "2026-07-27T00:01:00.000Z" });
+    writeFileSync(instructionPath, `${JSON.stringify(instructionsBeforeUnreadableHead)}\n`);
+    const unreadableHead = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, { ...deliveryReceiptContext(), workerLocalHeadReader: () => "" });
+    assert.equal(unreadableHead.status, "unknown");
+    const instructionsAfterUnreadableHead = JSON.parse(readFileSync(instructionPath, "utf8"));
+    assert.equal(instructionsAfterUnreadableHead[0].status, "unknown");
+    assert.equal(instructionsAfterUnreadableHead[1].status, "acknowledged");
+    const resetInstruction = JSON.parse(readFileSync(instructionPath, "utf8"));
+    resetInstruction[0] = { ...resetInstruction[0], status: "pending", acknowledgedAt: null };
+    writeFileSync(instructionPath, `${JSON.stringify(resetInstruction)}\n`);
     const malformedWorkers = JSON.parse(readFileSync(workersPath, "utf8"));
     writeFileSync(workersPath, `${JSON.stringify([...malformedWorkers, null])}\n`);
     const malformedWorkerAck = consumeWorkerLocalDeliveryInstruction({ runId: binding.runId, stateRoot, workerId: binding.workerId, taskId: binding.taskId, leaseId: "lease-delivery", apply: true }, deliveryReceiptContext());
@@ -14530,6 +14552,7 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
       JSON.stringify(
         [
           { workerId: "codex-1", owner: "manager-test/codex-1", runId: "manager-test", sessionName: "codex-1", state: "warm", recoveryState: "pointer_receipt_unverified", lastHeartbeatAt: "2026-06-29T00:00:00.000Z" },
+          { workerId: "codex-preserved", owner: "manager-test/codex-preserved", runId: "manager-test", sessionName: "codex-preserved", state: "active", assignmentId: "lane-preserved", taskId: "task-preserved", currentLease: { assignmentId: "lane-preserved", taskId: "task-preserved", leaseId: "lease-preserved", state: "active", issuedAt: "2026-07-27T00:00:00.000Z", source: "dispatcher_lease_state" } },
         ],
         null,
         2,
@@ -14621,6 +14644,7 @@ test("worker handoff gate apply writes handoff files, pastes short buffer, and a
     assert.equal(workers[0].leaseId, null);
     assert.equal(workers[0].leaseState, null);
     assert.equal(workers[0].currentLease.source, "dispatcher_lease_state");
+    assert.equal(workers[1].currentLease.issuedAt, "2026-07-27T00:00:00.000Z");
     assert.equal(workers[0].heartbeat.status, "recorded");
     assert.equal(workers[0].modelRoute.policy, "task-fit");
     assert.equal(workers[0].recoveryAction, "monitor_active_lease");
