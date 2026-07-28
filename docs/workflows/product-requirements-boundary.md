@@ -33,6 +33,13 @@ Status: draft requirements folded into source-owned architecture and workflow co
 
 Story 6.1 is complete for fake-worker orchestration. Story 7.4 later exercised one bounded supervised Codex launch within its exact approval. Any successor Codex launch outside that exact approval, all Claude process launch, and live GitHub automation remain blocked pending explicit successor approval.
 
+## Epic 27 recovery acceptance
+
+The accepted, revision-bound requirements and evidence contract for the two
+recovered Epic 27 envelope-hardening slices is
+[`docs/product/epic-27-requirements-and-evidence-contract.md`](../product/epic-27-requirements-and-evidence-contract.md).
+It is the only Epic 27 tracker created by that recovery decision.
+
 ## Local Provider Ollama Boundary
 
 Status: draft and reviewed requirements folded into source-owned execution authority contracts.
