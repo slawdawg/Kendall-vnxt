@@ -3789,7 +3789,6 @@ function currentThreadResolutionPostMutationBlockers(audit, target) {
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Post-resolution thread-aware audit is incomplete");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests after resolution: ${audit.pendingReviewRequestCount}`);
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads after resolution: ${audit.unresolvedNonOutdatedCount}`);
-  if (audit?.unresolvedOutdatedCount) blockers.push(`Unresolved outdated review threads after resolution: ${audit.unresolvedOutdatedCount}`);
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   return blockers;
 }
@@ -4659,7 +4658,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
     "target review thread is unresolved and current with a complete canonical all-comment fingerprint",
     "exact repository, PR, and current head match the managed worktree",
     "all reported checks are terminal-successful or exact-head documented non-required skips",
-    "no pending review request, requested change, unresolved outdated thread, or other unresolved current thread",
+    "no pending review request or requested change; other unresolved threads are retained as explicit merge holds",
     "bounded request, current-head diff, local verification, and independent code-review mapping is recorded",
     "GitHub resolution remains a separate named no-reply action followed by a fresh thread-aware re-audit",
   ];
@@ -4721,7 +4720,6 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   if (audit.hasNextPage) blockers.push("Review-thread query returned additional pages; complete thread evidence is required");
   if (audit.reviewRequestHasNextPage) blockers.push("Review-request query returned additional pages; complete review-request evidence is required");
   if (audit.pendingReviewRequestCount > 0) blockers.push(`Pending review requests: ${audit.pendingReviewRequestCount}`);
-  if (audit.unresolvedOutdatedCount > 0) blockers.push(`Unresolved outdated review threads: ${audit.unresolvedOutdatedCount}`);
   if (!context.target) blockers.push("Target review thread was not returned by the thread-aware audit");
   else if (context.target.isResolved) blockers.push("Target review thread is already resolved");
   else if (context.target.isOutdated) blockers.push("Target review thread is not current");
