@@ -51,21 +51,32 @@ currently connects the full Epic goal to measurable delivery evidence.
 
 ## GitHub evidence snapshot
 
-Observed 2026-07-28 UTC through GitHub PR metadata, check rollups, and
-thread-aware GraphQL queries. The matrix records immutable PR heads/merges and
-the bounded observed thread disposition; GitHub check and open-PR state remain
-mutable and must be freshly queried before any delivery decision. Review-thread
-identifiers observed: #718 `PRRT_kwDOSy366c6Tzj5w`; #723 has 30 unresolved
-threads; #728 has 4, #729 has 5, and #730 has 1 unresolved post-merge thread.
+Observed 2026-07-28 UTC through GitHub PR metadata, status-check rollups, and
+the `reviewThreads` GraphQL query. The recorded stable identifiers are #718
+`PRRT_kwDOSy366c6Tzj5w`; #723 has 30 unresolved threads; #728 has 4, #729 has
+5, and #730 has 1 unresolved post-merge thread. The exact heads/merges and
+these bounded thread results are the retained snapshot; check, review, and
+open-PR state remain mutable and must be freshly queried before a delivery
+decision.
+
+## Required reconciliation dimensions
+
+For each mapped source item, retain separate fields for tracker status,
+delivery state, and authority/hold disposition. Do not collapse an item that is
+open, stale, held, approval-gated, or merged into one mutually exclusive
+bucket; the final criterion mapping must preserve every applicable dimension.
 
 ## Exact next safe source decision
 
-Do not dispatch a new lane or mark Epic 27 complete. First select and preserve
+Do not dispatch a new lane sourced from or claiming Epic 27, or mark Epic 27
+complete. First select and preserve
 one authoritative Epic 27 source bundle, bind a tracker to its exact revision,
 and produce a criterion-to-evidence reconciliation that classifies every
 tracked item as merged, open, stale, approval-gated, or held. Only then may an
-authorized owner decide whether the Epic is complete, whether review-thread
-dispositions need separate work, or whether any source-backed work remains.
+authorized owner decide whether the Epic is complete or whether any
+source-backed Epic 27 work remains. Before a mapped #728, #729, or #730 PR can
+count toward an Epic 27 criterion, its unresolved review threads must be
+inspected and dispositioned as actionable or non-actionable.
 
 ## Verification boundary
 
