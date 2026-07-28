@@ -151,6 +151,15 @@ assertCondition(
   "codex workspace command must persist best-judgment decision evidence",
   failures,
 );
+for (const requiredText of [
+  "verify-unmanaged-pr-gates --pr <number> --base <branch> --expected-head\n   <sha> --merge-method <exact-head-method> --rollback-path <revert-path>",
+]) {
+  assertCondition(
+    files["docs/workflows/end-to-end-lane-runner.md"].includes(requiredText),
+    `End-to-end lane runner must document required unmanaged merge/rollback evidence: ${requiredText}`,
+    failures,
+  );
+}
 assertCondition(
   files["scripts/test-codex-workspace.mjs"].includes("bestJudgmentDecisionCount"),
   "codex workspace tests must cover best-judgment decision evidence packets",
