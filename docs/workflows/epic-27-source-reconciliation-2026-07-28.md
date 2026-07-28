@@ -13,8 +13,9 @@ currently connects the full Epic goal to measurable delivery evidence.
 
 ## Source hierarchy
 
-1. The accepted source bundle (PRD, architecture, epics, and its identified
-   status record) defines product scope and acceptance criteria.
+1. Accepted source-owned product requirements define product scope and
+   acceptance criteria. A PRD, architecture, epics, or status bundle is local
+   planning input until its decisions are rewritten into that boundary.
 2. A source-owned tracker can state planned and completed story status only
    when it identifies that same bundle and revision.
 3. Exact GitHub PR head, merge, check, and review-thread data prove a bounded
@@ -26,7 +27,7 @@ currently connects the full Epic goal to measurable delivery evidence.
 
 | Item | Proven purpose and exact evidence | Reconciliation use | Limit |
 | --- | --- | --- | --- |
-| PR #687 | Explicitly titled **Epic-27 supervisor report envelope hardening batch**. Merged head `365a18c86f88899e7a9871a22c15aea7d9acf76e`, merge `6cf3132224fd7c6f6e8eead4c49e06f48fdce922`, base `dev`; 3 files, +111/-4; no review threads. | Direct, bounded Epic 27 delivery evidence. | Its body proves two slices, not a complete Epic scope/criteria mapping. |
+| PR #687 | Explicitly titled **Epic-27 supervisor report envelope hardening batch**. Merged head `365a18c86f88899e7a9871a22c15aea7d9acf76e`, merge `6cf3132224fd7c6f6e8eead4c49e06f48fdce922`, base `dev`; 3 files, +111/-4; no review threads. | Contextual delivery evidence pending source-owned Epic mapping. | PR self-labeling and merge history cannot prove Epic scope or criteria. |
 | #687 slice 1 | The PR body names **authoritative work-packet mutation response envelopes for POST routes** with contract-only response typing and unchanged mutation/authority behavior. | Measurable slice: the merged exact head carries this declared response-envelope scope. | No independently tracked Epic 27 acceptance criterion ties this slice to an Epic-level outcome. |
 | #687 slice 2 | The PR body names **strict read-only delivery and cleanup report envelope route coverage**. | Measurable slice: the merged exact head carries the stated read-only route coverage. | It is not proof that cleanup was run or that all delivery lifecycle work is complete. |
 | PR #728 | Merged dirty-lane-takeover hardening at head `d69e9b65eb86376c2de77de61f9e5fda9cf00cad`, merge `c2a09ccb841cf278d4636cb37926ab10e4984c2f`; checks are success or documented skips. | Contextual recovery evidence only. | Four post-merge review threads remain unresolved; no proven Epic 27 source linkage. |
@@ -47,6 +48,15 @@ currently connects the full Epic goal to measurable delivery evidence.
   PR history alone cannot supply it.
 - Review-thread disposition for #728, #729, and #730 if any later decision
   needs thread-clean delivery evidence.
+
+## GitHub evidence snapshot
+
+Observed 2026-07-28 UTC through GitHub PR metadata, check rollups, and
+thread-aware GraphQL queries. The matrix records immutable PR heads/merges and
+the bounded observed thread disposition; GitHub check and open-PR state remain
+mutable and must be freshly queried before any delivery decision. Review-thread
+identifiers observed: #718 `PRRT_kwDOSy366c6Tzj5w`; #723 has 30 unresolved
+threads; #728 has 4, #729 has 5, and #730 has 1 unresolved post-merge thread.
 
 ## Exact next safe source decision
 
