@@ -6277,60 +6277,13 @@ try {
   });
 
   test("takeover apply transfers a stale dirty lane only with exact path fingerprints", () => {
-    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-allowed-"));
-    const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-allowed-worktree-"));
+    const fixture = createDirtyTakeoverFixture("allowed-exact-fingerprints");
     try {
-      runGit(worktreePath, ["init", "-q"]);
-      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
-      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
-      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
-      runGit(worktreePath, ["add", "tracked.txt"]);
-      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
-      runGit(worktreePath, ["checkout", "-q", "-b", "codex/stale-dirty-workspace"]);
-      writeFileSync(join(worktreePath, "dirty.txt"), "preserve this intended lane work\n");
-
-      const tasksDir = join(takeoverStateRoot, "tasks");
-      mkdirSync(tasksDir, { recursive: true });
-      const manifestPath = join(tasksDir, "stale-dirty-workspace.json");
-      writeFileSync(
-        manifestPath,
-        `${JSON.stringify(
-          {
-            task_id: "stale-dirty-workspace",
-            branch: "codex/stale-dirty-workspace",
-            worktree_path: worktreePath,
-            base_branch: "main",
-            status: "active",
-            owner: "runner-b",
-            owner_updated_at: "2026-06-21T00:00:00.000Z",
-            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      const result = run([
-        "takeover",
-        "stale-dirty-workspace",
-        "--apply",
-        "--owner",
-        "runner-a",
-        "--takeover-reason",
-        "stale owner evidence reviewed",
-        "--approval",
-        "operator explicitly approved the bounded dirty lane takeover",
-        "--allow-dirty-in-lane",
-        "--dirty-paths",
-        "dirty.txt",
-        "--stale-after-seconds",
-        "60",
-        "--state-root",
-        takeoverStateRoot,
-      ]);
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "preserve this intended lane work\n");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
 
       assert(result.code === 0, result.stderr || result.stdout);
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
       assert(manifest.owner === "runner-a", "dirty takeover did not update workspace owner");
       const decision = manifest.takeover_decisions.at(-1);
       const dirtyEvidence = decision.dirty_in_lane_evidence;
@@ -6344,8 +6297,7 @@ try {
       assert(decision.previous_owner === "runner-b" && decision.requesting_owner === "runner-a", JSON.stringify(decision));
       assert(decision.reason === "stale owner evidence reviewed", JSON.stringify(decision));
     } finally {
-      rmSync(takeoverStateRoot, { recursive: true, force: true });
-      rmSync(worktreePath, { recursive: true, force: true });
+      cleanupDirtyTakeoverFixture(fixture);
     }
   });
 
