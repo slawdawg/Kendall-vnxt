@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { hasCurrentThreadResolutionPrerequisites } from "./lib/runbook-review-thread-policy.mjs";
+
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
 function readWorkspaceFile(path) {
@@ -170,6 +172,11 @@ for (const requiredText of [
     failures,
   );
 }
+assertCondition(
+  hasCurrentThreadResolutionPrerequisites(files["docs/workflows/end-to-end-lane-runner.md"]),
+  "End-to-end lane runner must retain every positive current-thread resolution prerequisite: addressed feedback, relevant verification and independent review evidence, and fresh thread-aware data with no pending review request",
+  failures,
+);
 for (const requiredText of [
   "permanent bounded merge authority for **all\n  Kendall_Nxt PRs**",
   "in this repository and its expected base branch,\n  is not a draft, is cleanly mergeable",

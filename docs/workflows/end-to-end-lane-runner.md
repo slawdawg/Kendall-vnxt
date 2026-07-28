@@ -242,7 +242,7 @@ publisher.
    prompt only when all of the following are proven for the current PR head:
 
    - The feedback is fully addressed by the current diff and supported by the
-     relevant local verification and required code review.
+     relevant local verification and required independent code-review evidence.
    - Fresh GitHub thread-aware data shows the thread is current and
      unambiguous, with no requested change or pending review request.
    - Required and reported checks for the exact head are successful or
