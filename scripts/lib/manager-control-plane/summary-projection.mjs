@@ -10,6 +10,8 @@ export const DEFAULT_SUMMARY_STALE_AFTER_MS = 300_000;
 export const SIMULATED_WARNING = "backend_proof_simulated_no_live_worker_execution";
 const MAX_LANE_CLARITY_TEXT_LENGTH = 240;
 const MAX_LANE_CLARITY_REF_LENGTH = 255;
+const MAX_LANE_CLARITY_CRITERIA = 24;
+const MAX_LANE_CLARITY_REFS = 20;
 
 export const WORK_STATUSES = [
   "eligible",
@@ -122,6 +124,7 @@ export function buildManagerExecutionLaneSummary({
     currentPhase,
     freshness,
     evidenceFreshness: freshness === "stale" ? "stale" : evidenceRefs.length > 0 ? "fresh" : "missing",
+    evidenceRefs,
     events,
   });
 
@@ -169,7 +172,7 @@ export function buildManagerExecutionLaneSummary({
   };
 }
 
-function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, currentPhase, freshness, evidenceFreshness, events }) {
+function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, currentPhase, freshness, evidenceFreshness, evidenceRefs, events }) {
   const unavailable = (reason, nextSafeAction = "Record coherent manager lane source and criterion evidence before relying on lane clarity.") => ({
     schemaVersion: "manager-lane-clarity/v0",
     runId,
@@ -194,21 +197,23 @@ function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, cu
     candidate.sourceCursor === sourceCursor &&
     isLaneClarityText(goal?.summary) &&
     isLaneClarityRef(goal?.sourceRef) &&
-    Array.isArray(criteria) && criteria.length > 0 &&
+    Array.isArray(criteria) && criteria.length > 0 && criteria.length <= MAX_LANE_CLARITY_CRITERIA &&
     criteria.every(isValidLaneClarityCriterion) &&
+    criteria.every((criterion) => criterion.evidenceRefs.every((ref) => evidenceRefs.includes(ref))) &&
     isLaneClarityText(nextGate?.summary) && isLaneClarityText(nextGate?.nextSafeAction) &&
     candidate.metadataOnly === true && candidate.rawPayloadRetained === false;
   if (!coherent || freshness !== "fresh" || evidenceFreshness !== "fresh") {
     return unavailable("lane_clarity_incoherent_or_stale");
   }
   const pivotEvent = [...events].reverse().find((event) =>
-    event?.eventName === "scope_pivot_required" && event.runId === runId
+    event?.eventName === "scope_pivot_required" && event.runId === runId && event.scopePivotDecision?.eventWatermark === eventWatermark
   );
   if (pivotEvent) {
     const decision = pivotEvent.scopePivotDecision;
     if (!decision || !["operator_drift_concern", "second_qualified_recovery_detour"].includes(decision.qualification) ||
       decision.eventWatermark !== eventWatermark || !isLaneClarityRef(decision.decisionRef) || !isLaneClarityText(decision.reason) ||
       !hasSafeLaneClarityRefs(decision.sourceRefs) || !hasSafeLaneClarityRefs(pivotEvent.evidenceRefs) ||
+      !pivotEvent.evidenceRefs.every((ref) => evidenceRefs.includes(ref)) ||
       !isLaneClarityText(decision.nextSafeAction) || decision.rawPayloadRetained !== false) {
       return unavailable("scope_pivot_decision_malformed");
     }
@@ -217,10 +222,10 @@ function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, cu
       runId,
       eventWatermark,
       sourceCursor,
-      goal,
-      criteria,
+      goal: projectGoal(goal),
+      criteria: criteria.map(projectCriterion),
       canonicalState: { phase: currentPhase, freshness, evidenceFreshness },
-      nextGate,
+      nextGate: projectNextGate(nextGate),
       posture: { state: "pivot_required", reason: decision.reason, nextSafeAction: decision.nextSafeAction, decisionRef: decision.decisionRef, qualification: decision.qualification },
       metadataOnly: true,
       rawPayloadRetained: false,
@@ -231,10 +236,10 @@ function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, cu
     runId,
     eventWatermark,
     sourceCursor,
-    goal,
-    criteria,
+    goal: projectGoal(goal),
+    criteria: criteria.map(projectCriterion),
     canonicalState: { phase: currentPhase, freshness, evidenceFreshness },
-    nextGate,
+    nextGate: projectNextGate(nextGate),
     posture: { state: "on_scope", reason: "coherent_current_manager_lane_evidence", nextSafeAction: nextGate.nextSafeAction, decisionRef: null, qualification: null },
     metadataOnly: true,
     rawPayloadRetained: false,
@@ -249,8 +254,12 @@ function isValidLaneClarityCriterion(criterion) {
 }
 
 function hasSafeLaneClarityRefs(refs) {
-  return Array.isArray(refs) && refs.length > 0 && refs.every(isLaneClarityRef);
+  return Array.isArray(refs) && refs.length > 0 && refs.length <= MAX_LANE_CLARITY_REFS && refs.every(isLaneClarityRef);
 }
+
+function projectGoal(goal) { return { summary: goal.summary, sourceRef: goal.sourceRef }; }
+function projectCriterion(criterion) { return { criterionId: criterion.criterionId, summary: criterion.summary, disposition: criterion.disposition, evidenceRefs: [...criterion.evidenceRefs] }; }
+function projectNextGate(nextGate) { return { summary: nextGate.summary, nextSafeAction: nextGate.nextSafeAction }; }
 
 function isLaneClarityRef(value) {
   return isSafeMetadataOnlyText(value, { maxLength: MAX_LANE_CLARITY_REF_LENGTH, token: true });

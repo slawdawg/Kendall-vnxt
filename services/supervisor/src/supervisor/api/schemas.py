@@ -151,14 +151,14 @@ PEM_OR_HIGH_ENTROPY_SECRET_RE = re.compile(
     re.IGNORECASE,
 )
 LANE_CLARITY_UNSAFE_TEXT_RE = re.compile(
-    r"\b(?:raw(?:_?payload)?|provider(?:_?payload)?|secret|token|credential|password|api[_-]?key|private[_-]?key)\b|\bbearer\s+|\bsk-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    r"\b(?:raw[_-]?payload|provider[_-]?payload|secret|token|credential|password|api[_-]?key|private[_-]?key)\b|\bbearer\s+|\bsk-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----",
     re.IGNORECASE,
 )
 
 
 def _is_safe_pipeline_evidence_ref(value: str) -> bool:
     ref = value.strip()
-    return bool(ref) and len(ref) <= 255 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+    return bool(ref) and ref == value and len(ref) <= 255 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref) and not TOKEN_LIKE_METADATA_VALUE_RE.search(ref)
 
 
 def _is_safe_review_route_evidence_ref(value: str) -> bool:
@@ -4133,7 +4133,7 @@ class PipelineActiveManagerLaneClarityCriterionV0View(BaseModel):
     @field_validator("evidenceRefs")
     @classmethod
     def criterion_evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
-        if not refs or not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+        if not refs or len(refs) > 20 or not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
             raise ValueError("Lane clarity criterion evidence refs must be safe metadata refs.")
         return refs
 
@@ -4141,16 +4141,9 @@ class PipelineActiveManagerLaneClarityCriterionV0View(BaseModel):
 class PipelineActiveManagerLaneClarityCanonicalStateV0View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    phase: str
-    freshness: str
-    evidenceFreshness: str
-
-    @field_validator("phase", "freshness", "evidenceFreshness")
-    @classmethod
-    def state_value_is_safe(cls, value: str) -> str:
-        if not _is_safe_lane_clarity_text(value):
-            raise ValueError("Lane clarity state must be safe metadata text.")
-        return value
+    phase: Literal["eligible", "queued", "leased", "running", "refilling", "completed", "failed", "expired", "quarantined", "blocked", "closed", "needs_review"]
+    freshness: Literal["fresh", "stale", "unknown"]
+    evidenceFreshness: Literal["fresh", "stale", "missing"]
 
 
 class PipelineActiveManagerLaneClarityNextGateV0View(BaseModel):
@@ -4212,6 +4205,13 @@ class PipelineActiveManagerLaneClarityV0View(BaseModel):
         if not _is_safe_pipeline_evidence_ref(value):
             raise ValueError("Lane clarity identity must be a safe metadata ref.")
         return value
+
+    @field_validator("criteria")
+    @classmethod
+    def criteria_are_bounded(cls, criteria: list[PipelineActiveManagerLaneClarityCriterionV0View]) -> list[PipelineActiveManagerLaneClarityCriterionV0View]:
+        if len(criteria) > 24:
+            raise ValueError("Lane clarity criteria must be bounded.")
+        return criteria
 
 
 class PipelineQueueSummaryV0View(BaseModel):

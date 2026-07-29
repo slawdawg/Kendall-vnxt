@@ -17,12 +17,15 @@ function candidate({ eventWatermark, sourceCursor, runId = "run-1" }) {
   };
 }
 
+const laneEvidence = ["evidence:lane-clarity"];
+
 test("lane clarity emits on_scope only for a coherent fresh metadata record", () => {
   const summary = buildManagerExecutionLaneSummary({
     runId: "run-1",
     clock,
     events: [{ eventId: "event-progress", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] }],
     summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
     laneClarity: candidate({ eventWatermark: "event-summary", sourceCursor: "1" }),
   });
   assert.equal(summary.laneClarity.posture.state, "on_scope");
@@ -51,6 +54,7 @@ test("lane clarity emits pivot_required only for the current structured pivot de
     clock,
     events: [pivot],
     summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
     laneClarity: candidate({ eventWatermark: "event-summary", sourceCursor: "1" }),
   });
   assert.equal(summary.laneClarity.posture.state, "pivot_required");
@@ -63,7 +67,7 @@ test("lane clarity fails closed when source metadata is missing or incoherent", 
   assert.match(summary.laneClarity.posture.reason, /lane_clarity_missing/);
 });
 
-test("lane clarity fails closed when a pivot decision is malformed or unbound", () => {
+test("lane clarity ignores a stale pivot decision", () => {
   const pivot = {
     eventId: "event-pivot",
     eventName: "scope_pivot_required",
@@ -85,10 +89,10 @@ test("lane clarity fails closed when a pivot decision is malformed or unbound", 
     clock,
     events: [pivot],
     summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
     laneClarity: candidate({ eventWatermark: "event-summary", sourceCursor: "1" }),
   });
-  assert.equal(summary.laneClarity.posture.state, "not_assessed");
-  assert.match(summary.laneClarity.posture.reason, /scope_pivot_decision_malformed/);
+  assert.equal(summary.laneClarity.posture.state, "on_scope");
 });
 
 test("lane clarity fails closed for cross-run and stale metadata", () => {
@@ -104,6 +108,7 @@ test("lane clarity fails closed for cross-run and stale metadata", () => {
     clock,
     events: [current],
     summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
     laneClarity: candidate({ runId: "run-2", eventWatermark: "event-summary", sourceCursor: "1" }),
   });
   assert.equal(crossRun.laneClarity.posture.state, "not_assessed");
@@ -113,6 +118,7 @@ test("lane clarity fails closed for cross-run and stale metadata", () => {
     clock,
     events: [{ ...current, occurredAt: "2026-07-28T00:00:00.000Z" }],
     summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
     laneClarity: candidate({ eventWatermark: "event-summary", sourceCursor: "1" }),
   });
   assert.equal(stale.laneClarity.posture.state, "not_assessed");
@@ -127,8 +133,39 @@ test("lane clarity fails closed rather than retaining unsafe metadata", () => {
     clock,
     events: [{ eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: ["evidence:current"] }],
     summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
     laneClarity: unsafe,
   });
   assert.equal(summary.laneClarity.posture.state, "not_assessed");
   assert.match(summary.laneClarity.posture.reason, /incoherent_or_stale/);
+});
+
+test("lane clarity projects only validated fields and bounded current evidence", () => {
+  const source = candidate({ eventWatermark: "event-summary", sourceCursor: "1" });
+  source.goal.rawProviderPayload = "not-retained";
+  source.criteria[0].secret = "not-retained";
+  source.nextGate.retainedPayload = "not-retained";
+  const summary = buildManagerExecutionLaneSummary({
+    runId: "run-1", clock,
+    events: [{ eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] }],
+    summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source,
+  });
+  assert.equal(summary.laneClarity.posture.state, "on_scope");
+  assert.deepEqual(summary.laneClarity.goal, { summary: "Keep the production projection truthful.", sourceRef: "requirement:lane-clarity" });
+  assert.equal("secret" in summary.laneClarity.criteria[0], false);
+  assert.equal("retainedPayload" in summary.laneClarity.nextGate, false);
+});
+
+test("lane clarity ignores stale pivots and rejects unbound or oversized evidence", () => {
+  const source = candidate({ eventWatermark: "event-summary", sourceCursor: "2" });
+  const stalePivot = { eventId: "old", eventName: "scope_pivot_required", runId: "run-1", evidenceRefs: ["evidence:lane-clarity"], scopePivotDecision: { qualification: "operator_drift_concern", eventWatermark: "old", decisionRef: "decision:old", reason: "Old decision.", sourceRefs: ["source:old"], nextSafeAction: "review", rawPayloadRetained: false } };
+  const current = { eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] };
+  const onScope = buildManagerExecutionLaneSummary({ runId: "run-1", clock, events: [stalePivot, current], summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source });
+  assert.equal(onScope.laneClarity.posture.state, "on_scope");
+  source.criteria[0].evidenceRefs = ["evidence:unbound"];
+  const unbound = buildManagerExecutionLaneSummary({ runId: "run-1", clock, events: [stalePivot, current], summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source });
+  assert.equal(unbound.laneClarity.posture.state, "not_assessed");
+  source.criteria = Array.from({ length: 25 }, (_, index) => ({ criterionId: `criterion:${index}`, summary: "Bounded criterion.", disposition: "met", evidenceRefs: laneEvidence }));
+  const oversized = buildManagerExecutionLaneSummary({ runId: "run-1", clock, events: [stalePivot, current], summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source });
+  assert.equal(oversized.laneClarity.posture.state, "not_assessed");
 });

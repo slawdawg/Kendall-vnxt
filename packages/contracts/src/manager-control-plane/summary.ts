@@ -142,5 +142,5 @@ export interface ManagerExecutionLaneSummary {
   feedbackUnrelatedLanePolicy: "continue_unrelated_safe_lanes";
   feedbackRetention: "metadata_only";
   feedbackRawPayloadRetained: false;
-  laneClarity?: ManagerLaneClarity | null;
+  laneClarity: ManagerLaneClarity | null;
 }

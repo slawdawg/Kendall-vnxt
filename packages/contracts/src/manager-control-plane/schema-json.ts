@@ -561,7 +561,8 @@ export const MANAGER_CONTROL_PLANE_EVENT_SERIALIZED_FIELDS = [
   "redaction_boundary",
   "projection_behavior",
   "evidence_refs",
-  "payload_summary"
+  "payload_summary",
+  "scope_pivot_decision"
 ] as const;
 
 export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {

@@ -31396,6 +31396,7 @@ const LEDGER_EVENT_NAMES = new Set([
   "dispatcher.progress.observed",
   "dispatcher.policy.blocked_action",
   "dispatcher.recovery.attempted",
+  "scope_pivot_required",
   "dispatcher.work_supply.empty",
   "manager.run.started",
   "manager.run.steered",

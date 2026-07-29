@@ -50,3 +50,7 @@ def test_lane_clarity_view_rejects_unsafe_metadata() -> None:
         PipelineActiveManagerLaneClarityGoalV0View.model_validate(
             {"summary": "api_key=must-not-be-retained", "sourceRef": "requirement:lane-clarity"}
         )
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityGoalV0View.model_validate(
+            {"summary": "Safe summary.", "sourceRef": "ghp_abcdefghijkl"}
+        )

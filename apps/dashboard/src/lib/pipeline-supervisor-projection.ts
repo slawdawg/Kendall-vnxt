@@ -303,6 +303,10 @@ const managerReliabilityStates = new Set([
   "unavailable",
   "unknown",
 ]);
+const managerLaneClarityPhases = new Set(["eligible", "queued", "leased", "running", "refilling", "completed", "failed", "expired", "quarantined", "blocked", "closed", "needs_review"]);
+const managerLaneClarityFreshness = new Set(["fresh", "stale", "unknown"]);
+const managerLaneClarityEvidenceFreshness = new Set(["fresh", "stale", "missing"]);
+const managerLaneClarityDispositions = new Set(["met", "in_progress", "blocked", "not_assessed"]);
 const projectionSourceKinds = new Set([
   "prd",
   "bmad_story",
@@ -939,20 +943,21 @@ function isActiveManagerLaneClarity(value: unknown) {
   if (!value || typeof value !== "object") return false;
   const clarity = value as NonNullable<PipelineDashboardProjectionV0["activeManagerLaneClarity"]>;
   return clarity.schemaVersion === "manager-lane-clarity/v0" &&
-    typeof clarity.runId === "string" &&
-    typeof clarity.eventWatermark === "string" &&
-    typeof clarity.sourceCursor === "string" &&
-    typeof clarity.goal?.summary === "string" &&
-    typeof clarity.goal?.sourceRef === "string" &&
-    Array.isArray(clarity.criteria) &&
-    typeof clarity.canonicalState?.phase === "string" &&
-    typeof clarity.canonicalState?.freshness === "string" &&
-    typeof clarity.canonicalState?.evidenceFreshness === "string" &&
-    typeof clarity.nextGate?.summary === "string" &&
-    typeof clarity.nextGate?.nextSafeAction === "string" &&
+    isSafeEvidenceRef(clarity.runId) && isSafeEvidenceRef(clarity.eventWatermark) && isSafeEvidenceRef(clarity.sourceCursor) &&
+    isSafeProjectionText(clarity.goal?.summary) && isSafeEvidenceRef(clarity.goal?.sourceRef) &&
+    Array.isArray(clarity.criteria) && clarity.criteria.length <= 24 && clarity.criteria.every((criterion) =>
+      isSafeEvidenceRef(criterion?.criterionId) && isSafeProjectionText(criterion?.summary) &&
+      managerLaneClarityDispositions.has(criterion?.disposition) && Array.isArray(criterion?.evidenceRefs) &&
+      criterion.evidenceRefs.length > 0 && criterion.evidenceRefs.length <= 20 && criterion.evidenceRefs.every(isSafeEvidenceRef)
+    ) &&
+    managerLaneClarityPhases.has(clarity.canonicalState?.phase) &&
+    managerLaneClarityFreshness.has(clarity.canonicalState?.freshness) &&
+    managerLaneClarityEvidenceFreshness.has(clarity.canonicalState?.evidenceFreshness) &&
+    isSafeProjectionText(clarity.nextGate?.summary) && isSafeProjectionText(clarity.nextGate?.nextSafeAction) &&
     ["on_scope", "pivot_required", "not_assessed"].includes(clarity.posture?.state) &&
-    typeof clarity.posture?.reason === "string" &&
-    typeof clarity.posture?.nextSafeAction === "string" &&
+    isSafeProjectionText(clarity.posture?.reason) && isSafeProjectionText(clarity.posture?.nextSafeAction) &&
+    (clarity.posture?.decisionRef === null || clarity.posture?.decisionRef === undefined || isSafeEvidenceRef(clarity.posture.decisionRef)) &&
+    (clarity.posture?.qualification === null || clarity.posture?.qualification === undefined || ["operator_drift_concern", "second_qualified_recovery_detour"].includes(clarity.posture.qualification)) &&
     clarity.metadataOnly === true && clarity.rawPayloadRetained === false;
 }
 
