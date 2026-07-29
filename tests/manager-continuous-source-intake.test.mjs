@@ -79,6 +79,8 @@ function actualCycleContext() {
 
 test("refill and continuous planning project source intake only with one eligible seed and explicit loopback URL", () => {
   assert.equal(parseCommonArgs([]).supervisorUrl, "");
+  assert.equal(parseCommonArgs([]).laneClaritySupervisorUrl, "");
+  assert.equal(parseCommonArgs(["--lane-clarity-supervisor-url", "https://supervisor.example.com"]).laneClaritySupervisorUrl, "https://supervisor.example.com");
   assert.throws(() => parseCommonArgs(["--supervisor-url", "https://supervisor.example.com"]), /loopback/);
   const defaultRefill = refill();
   assert.equal(defaultRefill.nextActions.some((action) => action.code === "manager-source-intake-ready"), false);

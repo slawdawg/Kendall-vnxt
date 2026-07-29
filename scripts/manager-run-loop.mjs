@@ -13,6 +13,7 @@ import {
   readManagerCapabilityPosture,
   writeManagerCapabilityPosture,
 } from "./lib/manager-control-plane/core.mjs";
+import { publishManagerCycleLaneClarity } from "./lib/manager-control-plane/manager-cycle-lane-clarity-publication.mjs";
 
 function writePacket(packet, options) {
   const payload = options.summaryJson ? packet : packet.summary?.report || packet.summary || packet;
@@ -90,7 +91,7 @@ function knownCommandFingerprint(command = "") {
 
 function normalizeCommandArguments(args = []) {
   const ignoredFlags = new Set(["--apply", "--dry-run", "--summary-json"]);
-  const singletonFlags = new Set(["--state-root", "--owner", "--run-id", "--limit", "--worker-id", "--session-name", "--assignment-id", "--task-id", "--candidate-id", "--supervisor-url"]);
+  const singletonFlags = new Set(["--state-root", "--owner", "--run-id", "--limit", "--worker-id", "--session-name", "--assignment-id", "--task-id", "--candidate-id", "--supervisor-url", "--lane-clarity-supervisor-url"]);
   const seenSingletonFlags = new Set();
   const normalized = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -641,6 +642,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   const buildContinuousRunPlanFn = context.buildContinuousRunPlan || buildContinuousRunPlan;
   const buildRecoveryHousekeepingEvidenceRecordFn = context.buildRecoveryHousekeepingEvidenceRecord || buildRecoveryHousekeepingEvidenceRecord;
   const executeContinuousSelectedActionFn = context.executeContinuousSelectedAction || executeContinuousSelectedAction;
+  const publishManagerCycleLaneClarityFn = context.publishManagerCycleLaneClarity || publishManagerCycleLaneClarity;
   const writePacketFn = context.writePacket || writePacket;
   const sleepFn = context.sleep || sleep;
   const preflight = buildPreflightFn(options, { env: context.env || process.env });
@@ -838,18 +840,38 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
         break;
       }
       if (execution.continueLoop) {
+        result.summary.laneClarityHandoff = await publishManagerCycleLaneClarityFn(
+          laneClarityPublicationSummary(plan.summary),
+          options,
+          context.laneClarityPublicationContext || {},
+        );
         writePacketFn(result, options);
         if (maxIterations !== 0 && iteration >= maxIterations) break;
         await sleepFn(Math.max(1000, options.intervalMs || 60000));
         continue;
       }
     }
+    result.summary.laneClarityHandoff = await publishManagerCycleLaneClarityFn(
+      laneClarityPublicationSummary(plan.summary),
+      options,
+      context.laneClarityPublicationContext || {},
+    );
     if (iteration % Math.max(1, options.heartbeatEvery || 1) === 0 || selected) {
       writePacketFn(result, options);
     }
     if (maxIterations !== 0 && iteration >= maxIterations) break;
     await sleepFn(Math.max(1000, options.intervalMs || 60000));
   }
+}
+
+function laneClarityPublicationSummary(summary = {}) {
+  const canonical = summary?.managerExecutionLaneSummary;
+  if (canonical && typeof canonical === "object") return canonical;
+  return {
+    laneClarity: summary?.laneClarity || null,
+    lastObservedAt: summary?.laneClarityObservedAt || summary?.lastObservedAt || null,
+    selectedLaneId: summary?.selectedLaneId || null,
+  };
 }
 
 function firstSandboxBoundary(packet = {}) {
