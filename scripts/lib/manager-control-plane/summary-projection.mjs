@@ -4,13 +4,12 @@ import {
   SUPERVISOR_TERMINAL_INTEGRATION_MISSING,
   SUPERVISOR_TERMINAL_INTEGRATION_PERSISTED,
 } from "./terminal-event-contract.mjs";
+import { isSafeMetadataOnlyText } from "./forbidden-boundary.mjs";
 
 export const DEFAULT_SUMMARY_STALE_AFTER_MS = 300_000;
 export const SIMULATED_WARNING = "backend_proof_simulated_no_live_worker_execution";
 const MAX_LANE_CLARITY_TEXT_LENGTH = 240;
 const MAX_LANE_CLARITY_REF_LENGTH = 255;
-const LANE_CLARITY_UNSAFE_METADATA_RE = /\b(rawProviderPayload|providerPayload|rawPayload|retainedPayload|secret|token|credential|api[_-]?key|private[_-]?key|password)\b|\bbearer\s+|\bsk-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
-const LANE_CLARITY_REF_RE = /^[A-Za-z0-9._/@:-]+$/;
 
 export const WORK_STATUSES = [
   "eligible",
@@ -254,11 +253,11 @@ function hasSafeLaneClarityRefs(refs) {
 }
 
 function isLaneClarityRef(value) {
-  return typeof value === "string" && value.length <= MAX_LANE_CLARITY_REF_LENGTH && LANE_CLARITY_REF_RE.test(value) && !LANE_CLARITY_UNSAFE_METADATA_RE.test(value);
+  return isSafeMetadataOnlyText(value, { maxLength: MAX_LANE_CLARITY_REF_LENGTH, token: true });
 }
 
 function isLaneClarityText(value) {
-  return typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= MAX_LANE_CLARITY_TEXT_LENGTH && !/[\u0000-\u001F\u007F]/.test(value) && !LANE_CLARITY_UNSAFE_METADATA_RE.test(value);
+  return isSafeMetadataOnlyText(value, { maxLength: MAX_LANE_CLARITY_TEXT_LENGTH });
 }
 
 function countStates({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, refillJobs }) {
