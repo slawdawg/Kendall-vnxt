@@ -8,7 +8,7 @@ Status: current navigation index
 - `kendall-vnxt-overall-architecture.md`: durable system architecture spine.
 - `manager-supervisor-source-intake-boundary.md`: capability-gated loopback-only handoff from one eligible source-backed manager seed through continuous dry-run/apply into the supervisor-owned authoritative WorkPacket lifecycle.
 - `manager-supervisor-terminal-event-sync-boundary.md`: explicit loopback-only manager terminal-event persistence boundary that keeps refill planning network-free.
-- `manager-lane-clarity-projection-boundary.md`: metadata-only Lane Clarity contract and nullable production carrier; no manager-summary handoff is implied until an explicit typed adapter exists.
+- `manager-lane-clarity-projection-boundary.md`: metadata-only Lane Clarity contract, loopback-only typed handoff receipt, and fail-closed nullable production carrier.
 - `../workflows/manager-terminal-event-dogfood.md`: one-command local dogfood proof for fresh refill metadata and explicit terminal-event loopback sync.
 - `kendall-vnxt-current-gap-review-2026-06-08.md`: current gap review and recommended next work.
 - `kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md`: code-aware implementation reconciliation.

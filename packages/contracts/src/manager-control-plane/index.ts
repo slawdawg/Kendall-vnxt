@@ -5,6 +5,7 @@ export * from "./authority";
 export * from "./operational-action";
 export * from "./events";
 export * from "./terminal-event";
+export * from "./lane-clarity-handoff";
 export * from "./refill";
 export * from "./parallel-suitability";
 export * from "./review-route";

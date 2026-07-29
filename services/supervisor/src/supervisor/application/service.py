@@ -182,6 +182,7 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
+    PipelineActiveManagerLaneClarityV0View,
     PipelineBackendReachabilityV0View,
     PipelineCanonicalContractV1View,
     PipelineEpic25EvidenceChainIngestRequest,
@@ -400,6 +401,7 @@ from supervisor.domain.types import (
 )
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
+from supervisor.application.manager_lane_clarity_handoffs import get_current_manager_lane_clarity_handoff
 from supervisor.infrastructure.db.models import (
     AdmissionLock,
     AuditEvent,
@@ -5841,6 +5843,31 @@ class SupervisorService:
         )
         return lease is not None
 
+    async def _pipeline_active_manager_lane_clarity(
+        self,
+        session: AsyncSession,
+        generated_at: datetime,
+        stale_after_seconds: int,
+    ) -> PipelineActiveManagerLaneClarityV0View | None:
+        """Return only an exact, fresh manager-owned handoff; all failures are null."""
+        try:
+            handoff = await get_current_manager_lane_clarity_handoff(session)
+            if handoff is None:
+                return None
+            observed_at = handoff.observedAt.astimezone(timezone.utc)
+            if observed_at > generated_at or generated_at - observed_at > timedelta(seconds=stale_after_seconds):
+                return None
+            clarity = handoff.laneClarity
+            if (
+                clarity.runId != handoff.runId
+                or clarity.eventWatermark != handoff.eventWatermark
+                or clarity.sourceCursor != handoff.sourceCursor
+            ):
+                return None
+            return PipelineActiveManagerLaneClarityV0View.model_validate(clarity.model_dump())
+        except (SQLAlchemyError, ValidationError, ValueError, TypeError):
+            return None
+
     async def get_pipeline_dashboard_projection(
         self,
         session: AsyncSession,
@@ -5850,6 +5877,9 @@ class SupervisorService:
         generated_at = datetime.now(timezone.utc)
         stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
         try:
+            active_manager_lane_clarity = await self._pipeline_active_manager_lane_clarity(
+                session, generated_at, stale_after_seconds
+            )
             authoritative_packets = await self.list_authoritative_work_packets(session)
             legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
             legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
@@ -6392,7 +6422,7 @@ class SupervisorService:
                 ),
                 metadataOnly=True,
             ),
-            activeManagerLaneClarity=None,
+            activeManagerLaneClarity=active_manager_lane_clarity,
             workerSummary=worker_summary,
             reliabilityProblems=reliability_problems,
             gatedControls=gated_controls,
