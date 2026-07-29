@@ -210,7 +210,12 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
 
 
 def _is_safe_lane_clarity_text(value: str) -> bool:
-    return _is_safe_pipeline_control_text(value) and not LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
+    return (
+        _is_safe_pipeline_control_text(value)
+        and not LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(value)
+        and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
+    )
 
 
 def _is_safe_epic_25_evidence_ref(value: str) -> bool:
@@ -4148,9 +4153,14 @@ class PipelineActiveManagerLaneClarityCriterionV0View(BaseModel):
 class PipelineActiveManagerLaneClarityCanonicalStateV0View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    phase: Literal["eligible", "queued", "leased", "running", "refilling", "completed", "failed", "expired", "quarantined", "blocked", "closed", "needs_review"]
+    phase: Literal[
+        "queued", "leased", "running", "refilling", "completed", "failed",
+        "expired", "blocked", "needs_review", "closed", "manager_only",
+        "unknown", "no_safe_work", "authoritative_backlog_exhausted",
+        "unverified", "simulated",
+    ]
     freshness: Literal["fresh", "stale", "unknown"]
-    evidenceFreshness: Literal["fresh", "stale", "missing"]
+    evidenceFreshness: Literal["fresh", "stale", "missing", "unknown"]
 
 
 class PipelineActiveManagerLaneClarityNextGateV0View(BaseModel):
@@ -4219,6 +4229,20 @@ class PipelineActiveManagerLaneClarityV0View(BaseModel):
         if len(criteria) > 24:
             raise ValueError("Lane clarity criteria must be bounded.")
         return criteria
+
+    @model_validator(mode="after")
+    def assessed_postures_require_criterion_evidence(self) -> "PipelineActiveManagerLaneClarityV0View":
+        if self.posture.state in {"on_scope", "pivot_required"} and not self.criteria:
+            raise ValueError("Assessed lane clarity postures require criterion evidence.")
+        if self.posture.state == "pivot_required" and (
+            self.posture.decisionRef is None or self.posture.qualification is None
+        ):
+            raise ValueError("Pivot-required lane clarity must retain bounded decision provenance.")
+        if self.posture.state != "pivot_required" and (
+            self.posture.decisionRef is not None or self.posture.qualification is not None
+        ):
+            raise ValueError("Only pivot-required lane clarity may retain decision provenance.")
+        return self
 
 
 class PipelineQueueSummaryV0View(BaseModel):

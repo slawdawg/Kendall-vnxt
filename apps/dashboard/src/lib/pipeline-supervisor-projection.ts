@@ -303,9 +303,9 @@ const managerReliabilityStates = new Set([
   "unavailable",
   "unknown",
 ]);
-const managerLaneClarityPhases = new Set(["eligible", "queued", "leased", "running", "refilling", "completed", "failed", "expired", "quarantined", "blocked", "closed", "needs_review"]);
+const managerLaneClarityPhases = new Set(["queued", "leased", "running", "refilling", "completed", "failed", "expired", "blocked", "needs_review", "closed", "manager_only", "unknown", "no_safe_work", "authoritative_backlog_exhausted", "unverified", "simulated"]);
 const managerLaneClarityFreshness = new Set(["fresh", "stale", "unknown"]);
-const managerLaneClarityEvidenceFreshness = new Set(["fresh", "stale", "missing"]);
+const managerLaneClarityEvidenceFreshness = new Set(["fresh", "stale", "missing", "unknown"]);
 const managerLaneClarityDispositions = new Set(["met", "in_progress", "blocked", "not_assessed"]);
 const projectionSourceKinds = new Set([
   "prd",
@@ -354,6 +354,8 @@ const gatedControlOperations = new Set([
 const gatedControlStatuses = new Set(["gated", "action_needed", "blocked"]);
 const unsafeEvidenceRefPattern =
   /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const tokenLikeMetadataValuePattern =
+  /(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])/i;
 const executableControlTextPattern =
   /\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b/i;
 const gatedControlAllowedKeys = new Set([
@@ -415,7 +417,8 @@ function isSafeEvidenceRef(value: unknown) {
   return (
     isSafeReferenceString(value) &&
     value.length <= 255 &&
-    !unsafeEvidenceRefPattern.test(value)
+    !unsafeEvidenceRefPattern.test(value) &&
+    !tokenLikeMetadataValuePattern.test(value)
   );
 }
 
@@ -441,6 +444,7 @@ function isSafeProjectionText(value: unknown) {
     value.trim().length > 0 &&
     value.length <= 500 &&
     !unsafeEvidenceRefPattern.test(value) &&
+    !tokenLikeMetadataValuePattern.test(value) &&
     !executableControlTextPattern.test(value)
   );
 }
@@ -945,7 +949,9 @@ function isActiveManagerLaneClarity(value: unknown) {
   return clarity.schemaVersion === "manager-lane-clarity/v0" &&
     isSafeEvidenceRef(clarity.runId) && isSafeEvidenceRef(clarity.eventWatermark) && isSafeEvidenceRef(clarity.sourceCursor) &&
     isSafeProjectionText(clarity.goal?.summary) && isSafeEvidenceRef(clarity.goal?.sourceRef) &&
-    Array.isArray(clarity.criteria) && clarity.criteria.length <= 24 && clarity.criteria.every((criterion) =>
+    Array.isArray(clarity.criteria) && clarity.criteria.length <= 24 &&
+    (clarity.posture?.state === "not_assessed" || clarity.criteria.length > 0) &&
+    clarity.criteria.every((criterion) =>
       isSafeEvidenceRef(criterion?.criterionId) && isSafeProjectionText(criterion?.summary) &&
       managerLaneClarityDispositions.has(criterion?.disposition) && Array.isArray(criterion?.evidenceRefs) &&
       criterion.evidenceRefs.length > 0 && criterion.evidenceRefs.length <= 20 && criterion.evidenceRefs.every(isSafeEvidenceRef)
@@ -958,6 +964,9 @@ function isActiveManagerLaneClarity(value: unknown) {
     isSafeProjectionText(clarity.posture?.reason) && isSafeProjectionText(clarity.posture?.nextSafeAction) &&
     (clarity.posture?.decisionRef === null || clarity.posture?.decisionRef === undefined || isSafeEvidenceRef(clarity.posture.decisionRef)) &&
     (clarity.posture?.qualification === null || clarity.posture?.qualification === undefined || ["operator_drift_concern", "second_qualified_recovery_detour"].includes(clarity.posture.qualification)) &&
+    (clarity.posture?.state === "pivot_required"
+      ? (typeof clarity.posture.decisionRef === "string" && clarity.posture.qualification !== null && clarity.posture.qualification !== undefined)
+      : ((clarity.posture?.decisionRef === null || clarity.posture?.decisionRef === undefined) && (clarity.posture?.qualification === null || clarity.posture?.qualification === undefined))) &&
     clarity.metadataOnly === true && clarity.rawPayloadRetained === false;
 }
 

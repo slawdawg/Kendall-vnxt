@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from supervisor.api.main import app
 from supervisor.api.schemas import (
     PipelineActiveManagerLaneClarityGoalV0View,
+    PipelineActiveManagerLaneClarityV0View,
     PipelineDashboardProjectionApiEnvelope,
     PipelineDashboardProjectionV0View,
 )
@@ -54,3 +55,37 @@ def test_lane_clarity_view_rejects_unsafe_metadata() -> None:
         PipelineActiveManagerLaneClarityGoalV0View.model_validate(
             {"summary": "Safe summary.", "sourceRef": "ghp_abcdefghijkl"}
         )
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityGoalV0View.model_validate(
+            {"summary": "ghp_abcdefghijkl", "sourceRef": "requirement:lane-clarity"}
+        )
+
+
+def test_lane_clarity_view_requires_evidence_for_assessed_postures() -> None:
+    payload = {
+        "runId": "run:lane-clarity",
+        "eventWatermark": "event:lane-clarity",
+        "sourceCursor": "cursor:1",
+        "goal": {"summary": "Keep lane evidence coherent.", "sourceRef": "requirement:lane-clarity"},
+        "criteria": [],
+        "canonicalState": {"phase": "no_safe_work", "freshness": "fresh", "evidenceFreshness": "fresh"},
+        "nextGate": {"summary": "Review evidence.", "nextSafeAction": "review_lane_clarity"},
+        "posture": {"state": "on_scope", "reason": "Evidence is current.", "nextSafeAction": "review_lane_clarity"},
+    }
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityV0View.model_validate(payload)
+    payload["posture"]["state"] = "not_assessed"
+    assert PipelineActiveManagerLaneClarityV0View.model_validate(payload).canonicalState.phase == "no_safe_work"
+    payload["posture"] = {
+        "state": "pivot_required",
+        "reason": "A scope decision is current.",
+        "nextSafeAction": "review_scope_pivot",
+    }
+    payload["criteria"] = [{
+        "criterionId": "criterion:carrier",
+        "summary": "Carrier is coherent.",
+        "disposition": "in_progress",
+        "evidenceRefs": ["evidence:lane-clarity"],
+    }]
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityV0View.model_validate(payload)

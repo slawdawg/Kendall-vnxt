@@ -757,6 +757,35 @@ test("selected projection details reject synthetic and blank nested references",
   }
 });
 
+test("active manager lane clarity rejects credential text and empty assessed evidence", async () => {
+  const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
+  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const projection = validDashboardProjection();
+  projection.activeManagerLaneClarity = {
+    schemaVersion: "manager-lane-clarity/v0",
+    runId: "run:lane-clarity",
+    eventWatermark: "event:lane-clarity",
+    sourceCursor: "cursor:1",
+    goal: { summary: "Keep lane evidence coherent.", sourceRef: "requirement:lane-clarity" },
+    criteria: [{ criterionId: "criterion:carrier", summary: "Carrier is coherent.", disposition: "in_progress", evidenceRefs: ["evidence:lane-clarity"] }],
+    canonicalState: { phase: "no_safe_work", freshness: "fresh", evidenceFreshness: "fresh" },
+    nextGate: { summary: "Review evidence.", nextSafeAction: "review_lane_clarity" },
+    posture: { state: "on_scope", reason: "Evidence is current.", nextSafeAction: "review_lane_clarity", decisionRef: null, qualification: null },
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(projection), true);
+  const credentialText = structuredClone(projection);
+  credentialText.activeManagerLaneClarity.goal.summary = "ghp_abcdefghijklmnopqrstuvwxyz";
+  assert.equal(projectionModule.isPipelineDashboardProjection(credentialText), false);
+  const emptyAssessedEvidence = structuredClone(projection);
+  emptyAssessedEvidence.activeManagerLaneClarity.criteria = [];
+  assert.equal(projectionModule.isPipelineDashboardProjection(emptyAssessedEvidence), false);
+  const pivotWithoutProvenance = structuredClone(projection);
+  pivotWithoutProvenance.activeManagerLaneClarity.posture.state = "pivot_required";
+  assert.equal(projectionModule.isPipelineDashboardProjection(pivotWithoutProvenance), false);
+});
+
 test("Work Graph remains a supervisor-backed Packet Detail group and never enters compact cards", async () => {
   const [cockpitSource, packetDetailSource, lanDetailSource, mediatorSource] = await Promise.all([
     readFile(cockpitPath, "utf8"),

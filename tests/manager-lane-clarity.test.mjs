@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildManagerExecutionLaneSummary } from "../scripts/lib/manager-control-plane/summary-projection.mjs";
+import { ledgerCommand } from "../scripts/lib/manager-control-plane/core.mjs";
 
 const clock = { nowEpochMs: () => Date.parse("2026-07-29T00:00:00.000Z"), nowIso: () => "2026-07-29T00:00:00.000Z" };
 
@@ -59,6 +63,10 @@ test("lane clarity emits pivot_required only for the current structured pivot de
   });
   assert.equal(summary.laneClarity.posture.state, "pivot_required");
   assert.equal(summary.laneClarity.posture.decisionRef, "decision:pivot-1");
+  assert.equal(summary.operatorAttentionRequired, true);
+  assert.equal(summary.attentionReason, "scope_pivot_required");
+  assert.equal(summary.nextAction, "review_scope_pivot");
+  assert.ok(summary.blockers.includes("scope_pivot_required"));
 });
 
 test("lane clarity fails closed when source metadata is missing or incoherent", () => {
@@ -168,4 +176,76 @@ test("lane clarity ignores stale pivots and rejects unbound or oversized evidenc
   source.criteria = Array.from({ length: 25 }, (_, index) => ({ criterionId: `criterion:${index}`, summary: "Bounded criterion.", disposition: "met", evidenceRefs: laneEvidence }));
   const oversized = buildManagerExecutionLaneSummary({ runId: "run-1", clock, events: [stalePivot, current], summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source });
   assert.equal(oversized.laneClarity.posture.state, "not_assessed");
+});
+
+test("runtime ledger persists only complete metadata-only scope-pivot decisions", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "lane-clarity-ledger-"));
+  try {
+    assert.equal(ledgerCommand({ command: "init", runId: "lane-clarity-ledger", stateRoot }).status, "ready");
+    const decision = {
+      qualification: "operator_drift_concern",
+      eventWatermark: "event-summary",
+      decisionRef: "decision:lane-clarity",
+      reason: "The operator identified a scope pivot.",
+      sourceRefs: ["requirement:lane-clarity"],
+      nextSafeAction: "review_scope_pivot",
+    };
+    const appended = ledgerCommand({
+      command: "append-event",
+      runId: "lane-clarity-ledger",
+      stateRoot,
+      eventType: "scope_pivot_required",
+      summary: "Record scope pivot.",
+      authorityBasis: "operator-drift-decision",
+      recoveryPath: "review the bounded scope-pivot decision",
+      sourceRefs: ["requirement:lane-clarity"],
+      evidenceRefs: ["evidence:lane-clarity"],
+      scopePivotDecision: decision,
+    });
+    assert.equal(appended.status, "ready");
+    assert.deepEqual(appended.summary.event.scopePivotDecision, { ...decision, rawPayloadRetained: false });
+    const missing = ledgerCommand({
+      command: "append-event",
+      runId: "lane-clarity-ledger",
+      stateRoot,
+      eventType: "scope_pivot_required",
+      summary: "Missing scope decision.",
+      authorityBasis: "operator-drift-decision",
+      recoveryPath: "review the bounded scope-pivot decision",
+      sourceRefs: ["requirement:lane-clarity"],
+      evidenceRefs: ["evidence:lane-clarity"],
+    });
+    assert.equal(missing.status, "blocked");
+    assert.equal(missing.blockers[0].code, "scope-pivot-decision-missing-or-malformed");
+    const unsafe = ledgerCommand({
+      command: "append-event",
+      runId: "lane-clarity-ledger",
+      stateRoot,
+      eventType: "scope_pivot_required",
+      summary: "Unsafe scope decision.",
+      authorityBasis: "operator-drift-decision",
+      recoveryPath: "review the bounded scope-pivot decision",
+      sourceRefs: ["requirement:lane-clarity"],
+      evidenceRefs: ["evidence:lane-clarity"],
+      scopePivotDecision: { ...decision, reason: "ghp_abcdefghijklmnopqrstuvwxyz" },
+    });
+    assert.equal(unsafe.status, "blocked");
+    assert.equal(unsafe.blockers[0].code, "scope-pivot-decision-missing-or-malformed");
+    const retainedPayload = ledgerCommand({
+      command: "append-event",
+      runId: "lane-clarity-ledger",
+      stateRoot,
+      eventType: "scope_pivot_required",
+      summary: "Retained payload scope decision.",
+      authorityBasis: "operator-drift-decision",
+      recoveryPath: "review the bounded scope-pivot decision",
+      sourceRefs: ["requirement:lane-clarity"],
+      evidenceRefs: ["evidence:lane-clarity"],
+      scopePivotDecision: { ...decision, rawPayloadRetained: true, retainedPayload: "must-not-retain" },
+    });
+    assert.equal(retainedPayload.status, "blocked");
+    assert.equal(retainedPayload.blockers[0].code, "scope-pivot-decision-missing-or-malformed");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
 });

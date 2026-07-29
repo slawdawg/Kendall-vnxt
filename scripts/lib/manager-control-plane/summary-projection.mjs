@@ -127,6 +127,15 @@ export function buildManagerExecutionLaneSummary({
     evidenceRefs,
     events,
   });
+  const laneClarityRequiresAttention = projectedLaneClarity.posture.state === "pivot_required";
+  const summaryBlockers = laneClarityRequiresAttention ? unique([...blockers, "scope_pivot_required"]) : blockers;
+  const summaryNextAction = laneClarityRequiresAttention
+    ? projectedLaneClarity.posture.nextSafeAction
+    : nextActionForSummary({ phase: currentPhase, freshness, blockers, stateCounts });
+  const summaryAttentionRequired = operatorAttentionRequired || laneClarityRequiresAttention;
+  const summaryAttentionReason = laneClarityRequiresAttention
+    ? "scope_pivot_required"
+    : attentionReason;
 
   return {
     runId,
@@ -139,9 +148,9 @@ export function buildManagerExecutionLaneSummary({
     authorityBlockedReason,
     authorityStopReason,
     currentPhase,
-    nextAction: nextActionForSummary({ phase: currentPhase, freshness, blockers, stateCounts }),
-    operatorAttentionRequired,
-    attentionReason,
+    nextAction: summaryNextAction,
+    operatorAttentionRequired: summaryAttentionRequired,
+    attentionReason: summaryAttentionReason,
     recoveryStatus: recoveryRequired ? recoveryStatusForPhase("failed", recoveryEvents.length) : recoveryStatusForPhase(currentPhase, recoveryEvents.length),
     recoveryAttemptCount: recoveryEvents.length,
     lastRecoveryAt: recoveryEvents.at(-1)?.occurredAt ?? null,
@@ -160,7 +169,7 @@ export function buildManagerExecutionLaneSummary({
     evidenceLinks,
     stateCounts,
     rawStateLabels: rawStateLabels({ workItems, leases, attempts, blockedCandidates, needsReviewCandidates, duplicateCandidates, stateCounts, freshness, currentPhase, terminalDisposition, blockers }),
-    blockers,
+    blockers: summaryBlockers,
     warnings,
     feedbackRoutes: [],
     affectedDeliveryGates: [],

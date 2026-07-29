@@ -11,6 +11,7 @@ import { approveManagedSourceWrite } from "../mutation-admission-prewrite-guard.
 import { buildUsageResourceRoutingDecision } from "../../manager-usage-resource-routing.mjs";
 import { runReport as runTmuxOrientationReport } from "../../tmux-orientation-report.mjs";
 import { classifySandboxBoundaryResult } from "../sandbox-boundary-classifier.mjs";
+import { isSafeMetadataOnlyText } from "./forbidden-boundary.mjs";
 import { planManagerSourcePacketIntake, resolveLoopbackSourceIntakeEndpoint } from "./manager-supervisor-source-intake.mjs";
 import {
   MANAGER_TERMINAL_EVENT_TYPE,
@@ -339,6 +340,7 @@ export function parseCommonArgs(argv = []) {
     usageState: "",
     steeringInstruction: "",
     operatorFeedback: "",
+    scopePivotDecision: null,
     apply: false,
     limit: null,
     assignmentId: "",
@@ -601,6 +603,10 @@ export function parseCommonArgs(argv = []) {
       options.operatorFeedback = arg.slice("--feedback=".length);
     } else if (arg.startsWith("--operator-feedback=")) {
       options.operatorFeedback = arg.slice("--operator-feedback=".length);
+    } else if (arg === "--scope-pivot-decision") {
+      options.scopePivotDecision = parseScopePivotDecisionArgument(requiredValue(argv, ++index, arg));
+    } else if (arg.startsWith("--scope-pivot-decision=")) {
+      options.scopePivotDecision = parseScopePivotDecisionArgument(arg.slice("--scope-pivot-decision=".length));
     } else if (arg === "--apply") {
       options.apply = true;
     } else if (arg === "--dry-run") {
@@ -29988,6 +29994,21 @@ export function ledgerCommand(options = {}, context = {}) {
     if (blocked) return blocked;
     const normalizedEventName = normalizeLedgerEventName(options.eventType || "manager.ledger.appended");
     if (!normalizedEventName) return unknownLedgerEvent(paths, options.eventType || "");
+    const scopePivotDecision = normalizedEventName === "scope_pivot_required"
+      ? normalizeScopePivotDecision(options.scopePivotDecision)
+      : null;
+    if (normalizedEventName === "scope_pivot_required" && !scopePivotDecision) {
+      return packet({
+        ok: false,
+        status: "blocked",
+        summary: { runId, eventName: normalizedEventName, rawPayloadRetained: false },
+        blockers: [{
+          code: "scope-pivot-decision-missing-or-malformed",
+          message: "Scope-pivot ledger events require a complete metadata-only decision record.",
+          nextAction: "Provide qualification, current watermark, decision/source references, reason, and next safe action.",
+        }],
+      });
+    }
     const appended = appendLedgerEvent(paths, runId, {
       idPrefix: "evt",
       idName: "eventId",
@@ -29997,7 +30018,7 @@ export function ledgerCommand(options = {}, context = {}) {
       options,
       fallbackSummary: "manager event",
       eventName: normalizedEventName,
-      extra: ledgerEventExtra(normalizedEventName, options),
+      extra: ledgerEventExtra(normalizedEventName, { ...options, scopePivotDecision }),
     });
     if (appended.packet) return appended.packet;
     return packet({ status: "ready", summary: { runId, event: appended.record } });
@@ -31317,16 +31338,78 @@ function safeLedgerExtra(extra = {}) {
   if (Object.prototype.hasOwnProperty.call(extra, "managerCapability")) {
     safe.managerCapability = sanitizeLedgerField(extra.managerCapability, "manager", 80);
   }
+  if (extra.scopePivotDecision) {
+    safe.scopePivotDecision = extra.scopePivotDecision;
+  }
   return safe;
 }
 
 function ledgerEventExtra(eventName = "", options = {}) {
-  if (eventName !== "manager.self_repair.attempted") return {};
-  return {
+  const extra = {};
+  if (eventName === "manager.self_repair.attempted") {
+    Object.assign(extra, {
     actionCode: options.advisorActionCode || options.actionCode || "manager-self-repair",
     workClass: options.advisorWorkClass || options.workClass || "manager_improvement",
     managerCapability: options.capabilityName || options.managerCapability || "manager",
+    });
+  }
+  if (eventName === "scope_pivot_required" && options.scopePivotDecision) {
+    extra.scopePivotDecision = options.scopePivotDecision;
+  }
+  return extra;
+}
+
+function parseScopePivotDecisionArgument(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeScopePivotDecision(value) {
+  if (!isPlainObject(value)) return null;
+  const allowedFields = new Set([
+    "qualification",
+    "eventWatermark",
+    "decisionRef",
+    "reason",
+    "sourceRefs",
+    "nextSafeAction",
+    "rawPayloadRetained",
+  ]);
+  if (Object.keys(value).some((key) => !allowedFields.has(key)) || (value.rawPayloadRetained !== undefined && value.rawPayloadRetained !== false)) return null;
+  const qualification = value.qualification;
+  const eventWatermark = value.eventWatermark;
+  const decisionRef = value.decisionRef;
+  const reason = value.reason;
+  const sourceRefs = value.sourceRefs;
+  const nextSafeAction = value.nextSafeAction;
+  if (![
+    "operator_drift_concern",
+    "second_qualified_recovery_detour",
+  ].includes(qualification) ||
+    !isSafeScopePivotLedgerText(eventWatermark, 140, { token: true }) ||
+    !isSafeScopePivotLedgerText(decisionRef, 255, { token: true }) ||
+    !isSafeScopePivotLedgerText(reason, 500) ||
+    !isSafeScopePivotLedgerText(nextSafeAction, 500) ||
+    !Array.isArray(sourceRefs) || sourceRefs.length === 0 || sourceRefs.length > 20 ||
+    !sourceRefs.every((ref) => isSafeScopePivotLedgerText(ref, 255, { token: true }))) {
+    return null;
+  }
+  return {
+    qualification,
+    eventWatermark,
+    decisionRef,
+    reason,
+    sourceRefs: [...sourceRefs],
+    nextSafeAction,
+    rawPayloadRetained: false,
   };
+}
+
+function isSafeScopePivotLedgerText(value, maxLength, { token = false } = {}) {
+  return isSafeMetadataOnlyText(value, { maxLength, token });
 }
 
 function safeLedgerStructuredMetadata(value, depth = 0) {
@@ -31488,6 +31571,12 @@ function validateRuntimeLedgerEventRecord(record) {
   }
   if (record.rawPayloadRetained !== false) {
     return "runtime ledger event must retain metadata only.";
+  }
+  if (record.eventName === "scope_pivot_required" && !normalizeScopePivotDecision(record.scopePivotDecision)) {
+    return "scope-pivot runtime ledger event is missing valid structured decision metadata.";
+  }
+  if (record.eventName !== "scope_pivot_required" && record.scopePivotDecision !== undefined) {
+    return "only scope-pivot runtime ledger events may retain structured decision metadata.";
   }
   return null;
 }
