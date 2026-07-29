@@ -60,3 +60,35 @@ snapshot through the loopback client, and confirm its exact readback. Do not
 edit the supervisor database or reconstruct posture in the browser. This
 boundary adds no dashboard control, tracker persistence, worker launch,
 provider call, delivery action, or cleanup authority.
+
+## Normal manager-cycle publication
+
+`manager-run-loop` may publish only after a completed, otherwise-successful
+cycle and only when `--lane-clarity-supervisor-url` is explicitly supplied. The
+option is separate from `--supervisor-url`, which retains its source-intake
+meaning. An omitted Lane Clarity URL produces a local `disabled` receipt and
+does not create a network request.
+
+The cycle supplies the existing canonical `ManagerExecutionLaneSummary` (or its
+equivalent typed Lane Clarity fields) to the publication adapter. The adapter
+accepts only a current metadata-only record: fresh canonical/evidence state,
+an `on_scope` or `pivot_required` posture, an immutable observation timestamp,
+and a strictly positive decimal source cursor. It derives the selected-lane ID,
+sequence, and idempotency key from that one snapshot, then reuses the existing
+loopback client and its exact supervisor readback. It never compares opaque
+watermarks or cursors lexically and it never constructs a summary from manager
+files.
+
+Invalid loopback configuration produces a local `rejected` receipt with no
+call. A missing, stale, malformed, or incoherent summary produces an
+`unavailable` receipt with no call. Eligible local transport failures receive
+at most one retry; supervisor rejection and response-identity conflicts do not
+retry. These receipts are metadata-only and do not alter the cycle result, so
+the supervisor remains fail-closed at `activeManagerLaneClarity: null` until a
+later coherent handoff is accepted.
+
+For recovery, inspect the manager cycle's `laneClarityHandoff` receipt, correct
+only the explicit loopback configuration or the upstream canonical summary,
+then run the next normal manager cycle. Do not edit the supervisor database,
+read manager ledger files from the supervisor, or invoke a parallel handoff
+runner.

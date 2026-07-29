@@ -370,6 +370,7 @@ export function parseCommonArgs(argv = []) {
     runtimeMode: "",
     preflightFile: "",
     supervisorUrl: "",
+    laneClaritySupervisorUrl: "",
   };
   const positionals = [];
   const singletonTargetFlags = new Set();
@@ -733,6 +734,12 @@ export function parseCommonArgs(argv = []) {
     } else if (arg.startsWith("--supervisor-url=")) {
       claimSingletonTargetFlag(singletonTargetFlags, "--supervisor-url");
       options.supervisorUrl = arg.slice("--supervisor-url=".length);
+    } else if (arg === "--lane-clarity-supervisor-url") {
+      claimSingletonTargetFlag(singletonTargetFlags, "--lane-clarity-supervisor-url");
+      options.laneClaritySupervisorUrl = requiredValue(argv, ++index, arg);
+    } else if (arg.startsWith("--lane-clarity-supervisor-url=")) {
+      claimSingletonTargetFlag(singletonTargetFlags, "--lane-clarity-supervisor-url");
+      options.laneClaritySupervisorUrl = arg.slice("--lane-clarity-supervisor-url=".length);
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {

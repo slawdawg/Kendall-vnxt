@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import test from "node:test";
+import { tmpdir } from "node:os";
+
+import { publishManagerCycleLaneClarity } from "../scripts/lib/manager-control-plane/manager-cycle-lane-clarity-publication.mjs";
+import { runManagerRunLoop } from "../scripts/manager-run-loop.mjs";
+import { ledgerCommand } from "../scripts/lib/manager-control-plane/core.mjs";
+
+const laneClarity = {
+  schemaVersion: "manager-lane-clarity/v0",
+  runId: "run:current",
+  eventWatermark: "event:current",
+  sourceCursor: "7",
+  goal: { summary: "Keep the manager handoff coherent.", sourceRef: "requirement:lane-clarity" },
+  criteria: [{ criterionId: "criterion:handoff", summary: "Current evidence is bound.", disposition: "met", evidenceRefs: ["evidence:handoff"] }],
+  canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh" },
+  nextGate: { summary: "Publish the coherent handoff.", nextSafeAction: "publish_handoff" },
+  posture: { state: "on_scope", reason: "Current metadata is coherent.", nextSafeAction: "continue", decisionRef: null, qualification: null },
+  metadataOnly: true,
+  rawPayloadRetained: false,
+};
+
+function coherentSummary() {
+  return {
+    laneClarity,
+    lastObservedAt: "2026-07-29T00:00:00.000Z",
+  };
+}
+
+test("cycle Lane Clarity publication is disabled by default without invoking transport", async () => {
+  let calls = 0;
+  const receipt = await publishManagerCycleLaneClarity(coherentSummary(), {}, {
+    sync: async () => { calls += 1; },
+  });
+  assert.equal(receipt.state, "disabled");
+  assert.equal(receipt.attemptCount, 0);
+  assert.equal(receipt.rawPayloadRetained, false);
+  assert.equal(calls, 0);
+});
+
+test("cycle Lane Clarity publication rejects a non-loopback endpoint without invoking transport", async () => {
+  let calls = 0;
+  const receipt = await publishManagerCycleLaneClarity(coherentSummary(), { laneClaritySupervisorUrl: "https://supervisor.example.com" }, {
+    sync: async () => { calls += 1; },
+  });
+  assert.equal(receipt.state, "rejected");
+  assert.equal(receipt.failureCode, "loopback_endpoint_rejected");
+  assert.equal(receipt.attemptCount, 0);
+  assert.equal(calls, 0);
+});
+
+test("cycle Lane Clarity publication binds a deterministic per-run identity and sequence", async () => {
+  const calls = [];
+  const sync = async (summary, endpoint, context) => {
+    calls.push({ summary, endpoint, context });
+    return { handoffId: "manager-lane-clarity-handoff:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
+  };
+  const first = await publishManagerCycleLaneClarity(coherentSummary(), { laneClaritySupervisorUrl: "http://127.0.0.1:8100" }, { sync });
+  const replay = await publishManagerCycleLaneClarity(coherentSummary(), { laneClaritySupervisorUrl: "http://127.0.0.1:8100" }, { sync });
+  assert.equal(first.state, "published");
+  assert.equal(first.selectedLaneId, "manager-run:run:current");
+  assert.equal(first.sourceSequence, 7);
+  assert.equal(first.idempotencyKey, replay.idempotencyKey);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].context.sourceSequence, 7);
+  assert.equal(calls[0].context.observedAt, "2026-07-29T00:00:00.000Z");
+  assert.equal(calls[0].context.idempotencyKey, calls[1].context.idempotencyKey);
+});
+
+test("cycle Lane Clarity publication retries only local transport failures and records a bounded receipt", async () => {
+  let calls = 0;
+  const receipt = await publishManagerCycleLaneClarity(coherentSummary(), { laneClaritySupervisorUrl: "http://localhost:8100" }, {
+    sync: async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("fetch failed");
+      return { handoffId: "manager-lane-clarity-handoff:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
+    },
+  });
+  assert.equal(receipt.state, "published");
+  assert.equal(receipt.attemptCount, 2);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  const rejected = await publishManagerCycleLaneClarity(coherentSummary(), { laneClaritySupervisorUrl: "http://localhost:8100" }, {
+    sync: async () => {
+      calls += 1;
+      throw new TypeError("Lane clarity handoff failed with HTTP 409.");
+    },
+  });
+  assert.equal(rejected.state, "rejected");
+  assert.equal(rejected.attemptCount, 1);
+  assert.equal(calls, 1);
+  assert.equal(rejected.rawPayloadRetained, false);
+});
+
+test("cycle Lane Clarity publication leaves an unavailable summary local and does not call transport", async () => {
+  let calls = 0;
+  const receipt = await publishManagerCycleLaneClarity({ laneClarity: { ...laneClarity, posture: { ...laneClarity.posture, state: "not_assessed" } } }, { laneClaritySupervisorUrl: "http://localhost:8100" }, {
+    sync: async () => { calls += 1; },
+  });
+  assert.equal(receipt.state, "unavailable");
+  assert.equal(receipt.failureCode, "coherent_lane_clarity_unavailable");
+  assert.equal(calls, 0);
+
+  const malformed = await publishManagerCycleLaneClarity({ laneClarity: { ...laneClarity, criteria: [] }, lastObservedAt: "2026-07-29T00:00:00.000Z" }, { laneClaritySupervisorUrl: "http://localhost:8100" }, {
+    sync: async () => { calls += 1; },
+  });
+  assert.equal(malformed.state, "unavailable");
+  assert.equal(calls, 0);
+});
+
+test("normal manager cycle publishes only after its coherent plan completes", async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-runtime-lane-clarity-"));
+  try {
+    assert.equal(ledgerCommand({ command: "init", runId: "run-current", stateRoot }).status, "ready");
+    const packets = [];
+    const published = [];
+    await runManagerRunLoop(
+      { runId: "run-current", stateRoot, maxIterations: 1, heartbeatEvery: 1, laneClaritySupervisorUrl: "http://127.0.0.1:8100" },
+      {
+        buildPreflight: () => ({ ok: true, status: "ready", summary: {}, blockers: [], warnings: [] }),
+        buildContinuousRunPlan: () => ({
+          ok: true,
+          status: "ready",
+          summary: {
+            workerCounts: { active: 0, warm: 0, paused: 0 }, usageState: "normal", resourceState: "normal",
+            selectedAction: null, applySelectedAction: null, runtimeReadiness: { allowedExecutionMode: "continuous_dry_run" },
+            laneClarity, laneClarityObservedAt: "2026-07-29T00:00:00.000Z",
+          },
+          blockers: [], warnings: [], nextActions: [],
+        }),
+        publishManagerCycleLaneClarity: async (summary, options) => {
+          published.push({ summary, options });
+          return { state: "published", attemptCount: 1, metadataOnly: true, rawPayloadRetained: false };
+        },
+        writePacket: (packet) => packets.push(packet),
+        sleep: async () => {},
+      },
+    );
+    assert.equal(published.length, 1);
+    assert.equal(published[0].summary.laneClarity, laneClarity);
+    assert.equal(published[0].options.laneClaritySupervisorUrl, "http://127.0.0.1:8100");
+    assert.equal(packets[0].summary.laneClarityHandoff.state, "published");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
