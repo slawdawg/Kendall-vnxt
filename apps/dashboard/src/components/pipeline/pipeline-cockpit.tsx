@@ -101,6 +101,7 @@ type CockpitStageSummary = {
 };
 
 type ProjectionSelectedPacketDetail = PipelineDashboardProjectionV0["selectedPacketDetails"][number];
+type ActiveManagerLaneClarity = NonNullable<PipelineDashboardProjectionV0["activeManagerLaneClarity"]>;
 type ActiveBoardCockpitPacket = PipelineFixturePacket & {
   activeBoardCard?: PipelineCompactPacketCard;
 };
@@ -130,6 +131,7 @@ export function PipelineCockpit({
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [projectionTruthClock, setProjectionTruthClock] = useState(() => Date.now());
   const currentProjection = projection ?? null;
+  const activeManagerLaneClarity = currentProjection?.activeManagerLaneClarity ?? null;
   const currentProjectionError = projectionError ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
   const routeMapRef = useRef<HTMLElement | null>(null);
@@ -758,6 +760,8 @@ export function PipelineCockpit({
                 <summary className="cursor-pointer text-sm font-semibold text-[var(--foreground)]">Manager</summary>
                 <ManagerExecutionLane lane={managerExecutionLane} />
               </details>
+            ) : activeManagerLaneClarity ? (
+              <ProductionManagerLaneClarity clarity={activeManagerLaneClarity} />
             ) : null}
             {staleHistoryOpen && activeBoardViewModel ? (
               <StaleHistoryPanel
@@ -1473,6 +1477,57 @@ function isProjectionTooOld(projection: PipelineDashboardProjectionV0) {
     return true;
   }
   return Date.now() - sourceUpdatedAt > projection.staleAfterSeconds * 1000;
+}
+
+function ProductionManagerLaneClarity({ clarity }: { clarity: ActiveManagerLaneClarity }) {
+  return (
+    <section aria-label="Manager Execution Lane" className="manager-execution-lane mt-3 min-w-0 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--accent)_25%,var(--line))] bg-[color-mix(in_srgb,var(--surface)_86%,transparent)] p-3">
+      <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-[var(--accent)]">Manager Execution Lane</p>
+      <ManagerLaneClarityPanel clarity={clarity} />
+    </section>
+  );
+}
+
+function ManagerLaneClarityPanel({ clarity }: { clarity: ActiveManagerLaneClarity }) {
+  const posture = clarity.posture.state === "on_scope"
+    ? { label: "On scope", tone: "border-[color-mix(in_srgb,var(--complete)_45%,var(--line))] bg-[color-mix(in_srgb,var(--complete)_10%,transparent)]" }
+    : clarity.posture.state === "pivot_required"
+      ? { label: "Pivot required", tone: "border-[color-mix(in_srgb,var(--blocked)_45%,var(--line))] bg-[color-mix(in_srgb,var(--blocked)_10%,transparent)]" }
+      : { label: "Not assessed", tone: "border-[color-mix(in_srgb,var(--waiting)_45%,var(--line))] bg-[color-mix(in_srgb,var(--waiting)_10%,transparent)]" };
+  return (
+    <section aria-label="Lane clarity" className="mt-3 min-w-0 rounded-[0.375rem] border border-[var(--line)] bg-[var(--surface)] p-3" role="status">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-[var(--foreground)]">Lane Clarity</h2>
+          <p className="mt-1 break-words text-sm leading-5 text-[var(--foreground)]">{clarity.goal.summary}</p>
+          <p className="mt-1 break-all text-xs text-[var(--muted)]">Source: {clarity.goal.sourceRef}</p>
+        </div>
+        <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold text-[var(--foreground)] ${posture.tone}`}>{posture.label}</span>
+      </div>
+      <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+        <ManagerDefinition label="Canonical state" value={`${clarity.canonicalState.phase}; ${clarity.canonicalState.freshness}; evidence ${clarity.canonicalState.evidenceFreshness}`} />
+        <ManagerDefinition label="Next safe gate" value={`${clarity.nextGate.summary}. ${clarity.nextGate.nextSafeAction}`} />
+        <ManagerDefinition label="Posture" value={`${clarity.posture.reason}. ${clarity.posture.nextSafeAction}`} />
+        {clarity.posture.decisionRef ? (
+          <ManagerDefinition
+            label="Recorded decision"
+            value={clarity.posture.qualification ? `${clarity.posture.decisionRef}; ${clarity.posture.qualification}` : clarity.posture.decisionRef}
+          />
+        ) : null}
+      </dl>
+      <div className="mt-3">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Progress evidence</h3>
+        <ul className="mt-2 grid gap-2">
+          {clarity.criteria.map((criterion) => (
+            <li className="min-w-0 rounded-[0.25rem] border border-[var(--line)] p-2 text-xs" key={criterion.criterionId}>
+              <p className="font-semibold text-[var(--foreground)]">{criterion.summary} <span className="font-normal text-[var(--muted)]">— {criterion.disposition}</span></p>
+              <p className="mt-1 break-words text-[var(--muted)]">Evidence: {criterion.evidenceRefs.join(", ")}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
 }
 
 function ManagerAttentionSummary({ lane }: { lane: PipelineManagerExecutionLaneState }) {
