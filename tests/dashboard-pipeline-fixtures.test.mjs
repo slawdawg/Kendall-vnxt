@@ -1310,6 +1310,64 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.equal(liveDisplayLabels.sourceLabel, "live");
   assert.equal(liveDisplayLabels.freshnessState, "live");
 
+  const clarityProjection = projectionFixture({
+    activeManagerLaneClarity: {
+      schemaVersion: "manager-lane-clarity/v0",
+      runId: "run:lane-clarity",
+      eventWatermark: "event:lane-clarity",
+      sourceCursor: "cursor:1",
+      goal: { summary: "Render the production Lane Clarity panel.", sourceRef: "requirement:lane-clarity" },
+      criteria: [
+        { criterionId: "criterion:projection", summary: "Production carrier is coherent.", disposition: "in_progress", evidenceRefs: ["evidence:carrier"] },
+        { criterionId: "criterion:delivery", summary: "Delivery evidence is current.", disposition: "met", evidenceRefs: ["evidence:delivery"] },
+      ],
+      canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh" },
+      nextGate: { summary: "Verify the dashboard rendering.", nextSafeAction: "run_dashboard_lane_clarity_checks" },
+      posture: { state: "on_scope", reason: "Current criteria match the selected lane.", nextSafeAction: "continue_through_the_named_gate", decisionRef: null, qualification: null },
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+  });
+  const clarityHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
+    packets: [], projection: clarityProjection, projectionError: null, selectedPacket: null,
+  }));
+  assert.match(clarityHtml, /Manager Execution Lane/);
+  assert.match(clarityHtml, /Lane Clarity/);
+  assert.match(clarityHtml, /Render the production Lane Clarity panel\./);
+  assert.match(clarityHtml, /Production carrier is coherent\./);
+  assert.match(clarityHtml, /Delivery evidence is current\./);
+  assert.match(clarityHtml, /On scope/);
+  assert.match(clarityHtml, /Next safe gate/);
+  const pivotHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
+    packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, posture: { state: "pivot_required", reason: "Review the recorded drift decision.", nextSafeAction: "review_scope_pivot", decisionRef: "decision:pivot", qualification: "operator_drift_concern" } } }, projectionError: null, selectedPacket: null,
+  }));
+  assert.match(pivotHtml, /Pivot required/);
+  assert.match(pivotHtml, /Review the recorded drift decision\./);
+  assert.match(pivotHtml, /Recorded decision/);
+  assert.match(pivotHtml, /decision:pivot; operator_drift_concern/);
+  const notAssessedHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
+    packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, criteria: [], posture: { state: "not_assessed", reason: "Source criterion evidence is unavailable.", nextSafeAction: "record_current_lane_evidence", decisionRef: null, qualification: null } } }, projectionError: null, selectedPacket: null,
+  }));
+  assert.match(notAssessedHtml, /Not assessed/);
+  assert.match(notAssessedHtml, /Source criterion evidence is unavailable\./);
+  const absentHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
+    packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: null }, projectionError: null, selectedPacket: null,
+  }));
+  assert.doesNotMatch(absentHtml, /Lane Clarity/);
+  const laneClarityPanelSource = sourceBetween(
+    cockpitSource,
+    "function ManagerLaneClarityPanel",
+    "function ManagerAttentionSummary"
+  );
+  assert.doesNotMatch(
+    laneClarityPanelSource,
+    /fetch\s*\(|applyPipelineOperationalAction|requestPipelineOperationalApproval|onClick=|<button\b/
+  );
+
   const expiredLiveProjection = projectionFixture({
     sourceUpdatedAt: "2026-07-02T15:00:00.000Z",
     staleAfterSeconds: 15,
