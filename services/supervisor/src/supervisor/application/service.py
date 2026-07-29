@@ -6392,6 +6392,7 @@ class SupervisorService:
                 ),
                 metadataOnly=True,
             ),
+            activeManagerLaneClarity=None,
             workerSummary=worker_summary,
             reliabilityProblems=reliability_problems,
             gatedControls=gated_controls,
@@ -6489,6 +6490,7 @@ class SupervisorService:
                 summary="Manager runtime state is unavailable because backend projection failed.",
                 metadataOnly=True,
             ),
+            activeManagerLaneClarity=None,
             workerSummary=PipelineWorkerSummaryV0View(
                 stateSource="unavailable",
                 freshnessState="unavailable",

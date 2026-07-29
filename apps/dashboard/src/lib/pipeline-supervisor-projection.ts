@@ -164,6 +164,7 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     : projection.selectedPacketDetails;
   return {
     ...projection,
+    activeManagerLaneClarity: projection.activeManagerLaneClarity ?? null,
     managerSummary,
     workerSummary,
     queueSummary,
@@ -242,6 +243,7 @@ export function isPipelineDashboardProjection(value: unknown): value is Pipeline
     isFixtureMode(projection.fixtureMode) &&
     isTruthSummary(projection.truthSummary) &&
     isManagerSummary(projection.managerSummary) &&
+    (projection.activeManagerLaneClarity === undefined || projection.activeManagerLaneClarity === null || isActiveManagerLaneClarity(projection.activeManagerLaneClarity)) &&
     isWorkerSummary(projection.workerSummary) &&
     Array.isArray(projection.reliabilityProblems) &&
     projection.reliabilityProblems.every(isReliabilityProblem) &&
@@ -931,6 +933,27 @@ function isManagerSummary(value: unknown) {
     typeof managerSummary.summary === "string" &&
     managerSummary.metadataOnly === true
   );
+}
+
+function isActiveManagerLaneClarity(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const clarity = value as NonNullable<PipelineDashboardProjectionV0["activeManagerLaneClarity"]>;
+  return clarity.schemaVersion === "manager-lane-clarity/v0" &&
+    typeof clarity.runId === "string" &&
+    typeof clarity.eventWatermark === "string" &&
+    typeof clarity.sourceCursor === "string" &&
+    typeof clarity.goal?.summary === "string" &&
+    typeof clarity.goal?.sourceRef === "string" &&
+    Array.isArray(clarity.criteria) &&
+    typeof clarity.canonicalState?.phase === "string" &&
+    typeof clarity.canonicalState?.freshness === "string" &&
+    typeof clarity.canonicalState?.evidenceFreshness === "string" &&
+    typeof clarity.nextGate?.summary === "string" &&
+    typeof clarity.nextGate?.nextSafeAction === "string" &&
+    ["on_scope", "pivot_required", "not_assessed"].includes(clarity.posture?.state) &&
+    typeof clarity.posture?.reason === "string" &&
+    typeof clarity.posture?.nextSafeAction === "string" &&
+    clarity.metadataOnly === true && clarity.rawPayloadRetained === false;
 }
 
 function isWorkerSummary(value: unknown) {

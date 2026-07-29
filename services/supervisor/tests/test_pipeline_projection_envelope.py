@@ -6,7 +6,11 @@ import pytest
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import PipelineDashboardProjectionApiEnvelope, PipelineDashboardProjectionV0View
+from supervisor.api.schemas import (
+    PipelineActiveManagerLaneClarityGoalV0View,
+    PipelineDashboardProjectionApiEnvelope,
+    PipelineDashboardProjectionV0View,
+)
 
 
 def _route(path: str, method: str = "GET"):
@@ -37,3 +41,12 @@ def test_shared_typescript_pipeline_projection_contract_matches_python_model() -
     assert "export interface PipelineDashboardProjectionApiEnvelope" in contract_source
     assert "data: PipelineDashboardProjectionV0;" in contract_source
     assert "meta?: Record<string, string | number | boolean | null> | null;" in contract_source
+    assert "activeManagerLaneClarity?: NonNullable<ManagerExecutionLaneSummary[\"laneClarity\"]> | null;" in contract_source
+    assert "activeManagerLaneClarity" in PipelineDashboardProjectionV0View.model_fields
+
+
+def test_lane_clarity_view_rejects_unsafe_metadata() -> None:
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityGoalV0View.model_validate(
+            {"summary": "api_key=must-not-be-retained", "sourceRef": "requirement:lane-clarity"}
+        )

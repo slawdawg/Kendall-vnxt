@@ -73,6 +73,7 @@ function pickManagerSummaryFields(summary) {
     feedbackRecordPolicy: "metadata_only_feedback_record",
     feedbackUnrelatedLanePolicy: "continue_unrelated_safe_lanes",
     feedbackRetention: "metadata_only",
-    feedbackRawPayloadRetained: false
+    feedbackRawPayloadRetained: false,
+    laneClarity: summary.laneClarity ?? null
   };
 }

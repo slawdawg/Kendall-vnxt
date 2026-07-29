@@ -24,6 +24,7 @@ export const MANAGER_CONTROL_PLANE_EVENT_NAMES = [
   "dispatcher.progress.observed",
   "dispatcher.policy.blocked_action",
   "dispatcher.recovery.attempted",
+  "scope_pivot_required",
   "dispatcher.work_supply.empty",
   "manager.run.started",
   "manager.run.steered",
@@ -38,6 +39,19 @@ export const MANAGER_CONTROL_PLANE_EVENT_NAMES = [
 ] as const;
 
 export type ManagerControlPlaneEventName = (typeof MANAGER_CONTROL_PLANE_EVENT_NAMES)[number];
+
+export type ManagerScopePivotQualification = "operator_drift_concern" | "second_qualified_recovery_detour";
+
+export interface ManagerScopePivotDecisionMetadata {
+  qualification: ManagerScopePivotQualification;
+  /** The active summary watermark this decision is qualified against. */
+  eventWatermark: ManagerEventId;
+  decisionRef: string;
+  reason: string;
+  sourceRefs: readonly string[];
+  nextSafeAction: string;
+  rawPayloadRetained: false;
+}
 
 export type ManagerActorType = "manager" | "dispatcher" | "worker" | "operator" | "system";
 export type ManagerRedactionBoundary = "metadata_only" | "summary_only" | "fixture_only";
@@ -59,4 +73,5 @@ export interface ManagerControlPlaneEvent {
   projectionBehavior: ManagerProjectionBehavior;
   evidenceRefs: readonly EvidenceRefId[];
   payloadSummary: string;
+  scopePivotDecision?: ManagerScopePivotDecisionMetadata | null;
 }
