@@ -158,7 +158,14 @@ LANE_CLARITY_UNSAFE_TEXT_RE = re.compile(
 
 def _is_safe_pipeline_evidence_ref(value: str) -> bool:
     ref = value.strip()
-    return bool(ref) and ref == value and len(ref) <= 255 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref) and not TOKEN_LIKE_METADATA_VALUE_RE.search(ref)
+    manager_source_id = bool(MANAGER_SOURCE_PACKET_ID_RE.fullmatch(ref))
+    return (
+        bool(ref)
+        and ref == value
+        and len(ref) <= 255
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+        and (manager_source_id or not TOKEN_LIKE_METADATA_VALUE_RE.search(ref))
+    )
 
 
 def _is_safe_review_route_evidence_ref(value: str) -> bool:
