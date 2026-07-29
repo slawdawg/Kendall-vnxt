@@ -37,7 +37,7 @@ Story 6.1 is complete for fake-worker orchestration. Story 7.4 later exercised o
 
 The accepted, revision-bound requirements and evidence contract for the two
 recovered Epic 27 envelope-hardening slices is
-[`docs/product/epic-27-requirements-and-evidence-contract.md`](../product/epic-27-requirements-and-evidence-contract.md).
+[`docs/product/kendall-nxt-epic-27-requirements-and-evidence-contract.md`](../product/kendall-nxt-epic-27-requirements-and-evidence-contract.md).
 It is the only Epic 27 tracker created by that recovery decision.
 
 ## Local Provider Ollama Boundary
