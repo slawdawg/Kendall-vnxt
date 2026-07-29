@@ -97,6 +97,8 @@ from supervisor.api.schemas import (
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
+    ManagerLaneClarityHandoffApiEnvelope,
+    ManagerLaneClarityHandoffRequest,
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
@@ -130,6 +132,10 @@ from supervisor.application.manager_terminal_events import (
     get_manager_terminal_event,
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
+)
+from supervisor.application.manager_lane_clarity_handoffs import (
+    get_manager_lane_clarity_handoff,
+    persist_manager_lane_clarity_handoff,
 )
 from supervisor.application import local_dogfood_attestation
 from supervisor.application.operator_auth import (
@@ -731,6 +737,43 @@ async def get_pipeline_dashboard_projection(request: Request, session: AsyncSess
             mutation_access=request_has_local_operational_transport(request),
         )
     )
+
+
+@app.post(
+    "/manager-control-plane/lane-clarity-handoffs",
+    response_model=ManagerLaneClarityHandoffApiEnvelope,
+)
+async def record_manager_lane_clarity_handoff(
+    payload: ManagerLaneClarityHandoffRequest,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        handoff = await persist_manager_lane_clarity_handoff(session, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "manager_lane_clarity_handoff_conflict").model_dump(),
+        ) from exc
+    return ManagerLaneClarityHandoffApiEnvelope(data=handoff)
+
+
+@app.get(
+    "/manager-control-plane/lane-clarity-handoffs/{handoff_id}",
+    response_model=ManagerLaneClarityHandoffApiEnvelope,
+)
+async def read_manager_lane_clarity_handoff(
+    handoff_id: str,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    handoff = await get_manager_lane_clarity_handoff(session, handoff_id)
+    if handoff is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Manager lane clarity handoff not found.", "manager_lane_clarity_handoff_not_found").model_dump(),
+        )
+    return ManagerLaneClarityHandoffApiEnvelope(data=handoff)
 
 
 @app.get("/pipeline-control-plane/work-packets/{packet_id}", response_model=AuthoritativeWorkPacketApiEnvelope)

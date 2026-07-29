@@ -496,6 +496,28 @@ class ManagerTerminalEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ManagerLaneClarityHandoff(Base):
+    """Idempotent transport receipt, not manager lifecycle or tracker state."""
+
+    __tablename__ = "manager_lane_clarity_handoffs"
+    __table_args__ = (
+        UniqueConstraint("selected_lane_id", "source_sequence", name="uq_manager_lane_clarity_handoff_sequence"),
+    )
+
+    handoff_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    selected_lane_id: Mapped[str] = mapped_column(String(160), index=True)
+    run_id: Mapped[str] = mapped_column(String(120))
+    event_watermark: Mapped[str] = mapped_column(String(160))
+    source_cursor: Mapped[str] = mapped_column(String(160))
+    source_sequence: Mapped[int] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lane_clarity_json: Mapped[dict] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class OperatorView(Base):
     __tablename__ = "operator_views"
 

@@ -40,13 +40,15 @@ result when no coherent current record has been handed off.
 ## Recovery and boundaries
 
 If the panel is absent or shows **Not assessed**, inspect the manager-to-
-supervisor handoff and the bounded evidence references; do not use the browser
-to reconstruct posture or modify a lane. The dashboard has no Lane Clarity
-controls, persistence, worker launch, delivery, cleanup, provider, or tracker
-authority.
+supervisor loopback receipt and the bounded evidence references; do not use the
+browser to reconstruct posture or modify a lane. A valid handoff binds one
+selected lane, run, watermark, and cursor, then has a matching supervisor GET
+readback. Re-submit only a newer coherent snapshot if it is stale; do not edit
+the supervisor database. The dashboard has no Lane Clarity controls,
+persistence, worker launch, delivery, cleanup, provider, or tracker authority.
 
 The canonical record, allowed posture values, freshness requirements, and
-adapter stop line are defined in
+loopback recovery boundary are defined in
 [Manager Lane Clarity Projection Boundary](../architecture/manager-lane-clarity-projection-boundary.md).
 The `/pipeline/demo` route remains a separate fixture surface and is not
 production evidence.

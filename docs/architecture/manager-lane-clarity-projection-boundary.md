@@ -13,11 +13,12 @@ The production `PipelineDashboardProjectionV0.activeManagerLaneClarity` field
 is a nullable typed carrier for one selected lane; it is not a second tracker,
 classifier, or action surface.
 
-The carrier is intentionally `null` until a source-owned manager-to-supervisor
-adapter supplies one coherent current record. The supervisor must never read a
-manager ledger file opportunistically, spawn a manager process, derive posture
-from queue state, or substitute `/pipeline/demo` fixtures. `null` is the
-truthful production value when that adapter is unavailable.
+The carrier is intentionally `null` until the source-owned, loopback-only
+manager-to-supervisor handoff supplies one coherent current record. The
+supervisor must never read a manager ledger file opportunistically, spawn a
+manager process, derive posture from queue state, or substitute `/pipeline/demo`
+fixtures. `null` is the truthful production value when that handoff is
+unavailable or rejected.
 
 ## Posture and recovery
 
@@ -34,14 +35,28 @@ No browser, dashboard projection builder, or supervisor response may count
 detours or infer a posture. No Lane Clarity path stores raw prompts,
 completions, reasoning, provider payloads, or source copies.
 
-## Transport stop line
+## Loopback handoff and recovery
 
-Existing manager-to-supervisor loopback contracts carry bounded source-intake
-and terminal-event data, not a manager execution summary. A future adapter may
-add an explicit, loopback-only, typed handoff only after it specifies exact
-identity, freshness, idempotency, and failure semantics. Until then, production
-returns the nullable carrier unchanged and the future UI must remain absent or
-`not_assessed`; it cannot make a live claim.
+`POST /manager-control-plane/lane-clarity-handoffs` accepts only the typed
+`manager-lane-clarity-handoff/v0` metadata envelope through the existing local
+operational boundary. The manager uses the matching loopback client and then
+performs an exact `GET` readback of the supervisor-owned receipt. The request
+and nested Lane Clarity record must bind the same run ID, event watermark, and
+source cursor. It also carries a selected-lane ID, positive per-lane source
+sequence, RFC 3339 observation timestamp, deterministic handoff ID, and
+idempotency key.
 
-This boundary adds no dashboard control, POST route, persistence, worker
-launch, provider call, delivery action, or cleanup authority.
+The supervisor persists receipts only as transport metadata. An exact replay
+returns the original receipt; a conflicting handoff ID or idempotency key, or a
+non-advancing sequence for the same selected lane, is rejected. The production
+projection uses only the most recent receipt whose nested identity is still
+coherent and whose observation is neither future-dated nor older than the
+normal projection freshness window. Missing, stale, malformed, cross-run, or
+unavailable data returns `activeManagerLaneClarity: null` without attempting
+repair.
+
+Recovery is non-mutating: inspect the manager summary, submit the next coherent
+snapshot through the loopback client, and confirm its exact readback. Do not
+edit the supervisor database or reconstruct posture in the browser. This
+boundary adds no dashboard control, tracker persistence, worker launch,
+provider call, delivery action, or cleanup authority.

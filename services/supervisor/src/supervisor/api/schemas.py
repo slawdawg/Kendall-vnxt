@@ -7561,6 +7561,67 @@ class ManagerTerminalEventApiEnvelope(BaseModel):
     meta: dict[str, str | int | float | bool | None] | None = None
 
 
+class ManagerLaneClarityHandoffRequest(BaseModel):
+    """Metadata-only manager snapshot accepted only through the local transport."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["manager-lane-clarity-handoff/v0"]
+    handoffId: str = Field(max_length=120, pattern=r"^manager-lane-clarity-handoff:[0-9a-f]{40}$")
+    selectedLaneId: str = Field(max_length=160)
+    runId: str = Field(max_length=120)
+    eventWatermark: str = Field(max_length=160)
+    sourceCursor: str = Field(max_length=160)
+    sourceSequence: PositiveInt
+    observedAt: datetime
+    laneClarity: PipelineActiveManagerLaneClarityV0View
+    idempotencyKey: str = Field(max_length=180)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("selectedLaneId", "runId", "eventWatermark", "sourceCursor", "idempotencyKey")
+    @classmethod
+    def _handoff_identity_is_safe(cls, value: str, info) -> str:
+        if value != value.strip():
+            raise ValueError(f"{info.field_name} must not contain leading or trailing whitespace.")
+        return _validate_authoritative_metadata_text(value, path=info.field_name)
+
+    @field_validator("observedAt", mode="before")
+    @classmethod
+    def _parse_rfc3339_observed_at(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Lane clarity handoff observedAt must be an RFC 3339 timestamp.") from exc
+
+    @model_validator(mode="after")
+    def _handoff_matches_nested_clarity(self) -> "ManagerLaneClarityHandoffRequest":
+        clarity = self.laneClarity
+        if (
+            clarity.runId != self.runId
+            or clarity.eventWatermark != self.eventWatermark
+            or clarity.sourceCursor != self.sourceCursor
+        ):
+            raise ValueError("Lane clarity handoff identity must exactly match the nested clarity snapshot.")
+        if self.observedAt.tzinfo is None:
+            raise ValueError("Lane clarity handoff observedAt must be timezone-aware.")
+        return self
+
+
+class ManagerLaneClarityHandoffView(ManagerLaneClarityHandoffRequest):
+    owner: Literal["supervisor"]
+    createdAt: datetime
+
+
+class ManagerLaneClarityHandoffApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: ManagerLaneClarityHandoffView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
 class SupervisorTerminalEventProjection(BaseModel):
     """Read-only latest canonical terminal-event projection owned by supervisor."""
 
