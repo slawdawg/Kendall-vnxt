@@ -215,7 +215,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Linux install docs: [docs/linux-install/index.md](docs/linux-install/index.md)
 - Current architecture index: [docs/architecture/index.md](docs/architecture/index.md)
 - Product requirements boundary: [docs/workflows/product-requirements-boundary.md](docs/workflows/product-requirements-boundary.md)
-- Epic 27 requirements/evidence contract: [docs/product/epic-27-requirements-and-evidence-contract.md](docs/product/epic-27-requirements-and-evidence-contract.md)
+- Epic 27 requirements/evidence contract: [docs/product/kendall-nxt-epic-27-requirements-and-evidence-contract.md](docs/product/kendall-nxt-epic-27-requirements-and-evidence-contract.md)
 - Implementation evidence boundary: [docs/workflows/implementation-evidence-boundary.md](docs/workflows/implementation-evidence-boundary.md)
 - Bounded-write plan runbook: [docs/workflows/bounded-write-plan-runbook.md](docs/workflows/bounded-write-plan-runbook.md)
 - Provider-routing gateway note: [docs/workflows/provider-routing-gateway-note.md](docs/workflows/provider-routing-gateway-note.md) — report-only disclosure packets only; it does not execute provider calls.
