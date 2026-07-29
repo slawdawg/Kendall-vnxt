@@ -529,7 +529,8 @@ export const MANAGER_EXECUTION_LANE_SUMMARY_SERIALIZED_FIELDS = [
   "feedback_record_policy",
   "feedback_unrelated_lane_policy",
   "feedback_retention",
-  "feedback_raw_payload_retained"
+  "feedback_raw_payload_retained",
+  "lane_clarity"
 ] as const;
 
 export const MANAGER_AUTHORITY_DECISION_SERIALIZED_FIELDS = [
@@ -560,7 +561,8 @@ export const MANAGER_CONTROL_PLANE_EVENT_SERIALIZED_FIELDS = [
   "redaction_boundary",
   "projection_behavior",
   "evidence_refs",
-  "payload_summary"
+  "payload_summary",
+  "scope_pivot_decision"
 ] as const;
 
 export const MANAGER_CONTROL_PLANE_SERIALIZED_FIELDS_BY_CONTRACT = {
@@ -887,6 +889,7 @@ export const MANAGER_CONTROL_PLANE_REQUIRED_FIELDS_BY_CONTRACT = {
     "feedback_unrelated_lane_policy",
     "feedback_retention",
     "feedback_raw_payload_retained",
+    "lane_clarity",
     "blockers",
     "warnings"
   ],

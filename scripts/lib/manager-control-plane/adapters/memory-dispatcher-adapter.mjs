@@ -846,7 +846,7 @@ export function createMemoryDispatcherAdapter({
     };
   }
 
-  function appendEvent(eventName, { actorType, actorId, evidenceRefs, correlationId = "run-1", causationId = null, payloadSummary }) {
+  function appendEvent(eventName, { actorType, actorId, evidenceRefs, correlationId = "run-1", causationId = null, payloadSummary, scopePivotDecision = null }) {
     const normalizedEvidenceRefs = normalizeEvidenceRefs(evidenceRefs);
     ensureEvidenceRecords(normalizedEvidenceRefs, `${eventName} evidence`, "event");
     const normalizedActorId = normalizeEventScalar(actorId);
@@ -866,7 +866,18 @@ export function createMemoryDispatcherAdapter({
       redactionBoundary: "metadata_only",
       projectionBehavior: eventName.includes("summary") ? "updates_summary" : "records_evidence",
       evidenceRefs: normalizedEvidenceRefs,
-      payloadSummary: normalizeEventPayloadSummary(payloadSummary)
+      payloadSummary: normalizeEventPayloadSummary(payloadSummary),
+      ...(scopePivotDecision && typeof scopePivotDecision === "object"
+        ? { scopePivotDecision: {
+          qualification: scopePivotDecision.qualification,
+          eventWatermark: normalizeEventScalar(scopePivotDecision.eventWatermark),
+          decisionRef: normalizeEventScalar(scopePivotDecision.decisionRef),
+          reason: normalizeEventPayloadSummary(scopePivotDecision.reason),
+          sourceRefs: Array.isArray(scopePivotDecision.sourceRefs) ? scopePivotDecision.sourceRefs.map(normalizeEventScalar) : [],
+          nextSafeAction: normalizeEventPayloadSummary(scopePivotDecision.nextSafeAction),
+          rawPayloadRetained: false,
+        } }
+        : {}),
     };
     state.events.push(event);
     return event;

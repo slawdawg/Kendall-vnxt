@@ -1,3 +1,5 @@
+import type { ManagerExecutionLaneSummary } from "../manager-control-plane";
+
 export const AUTHORITATIVE_PACKET_STAGES = [
   "capture",
   "classify",
@@ -4796,6 +4798,7 @@ export interface PipelineDashboardProjectionV0 {
   workPackets: PipelineDashboardWorkPacketV0[];
   selectedPacketDetails: PipelineSelectedPacketDetailV0[];
   managerSummary: PipelineManagerSummaryV0;
+  activeManagerLaneClarity?: NonNullable<ManagerExecutionLaneSummary["laneClarity"]> | null;
   workerSummary: PipelineWorkerSummaryV0;
   reliabilityProblems: PipelineReliabilityProblemV0[];
   gatedControls: PipelineGatedControlV0[];

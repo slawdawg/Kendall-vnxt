@@ -88,7 +88,9 @@ const BASE_FORBIDDEN_PATTERNS = [
   ["raw_payload_retention", /\b(?:rawPrompt|rawCompletion|providerPayload|rawWorkerTranscript|unboundedLog|secret)\b/]
 ];
 
-const RAW_METADATA_VALUE_PATTERN = /(?:\braw\b|\bprovider\b|raw[-_\s]?payload|raw[-_\s]?prompt|raw[-_\s]?completion|provider[-_\s]?payload|raw[-_\s]?worker(?:[-_\s]?transcript)?|raw[Pp]rompt|raw[Cc]ompletion|provider[Pp]ayload|raw[Ww]orker[Tt]ranscript|\bpayload\b|transcript|s(?:ec)ret|sk-[A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const RAW_METADATA_VALUE_PATTERN = /(?:raw[-_\s]?payload|raw[-_\s]?prompt|raw[-_\s]?completion|provider[-_\s]?payload|raw[-_\s]?worker(?:[-_\s]?transcript)?|raw[Pp]rompt|raw[Cc]ompletion|provider[Pp]ayload|raw[Ww]orker[Tt]ranscript|\bsecret\b|api[_-]?key|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const REDACTED_METADATA_VALUE_PATTERN = /(?:\braw\b|\bprovider\b|raw[-_\s]?payload|raw[-_\s]?prompt|raw[-_\s]?completion|provider[-_\s]?payload|raw[-_\s]?worker(?:[-_\s]?transcript)?|raw[Pp]rompt|raw[Cc]ompletion|provider[Pp]ayload|raw[Ww]orker[Tt]ranscript|\bpayload\b|transcript|s(?:ec)ret|api[_-]?key|sk-[A-Za-z0-9_-]{8,}|BEGIN [A-Z ]+PRIVATE KEY)/i;
+const TOKEN_LIKE_METADATA_VALUE_PATTERN = /(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])/i;
 const SAFE_RUNTIME_PROOF_STRING_KEYS = Object.freeze(new Set([
   "schema_version",
   "status",
@@ -148,6 +150,12 @@ export function classifyBackendProofOperation(operation) {
     authorityClass: "forbidden",
     authorityStopReason: `backend_proof_forbids_${capability}`
   };
+}
+
+export function isSafeMetadataOnlyText(value, { maxLength = 240, token = false } = {}) {
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.length > maxLength) return false;
+  if (!/^[\x20-\x7E]+$/.test(value) || RAW_METADATA_VALUE_PATTERN.test(value) || TOKEN_LIKE_METADATA_VALUE_PATTERN.test(value)) return false;
+  return !token || /^[A-Za-z0-9._/@:-]+$/.test(value);
 }
 
 export function classifyBackendProofSourceBoundary({ path, source, surface = "backend_proof" }) {
@@ -230,7 +238,7 @@ function sanitizeMetadataValue(value, depth, key) {
     for (const [key, entry] of Object.entries(value).slice(0, 48)) {
       if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
       if (!/^[A-Za-z0-9._:-]{1,80}$/.test(key)) continue;
-      if (key !== "raw_payload_retained" && RAW_METADATA_VALUE_PATTERN.test(key)) continue;
+      if (key !== "raw_payload_retained" && REDACTED_METADATA_VALUE_PATTERN.test(key)) continue;
       output[key] = sanitizeMetadataValue(entry, depth + 1, key);
     }
     return output;
@@ -240,7 +248,7 @@ function sanitizeMetadataValue(value, depth, key) {
 
 function sanitizeRuntimeProofString(value, key) {
   if (!/^[\x20-\x7E]{0,260}$/.test(value)) return "metadata-only:redacted";
-  if (RAW_METADATA_VALUE_PATTERN.test(value)) return "metadata-only:redacted";
+  if (REDACTED_METADATA_VALUE_PATTERN.test(value) || TOKEN_LIKE_METADATA_VALUE_PATTERN.test(value)) return "metadata-only:redacted";
   if ((key === "command_digest" || key === "expected_result_digest") && DIGEST_PATTERN.test(value)) return value;
   if (SAFE_RUNTIME_PROOF_STRING_KEYS.has(key) && SAFE_RUNTIME_PROOF_STRING_PATTERN.test(value)) return value;
   return `metadata-only:${stableDigest(value)}`;
@@ -260,7 +268,7 @@ function sanitizeEvidenceRefs(evidenceRefs) {
 function sanitizeMetadataToken(value, fallback, { maxLength = 160 } = {}) {
   if (typeof value !== "string") return fallback;
   if (!new RegExp(`^[A-Za-z0-9._:/#-]{1,${maxLength}}$`).test(value)) return fallback;
-  if (RAW_METADATA_VALUE_PATTERN.test(value)) return fallback;
+  if (REDACTED_METADATA_VALUE_PATTERN.test(value) || TOKEN_LIKE_METADATA_VALUE_PATTERN.test(value)) return fallback;
   return value;
 }
 

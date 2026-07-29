@@ -150,11 +150,22 @@ PEM_OR_HIGH_ENTROPY_SECRET_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?<![A-Za-z0-9])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+LANE_CLARITY_UNSAFE_TEXT_RE = re.compile(
+    r"\b(?:raw[_-]?payload|provider[_-]?payload|secret|token|credential|password|api[_-]?key|private[_-]?key)\b|\bbearer\s+|\bsk-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    re.IGNORECASE,
+)
 
 
 def _is_safe_pipeline_evidence_ref(value: str) -> bool:
     ref = value.strip()
-    return bool(ref) and len(ref) <= 255 and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+    manager_source_id = bool(MANAGER_SOURCE_PACKET_ID_RE.fullmatch(ref))
+    return (
+        bool(ref)
+        and ref == value
+        and len(ref) <= 255
+        and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(ref)
+        and (manager_source_id or not TOKEN_LIKE_METADATA_VALUE_RE.search(ref))
+    )
 
 
 def _is_safe_review_route_evidence_ref(value: str) -> bool:
@@ -195,6 +206,15 @@ def _is_safe_pipeline_control_text(value: str) -> bool:
         and len(text) <= 500
         and not PIPELINE_METADATA_CONTROL_CHARACTER_RE.search(text)
         and not UNSAFE_PIPELINE_EVIDENCE_REF_RE.search(text)
+    )
+
+
+def _is_safe_lane_clarity_text(value: str) -> bool:
+    return (
+        _is_safe_pipeline_control_text(value)
+        and not LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
+        and not TOKEN_LIKE_METADATA_VALUE_RE.search(value)
+        and not PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
     )
 
 
@@ -4079,6 +4099,157 @@ class PipelineManagerSummaryV0View(BaseModel):
     metadataOnly: Literal[True] = True
 
 
+class PipelineActiveManagerLaneClarityGoalV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    sourceRef: str
+
+    @field_validator("summary")
+    @classmethod
+    def summary_is_safe(cls, value: str) -> str:
+        if not _is_safe_lane_clarity_text(value):
+            raise ValueError("Lane clarity goal summary must be safe metadata text.")
+        return value
+
+    @field_validator("sourceRef")
+    @classmethod
+    def source_ref_is_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_evidence_ref(value):
+            raise ValueError("Lane clarity source ref must be a safe metadata ref.")
+        return value
+
+
+class PipelineActiveManagerLaneClarityCriterionV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criterionId: str
+    summary: str
+    disposition: Literal["met", "in_progress", "blocked", "not_assessed"]
+    evidenceRefs: list[str] = Field(default_factory=list)
+
+    @field_validator("criterionId")
+    @classmethod
+    def criterion_id_is_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_evidence_ref(value):
+            raise ValueError("Lane clarity criterion id must be a safe metadata ref.")
+        return value
+
+    @field_validator("summary")
+    @classmethod
+    def criterion_summary_is_safe(cls, value: str) -> str:
+        if not _is_safe_lane_clarity_text(value):
+            raise ValueError("Lane clarity criterion summary must be safe metadata text.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def criterion_evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if not refs or len(refs) > 20 or not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Lane clarity criterion evidence refs must be safe metadata refs.")
+        return refs
+
+
+class PipelineActiveManagerLaneClarityCanonicalStateV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Literal[
+        "queued", "leased", "running", "refilling", "completed", "failed",
+        "expired", "blocked", "needs_review", "closed", "manager_only",
+        "unknown", "no_safe_work", "authoritative_backlog_exhausted",
+        "unverified", "simulated",
+    ]
+    freshness: Literal["fresh", "stale", "unknown"]
+    evidenceFreshness: Literal["fresh", "stale", "missing", "unknown"]
+
+
+class PipelineActiveManagerLaneClarityNextGateV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    nextSafeAction: str
+
+    @field_validator("summary", "nextSafeAction")
+    @classmethod
+    def text_is_safe(cls, value: str) -> str:
+        if not _is_safe_lane_clarity_text(value):
+            raise ValueError("Lane clarity next-gate text must be safe metadata text.")
+        return value
+
+
+class PipelineActiveManagerLaneClarityPostureV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["on_scope", "pivot_required", "not_assessed"]
+    reason: str
+    nextSafeAction: str
+    decisionRef: str | None = None
+    qualification: Literal["operator_drift_concern", "second_qualified_recovery_detour"] | None = None
+
+    @field_validator("reason", "nextSafeAction")
+    @classmethod
+    def text_is_safe(cls, value: str) -> str:
+        if not _is_safe_lane_clarity_text(value):
+            raise ValueError("Lane clarity posture text must be safe metadata text.")
+        return value
+
+    @field_validator("decisionRef")
+    @classmethod
+    def decision_ref_is_safe(cls, value: str | None) -> str | None:
+        if value is not None and not _is_safe_pipeline_evidence_ref(value):
+            raise ValueError("Lane clarity decision ref must be a safe metadata ref.")
+        return value
+
+
+class PipelineActiveManagerLaneClarityV0View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["manager-lane-clarity/v0"] = "manager-lane-clarity/v0"
+    runId: str
+    eventWatermark: str
+    sourceCursor: str
+    goal: PipelineActiveManagerLaneClarityGoalV0View
+    criteria: list[PipelineActiveManagerLaneClarityCriterionV0View] = Field(default_factory=list)
+    canonicalState: PipelineActiveManagerLaneClarityCanonicalStateV0View
+    nextGate: PipelineActiveManagerLaneClarityNextGateV0View
+    posture: PipelineActiveManagerLaneClarityPostureV0View
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+    @field_validator("runId", "eventWatermark", "sourceCursor")
+    @classmethod
+    def identity_is_safe(cls, value: str) -> str:
+        if not _is_safe_pipeline_evidence_ref(value):
+            raise ValueError("Lane clarity identity must be a safe metadata ref.")
+        return value
+
+    @field_validator("criteria")
+    @classmethod
+    def criteria_are_bounded(cls, criteria: list[PipelineActiveManagerLaneClarityCriterionV0View]) -> list[PipelineActiveManagerLaneClarityCriterionV0View]:
+        if len(criteria) > 24:
+            raise ValueError("Lane clarity criteria must be bounded.")
+        return criteria
+
+    @model_validator(mode="after")
+    def assessed_postures_require_criterion_evidence(self) -> "PipelineActiveManagerLaneClarityV0View":
+        if self.posture.state in {"on_scope", "pivot_required"} and not self.criteria:
+            raise ValueError("Assessed lane clarity postures require criterion evidence.")
+        if self.posture.state in {"on_scope", "pivot_required"} and (
+            self.canonicalState.freshness != "fresh"
+            or self.canonicalState.evidenceFreshness != "fresh"
+        ):
+            raise ValueError("Assessed lane clarity postures require fresh canonical evidence.")
+        if self.posture.state == "pivot_required" and (
+            self.posture.decisionRef is None or self.posture.qualification is None
+        ):
+            raise ValueError("Pivot-required lane clarity must retain bounded decision provenance.")
+        if self.posture.state != "pivot_required" and (
+            self.posture.decisionRef is not None or self.posture.qualification is not None
+        ):
+            raise ValueError("Only pivot-required lane clarity may retain decision provenance.")
+        return self
+
+
 class PipelineQueueSummaryV0View(BaseModel):
     activeCount: int | None = None
     dispatchableCount: int | None = None
@@ -4253,6 +4424,7 @@ class PipelineDashboardProjectionV0View(BaseModel):
     workPackets: list[PipelineDashboardWorkPacketV0View] = Field(default_factory=list)
     selectedPacketDetails: list[PipelineSelectedPacketDetailV0View] = Field(default_factory=list)
     managerSummary: PipelineManagerSummaryV0View
+    activeManagerLaneClarity: PipelineActiveManagerLaneClarityV0View | None = None
     workerSummary: PipelineWorkerSummaryV0View
     reliabilityProblems: list[PipelineReliabilityProblemV0View] = Field(default_factory=list)
     gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)

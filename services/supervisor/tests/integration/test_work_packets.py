@@ -1292,6 +1292,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             "workPackets",
             "selectedPacketDetails",
             "managerSummary",
+            "activeManagerLaneClarity",
             "workerSummary",
             "queueSummary",
             "evidenceRefs",
@@ -1320,6 +1321,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert empty_projection["managerSummary"]["unknownSourceCount"] == 0
         assert empty_projection["managerSummary"]["inactivityReason"] == "healthy_empty"
         assert empty_projection["managerSummary"]["evidenceRefs"] == []
+        assert empty_projection["activeManagerLaneClarity"] is None
         assert empty_projection["workerSummary"]["stateSource"] == "unknown"
         assert empty_projection["workerSummary"]["freshnessState"] == "unknown"
         assert empty_projection["workerSummary"]["warmCount"] is None

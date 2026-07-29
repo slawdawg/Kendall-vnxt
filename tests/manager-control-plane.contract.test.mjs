@@ -602,7 +602,7 @@ test("Manager Control Plane schema metadata covers required serialized fields an
 
   assertRequiredFields(
     "ManagerControlPlaneEvent serialized metadata",
-    ["causation_id", "payload_summary"],
+    ["causation_id", "payload_summary", "scope_pivot_decision"],
     extractConstArray(schemaSource, "MANAGER_CONTROL_PLANE_EVENT_SERIALIZED_FIELDS")
   );
   assertRequiredFields(
@@ -841,7 +841,7 @@ test("Manager Control Plane contract TypeScript surface compiles", () => {
       `  authorityClass: "block_and_record", queuedWorkItemIds: [], activeWorkItemIds: [], evidenceRefs: ["evidence-1" as EvidenceRefId], evidenceLinks: [],`,
       `  stateCounts, rawStateLabels: ["refill:queued_metadata"], blockers: ["dispatcher_has_needs_review_candidates"], warnings: [],`,
       `  feedbackRoutes: [], affectedDeliveryGates: [], feedbackRecordPolicy: "metadata_only_feedback_record",`,
-      `  feedbackUnrelatedLanePolicy: "continue_unrelated_safe_lanes", feedbackRetention: "metadata_only", feedbackRawPayloadRetained: false`,
+      `  feedbackUnrelatedLanePolicy: "continue_unrelated_safe_lanes", feedbackRetention: "metadata_only", feedbackRawPayloadRetained: false, laneClarity: null`,
       `};`,
       `if (summary.metadataOnlyQueuedCount !== summary.stateCounts.metadataOnlyQueuedCandidates) throw new Error("metadata-only queue mismatch");`,
       ""

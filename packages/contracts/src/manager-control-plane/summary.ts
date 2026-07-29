@@ -2,9 +2,39 @@ import type { ManagerAuthorityDecisionClass, ManagerAuthorityStage } from "./aut
 import type { EvidenceRefId, ExecutionAttemptId, LeaseId, ManagerEventId, ManagerRunId, WorkItemId } from "./ids";
 import type { EvidenceFreshnessState, ManagerFreshnessState, ManagerSummaryPhase } from "./lifecycle";
 import type { AuthoritativeBacklogExhaustedDisposition } from "./refill";
+import type { ManagerScopePivotQualification } from "./events";
 
 export type ManagerSummaryStateSource = "dispatcher" | "fixture" | "projection" | "unknown";
 export type ManagerSummaryProofMode = "backend_proof" | "read_only_projection" | "unknown";
+
+export type ManagerLaneClarityPosture = "on_scope" | "pivot_required" | "not_assessed";
+
+export interface ManagerLaneClarityCriterion {
+  criterionId: string;
+  summary: string;
+  disposition: "met" | "in_progress" | "blocked" | "not_assessed";
+  evidenceRefs: readonly EvidenceRefId[];
+}
+
+export interface ManagerLaneClarity {
+  schemaVersion: "manager-lane-clarity/v0";
+  runId: ManagerRunId;
+  eventWatermark: ManagerEventId;
+  sourceCursor: string;
+  goal: { summary: string; sourceRef: string };
+  criteria: readonly ManagerLaneClarityCriterion[];
+  canonicalState: { phase: ManagerSummaryPhase; freshness: ManagerFreshnessState; evidenceFreshness: EvidenceFreshnessState };
+  nextGate: { summary: string; nextSafeAction: string };
+  posture: {
+    state: ManagerLaneClarityPosture;
+    reason: string;
+    nextSafeAction: string;
+    decisionRef?: string | null;
+    qualification?: ManagerScopePivotQualification | null;
+  };
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
 
 export interface ManagerExecutionLaneStateCounts {
   totalWorkItems: number;
@@ -112,4 +142,5 @@ export interface ManagerExecutionLaneSummary {
   feedbackUnrelatedLanePolicy: "continue_unrelated_safe_lanes";
   feedbackRetention: "metadata_only";
   feedbackRawPayloadRetained: false;
+  laneClarity: ManagerLaneClarity | null;
 }
