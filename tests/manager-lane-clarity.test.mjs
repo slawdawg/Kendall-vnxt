@@ -27,7 +27,7 @@ test("lane clarity emits on_scope only for a coherent fresh metadata record", ()
   const summary = buildManagerExecutionLaneSummary({
     runId: "run-1",
     clock,
-    events: [{ eventId: "event-progress", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] }],
+    events: [{ eventId: "event-progress", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: laneEvidence }],
     summaryEvent: { eventId: "event-summary" },
     fallbackEvidenceRefs: laneEvidence,
     laneClarity: candidate({ eventWatermark: "event-summary", sourceCursor: "1" }),
@@ -42,7 +42,7 @@ test("lane clarity emits pivot_required only for the current structured pivot de
     eventName: "scope_pivot_required",
     runId: "run-1",
     occurredAt: "2026-07-29T00:00:00.000Z",
-    evidenceRefs: ["evidence:pivot"],
+    evidenceRefs: ["evidence:pivot", ...laneEvidence],
     scopePivotDecision: {
       qualification: "second_qualified_recovery_detour",
       eventWatermark: "event-summary",
@@ -81,7 +81,7 @@ test("lane clarity ignores a stale pivot decision", () => {
     eventName: "scope_pivot_required",
     runId: "run-1",
     occurredAt: "2026-07-29T00:00:00.000Z",
-    evidenceRefs: ["evidence:pivot"],
+    evidenceRefs: ["evidence:pivot", ...laneEvidence],
     scopePivotDecision: {
       qualification: "operator_drift_concern",
       eventWatermark: "event-old-summary",
@@ -155,7 +155,7 @@ test("lane clarity projects only validated fields and bounded current evidence",
   source.nextGate.retainedPayload = "not-retained";
   const summary = buildManagerExecutionLaneSummary({
     runId: "run-1", clock,
-    events: [{ eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] }],
+    events: [{ eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: laneEvidence }],
     summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source,
   });
   assert.equal(summary.laneClarity.posture.state, "on_scope");
@@ -167,7 +167,7 @@ test("lane clarity projects only validated fields and bounded current evidence",
 test("lane clarity ignores stale pivots and rejects unbound or oversized evidence", () => {
   const source = candidate({ eventWatermark: "event-summary", sourceCursor: "2" });
   const stalePivot = { eventId: "old", eventName: "scope_pivot_required", runId: "run-1", evidenceRefs: ["evidence:lane-clarity"], scopePivotDecision: { qualification: "operator_drift_concern", eventWatermark: "old", decisionRef: "decision:old", reason: "Old decision.", sourceRefs: ["source:old"], nextSafeAction: "review", rawPayloadRetained: false } };
-  const current = { eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] };
+  const current = { eventId: "event-current", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: laneEvidence };
   const onScope = buildManagerExecutionLaneSummary({ runId: "run-1", clock, events: [stalePivot, current], summaryEvent: { eventId: "event-summary" }, fallbackEvidenceRefs: laneEvidence, laneClarity: source });
   assert.equal(onScope.laneClarity.posture.state, "on_scope");
   source.criteria[0].evidenceRefs = ["evidence:unbound"];
@@ -231,6 +231,20 @@ test("runtime ledger persists only complete metadata-only scope-pivot decisions"
     });
     assert.equal(unsafe.status, "blocked");
     assert.equal(unsafe.blockers[0].code, "scope-pivot-decision-missing-or-malformed");
+    const oversized = ledgerCommand({
+      command: "append-event",
+      runId: "lane-clarity-ledger",
+      stateRoot,
+      eventType: "scope_pivot_required",
+      summary: "Oversized scope decision.",
+      authorityBasis: "operator-drift-decision",
+      recoveryPath: "review the bounded scope-pivot decision",
+      sourceRefs: ["requirement:lane-clarity"],
+      evidenceRefs: ["evidence:lane-clarity"],
+      scopePivotDecision: { ...decision, reason: "x".repeat(241) },
+    });
+    assert.equal(oversized.status, "blocked");
+    assert.equal(oversized.blockers[0].code, "scope-pivot-decision-missing-or-malformed");
     const retainedPayload = ledgerCommand({
       command: "append-event",
       runId: "lane-clarity-ledger",
@@ -248,4 +262,17 @@ test("runtime ledger persists only complete metadata-only scope-pivot decisions"
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("lane clarity rejects synthetic fallback evidence as criterion proof", () => {
+  const summary = buildManagerExecutionLaneSummary({
+    runId: "run-1",
+    clock,
+    events: [{ eventId: "event-progress", eventName: "dispatcher.progress.observed", occurredAt: "2026-07-29T00:00:00.000Z", evidenceRefs: [] }],
+    summaryEvent: { eventId: "event-summary" },
+    fallbackEvidenceRefs: laneEvidence,
+    laneClarity: candidate({ eventWatermark: "event-summary", sourceCursor: "1" }),
+  });
+  assert.equal(summary.laneClarity.posture.state, "not_assessed");
+  assert.equal(summary.laneClarity.canonicalState.evidenceFreshness, "missing");
 });

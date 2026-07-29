@@ -4234,6 +4234,11 @@ class PipelineActiveManagerLaneClarityV0View(BaseModel):
     def assessed_postures_require_criterion_evidence(self) -> "PipelineActiveManagerLaneClarityV0View":
         if self.posture.state in {"on_scope", "pivot_required"} and not self.criteria:
             raise ValueError("Assessed lane clarity postures require criterion evidence.")
+        if self.posture.state in {"on_scope", "pivot_required"} and (
+            self.canonicalState.freshness != "fresh"
+            or self.canonicalState.evidenceFreshness != "fresh"
+        ):
+            raise ValueError("Assessed lane clarity postures require fresh canonical evidence.")
         if self.posture.state == "pivot_required" and (
             self.posture.decisionRef is None or self.posture.qualification is None
         ):

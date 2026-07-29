@@ -31391,8 +31391,8 @@ function normalizeScopePivotDecision(value) {
   ].includes(qualification) ||
     !isSafeScopePivotLedgerText(eventWatermark, 140, { token: true }) ||
     !isSafeScopePivotLedgerText(decisionRef, 255, { token: true }) ||
-    !isSafeScopePivotLedgerText(reason, 500) ||
-    !isSafeScopePivotLedgerText(nextSafeAction, 500) ||
+    !isSafeScopePivotLedgerText(reason, 240) ||
+    !isSafeScopePivotLedgerText(nextSafeAction, 240) ||
     !Array.isArray(sourceRefs) || sourceRefs.length === 0 || sourceRefs.length > 20 ||
     !sourceRefs.every((ref) => isSafeScopePivotLedgerText(ref, 255, { token: true }))) {
     return null;

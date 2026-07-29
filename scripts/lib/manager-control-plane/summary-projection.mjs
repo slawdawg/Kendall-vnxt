@@ -99,6 +99,16 @@ export function buildManagerExecutionLaneSummary({
     ...needsReviewCandidates.flatMap((candidate) => candidate.evidenceRefs ?? []),
     ...duplicateCandidates.flatMap((candidate) => candidate.evidenceRefs ?? [])
   ]);
+  const sourceEvidenceRefs = unique([
+    ...workItems.flatMap((item) => item.evidenceRefs ?? []),
+    ...leases.flatMap((lease) => lease.evidenceRefs ?? []),
+    ...attempts.flatMap((attempt) => attempt.evidenceRefs ?? []),
+    ...events.flatMap((event) => event.evidenceRefs ?? []),
+    ...refillJobs.flatMap((job) => job.evidenceRefs ?? []),
+    ...blockedCandidates.flatMap((candidate) => candidate.evidenceRefs ?? []),
+    ...needsReviewCandidates.flatMap((candidate) => candidate.evidenceRefs ?? []),
+    ...duplicateCandidates.flatMap((candidate) => candidate.evidenceRefs ?? [])
+  ]);
   const recoveryEvents = events.filter((event) => event.eventName === "dispatcher.recovery.attempted");
   const recoveryRequired = stateCounts.failed > 0 || stateCounts.expired > 0 || activeRecoveryAttempts.length > 0;
   const eventWatermark = summaryEvent?.eventId ?? events.at(-1)?.eventId ?? "event-000";
@@ -123,8 +133,9 @@ export function buildManagerExecutionLaneSummary({
     sourceCursor: String(events.length),
     currentPhase,
     freshness,
-    evidenceFreshness: freshness === "stale" ? "stale" : evidenceRefs.length > 0 ? "fresh" : "missing",
+    evidenceFreshness: freshness === "stale" ? "stale" : sourceEvidenceRefs.length > 0 ? "fresh" : "missing",
     evidenceRefs,
+    sourceEvidenceRefs,
     events,
   });
   const laneClarityRequiresAttention = projectedLaneClarity.posture.state === "pivot_required";
@@ -157,7 +168,7 @@ export function buildManagerExecutionLaneSummary({
     safeWorkAvailableCount: stateCounts.queued,
     metadataOnlyQueuedCount: stateCounts.metadataOnlyQueuedCandidates,
     unsafeOrGatedWorkCount,
-    evidenceFreshness: freshness === "stale" ? "stale" : evidenceRefs.length > 0 ? "fresh" : "missing",
+    evidenceFreshness: freshness === "stale" ? "stale" : sourceEvidenceRefs.length > 0 ? "fresh" : "missing",
     eventWatermark,
     sourceCursor: String(events.length),
     authorityStage: "backend_proof",
@@ -181,7 +192,7 @@ export function buildManagerExecutionLaneSummary({
   };
 }
 
-function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, currentPhase, freshness, evidenceFreshness, evidenceRefs, events }) {
+function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, currentPhase, freshness, evidenceFreshness, evidenceRefs, sourceEvidenceRefs, events }) {
   const unavailable = (reason, nextSafeAction = "Record coherent manager lane source and criterion evidence before relying on lane clarity.") => ({
     schemaVersion: "manager-lane-clarity/v0",
     runId,
@@ -208,7 +219,7 @@ function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, cu
     isLaneClarityRef(goal?.sourceRef) &&
     Array.isArray(criteria) && criteria.length > 0 && criteria.length <= MAX_LANE_CLARITY_CRITERIA &&
     criteria.every(isValidLaneClarityCriterion) &&
-    criteria.every((criterion) => criterion.evidenceRefs.every((ref) => evidenceRefs.includes(ref))) &&
+    criteria.every((criterion) => criterion.evidenceRefs.every((ref) => sourceEvidenceRefs.includes(ref))) &&
     isLaneClarityText(nextGate?.summary) && isLaneClarityText(nextGate?.nextSafeAction) &&
     candidate.metadataOnly === true && candidate.rawPayloadRetained === false;
   if (!coherent || freshness !== "fresh" || evidenceFreshness !== "fresh") {
@@ -222,7 +233,7 @@ function projectLaneClarity({ candidate, runId, eventWatermark, sourceCursor, cu
     if (!decision || !["operator_drift_concern", "second_qualified_recovery_detour"].includes(decision.qualification) ||
       decision.eventWatermark !== eventWatermark || !isLaneClarityRef(decision.decisionRef) || !isLaneClarityText(decision.reason) ||
       !hasSafeLaneClarityRefs(decision.sourceRefs) || !hasSafeLaneClarityRefs(pivotEvent.evidenceRefs) ||
-      !pivotEvent.evidenceRefs.every((ref) => evidenceRefs.includes(ref)) ||
+      !pivotEvent.evidenceRefs.every((ref) => sourceEvidenceRefs.includes(ref)) ||
       !isLaneClarityText(decision.nextSafeAction) || decision.rawPayloadRetained !== false) {
       return unavailable("scope_pivot_decision_malformed");
     }

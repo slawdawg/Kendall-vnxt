@@ -784,6 +784,12 @@ test("active manager lane clarity rejects credential text and empty assessed evi
   const pivotWithoutProvenance = structuredClone(projection);
   pivotWithoutProvenance.activeManagerLaneClarity.posture.state = "pivot_required";
   assert.equal(projectionModule.isPipelineDashboardProjection(pivotWithoutProvenance), false);
+  const staleAssessedEvidence = structuredClone(projection);
+  staleAssessedEvidence.activeManagerLaneClarity.canonicalState.freshness = "stale";
+  assert.equal(projectionModule.isPipelineDashboardProjection(staleAssessedEvidence), false);
+  const missingAssessedEvidence = structuredClone(projection);
+  missingAssessedEvidence.activeManagerLaneClarity.canonicalState.evidenceFreshness = "missing";
+  assert.equal(projectionModule.isPipelineDashboardProjection(missingAssessedEvidence), false);
 });
 
 test("Work Graph remains a supervisor-backed Packet Detail group and never enters compact cards", async () => {

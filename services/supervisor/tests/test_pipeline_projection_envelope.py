@@ -74,6 +74,25 @@ def test_lane_clarity_view_requires_evidence_for_assessed_postures() -> None:
     }
     with pytest.raises(ValidationError):
         PipelineActiveManagerLaneClarityV0View.model_validate(payload)
+    payload["criteria"] = [{
+        "criterionId": "criterion:carrier",
+        "summary": "Carrier is coherent.",
+        "disposition": "in_progress",
+        "evidenceRefs": ["evidence:lane-clarity"],
+    }]
+    payload["posture"] = {
+        "state": "on_scope",
+        "reason": "Evidence is current.",
+        "nextSafeAction": "review_lane_clarity",
+    }
+    payload["canonicalState"]["freshness"] = "stale"
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityV0View.model_validate(payload)
+    payload["canonicalState"]["freshness"] = "fresh"
+    payload["canonicalState"]["evidenceFreshness"] = "missing"
+    with pytest.raises(ValidationError):
+        PipelineActiveManagerLaneClarityV0View.model_validate(payload)
+    payload["canonicalState"]["evidenceFreshness"] = "fresh"
     payload["posture"]["state"] = "not_assessed"
     assert PipelineActiveManagerLaneClarityV0View.model_validate(payload).canonicalState.phase == "no_safe_work"
     payload["posture"] = {
@@ -81,11 +100,5 @@ def test_lane_clarity_view_requires_evidence_for_assessed_postures() -> None:
         "reason": "A scope decision is current.",
         "nextSafeAction": "review_scope_pivot",
     }
-    payload["criteria"] = [{
-        "criterionId": "criterion:carrier",
-        "summary": "Carrier is coherent.",
-        "disposition": "in_progress",
-        "evidenceRefs": ["evidence:lane-clarity"],
-    }]
     with pytest.raises(ValidationError):
         PipelineActiveManagerLaneClarityV0View.model_validate(payload)

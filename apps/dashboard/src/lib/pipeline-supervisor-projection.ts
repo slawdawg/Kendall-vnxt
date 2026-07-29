@@ -959,6 +959,8 @@ function isActiveManagerLaneClarity(value: unknown) {
     managerLaneClarityPhases.has(clarity.canonicalState?.phase) &&
     managerLaneClarityFreshness.has(clarity.canonicalState?.freshness) &&
     managerLaneClarityEvidenceFreshness.has(clarity.canonicalState?.evidenceFreshness) &&
+    (clarity.posture?.state === "not_assessed" ||
+      (clarity.canonicalState?.freshness === "fresh" && clarity.canonicalState?.evidenceFreshness === "fresh")) &&
     isSafeProjectionText(clarity.nextGate?.summary) && isSafeProjectionText(clarity.nextGate?.nextSafeAction) &&
     ["on_scope", "pivot_required", "not_assessed"].includes(clarity.posture?.state) &&
     isSafeProjectionText(clarity.posture?.reason) && isSafeProjectionText(clarity.posture?.nextSafeAction) &&
