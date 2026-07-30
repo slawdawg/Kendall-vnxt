@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   buildBmadCodeReviewRequestPlan,
+  buildManagerCoordinationHealth,
   buildContinuousRunPlan,
   buildPreflight,
   buildRecoveryHousekeepingEvidenceRecord,
@@ -14,6 +15,7 @@ import {
   writeManagerCapabilityPosture,
 } from "./lib/manager-control-plane/core.mjs";
 import { publishManagerCycleLaneClarity } from "./lib/manager-control-plane/manager-cycle-lane-clarity-publication.mjs";
+import { publishManagerCycleCoordinationHealth } from "./lib/manager-control-plane/manager-cycle-coordination-health-publication.mjs";
 
 function writePacket(packet, options) {
   const payload = options.summaryJson ? packet : packet.summary?.report || packet.summary || packet;
@@ -643,6 +645,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   const buildRecoveryHousekeepingEvidenceRecordFn = context.buildRecoveryHousekeepingEvidenceRecord || buildRecoveryHousekeepingEvidenceRecord;
   const executeContinuousSelectedActionFn = context.executeContinuousSelectedAction || executeContinuousSelectedAction;
   const publishManagerCycleLaneClarityFn = context.publishManagerCycleLaneClarity || publishManagerCycleLaneClarity;
+  const publishManagerCycleCoordinationHealthFn = context.publishManagerCycleCoordinationHealth || publishManagerCycleCoordinationHealth;
   const writePacketFn = context.writePacket || writePacket;
   const sleepFn = context.sleep || sleep;
   const preflight = buildPreflightFn(options, { env: context.env || process.env });
@@ -746,6 +749,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
       : null;
     const selected = plan.summary?.selectedAction || null;
     const applySelected = plan.summary?.applySelectedAction || null;
+    const coordinationHealth = buildManagerCoordinationHealth(options);
     const result = {
       ok: plan.ok,
       status: plan.status,
@@ -775,6 +779,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
         selectedAction: projectContinuousLoopSelectedAction(selected),
         applySelectedAction: projectContinuousLoopSelectedAction(applySelected),
         runtimeReadiness: plan.summary?.runtimeReadiness,
+        coordinationHealth,
         blockers: plan.blockers || [],
         warnings: [...(persistedCapabilityPosture.warnings || []), ...(postureWrite?.warnings || []), ...(plan.warnings || [])],
       },
@@ -845,6 +850,11 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
           options,
           context.laneClarityPublicationContext || {},
         );
+        result.summary.coordinationHealthHandoff = await publishManagerCycleCoordinationHealthFn(
+          coordinationHealth,
+          options,
+          context.coordinationHealthPublicationContext || {},
+        );
         writePacketFn(result, options);
         if (maxIterations !== 0 && iteration >= maxIterations) break;
         await sleepFn(Math.max(1000, options.intervalMs || 60000));
@@ -855,6 +865,11 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
       laneClarityPublicationSummary(plan.summary),
       options,
       context.laneClarityPublicationContext || {},
+    );
+    result.summary.coordinationHealthHandoff = await publishManagerCycleCoordinationHealthFn(
+      coordinationHealth,
+      options,
+      context.coordinationHealthPublicationContext || {},
     );
     if (iteration % Math.max(1, options.heartbeatEvery || 1) === 0 || selected) {
       writePacketFn(result, options);

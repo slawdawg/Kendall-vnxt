@@ -49,6 +49,7 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
   const reliabilityProblemsCurrent = "reliabilityProblems" in projection;
   const gatedControlsCurrent = "gatedControls" in projection;
   const runtimeCapabilitiesCurrent = !projection.runtimeReadiness || "actionCapabilitiesV1" in projection.runtimeReadiness;
+  const coordinationHealthCurrent = "coordinationHealth" in projection;
   const selectedPacketWorkGraphsCurrent = !Array.isArray(projection.selectedPacketDetails) || Array.from(projection.selectedPacketDetails).every((detail) => (
     detail && typeof detail === "object" && "workGraph" in detail
   ));
@@ -65,6 +66,8 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
     reliabilityProblemsCurrent &&
     gatedControlsCurrent &&
     runtimeCapabilitiesCurrent &&
+    coordinationHealthCurrent &&
+    (projection.coordinationHealth === null || isPipelineCoordinationHealth(projection.coordinationHealth)) &&
     selectedPacketWorkGraphsCurrent &&
     selectedPacketReviewRoutesCurrent
   ) {
@@ -165,6 +168,7 @@ export function normalizePipelineDashboardProjection(projection: Partial<Pipelin
   return {
     ...projection,
     activeManagerLaneClarity: projection.activeManagerLaneClarity ?? null,
+    coordinationHealth: isPipelineCoordinationHealth(projection.coordinationHealth) ? projection.coordinationHealth : null,
     managerSummary,
     workerSummary,
     queueSummary,
@@ -244,6 +248,7 @@ export function isPipelineDashboardProjection(value: unknown): value is Pipeline
     isTruthSummary(projection.truthSummary) &&
     isManagerSummary(projection.managerSummary) &&
     (projection.activeManagerLaneClarity === undefined || projection.activeManagerLaneClarity === null || isActiveManagerLaneClarity(projection.activeManagerLaneClarity)) &&
+    (projection.coordinationHealth === undefined || projection.coordinationHealth === null || isPipelineCoordinationHealth(projection.coordinationHealth)) &&
     isWorkerSummary(projection.workerSummary) &&
     Array.isArray(projection.reliabilityProblems) &&
     projection.reliabilityProblems.every(isReliabilityProblem) &&
@@ -970,6 +975,24 @@ function isActiveManagerLaneClarity(value: unknown) {
       ? (typeof clarity.posture.decisionRef === "string" && clarity.posture.qualification !== null && clarity.posture.qualification !== undefined)
       : ((clarity.posture?.decisionRef === null || clarity.posture?.decisionRef === undefined) && (clarity.posture?.qualification === null || clarity.posture?.qualification === undefined))) &&
     clarity.metadataOnly === true && clarity.rawPayloadRetained === false;
+}
+
+function isPipelineCoordinationHealth(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const health = value as NonNullable<PipelineDashboardProjectionV0["coordinationHealth"]>;
+  return health.schemaVersion === "manager-coordination-health/v0" &&
+    isSafeEvidenceRef(health.runId) && isTimestampString(health.observedAt) &&
+    health.source === "manager_workspace_inventory" &&
+    (health.freshness === "fresh" || health.freshness === "unavailable") &&
+    (health.availability === "available" || health.availability === "incomplete" || health.availability === "unavailable") &&
+    [health.activeWorkCount, health.staleOwnerTargetCount, health.staleOwnerProjectedCount, health.dirtyPreserveCount]
+      .every((count) => Number.isSafeInteger(count) && count >= 0) &&
+    health.staleOwnerProjectedCount <= health.staleOwnerTargetCount &&
+    (health.staleOwnerProjectedCount === health.staleOwnerTargetCount || health.availability === "incomplete") &&
+    typeof health.missingWorktreeJournalHold === "boolean" &&
+    isSafeProjectionText(health.nextSafeAction) &&
+    Array.isArray(health.evidenceRefs) && health.evidenceRefs.length <= 8 && health.evidenceRefs.every(isSafeEvidenceRef) &&
+    health.metadataOnly === true && health.rawPayloadRetained === false;
 }
 
 function isWorkerSummary(value: unknown) {

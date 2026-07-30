@@ -47,6 +47,18 @@ the existing session-bound private-UDS mediator; never expose or copy the
 supervisor socket, bootstrap password, prompts, provider payloads, source/diff
 content, worktree paths, or host command output to the browser.
 
+## Pipeline Coordination Health
+
+`/pipeline` always renders a read-only **Coordination Health** panel beside the
+Manager Execution Lane. It consumes only the supervisor-projected canonical
+manager workspace-inventory receipt; it never scans worktrees or constructs a
+second tracker in the browser. Missing, stale, malformed, or unavailable
+receipts render as unavailable. See the [Coordination Health operator
+guide](../../docs/workflows/pipeline-coordination-health.md) for startup,
+recovery, holds, and focused verification. The normal supervisor port is 8000;
+if it is unavailable, restore that service rather than treating the panel as
+current or starting a substitute listener.
+
 ## Packet Detail Review route
 
 Packet Detail can also show a **Review route** group when the supervisor has a

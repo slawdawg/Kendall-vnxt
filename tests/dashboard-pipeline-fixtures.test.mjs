@@ -792,6 +792,41 @@ test("active manager lane clarity rejects credential text and empty assessed evi
   assert.equal(projectionModule.isPipelineDashboardProjection(missingAssessedEvidence), false);
 });
 
+test("coordination health is validated as canonical bounded metadata and legacy projections fail closed", async () => {
+  const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
+  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const projection = validDashboardProjection();
+  projection.coordinationHealth = {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: "run:coordination",
+    observedAt: "2026-07-30T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  assert.equal(projectionModule.isPipelineDashboardProjection(projection), true);
+  const falseComplete = structuredClone(projection);
+  falseComplete.coordinationHealth.availability = "available";
+  assert.equal(projectionModule.isPipelineDashboardProjection(falseComplete), false);
+  const unsafe = structuredClone(projection);
+  unsafe.coordinationHealth.nextSafeAction = "Use ghp_abcdefghijklmnopqrstuvwxyz";
+  assert.equal(projectionModule.isPipelineDashboardProjection(unsafe), false);
+  const legacy = validDashboardProjection();
+  assert.equal(projectionModule.isPipelineDashboardProjection(legacy), true);
+  const normalized = projectionModule.normalizePipelineDashboardProjection(legacy);
+  assert.equal(normalized.coordinationHealth, null);
+  assert.equal(projectionModule.isPipelineDashboardProjection(normalized), true);
+});
+
 test("Work Graph remains a supervisor-backed Packet Detail group and never enters compact cards", async () => {
   const [cockpitSource, packetDetailSource, lanDetailSource, mediatorSource] = await Promise.all([
     readFile(cockpitPath, "utf8"),
@@ -1358,6 +1393,35 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
     packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: null }, projectionError: null, selectedPacket: null,
   }));
   assert.doesNotMatch(absentHtml, /Lane Clarity/);
+  assert.match(absentHtml, /Coordination Health/);
+  assert.match(absentHtml, /supervisor receipt unavailable/);
+  const coordinationHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
+    packets: [], projection: {
+      ...clarityProjection,
+      coordinationHealth: {
+        schemaVersion: "manager-coordination-health/v0",
+        runId: "run:coordination",
+        observedAt: "2026-07-30T00:00:00.000Z",
+        source: "manager_workspace_inventory",
+        freshness: "fresh",
+        availability: "incomplete",
+        activeWorkCount: 2,
+        staleOwnerTargetCount: 17,
+        staleOwnerProjectedCount: 12,
+        dirtyPreserveCount: 3,
+        missingWorktreeJournalHold: true,
+        nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+        evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+    }, projectionError: null, selectedPacket: null,
+  }));
+  assert.match(coordinationHtml, /2 projected \/ 17 total/);
+  assert.match(coordinationHtml, /3 dirty worktrees preserved/);
+  assert.match(coordinationHtml, /missing-worktree journal hold/);
+  assert.match(coordinationHtml, /Preserve dirty worktrees and refresh canonical stale-owner evidence\./);
   const laneClarityPanelSource = sourceBetween(
     cockpitSource,
     "function ManagerLaneClarityPanel",

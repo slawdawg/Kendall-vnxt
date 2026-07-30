@@ -99,6 +99,8 @@ from supervisor.api.schemas import (
     ManagerTerminalEventRequest,
     ManagerLaneClarityHandoffApiEnvelope,
     ManagerLaneClarityHandoffRequest,
+    ManagerCoordinationHealthHandoffApiEnvelope,
+    ManagerCoordinationHealthHandoffRequest,
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
@@ -136,6 +138,10 @@ from supervisor.application.manager_terminal_events import (
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
     persist_manager_lane_clarity_handoff,
+)
+from supervisor.application.manager_coordination_health_handoffs import (
+    get_manager_coordination_health_handoff,
+    persist_manager_coordination_health_handoff,
 )
 from supervisor.application import local_dogfood_attestation
 from supervisor.application.operator_auth import (
@@ -774,6 +780,40 @@ async def read_manager_lane_clarity_handoff(
             detail=error_response("Manager lane clarity handoff not found.", "manager_lane_clarity_handoff_not_found").model_dump(),
         )
     return ManagerLaneClarityHandoffApiEnvelope(data=handoff)
+
+
+@app.post(
+    "/manager-control-plane/coordination-health-handoffs",
+    response_model=ManagerCoordinationHealthHandoffApiEnvelope,
+)
+async def record_manager_coordination_health_handoff(
+    payload: ManagerCoordinationHealthHandoffRequest,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        handoff = await persist_manager_coordination_health_handoff(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "manager_coordination_health_handoff_conflict").model_dump()) from exc
+    return ManagerCoordinationHealthHandoffApiEnvelope(data=handoff)
+
+
+@app.get(
+    "/manager-control-plane/coordination-health-handoffs/{handoff_id}",
+    response_model=ManagerCoordinationHealthHandoffApiEnvelope,
+)
+async def read_manager_coordination_health_handoff(
+    handoff_id: str,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    handoff = await get_manager_coordination_health_handoff(session, handoff_id)
+    if handoff is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Manager coordination-health handoff not found.", "manager_coordination_health_handoff_not_found").model_dump(),
+        )
+    return ManagerCoordinationHealthHandoffApiEnvelope(data=handoff)
 
 
 @app.get("/pipeline-control-plane/work-packets/{packet_id}", response_model=AuthoritativeWorkPacketApiEnvelope)

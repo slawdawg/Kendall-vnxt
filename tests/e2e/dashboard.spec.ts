@@ -841,6 +841,10 @@ test.describe("dashboard workflow coverage", () => {
       const truthSummary = page.locator('section[aria-label="Projection truth summary"]').first();
       await expect(page.getByText("Supervisor unavailable", { exact: true })).toBeVisible();
       await expect(truthSummary.getByText("refresh unavailable", { exact: true })).toBeVisible();
+      const coordinationHealth = page.getByLabel("Coordination Health");
+      await expect(coordinationHealth).toBeVisible();
+      await expect(coordinationHealth.getByText("unavailable", { exact: true }).first()).toBeVisible();
+      await expect(coordinationHealth).toContainText("does not infer local worktree state");
       await expect(page.locator(".pipeline-mini-packet")).toHaveCount(0);
       await expect(page.getByText("Demo fixtures", { exact: true })).toHaveCount(0);
     });
@@ -1116,6 +1120,7 @@ test.describe("dashboard workflow coverage", () => {
     await pageMenu.click();
     const cockpit = page.getByRole("main", { name: "Pipeline cockpit" });
     await expect(cockpit).toBeVisible();
+    await expect(page.getByLabel("Coordination Health")).toBeVisible();
     const refinedFrame = page.getByLabel("Refined pipeline cockpit frame");
     await expect(refinedFrame).toBeVisible();
     const firstFrame = page.getByLabel("Cockpit first-frame hierarchy");

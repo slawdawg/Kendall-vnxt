@@ -102,6 +102,7 @@ type CockpitStageSummary = {
 
 type ProjectionSelectedPacketDetail = PipelineDashboardProjectionV0["selectedPacketDetails"][number];
 type ActiveManagerLaneClarity = NonNullable<PipelineDashboardProjectionV0["activeManagerLaneClarity"]>;
+type PipelineCoordinationHealth = NonNullable<PipelineDashboardProjectionV0["coordinationHealth"]>;
 type ActiveBoardCockpitPacket = PipelineFixturePacket & {
   activeBoardCard?: PipelineCompactPacketCard;
 };
@@ -755,6 +756,7 @@ export function PipelineCockpit({
               readyToTestCount={activeBoardViewModel?.summary.readyToTestCount ?? 0}
             />
             {managerExecutionLane?.operatorAttentionRequired ? <ManagerAttentionSummary lane={managerExecutionLane} /> : null}
+            <CoordinationHealthPanel health={currentProjection?.coordinationHealth ?? null} />
             {managerExecutionLane ? (
               <details className="mt-3 rounded-[0.5rem] border border-[var(--line)] bg-[var(--surface)] p-2">
                 <summary className="cursor-pointer text-sm font-semibold text-[var(--foreground)]">Manager</summary>
@@ -1553,6 +1555,70 @@ function ManagerAttentionSummary({ lane }: { lane: PipelineManagerExecutionLaneS
         Manager internals, worker counts, run ids, evidence refs, and authority details are available in Diagnostics.
       </p>
     </section>
+  );
+}
+
+function CoordinationHealthPanel({ health }: { health: PipelineCoordinationHealth | null }) {
+  const unavailable = health === null || health.availability === "unavailable" || health.freshness === "unavailable";
+  const incomplete = !unavailable && health.availability === "incomplete";
+  const attention = unavailable || incomplete || Boolean(health?.dirtyPreserveCount) || Boolean(health?.missingWorktreeJournalHold);
+  const staleCoverage = health ? `${health.staleOwnerProjectedCount} projected / ${health.staleOwnerTargetCount} total` : "unavailable";
+  const holds = health
+    ? [
+        health.staleOwnerProjectedCount < health.staleOwnerTargetCount ? "bounded stale-owner evidence" : null,
+        health.dirtyPreserveCount > 0 ? `${health.dirtyPreserveCount} dirty worktree${health.dirtyPreserveCount === 1 ? "" : "s"} preserved` : null,
+        health.missingWorktreeJournalHold ? "missing-worktree journal hold" : null,
+      ].filter((hold): hold is string => Boolean(hold))
+    : ["supervisor receipt unavailable"];
+  const status = unavailable ? "unavailable" : incomplete ? "incomplete" : "available";
+  return (
+    <section
+      aria-label="Coordination Health"
+      className="mt-3 grid min-w-0 gap-3 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--accent)_25%,var(--line))] bg-[color-mix(in_srgb,var(--surface)_86%,transparent)] p-3"
+    >
+      <p className="sr-only" role={attention ? "alert" : "status"}>
+        Coordination Health {status}. {health ? `${health.activeWorkCount} active work item${health.activeWorkCount === 1 ? "" : "s"}. ${staleCoverage}.` : "No canonical manager inventory receipt is available."}
+      </p>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-[var(--accent)]">Current Work</p>
+          <h2 className="mt-1 text-base font-semibold leading-tight text-[var(--foreground)]">Coordination Health</h2>
+          <p className="mt-1 max-w-4xl text-sm leading-5 text-[var(--muted)]">
+            {health
+              ? `Canonical manager workspace inventory; observed ${health.observedAt}.`
+              : "No canonical manager workspace inventory receipt is available. This panel does not infer local worktree state."}
+          </p>
+        </div>
+        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${attention ? "border-[color-mix(in_srgb,var(--blocked)_45%,var(--line))] text-[var(--blocked)]" : "border-[color-mix(in_srgb,var(--accent)_45%,var(--line))] text-[var(--accent)]"}`}>
+          {status}
+        </span>
+      </div>
+      <dl className="grid gap-2 text-xs sm:grid-cols-3">
+        <CoordinationHealthMetric label="Active work" value={health ? String(health.activeWorkCount) : "—"} detail={health?.source ?? "source unavailable"} />
+        <CoordinationHealthMetric label="Stale-owner scope" value={staleCoverage} detail={health?.freshness ?? "unavailable"} />
+        <CoordinationHealthMetric label="Dirty preserves" value={health ? String(health.dirtyPreserveCount) : "—"} detail={health?.missingWorktreeJournalHold ? "journal hold active" : "no journal hold reported"} />
+      </dl>
+      {holds.length > 0 ? (
+        <div className={`rounded-[0.375rem] border p-2 text-sm ${attention ? "border-[color-mix(in_srgb,var(--blocked)_45%,var(--line))] bg-[color-mix(in_srgb,var(--blocked)_10%,transparent)] text-[var(--foreground)]" : "border-[var(--line)] text-[var(--muted)]"}`}>
+          <p className="font-semibold">{attention ? "Intentional holds" : "No coordination holds reported"}</p>
+          {attention ? <p className="mt-1">{holds.join("; ")}.</p> : null}
+        </div>
+      ) : null}
+      <p className="rounded-[0.375rem] border border-[var(--line)] p-2 text-sm text-[var(--muted)]">
+        <span className="font-semibold text-[var(--foreground)]">Next safe action: </span>
+        {health?.nextSafeAction ?? "Restore the supervisor receipt, then refresh canonical manager coordination evidence before lifecycle mutation."}
+      </p>
+    </section>
+  );
+}
+
+function CoordinationHealthMetric({ detail, label, value }: { detail: string; label: string; value: string }) {
+  return (
+    <div className="rounded-[0.375rem] border border-[var(--line)] bg-[var(--surface)] p-2">
+      <dt className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted)]">{label}</dt>
+      <dd className="mt-1 break-words font-semibold text-[var(--foreground)]">{value}</dd>
+      <p className="mt-1 break-words text-[0.7rem] text-[var(--muted)]">{detail}</p>
+    </div>
   );
 }
 
