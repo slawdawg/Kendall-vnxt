@@ -66,13 +66,13 @@ export async function syncManagerSupervisorLaneClarity(summary, supervisorUrl, c
   const post = await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(request), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!post?.ok) throw new TypeError(`Lane clarity handoff failed with HTTP ${post?.status ?? "unknown"}.`);
   const receipt = (await post.json())?.data;
-  if (!receipt || !isDeepStrictEqual(request, selectRequestFields(receipt))) {
+  if (!receipt || !sameRequestFields(request, receipt)) {
     throw new TypeError("Lane clarity handoff response conflicts with the submitted metadata.");
   }
   const readback = await fetchImpl(`${endpoint}/${encodeURIComponent(request.handoffId)}`, { method: "GET", headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!readback?.ok) throw new TypeError(`Lane clarity handoff readback failed with HTTP ${readback?.status ?? "unknown"}.`);
   const persisted = (await readback.json())?.data;
-  if (!persisted || !isDeepStrictEqual(request, selectRequestFields(persisted))) {
+  if (!persisted || !sameRequestFields(request, persisted)) {
     throw new TypeError("Lane clarity handoff readback conflicts with the submitted metadata.");
   }
   return persisted;
@@ -80,6 +80,23 @@ export async function syncManagerSupervisorLaneClarity(summary, supervisorUrl, c
 
 function selectRequestFields(value) {
   return Object.fromEntries(MANAGER_LANE_CLARITY_HANDOFF_REQUEST_FIELDS.map((key) => [key, value[key]]));
+}
+
+function sameRequestFields(request, received) {
+  const expected = selectRequestFields(request);
+  const actual = selectRequestFields(received);
+  // The supervisor's RFC 3339 serializer may expand JavaScript millisecond
+  // precision (for example, `.000Z` to `.000000Z`). Compare the instant, not
+  // the renderer-specific spelling, while keeping every other request field
+  // exact.
+  expected.observedAt = canonicalTimestamp(expected.observedAt);
+  actual.observedAt = canonicalTimestamp(actual.observedAt);
+  return isDeepStrictEqual(expected, actual);
+}
+
+function canonicalTimestamp(value) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return value;
+  return new Date(value).toISOString();
 }
 
 function required(value, label, maxLength) {

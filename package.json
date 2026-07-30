@@ -135,6 +135,7 @@
     "manager:refill": "node ./scripts/manager-refill-plan.mjs --summary-json",
     "manager:terminal-event-dogfood": "node ./scripts/manager-terminal-event-dogfood.mjs",
     "test:manager-terminal-event-dogfood": "node --test tests/manager-terminal-event-dogfood.test.mjs",
+    "test:lane-clarity-live-dogfood": "node ./scripts/lane-clarity-live-dogfood.mjs",
     "manager:source-intake-cycle": "node ./scripts/manager-source-intake-cycle.mjs",
     "manager:supervisor-terminal-event-sync": "node ./scripts/manager-supervisor-terminal-event-sync.mjs",
     "manager:supervisor-source-intake": "node ./scripts/manager-supervisor-source-intake.mjs",

@@ -39,9 +39,22 @@ test("lane clarity handoff binds one manager snapshot and uses loopback only", (
   assert.throws(() => buildManagerLaneClarityHandoffRequest({ laneClarity: clarity }, { ...context(), sourceSequence: 0 }));
 });
 
-test("lane clarity handoff requires exact persisted readback", async () => {
+test("lane clarity handoff accepts the supervisor's canonical RFC 3339 precision while requiring every other field to match", async () => {
   const request = buildManagerLaneClarityHandoffRequest({ laneClarity: clarity }, context());
-  const fetchImpl = async (url, options) => ({ ok: true, status: 200, json: async () => ({ data: { ...request, owner: "supervisor", createdAt: "2026-07-29T00:00:01.000Z" } }) });
+  const canonicalReceipt = {
+    ...request,
+    observedAt: "2026-07-29T00:00:00.000000Z",
+    owner: "supervisor",
+    createdAt: "2026-07-29T00:00:01.000000Z",
+  };
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ data: canonicalReceipt }) });
   const receipt = await syncManagerSupervisorLaneClarity({ laneClarity: clarity }, "http://localhost:8100", { ...context(), fetchImpl });
   assert.equal(receipt.owner, "supervisor");
+
+  const mismatch = { ...canonicalReceipt, eventWatermark: "event:mismatch" };
+  const mismatchFetch = async () => ({ ok: true, status: 200, json: async () => ({ data: mismatch }) });
+  await assert.rejects(
+    syncManagerSupervisorLaneClarity({ laneClarity: clarity }, "http://localhost:8100", { ...context(), fetchImpl: mismatchFetch }),
+    /conflicts/,
+  );
 });
