@@ -19647,6 +19647,47 @@ test("stale-owner inspection blocks partial target detail instead of inspecting 
   assert.match(inspection.nextActions[0].summary, /only 1 exact target/);
 });
 
+test("stale-owner inspection fails closed when its bounded projection omits canonical targets", () => {
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          ledger: { runId: "manager-test" },
+          takeoverInspection: {
+            targetCount: 13,
+            projectedTargetCount: 12,
+            complete: false,
+            targets: [{
+              kind: "lane_assignment",
+              id: "lane-one",
+              dryRunCommand: "node ./scripts/codex-workspace.mjs takeover 'lane-one' --dry-run --summary-json",
+            }],
+          },
+        },
+        warnings: [],
+      },
+      takeoverResults: {
+        "lane-one": {
+          ok: true,
+          allowed: false,
+          worktree: { exists: false, status: "missing" },
+          branch: { status: "inspected" },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+        },
+      },
+    },
+  );
+
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.status, "blocked");
+  assert.equal(inspection.summary.targetCount, 13);
+  assert.equal(inspection.summary.projectedTargetCount, 1);
+  assert.ok(inspection.blockers.some((blocker) => blocker.sourceCode === "stale-owner-detail-truncated"));
+  assert.match(inspection.nextActions[0].summary, /counted 13 stale-owner target/);
+});
+
 test("cleanup and dirty preservation propagate stale-owner inspection blockers", () => {
   const staleOwnerInspection = {
     ok: false,

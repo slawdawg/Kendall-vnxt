@@ -2169,6 +2169,22 @@ try {
         )}\n`,
       );
       writeFileSync(
+        join(tasksDir, "merged-stale-owner.json"),
+        `${JSON.stringify(
+          {
+            task_id: "merged-stale-owner",
+            branch: "codex/merged-stale-owner",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "merged",
+            owner: "runner-b",
+            owner_updated_at: stale,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
         join(assignmentsDir, "claimed-assignment.json"),
         `${JSON.stringify(
           {
@@ -2290,7 +2306,7 @@ try {
       assert(packet.laneAssignmentStatusCounts.ambiguous === 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.blocked_owned_active === 2, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.assignable >= 1, result.stdout || result.stderr);
-      assert(packet.workspaceAssignmentStatusCounts.ambiguous >= 1, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentStatusCounts.cleanup >= 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
       assert(packet.backlogReasonCodeCounts.safe_backlog_complete >= 1, result.stdout || result.stderr);
       assert(packet.backlogReasonCodeCounts.duplicate_assignment_records === 1, result.stdout || result.stderr);
@@ -2299,7 +2315,7 @@ try {
       assert(packet.laneAssignmentReasonCodeCounts.assignment_missing_owner === 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentReasonCodeCounts.assignment_owned_by_other_runner === 2, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentReasonCodeCounts.active_workspace_unowned >= 1, result.stdout || result.stderr);
-      assert(packet.workspaceAssignmentReasonCodeCounts.worktree_path_missing >= 1, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentReasonCodeCounts.pr_merged_cleanup_pending >= 1, result.stdout || result.stderr);
       assert(packet.backlogCandidates.length <= 10, result.stdout || result.stderr);
       assert(packet.laneAssignments.length <= 10, result.stdout || result.stderr);
       assert(packet.workspaceAssignments.length <= 10, result.stdout || result.stderr);
@@ -2323,6 +2339,11 @@ try {
       assert(packet.assignmentInventory.counts.laneAssignments === packet.counts.laneAssignments, result.stdout || result.stderr);
       assert(packet.assignmentInventory.counts.workspaceAssignments === packet.counts.workspaceAssignments, result.stdout || result.stderr);
       assert(packet.assignmentInventory.counts.staleOwnerTargets >= 1, result.stdout || result.stderr);
+      assert(
+        (packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover || 0) ===
+          packet.assignmentInventory.workspaceAssignments.filter((row) => row.status === "blocked_stale_owner_needs_takeover").length,
+        "workspace stale-owner status count must agree with the complete canonical inventory",
+      );
       assert(packet.assignmentInventory.counts.ownedActiveTargets >= 8, result.stdout || result.stderr);
       assert(packet.assignmentInventory.laneAssignments.length === packet.counts.laneAssignments, result.stdout || result.stderr);
       assert(packet.assignmentInventory.workspaceAssignments.length === packet.counts.workspaceAssignments, result.stdout || result.stderr);

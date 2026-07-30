@@ -1424,7 +1424,7 @@ function buildAssignmentReportSummary({
       reason: classification.reason,
     };
   });
-  const laneAssignments = assignments.map((assignment) => {
+  let laneAssignments = assignments.map((assignment) => {
     const classification = classifyLaneAssignment(assignment, context);
     return {
       assignmentId: assignment.assignment_id,
@@ -1439,7 +1439,7 @@ function buildAssignmentReportSummary({
       nextAction: classification.nextAction,
     };
   });
-  const workspaceAssignments = manifests.map((manifest) => {
+  let workspaceAssignments = manifests.map((manifest) => {
     const classification = classifyWorkspaceAssignment(manifest, context);
     return {
       taskId: manifest.task_id,
@@ -1463,6 +1463,12 @@ function buildAssignmentReportSummary({
     staleAfterSeconds,
     stateRoot: state.root,
   });
+  // The inventory is the complete canonical classification. Keep the bounded
+  // report samples and their status counts derived from it so a duplicated
+  // legacy classifier cannot advertise stale targets absent from manager
+  // inspection detail.
+  laneAssignments = assignmentInventory.laneAssignments;
+  workspaceAssignments = assignmentInventory.workspaceAssignments;
 
   return {
     generatedAt: generatedAt.toISOString(),
