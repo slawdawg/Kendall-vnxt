@@ -23064,11 +23064,18 @@ function buildTakeoverInspectionPlan(assignmentSummary = {}) {
   const workspaceAssignments = Array.isArray(assignmentSummary?.blockedWorkspaceAssignments) ? assignmentSummary.blockedWorkspaceAssignments : [];
   const laneTargets = laneAssignments.map((assignment) => buildTakeoverInspectionTarget("lane_assignment", assignment.assignmentId || assignment.assignment_id, assignment));
   const workspaceTargets = workspaceAssignments.map((assignment) => buildTakeoverInspectionTarget("workspace_assignment", assignment.taskId || assignment.task_id, assignment));
-  const targets = [...laneTargets, ...workspaceTargets].filter(Boolean).slice(0, 12);
+  // Keep the inspection packet bounded, but never represent a partial target
+  // projection as the whole stale-owner set.  Callers must fail closed until
+  // every canonical target is available for dry-run evidence.
+  const allTargets = [...laneTargets, ...workspaceTargets].filter(Boolean);
+  const targets = allTargets.slice(0, 12);
+  const targetCount = allTargets.length;
   return {
-    needed: targets.length > 0,
+    needed: targetCount > 0,
     mutationMode: "dry_run_only",
-    targetCount: targets.length,
+    targetCount,
+    projectedTargetCount: targets.length,
+    complete: targets.length === targetCount,
     targets,
     stopLines: [
       "do_not_apply_takeover_without_explicit_operator_approval",
@@ -23117,7 +23124,9 @@ function buildTakeoverInspectionTarget(kind, rawId, assignment = {}) {
 export function buildStaleOwnerInspection(options = {}, context = {}) {
   const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
   const resume = context.resumeState || buildResumeState(runOptions, context);
-  const targets = Array.isArray(resume.summary?.takeoverInspection?.targets) ? resume.summary.takeoverInspection.targets : [];
+  const takeoverInspection = resume.summary?.takeoverInspection || {};
+  const targets = Array.isArray(takeoverInspection.targets) ? takeoverInspection.targets : [];
+  const targetCount = nonNegativeInteger(takeoverInspection.targetCount) ?? targets.length;
   const limit = runOptions.limit === null || runOptions.limit === undefined ? targets.length : Math.max(0, Number(runOptions.limit) || 0);
   const inspections = targets.slice(0, limit).map((target) => inspectStaleOwnerTarget(target, context, runOptions));
   const targetEvidenceBlockers = staleOwnerTargetEvidenceBlockers(resume, targets);
@@ -23148,7 +23157,8 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
     status: blockers.length > 0 ? "blocked" : inspections.length > 0 ? "attention" : "ready",
     summary: {
       runId: resume.summary?.ledger?.runId || runOptions.runId,
-      targetCount: targets.length,
+      targetCount,
+      projectedTargetCount: targets.length,
       inspectedCount: inspections.length,
       cleanupCandidateCount: cleanupCandidates.length,
       canonicalCloseoutEvidenceCount: canonicalEvidenceNeeded.length,
@@ -23247,9 +23257,18 @@ function staleOwnerTargetEvidenceBlockers(resume = {}, targets = []) {
     ? (Array.isArray(resume.blockers) ? resume.blockers : [])
       .filter((notice) => ["assignment-report-unavailable", "workspace-state-unsafe"].includes(notice.code))
     : [];
+  const targetCount = nonNegativeInteger(resume.summary?.takeoverInspection?.targetCount) ?? targets.length;
+  const projectionBlockers = targetCount > targets.length
+    ? [{
+        code: "stale-owner-detail-truncated",
+        message: `Assignment inventory counted ${targetCount} stale-owner target(s), but only ${targets.length} exact target row(s) were projected for inspection.`,
+        nextAction: "Refresh canonical assignment inventory or reduce the stale-owner set before takeover apply.",
+      }]
+    : [];
   return dedupeNoticePackets([
     ...existingBlockers,
     ...warningBlockers,
+    ...staleOwnerTargetEvidenceBlockersFromNotices(projectionBlockers),
     ...staleOwnerTargetEvidenceBlockersFromNotices(blockingErrors, { includeAvailabilityErrors: true }),
   ]);
 }
