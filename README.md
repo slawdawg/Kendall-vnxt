@@ -224,6 +224,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Restricted exact-tree closeout: [docs/codex-workspace-cleanup-runbook.md#restricted-exact-tree-closeout](docs/codex-workspace-cleanup-runbook.md#restricted-exact-tree-closeout)
 - Manager terminal-event dogfood runbook: [docs/workflows/manager-terminal-event-dogfood.md](docs/workflows/manager-terminal-event-dogfood.md)
 - Pipeline Lane Clarity operator guide: [docs/workflows/pipeline-lane-clarity.md](docs/workflows/pipeline-lane-clarity.md)
+- Live Lane Clarity dogfood proof: [docs/workflows/lane-clarity-live-dogfood.md](docs/workflows/lane-clarity-live-dogfood.md)
 - Manager worker delivery receipt/instruction smoke run: [docs/workflows/tmux-codex-worker-smoke-run.md](docs/workflows/tmux-codex-worker-smoke-run.md)
 - Legacy dashboard fixture/fallback audit: [docs/workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md](docs/workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md)
 - Adaptive scoring decision preparation: [docs/workflows/adaptive-scoring-decision-prep.md](docs/workflows/adaptive-scoring-decision-prep.md)
