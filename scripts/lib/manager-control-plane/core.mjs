@@ -23182,6 +23182,39 @@ export function buildStaleOwnerInspection(options = {}, context = {}) {
   });
 }
 
+export function buildManagerCoordinationHealth(options = {}, context = {}) {
+  const runOptions = { ...options, runId: resolveManagerRunId(options, context) };
+  const resume = context.resumeState || buildResumeState(runOptions, context);
+  const staleOwner = context.staleOwnerInspection || buildStaleOwnerInspection(runOptions, { ...context, resumeState: resume });
+  const assignment = resume.summary?.assignment || {};
+  const statusCounts = assignment.statusCounts?.workspaceAssignments || {};
+  const targetCount = nonNegativeInteger(staleOwner.summary?.targetCount) ?? 0;
+  const projectedTargetCount = nonNegativeInteger(staleOwner.summary?.projectedTargetCount) ?? 0;
+  const dirtyPreserveCount = nonNegativeInteger(staleOwner.summary?.dirtyWorkspaceCount) ?? 0;
+  const missingJournalHold = Array.isArray(staleOwner.summary?.inspections) && staleOwner.summary.inspections
+    .some((inspection) => inspection?.classification === "stale_record_cleanup_candidate" && inspection?.worktreeStatus === "missing");
+  const unavailable = assignment.available !== true || staleOwner.summary?.sandboxBoundary === true;
+  const incomplete = unavailable || targetCount > projectedTargetCount || staleOwner.status === "blocked";
+  const nextAction = staleOwner.nextActions?.[0]?.nextAction || resume.nextActions?.[0]?.nextAction || "Refresh canonical manager coordination evidence before lifecycle mutation.";
+  return {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: sanitizeLedgerField(resume.summary?.ledger?.runId || runOptions.runId, "", 120),
+    observedAt: new Date().toISOString(),
+    source: "manager_workspace_inventory",
+    freshness: unavailable ? "unavailable" : "fresh",
+    availability: unavailable ? "unavailable" : incomplete ? "incomplete" : "available",
+    activeWorkCount: nonNegativeInteger(statusCounts.active) ?? 0,
+    staleOwnerTargetCount: targetCount,
+    staleOwnerProjectedCount: projectedTargetCount,
+    dirtyPreserveCount,
+    missingWorktreeJournalHold: missingJournalHold,
+    nextSafeAction: sanitizeLedgerField(nextAction, "Refresh canonical manager coordination evidence before lifecycle mutation.", 260),
+    evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function staleOwnerInspectionStopLines() {
   return [
     "do_not_mutate_workers",

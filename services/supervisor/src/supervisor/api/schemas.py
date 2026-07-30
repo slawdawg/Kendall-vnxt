@@ -4425,6 +4425,7 @@ class PipelineDashboardProjectionV0View(BaseModel):
     selectedPacketDetails: list[PipelineSelectedPacketDetailV0View] = Field(default_factory=list)
     managerSummary: PipelineManagerSummaryV0View
     activeManagerLaneClarity: PipelineActiveManagerLaneClarityV0View | None = None
+    coordinationHealth: "PipelineCoordinationHealthV0View | None" = None
     workerSummary: PipelineWorkerSummaryV0View
     reliabilityProblems: list[PipelineReliabilityProblemV0View] = Field(default_factory=list)
     gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)
@@ -7619,6 +7620,94 @@ class ManagerLaneClarityHandoffApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: ManagerLaneClarityHandoffView
+    meta: dict[str, str | int | float | bool | None] | None = None
+
+
+class PipelineCoordinationHealthV0View(BaseModel):
+    """Manager-owned, metadata-only coordination snapshot for the pipeline."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["manager-coordination-health/v0"]
+    runId: str = Field(max_length=120)
+    observedAt: datetime
+    source: Literal["manager_workspace_inventory"]
+    freshness: Literal["fresh", "unavailable"]
+    availability: Literal["available", "incomplete", "unavailable"]
+    activeWorkCount: int = Field(ge=0)
+    staleOwnerTargetCount: int = Field(ge=0)
+    staleOwnerProjectedCount: int = Field(ge=0)
+    dirtyPreserveCount: int = Field(ge=0)
+    missingWorktreeJournalHold: bool
+    nextSafeAction: str = Field(max_length=260)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=8)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("runId", "nextSafeAction")
+    @classmethod
+    def _coordination_metadata_is_safe(cls, value: str, info) -> str:
+        if value != value.strip():
+            raise ValueError(f"{info.field_name} must not contain leading or trailing whitespace.")
+        return _validate_authoritative_metadata_text(value, path=info.field_name)
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _coordination_evidence_refs_are_safe(cls, refs: list[str]) -> list[str]:
+        if not all(_is_safe_pipeline_evidence_ref(ref) for ref in refs):
+            raise ValueError("Coordination health evidenceRefs must be safe metadata references.")
+        return refs
+
+    @field_validator("observedAt", mode="before")
+    @classmethod
+    def _parse_rfc3339_observed_at(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Coordination health observedAt must be an RFC 3339 timestamp.") from exc
+
+    @model_validator(mode="after")
+    def _bounded_projection_is_honest(self) -> "PipelineCoordinationHealthV0View":
+        if self.staleOwnerProjectedCount > self.staleOwnerTargetCount:
+            raise ValueError("Projected stale-owner count cannot exceed canonical target count.")
+        if self.staleOwnerProjectedCount < self.staleOwnerTargetCount and self.availability != "incomplete":
+            raise ValueError("A bounded stale-owner projection must be marked incomplete.")
+        if (self.freshness == "unavailable") != (self.availability == "unavailable"):
+            raise ValueError("Unavailable coordination freshness and availability must agree.")
+        if self.observedAt.tzinfo is None:
+            raise ValueError("Coordination health observedAt must be timezone-aware.")
+        return self
+
+
+class ManagerCoordinationHealthHandoffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["manager-coordination-health-handoff/v0"]
+    handoffId: str = Field(max_length=128, pattern=r"^manager-coordination-health-handoff:[0-9a-f]{40}$")
+    sourceSequence: PositiveInt
+    coordinationHealth: PipelineCoordinationHealthV0View
+    idempotencyKey: str = Field(max_length=180)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("idempotencyKey")
+    @classmethod
+    def _handoff_identity_is_safe(cls, value: str, info) -> str:
+        if value != value.strip():
+            raise ValueError(f"{info.field_name} must not contain leading or trailing whitespace.")
+        return _validate_authoritative_metadata_text(value, path=info.field_name)
+
+
+class ManagerCoordinationHealthHandoffView(ManagerCoordinationHealthHandoffRequest):
+    owner: Literal["supervisor"]
+    createdAt: datetime
+
+
+class ManagerCoordinationHealthHandoffApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    data: ManagerCoordinationHealthHandoffView
     meta: dict[str, str | int | float | bool | None] | None = None
 
 

@@ -4799,6 +4799,7 @@ export interface PipelineDashboardProjectionV0 {
   selectedPacketDetails: PipelineSelectedPacketDetailV0[];
   managerSummary: PipelineManagerSummaryV0;
   activeManagerLaneClarity?: NonNullable<ManagerExecutionLaneSummary["laneClarity"]> | null;
+  coordinationHealth?: PipelineCoordinationHealthV0 | null;
   workerSummary: PipelineWorkerSummaryV0;
   reliabilityProblems: PipelineReliabilityProblemV0[];
   gatedControls: PipelineGatedControlV0[];
@@ -4808,6 +4809,24 @@ export interface PipelineDashboardProjectionV0 {
   executeAdmission: PipelineExecuteAdmissionV0;
   queueSummary: PipelineQueueSummaryV0;
   evidenceRefs: string[];
+}
+
+export interface PipelineCoordinationHealthV0 {
+  schemaVersion: "manager-coordination-health/v0";
+  runId: string;
+  observedAt: string;
+  source: "manager_workspace_inventory";
+  freshness: "fresh" | "unavailable";
+  availability: "available" | "incomplete" | "unavailable";
+  activeWorkCount: number;
+  staleOwnerTargetCount: number;
+  staleOwnerProjectedCount: number;
+  dirtyPreserveCount: number;
+  missingWorktreeJournalHold: boolean;
+  nextSafeAction: string;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
 }
 
 export interface PipelineDashboardProjectionApiEnvelope {

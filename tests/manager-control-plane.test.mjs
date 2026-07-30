@@ -11,6 +11,10 @@ import {
   deriveManagerTerminalEventId,
   syncManagerSupervisorTerminalEvent,
 } from "../scripts/manager-supervisor-terminal-event-sync.mjs";
+import {
+  buildManagerCoordinationHealthHandoffRequest,
+  syncManagerSupervisorCoordinationHealth,
+} from "../scripts/lib/manager-control-plane/manager-supervisor-coordination-health-sync.mjs";
 import { MANAGER_TERMINAL_EVENT_TYPE } from "../scripts/lib/manager-control-plane/terminal-event-contract.mjs";
 import { runManagerSourcePacketSeed } from "../scripts/manager-source-packet-seed.mjs";
 import {
@@ -19,6 +23,7 @@ import {
   buildCyclePacket,
   buildContinuousRunPlan,
   buildManagerCapabilityPosture,
+  buildManagerCoordinationHealth,
   buildManagerCapabilityPostureControlPlan,
   buildManagerSelfRepairSummary,
   buildCleanupPlan,
@@ -98,6 +103,40 @@ const COURSE_CORRECTION_TEMPLATE_ITEMS = [
 ];
 
 const ADMITTED_MANAGER_FIXTURE_CWD = "/tmp/manager-admitted-fixture-worktree";
+
+test("manager coordination health preserves bounded stale-owner evidence as incomplete", () => {
+  const health = buildManagerCoordinationHealth(
+    { runId: "manager-test" },
+    {
+      resumeState: {
+        summary: {
+          ledger: { runId: "manager-test" },
+          assignment: { available: true, statusCounts: { workspaceAssignments: { active: 2 } } },
+        },
+        nextActions: [],
+      },
+      staleOwnerInspection: {
+        status: "blocked",
+        summary: {
+          targetCount: 17,
+          projectedTargetCount: 12,
+          dirtyWorkspaceCount: 3,
+          inspections: [{ classification: "stale_record_cleanup_candidate", worktreeStatus: "missing" }],
+        },
+        nextActions: [{ nextAction: "Refresh canonical assignment inventory before takeover apply." }],
+      },
+    },
+  );
+  assert.equal(health.schemaVersion, "manager-coordination-health/v0");
+  assert.equal(health.availability, "incomplete");
+  assert.equal(health.activeWorkCount, 2);
+  assert.equal(health.staleOwnerTargetCount, 17);
+  assert.equal(health.staleOwnerProjectedCount, 12);
+  assert.equal(health.dirtyPreserveCount, 3);
+  assert.equal(health.missingWorktreeJournalHold, true);
+  assert.equal(health.metadataOnly, true);
+  assert.equal(health.rawPayloadRetained, false);
+});
 
 function deliveryReceiptFixture(stateRoot, runId = "manager-test") {
   const worktreePath = ADMITTED_MANAGER_FIXTURE_CWD;
@@ -33848,6 +33887,47 @@ test("manager refill dry runs never fetch supervisor state", () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("manager coordination health handoff binds one canonical metadata-only snapshot and verifies readback", async () => {
+  const coordinationHealth = {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: "manager-coordination-test",
+    observedAt: "2026-07-30T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const request = buildManagerCoordinationHealthHandoffRequest(coordinationHealth);
+  assert.equal(request.sourceSequence, Date.parse(coordinationHealth.observedAt));
+  assert.match(request.idempotencyKey, /^manager-coordination-health:[0-9a-f]{40}$/);
+  assert.match(request.handoffId, /^manager-coordination-health-handoff:[0-9a-f]{40}$/);
+  const persisted = await syncManagerSupervisorCoordinationHealth(
+    coordinationHealth,
+    "http://127.0.0.1:8000",
+    { fetchImpl: managerSupervisorReadbackFetch() },
+  );
+  assert.equal(persisted.handoffId, request.handoffId);
+  assert.deepEqual(persisted.coordinationHealth, coordinationHealth);
+});
+
+test("manager coordination health handoff remains bounded for a maximum-length run ID", () => {
+  const request = buildManagerCoordinationHealthHandoffRequest({
+    schemaVersion: "manager-coordination-health/v0", runId: "r".repeat(120), observedAt: "2026-07-30T00:00:00.000Z",
+    source: "manager_workspace_inventory", freshness: "fresh", availability: "available", activeWorkCount: 0,
+    staleOwnerTargetCount: 0, staleOwnerProjectedCount: 0, dirtyPreserveCount: 0, missingWorktreeJournalHold: false,
+    nextSafeAction: "Refresh canonical manager coordination evidence before lifecycle mutation.", evidenceRefs: [], metadataOnly: true, rawPayloadRetained: false,
+  });
+  assert.ok(request.idempotencyKey.length <= 180);
 });
 
 function managerSupervisorSyncPacket() {

@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
@@ -512,6 +512,23 @@ class ManagerLaneClarityHandoff(Base):
     source_sequence: Mapped[int] = mapped_column(Integer)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     lane_clarity_json: Mapped[dict] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ManagerCoordinationHealthHandoff(Base):
+    """Idempotent metadata-only receipt for canonical manager coordination health."""
+
+    __tablename__ = "manager_coordination_health_handoffs"
+    __table_args__ = (
+        UniqueConstraint("source_sequence", name="uq_manager_coordination_health_handoff_sequence"),
+    )
+
+    handoff_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_sequence: Mapped[int] = mapped_column(BigInteger)
+    coordination_health_json: Mapped[dict] = mapped_column(JSON)
     idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
     metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
     raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)

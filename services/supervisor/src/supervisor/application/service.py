@@ -183,6 +183,7 @@ from supervisor.api.schemas import (
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
     PipelineActiveManagerLaneClarityV0View,
+    PipelineCoordinationHealthV0View,
     PipelineBackendReachabilityV0View,
     PipelineCanonicalContractV1View,
     PipelineEpic25EvidenceChainIngestRequest,
@@ -402,6 +403,7 @@ from supervisor.domain.types import (
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
 from supervisor.application.manager_lane_clarity_handoffs import get_current_manager_lane_clarity_handoff
+from supervisor.application.manager_coordination_health_handoffs import get_current_manager_coordination_health_handoff
 from supervisor.infrastructure.db.models import (
     AdmissionLock,
     AuditEvent,
@@ -5868,6 +5870,20 @@ class SupervisorService:
         except (SQLAlchemyError, ValidationError, ValueError, TypeError):
             return None
 
+    async def _pipeline_coordination_health(
+        self, session: AsyncSession, generated_at: datetime, stale_after_seconds: int
+    ) -> PipelineCoordinationHealthV0View | None:
+        try:
+            handoff = await get_current_manager_coordination_health_handoff(session)
+            if handoff is None:
+                return None
+            observed_at = handoff.coordinationHealth.observedAt.astimezone(timezone.utc)
+            if observed_at > generated_at or generated_at - observed_at > timedelta(seconds=stale_after_seconds):
+                return None
+            return PipelineCoordinationHealthV0View.model_validate(handoff.coordinationHealth.model_dump())
+        except (SQLAlchemyError, ValidationError, ValueError, TypeError):
+            return None
+
     async def get_pipeline_dashboard_projection(
         self,
         session: AsyncSession,
@@ -5880,6 +5896,7 @@ class SupervisorService:
             active_manager_lane_clarity = await self._pipeline_active_manager_lane_clarity(
                 session, generated_at, stale_after_seconds
             )
+            coordination_health = await self._pipeline_coordination_health(session, generated_at, stale_after_seconds)
             authoritative_packets = await self.list_authoritative_work_packets(session)
             legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
             legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
@@ -6423,6 +6440,7 @@ class SupervisorService:
                 metadataOnly=True,
             ),
             activeManagerLaneClarity=active_manager_lane_clarity,
+            coordinationHealth=coordination_health,
             workerSummary=worker_summary,
             reliabilityProblems=reliability_problems,
             gatedControls=gated_controls,
