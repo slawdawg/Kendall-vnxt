@@ -269,17 +269,46 @@ remove only the user-owned `$AUTH_DIR/supervisor.sock`, then run
 `pnpm run lan-auth:restart`. Never remove an unknown socket or terminate a
 process by a broad name match.
 
-## 6. Persistent Tailnet startup
+## 6. Persistent Tailnet startup and canonical hostname migration
 
-For Tailnet-only operation, install the dedicated authenticated units rather
-than the local `cockpit:install` units. The LAN launcher derives `tailscale ip
--4` at each service start, checks that the dashboard certificate SAN matches
-that address, and then starts the private-UDS supervisor and HTTPS dashboard.
-It fails closed if Tailscale is not authenticated or its address changed before
-the certificate was renewed.
+For Tailnet-only operation, use the dedicated authenticated units rather than
+the local `cockpit:install` units. This is the only supported persistent
+Tailnet runtime. It binds the dashboard to the current Tailnet IP by default,
+but uses one explicit MagicDNS hostname for the browser URL, cookie, CORS, and
+Host-header allow-list. The supervisor records that canonical origin and the
+exact source revision; the dashboard will not listen unless both match after
+the private-UDS startup gate succeeds.
 
-First stop the manual LAN-auth processes and disable the legacy local cockpit
-target so no TCP supervisor or wildcard dashboard can reclaim port 3000:
+Before any cutover, configure the full MagicDNS name (without a trailing dot)
+and prove that the private certificate has a **DNS SAN** for that exact name.
+An IP-only SAN is not acceptable for this hostname URL. `tailscale cert` is one
+supported provisioning route after HTTPS certificates are enabled for the
+Tailnet; a CA-issued certificate with the same DNS SAN is also valid. Enabling
+Tailnet HTTPS publishes the machine name in Certificate Transparency, so do
+not do it if that disclosure is unacceptable in your environment.
+
+```bash
+export AUTH_DIR="$HOME/kendall-lan-auth"
+export KENDALL_LAN_AUTH_DIR="$AUTH_DIR"
+export KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME="kendallvnxt-1.tail045dec.ts.net" # replace from tailscale status --json Self.DNSName, without the trailing dot
+# After Tailnet HTTPS is enabled, issue/install a certificate whose DNS SAN
+# covers the configured hostname.
+tailscale cert --cert-file "$AUTH_DIR/dashboard.crt" --key-file "$AUTH_DIR/dashboard.key" "$KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME"
+chmod 600 "$AUTH_DIR/dashboard.crt" "$AUTH_DIR/dashboard.key"
+
+# Read-only: proves current node identity, certificate DNS SAN, canonical
+# origin, and source revision before any unit is written or stopped.
+pnpm run lan-cockpit:preflight
+```
+
+If preflight reports that the certificate DNS SAN does not match, stop there.
+The existing listener stays untouched while the certificate is reissued. This
+is the expected result for a certificate containing only `IP:100.86.154.99`
+when the canonical URL is the MagicDNS hostname above.
+
+Only after preflight succeeds, stop the manual LAN-auth processes and disable
+the legacy local cockpit target so no TCP supervisor or second dashboard can
+reclaim port 3000. The installer repeats preflight before it changes units:
 
 ```bash
 systemctl --user disable --now kendall-cockpit.target
@@ -292,58 +321,51 @@ The installer writes `kendall-lan-cockpit.target`,
 `~/.config/systemd/user/`. It stores no password or key in the unit files; both
 services reference the existing private `~/kendall-lan-auth/` directory.
 
-If a Tailnet address changes, issue a new certificate with that address in its
-SAN using the procedure above, then restart the dedicated target:
+The default listener bind is `tailnet-ip`. Do not use an all-interface bind
+unless it is explicitly required and reviewed; that mode requires both
+`KENDALL_DASHBOARD_BIND_MODE=all-interfaces` and
+`KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true` before preflight. The canonical
+hostname, exact Host allow-list, and certificate DNS SAN remain mandatory.
 
-```bash
-pnpm run lan-cockpit:restart
-```
+### Tailnet address rotation, health proof, and controlled recovery
 
-### Tailnet address rotation and controlled recovery
-
-Treat a Tailnet address change as a paired supervisor/dashboard restart. On
-each start the supervisor records the exact HTTPS origin it derived from
-`tailscale ip -4`; after the private-UDS startup gate succeeds, the dashboard
-requires that same origin before it listens. This state contains only the
-numeric HTTPS origin, never a password, session, certificate key, or packet
-data. A mismatch fails closed rather than serving a dashboard paired to a
-different Tailnet address.
-
-When Tailscale reports a new address, do not repeatedly restart the dashboard
-or edit its unit file. Use this recovery sequence:
+When a Tailnet address changes, do not repeatedly restart the dashboard or
+edit its unit file. Re-run the same read-only preflight, then restart only if
+it passes:
 
 ```bash
 cd "$HOME/Kendall_Nxt"
-tailscale ip -4
-# Reissue $AUTH_DIR/dashboard.crt with that exact numeric address in its SAN.
+pnpm run lan-cockpit:preflight
 pnpm run lan-cockpit:restart
 pnpm run lan-cockpit:status
 ```
 
-Then verify the trusted HTTPS path and the private supervisor boundary. Replace
-the address below with the current `tailscale ip -4` result; do not pass
-`--insecure` in routine checks:
+Then verify the trusted HTTPS runtime proof and the private supervisor boundary.
+Do not pass `--insecure` in routine checks:
 
 ```bash
-export TAILNET_IP="100.86.154.99" # replace with the current Tailnet address
-curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" "https://${TAILNET_IP}:3000/" >/dev/null
+export TAILNET_HOST="$KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME"
+curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
 curl --fail --silent --show-error --unix-socket "$AUTH_DIR/supervisor.sock" http://localhost/internal/lan-auth/startup-gate
 ```
 
-If the certificate SAN, Tailnet origin marker, or private-UDS startup gate is
-rejected, keep the Tailnet dashboard stopped while investigating:
+The health response is metadata-only: it proves `ready`, the canonical origin,
+and the paired runtime revision. It never returns a password, session, private
+key, or supervisor payload. A Host header other than the configured hostname
+is rejected before application routing.
+
+If preflight, certificate identity, paired runtime state, or the UDS startup
+gate is rejected, keep the Tailnet dashboard stopped while investigating:
 
 ```bash
 systemctl --user stop kendall-lan-cockpit.target
 ```
 
-The generated supervisor and dashboard units are part of that target, so this
-single stop propagates to both services before a local-only recovery begins.
-
-For a temporary, host-only recovery, first confirm the Tailnet target is
-stopped, then reinstall the loopback cockpit with `pnpm run cockpit:install`.
-That recovery is intentionally local-only: it must not expose the supervisor
-or dashboard to LAN or Tailnet clients. Reinstall the dedicated Tailnet target
-only after the certificate SAN and `tailscale ip -4` agree. Do not delete or
-hand-edit `tailnet-origin.json`; `lan-cockpit:restart` recreates it as part of
-the paired start.
+This is reversible: the generated supervisor and dashboard units are part of
+that target, so one stop propagates to both. Inspect/fix the preflight or
+restore the last known-good source revision before reinstalling. Do not delete
+or hand-edit `tailnet-origin.json` or `tailnet-runtime.json`; a successful
+paired start recreates them. For a temporary host-only recovery, first confirm
+the Tailnet target is stopped, then reinstall the loopback cockpit with
+`pnpm run cockpit:install`; it must not expose the supervisor or dashboard to
+LAN or Tailnet clients.

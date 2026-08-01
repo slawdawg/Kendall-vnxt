@@ -225,6 +225,7 @@
     "lan-cockpit:status": "node ./scripts/lan-cockpit-systemd.mjs status",
     "lan-cockpit:restart": "node ./scripts/lan-cockpit-systemd.mjs restart",
     "lan-cockpit:print": "node ./scripts/lan-cockpit-systemd.mjs print",
+    "lan-cockpit:preflight": "node ./scripts/lan-cockpit-runtime.mjs preflight",
     "build:dashboard": "node ./scripts/dashboard-build-boundary.mjs",
     "lint:dashboard": "pnpm --filter @kendall/dashboard lint",
     "test:e2e:dashboard": "playwright test",

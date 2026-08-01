@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeTailnetHostname } from "./lan-cockpit-runtime.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const unitNames = {
@@ -19,9 +20,12 @@ const legacyCockpitUnits = [
   "kendall-lan-auth-dashboard.service",
 ];
 
-export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath }) {
+export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath, canonicalHostname, dashboardBindMode = "tailnet-ip", allowAllInterfaces = false }) {
+  const hostname = normalizeTailnetHostname(canonicalHostname);
+  if (!["tailnet-ip", "all-interfaces"].includes(dashboardBindMode)) throw new Error("Kendall Tailnet cockpit bind mode is invalid.");
+  if (dashboardBindMode === "all-interfaces" && !allowAllInterfaces) throw new Error("Kendall Tailnet cockpit all-interface bind requires explicit approval.");
   const authDir = "%h/kendall-lan-auth";
-  const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}`;
+  const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}\nEnvironment=KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=${hostname}\nEnvironment=KENDALL_DASHBOARD_BIND_MODE=${dashboardBindMode}${allowAllInterfaces ? "\nEnvironment=KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true" : ""}`;
   const legacyUnitList = legacyCockpitUnits.join(" ");
   return {
     [unitNames.target]: `[Unit]\nDescription=Kendall authenticated Tailnet cockpit\nWants=${unitNames.supervisor} ${unitNames.dashboard}\nAfter=network-online.target\nConflicts=${legacyUnitList}\nBefore=${legacyUnitList}\n\n[Install]\nWantedBy=default.target\n`,
@@ -65,12 +69,19 @@ function stopLegacyCockpitUnits() {
 }
 
 function install() {
+  const canonicalHostname = process.env.KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME;
+  const dashboardBindMode = process.env.KENDALL_DASHBOARD_BIND_MODE || "tailnet-ip";
+  const allowAllInterfaces = process.env.KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES === "true";
   const units = renderLanCockpitUnits({
     repoRoot: rootDir,
     nodePath: process.execPath,
     pnpmPath: commandPath("pnpm"),
     uvPath: commandPath("uv"),
+    canonicalHostname,
+    dashboardBindMode,
+    allowAllInterfaces,
   });
+  execFileSync(process.execPath, ["scripts/lan-cockpit-runtime.mjs", "preflight"], { cwd: rootDir, stdio: "inherit", env: process.env });
   mkdirSync(systemdDir(), { recursive: true });
   for (const [name, contents] of Object.entries(units)) writeFileSync(join(systemdDir(), name), contents);
   // A target conflict alone does not stop independently enabled child services.
@@ -84,11 +95,17 @@ function install() {
 function main() {
   const command = process.argv[2] || "status";
   if (command === "print") {
+    const canonicalHostname = process.env.KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME;
+    const dashboardBindMode = process.env.KENDALL_DASHBOARD_BIND_MODE || "tailnet-ip";
+    const allowAllInterfaces = process.env.KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES === "true";
     const units = renderLanCockpitUnits({
       repoRoot: rootDir,
       nodePath: process.execPath,
       pnpmPath: commandPath("pnpm"),
       uvPath: commandPath("uv"),
+      canonicalHostname,
+      dashboardBindMode,
+      allowAllInterfaces,
     });
     for (const [name, contents] of Object.entries(units)) console.log(`\n# ${name}\n${contents}`);
     return;
