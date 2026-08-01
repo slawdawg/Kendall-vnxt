@@ -43,7 +43,10 @@ an alternate lifecycle model.
    states remain non-mutating until canonical manager evidence changes.
 
 The dashboard normally uses supervisor port `8000` only in loopback development.
-In authenticated LAN mode, never open or restore a TCP supervisor listener:
+In authenticated LAN mode, manager handoff POST/readback uses only the
+configured private UDS: the supervisor recognizes that no-TCP-client request
+shape as local operational transport, while its API edge rejects every TCP
+request (including loopback). Never open or restore a TCP supervisor listener;
 restore the existing private supervisor service and socket, then publish a
 newer manager receipt.
 
@@ -77,6 +80,15 @@ otherwise it remains explicitly `unavailable` and does not invent or post a
 replacement summary. A missing, unsafe, or unreachable socket is fail-closed;
 repair the private supervisor startup path rather than adding a loopback or
 LAN listener.
+
+Prove the supervisor-projected result through that same private socket. This
+command exits nonzero unless Coordination Health is non-null and fresh:
+
+```bash
+curl --unix-socket "$KENDALL_SUPERVISOR_UDS_PATH" -sS --max-time 10 \
+  http://localhost/pipeline-control-plane/projection \
+  | jq -e '.data.coordinationHealth | select(. != null and .freshness == "fresh")'
+```
 
 Focused verification:
 
