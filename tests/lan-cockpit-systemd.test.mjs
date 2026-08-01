@@ -7,13 +7,15 @@ import { renderLanCockpitUnits } from "../scripts/lan-cockpit-systemd.mjs";
 import { assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveDashboardTlsPaths, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
 
 test("renders private-UDS authenticated Tailnet cockpit units", () => {
-  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net" });
+  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/home/kendall/kendall-lan-auth/dashboard-leaf.crt", keyPath: "/home/kendall/kendall-lan-auth/dashboard-leaf.key" });
   assert.match(units["kendall-lan-cockpit.target"], /WantedBy=default\.target/);
   assert.match(units["kendall-lan-cockpit.target"], /Conflicts=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-cockpit.target"], /Before=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_LAN_AUTH_DIR=%h\/kendall-lan-auth/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_UV_PATH=\/home\/kendall\/\.local\/bin\/uv/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=kendallvnxt-1\.tail045dec\.ts\.net/);
+  assert.match(units["kendall-lan-supervisor.service"], /KENDALL_DASHBOARD_TLS_CERT_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.crt/);
+  assert.match(units["kendall-lan-supervisor.service"], /KENDALL_DASHBOARD_TLS_KEY_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.key/);
   assert.match(units["kendall-lan-supervisor.service"], /PartOf=kendall-lan-cockpit\.target/);
   assert.match(units["kendall-lan-supervisor.service"], /lan-cockpit-runtime\.mjs supervisor/);
   assert.doesNotMatch(units["kendall-lan-supervisor.service"], /SUPERVISOR_PORT|0\.0\.0\.0/);
@@ -22,6 +24,8 @@ test("renders private-UDS authenticated Tailnet cockpit units", () => {
   assert.match(units["kendall-lan-dashboard.service"], /PartOf=kendall-lan-cockpit\.target/);
   assert.match(units["kendall-lan-dashboard.service"], /Requires=kendall-lan-supervisor\.service/);
   assert.match(units["kendall-lan-dashboard.service"], /BindsTo=kendall-lan-supervisor\.service/);
+  assert.match(units["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_TLS_CERT_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.crt/);
+  assert.match(units["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_TLS_KEY_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.key/);
   assert.doesNotMatch(units["kendall-lan-dashboard.service"], /NEXT_PUBLIC_SUPERVISOR_URL|SUPERVISOR_INTERNAL_URL/);
 });
 
@@ -30,6 +34,8 @@ test("Tailnet unit generation requires a hostname and explicit all-interface adm
   assert.throws(() => renderLanCockpitUnits(base), /canonical hostname/);
   assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces" }), /explicit approval/);
   assert.match(renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces", allowAllInterfaces: true })["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt" }), /configured together/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt\nEnvironment=UNSAFE", keyPath: "/private/dashboard-leaf.key" }), /cannot contain whitespace/);
 });
 
 test("Tailnet installer fences legacy port-3000 cockpit services and starts the supervisor through resolved uv", () => {

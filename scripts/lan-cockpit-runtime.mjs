@@ -126,17 +126,13 @@ export function resolveDashboardTlsPaths(environment, authDir) {
     const root = resolvePath(authDir);
     const candidate = resolvePath(configured);
     const segment = relative(root, candidate);
-    if (!segment || segment === ".." || segment.startsWith(`..${pathSeparator()}`)) fail(`${name} must be a distinct file inside the private LAN auth directory.`);
+    if (!segment || segment === ".." || segment.startsWith("../")) fail(`${name} must be a distinct file inside the private LAN auth directory.`);
     return candidate;
   };
   return {
     certificatePath: resolvePrivatePath("KENDALL_DASHBOARD_TLS_CERT_FILE", join(authDir, "dashboard.crt")),
     keyPath: resolvePrivatePath("KENDALL_DASHBOARD_TLS_KEY_FILE", join(authDir, "dashboard.key")),
   };
-}
-
-function pathSeparator() {
-  return process.platform === "win32" ? "\\" : "/";
 }
 
 export function lanCockpitEnvironment(environment = process.env, run = spawnSync) {

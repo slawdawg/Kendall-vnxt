@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeTailnetHostname } from "./lan-cockpit-runtime.mjs";
+import { normalizeTailnetHostname, resolveDashboardTlsPaths } from "./lan-cockpit-runtime.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const unitNames = {
@@ -20,12 +20,15 @@ const legacyCockpitUnits = [
   "kendall-lan-auth-dashboard.service",
 ];
 
-export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath, canonicalHostname, dashboardBindMode = "tailnet-ip", allowAllInterfaces = false }) {
+export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath, canonicalHostname, dashboardBindMode = "tailnet-ip", allowAllInterfaces = false, certificatePath, keyPath }) {
   const hostname = normalizeTailnetHostname(canonicalHostname);
   if (!["tailnet-ip", "all-interfaces"].includes(dashboardBindMode)) throw new Error("Kendall Tailnet cockpit bind mode is invalid.");
   if (dashboardBindMode === "all-interfaces" && !allowAllInterfaces) throw new Error("Kendall Tailnet cockpit all-interface bind requires explicit approval.");
+  if (Boolean(certificatePath) !== Boolean(keyPath)) throw new Error("Kendall Tailnet cockpit TLS certificate and key paths must be configured together.");
+  if ([certificatePath, keyPath].filter(Boolean).some((value) => /\s/.test(value))) throw new Error("Kendall Tailnet cockpit TLS paths cannot contain whitespace.");
   const authDir = "%h/kendall-lan-auth";
-  const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}\nEnvironment=KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=${hostname}\nEnvironment=KENDALL_DASHBOARD_BIND_MODE=${dashboardBindMode}${allowAllInterfaces ? "\nEnvironment=KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true" : ""}`;
+  const tlsEnvironment = certificatePath ? `\nEnvironment=KENDALL_DASHBOARD_TLS_CERT_FILE=${certificatePath}\nEnvironment=KENDALL_DASHBOARD_TLS_KEY_FILE=${keyPath}` : "";
+  const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}\nEnvironment=KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=${hostname}\nEnvironment=KENDALL_DASHBOARD_BIND_MODE=${dashboardBindMode}${allowAllInterfaces ? "\nEnvironment=KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true" : ""}${tlsEnvironment}`;
   const legacyUnitList = legacyCockpitUnits.join(" ");
   return {
     [unitNames.target]: `[Unit]\nDescription=Kendall authenticated Tailnet cockpit\nWants=${unitNames.supervisor} ${unitNames.dashboard}\nAfter=network-online.target\nConflicts=${legacyUnitList}\nBefore=${legacyUnitList}\n\n[Install]\nWantedBy=default.target\n`,
@@ -42,6 +45,11 @@ function commandPath(name) {
 
 function systemdDir() {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user");
+}
+
+function configuredTlsPaths(environment = process.env) {
+  const authDir = environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth");
+  return resolveDashboardTlsPaths(environment, authDir);
 }
 
 function run(args) {
@@ -72,6 +80,7 @@ function install() {
   const canonicalHostname = process.env.KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME;
   const dashboardBindMode = process.env.KENDALL_DASHBOARD_BIND_MODE || "tailnet-ip";
   const allowAllInterfaces = process.env.KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES === "true";
+  const { certificatePath, keyPath } = configuredTlsPaths();
   const units = renderLanCockpitUnits({
     repoRoot: rootDir,
     nodePath: process.execPath,
@@ -80,6 +89,8 @@ function install() {
     canonicalHostname,
     dashboardBindMode,
     allowAllInterfaces,
+    certificatePath,
+    keyPath,
   });
   execFileSync(process.execPath, ["scripts/lan-cockpit-runtime.mjs", "preflight"], { cwd: rootDir, stdio: "inherit", env: process.env });
   mkdirSync(systemdDir(), { recursive: true });
@@ -98,6 +109,7 @@ function main() {
     const canonicalHostname = process.env.KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME;
     const dashboardBindMode = process.env.KENDALL_DASHBOARD_BIND_MODE || "tailnet-ip";
     const allowAllInterfaces = process.env.KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES === "true";
+    const { certificatePath, keyPath } = configuredTlsPaths();
     const units = renderLanCockpitUnits({
       repoRoot: rootDir,
       nodePath: process.execPath,
@@ -106,6 +118,8 @@ function main() {
       canonicalHostname,
       dashboardBindMode,
       allowAllInterfaces,
+      certificatePath,
+      keyPath,
     });
     for (const [name, contents] of Object.entries(units)) console.log(`\n# ${name}\n${contents}`);
     return;
