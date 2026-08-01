@@ -642,6 +642,7 @@ function sleep(ms) {
 export async function runManagerRunLoop(options = parseCommonArgs(process.argv.slice(2)), context = {}) {
   const buildPreflightFn = context.buildPreflight || buildPreflight;
   const buildContinuousRunPlanFn = context.buildContinuousRunPlan || buildContinuousRunPlan;
+  const buildManagerCoordinationHealthFn = context.buildManagerCoordinationHealth || buildManagerCoordinationHealth;
   const buildRecoveryHousekeepingEvidenceRecordFn = context.buildRecoveryHousekeepingEvidenceRecord || buildRecoveryHousekeepingEvidenceRecord;
   const executeContinuousSelectedActionFn = context.executeContinuousSelectedAction || executeContinuousSelectedAction;
   const publishManagerCycleLaneClarityFn = context.publishManagerCycleLaneClarity || publishManagerCycleLaneClarity;
@@ -661,7 +662,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
         selectedAction: null,
       },
     );
-    writePacketFn({
+    const result = {
       ok: false,
       status: sandboxBoundary ? "known_sandbox_boundary" : "blocked",
       summary: {
@@ -676,7 +677,46 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
       },
       blockers: preflight.blockers,
       warnings: preflight.warnings,
-    }, options);
+    };
+    if (!sandboxBoundary) {
+      let coordinationHealth = null;
+      let publicationSandboxBoundary = null;
+      try {
+        coordinationHealth = buildManagerCoordinationHealthFn(options);
+        result.summary.coordinationHealth = coordinationHealth;
+      } catch (error) {
+        result.summary.coordinationHealthHandoff = unavailableCoordinationHealthHandoff();
+        publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
+      }
+      if (!publicationSandboxBoundary) {
+        try {
+          result.summary.laneClarityHandoff = await publishManagerCycleLaneClarityFn(
+            laneClarityPublicationSummary(preflight.summary),
+            options,
+            context.laneClarityPublicationContext || {},
+          );
+          publicationSandboxBoundary = publicationSandboxBoundaryFromReceipt(result.summary.laneClarityHandoff);
+        } catch (error) {
+          result.summary.laneClarityHandoff = unavailableLaneClarityHandoff();
+          publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
+        }
+      }
+      if (coordinationHealth && !publicationSandboxBoundary) {
+        try {
+          result.summary.coordinationHealthHandoff = await publishManagerCycleCoordinationHealthFn(
+            coordinationHealth,
+            options,
+            context.coordinationHealthPublicationContext || {},
+          );
+          publicationSandboxBoundary = publicationSandboxBoundaryFromReceipt(result.summary.coordinationHealthHandoff);
+        } catch (error) {
+          result.summary.coordinationHealthHandoff = unavailableCoordinationHealthHandoff();
+          publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
+        }
+      }
+      if (publicationSandboxBoundary) applyBlockedPreflightSandboxBoundary(result, publicationSandboxBoundary);
+    }
+    writePacketFn(result, options);
     process.exitCode = 1;
     return;
   }
@@ -749,7 +789,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
       : null;
     const selected = plan.summary?.selectedAction || null;
     const applySelected = plan.summary?.applySelectedAction || null;
-    const coordinationHealth = buildManagerCoordinationHealth(options);
+    const coordinationHealth = buildManagerCoordinationHealthFn(options);
     const result = {
       ok: plan.ok,
       status: plan.status,
@@ -887,6 +927,77 @@ function laneClarityPublicationSummary(summary = {}) {
     lastObservedAt: summary?.laneClarityObservedAt || summary?.lastObservedAt || null,
     selectedLaneId: summary?.selectedLaneId || null,
   };
+}
+
+function unavailableLaneClarityHandoff() {
+  return {
+    schemaVersion: "manager-cycle-lane-clarity-publication/v0",
+    state: "unavailable",
+    attemptCount: 0,
+    endpoint: null,
+    selectedLaneId: null,
+    sourceSequence: null,
+    handoffId: null,
+    idempotencyKey: null,
+    persisted: false,
+    failureCode: "blocked_preflight_readonly_publication_unavailable",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function unavailableCoordinationHealthHandoff() {
+  return {
+    schemaVersion: "manager-cycle-coordination-health-publication/v0",
+    state: "unavailable",
+    attemptCount: 0,
+    endpoint: null,
+    sourceSequence: null,
+    handoffId: null,
+    idempotencyKey: null,
+    persisted: false,
+    failureCode: "blocked_preflight_readonly_publication_unavailable",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function publicationSandboxBoundaryFromError(error) {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "");
+  if (![
+    "EACCES",
+    "EPERM",
+    "EROFS",
+  ].includes(code) && !/operation not permitted|permission denied|read-only file system|sandbox/i.test(message)) return null;
+  return {
+    boundary: true,
+    class: "sandbox",
+    signature: code || "known_sandbox_boundary",
+    command: currentInvocationCommand(),
+    safe_rerun: "exact_command_outside_sandbox_when_read_only",
+    mutation: "none",
+    next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+  };
+}
+
+function publicationSandboxBoundaryFromReceipt(receipt) {
+  if (receipt?.sandboxBoundary !== true) return null;
+  return {
+    boundary: true,
+    class: "sandbox",
+    signature: "private_uds_transport_sandbox_boundary",
+    command: currentInvocationCommand(),
+    safe_rerun: "exact_command_outside_sandbox_when_read_only",
+    mutation: "none",
+    next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+  };
+}
+
+function applyBlockedPreflightSandboxBoundary(result, boundary) {
+  result.status = "known_sandbox_boundary";
+  result.summary.stopReason = "known_sandbox_boundary";
+  result.summary.sandboxBoundaryPacket = boundary;
 }
 
 function firstSandboxBoundary(packet = {}) {

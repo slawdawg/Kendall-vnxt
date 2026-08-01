@@ -29,7 +29,7 @@ export async function publishManagerCycleCoordinationHealth(coordinationHealth, 
       return receipt("published", { attemptCount: attempt, endpoint, sourceSequence: request.sourceSequence, handoffId: request.handoffId, idempotencyKey: request.idempotencyKey, persisted: persisted?.handoffId === request.handoffId });
     } catch (error) {
       const failure = classifyFailure(error, privateUds);
-      if (!failure.retryable || attempt === MAX_ATTEMPTS) return receipt(failure.state, { attemptCount: attempt, endpoint, sourceSequence: request.sourceSequence, handoffId: request.handoffId, idempotencyKey: request.idempotencyKey, failureCode: failure.code });
+      if (!failure.retryable || attempt === MAX_ATTEMPTS) return receipt(failure.state, { attemptCount: attempt, endpoint, sourceSequence: request.sourceSequence, handoffId: request.handoffId, idempotencyKey: request.idempotencyKey, failureCode: failure.code, sandboxBoundary: failure.sandboxBoundary });
     }
   }
   return receipt("unavailable", { failureCode: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable" });
@@ -39,9 +39,20 @@ function classifyFailure(error, privateUds) {
   const message = String(error?.message || "");
   const status = Number(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1]);
   if ((Number.isInteger(status) && status >= 400 && status < 500) || /conflict|canonical|must be|requires/i.test(message)) return { state: "rejected", code: "supervisor_handoff_rejected", retryable: false };
-  return { state: "unavailable", code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable", retryable: true };
+  const sandboxBoundary = isSandboxBoundaryError(error);
+  return {
+    state: "unavailable",
+    code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable",
+    retryable: !sandboxBoundary,
+    sandboxBoundary,
+  };
 }
 
 function receipt(state, details = {}) {
-  return { schemaVersion: "manager-cycle-coordination-health-publication/v0", state, attemptCount: details.attemptCount || 0, endpoint: details.endpoint || null, sourceSequence: details.sourceSequence || null, handoffId: details.handoffId || null, idempotencyKey: details.idempotencyKey || null, persisted: details.persisted === true, failureCode: details.failureCode || null, metadataOnly: true, rawPayloadRetained: false };
+  return { schemaVersion: "manager-cycle-coordination-health-publication/v0", state, attemptCount: details.attemptCount || 0, endpoint: details.endpoint || null, sourceSequence: details.sourceSequence || null, handoffId: details.handoffId || null, idempotencyKey: details.idempotencyKey || null, persisted: details.persisted === true, failureCode: details.failureCode || null, sandboxBoundary: details.sandboxBoundary === true, metadataOnly: true, rawPayloadRetained: false };
+}
+
+function isSandboxBoundaryError(error) {
+  const code = String(error?.code || "").toUpperCase();
+  return ["EACCES", "EPERM", "EROFS"].includes(code) || /operation not permitted|permission denied|read-only file system|sandbox/i.test(String(error?.message || ""));
 }
