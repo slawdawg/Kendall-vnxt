@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 
 import { publishManagerCycleLaneClarity } from "../scripts/lib/manager-control-plane/manager-cycle-lane-clarity-publication.mjs";
+import { publishManagerCycleCoordinationHealth } from "../scripts/lib/manager-control-plane/manager-cycle-coordination-health-publication.mjs";
 import { runManagerRunLoop } from "../scripts/manager-run-loop.mjs";
 import { ledgerCommand } from "../scripts/lib/manager-control-plane/core.mjs";
 
@@ -27,6 +29,54 @@ function coherentSummary() {
     laneClarity,
     lastObservedAt: "2026-07-29T00:00:00.000Z",
   };
+}
+
+function coordinationHealth() {
+  return {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: "run:current",
+    observedAt: "2026-07-29T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "available",
+    activeWorkCount: 0,
+    staleOwnerTargetCount: 0,
+    staleOwnerProjectedCount: 0,
+    dirtyPreserveCount: 0,
+    missingWorktreeJournalHold: false,
+    nextSafeAction: "Continue the normal manager cycle.",
+    evidenceRefs: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+async function startPrivateHandoffSupervisor(socketPath) {
+  const records = new Map();
+  const requests = [];
+  const server = createServer((request, response) => {
+    const respond = (status, payload) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(payload));
+    };
+    if (request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const payload = JSON.parse(body);
+        records.set(payload.handoffId, payload);
+        requests.push({ method: request.method, url: request.url });
+        respond(200, { data: payload });
+      });
+      return;
+    }
+    requests.push({ method: request.method, url: request.url });
+    const handoffId = decodeURIComponent(String(request.url).split("/").at(-1));
+    const payload = records.get(handoffId);
+    respond(payload ? 200 : 404, { data: payload });
+  });
+  await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
+  return { server, requests };
 }
 
 test("cycle Lane Clarity publication is disabled by default without invoking transport", async () => {
@@ -108,6 +158,47 @@ test("cycle Lane Clarity publication leaves an unavailable summary local and doe
     sync: async () => { calls += 1; },
   });
   assert.equal(malformed.state, "unavailable");
+  assert.equal(calls, 0);
+});
+
+test("normal manager publication uses the configured private UDS for both handoffs and verifies exact readback", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "manager-private-handoff-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const { server, requests } = await startPrivateHandoffSupervisor(socketPath);
+  const context = {
+    supervisorTransport: "private_uds",
+    supervisorUdsPath: socketPath,
+    fetchImpl: () => { throw new Error("private UDS handoffs must not use fetch"); },
+  };
+  try {
+    const laneReceipt = await publishManagerCycleLaneClarity(coherentSummary(), {}, context);
+    const coordinationReceipt = await publishManagerCycleCoordinationHealth(coordinationHealth(), {}, context);
+    assert.equal(laneReceipt.state, "published");
+    assert.equal(laneReceipt.persisted, true);
+    assert.match(laneReceipt.endpoint, /^private-uds:/);
+    assert.equal(coordinationReceipt.state, "published");
+    assert.equal(coordinationReceipt.persisted, true);
+    assert.match(coordinationReceipt.endpoint, /^private-uds:/);
+    assert.deepEqual(requests.map(({ method, url }) => `${method} ${url}`), [
+      "POST /manager-control-plane/lane-clarity-handoffs",
+      `GET /manager-control-plane/lane-clarity-handoffs/${encodeURIComponent(laneReceipt.handoffId)}`,
+      "POST /manager-control-plane/coordination-health-handoffs",
+      `GET /manager-control-plane/coordination-health-handoffs/${encodeURIComponent(coordinationReceipt.handoffId)}`,
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("private UDS mode fails closed without a safe socket path", async () => {
+  let calls = 0;
+  const receipt = await publishManagerCycleCoordinationHealth(coordinationHealth(), {}, {
+    supervisorTransport: "private_uds",
+    sync: async () => { calls += 1; },
+  });
+  assert.equal(receipt.state, "rejected");
+  assert.equal(receipt.failureCode, "private_uds_transport_rejected");
   assert.equal(calls, 0);
 });
 

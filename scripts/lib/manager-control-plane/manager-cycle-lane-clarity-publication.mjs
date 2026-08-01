@@ -1,6 +1,6 @@
 import {
   buildManagerLaneClarityHandoffRequest,
-  resolveLoopbackLaneClarityHandoffEndpoint,
+  resolveLaneClarityHandoffTransport,
   syncManagerSupervisorLaneClarity,
 } from "./manager-supervisor-lane-clarity-sync.mjs";
 import { isSafeMetadataOnlyText } from "./forbidden-boundary.mjs";
@@ -9,13 +9,14 @@ const MAX_ATTEMPTS = 2;
 
 export async function publishManagerCycleLaneClarity(summary = {}, options = {}, context = {}) {
   const supervisorUrl = String(options.laneClaritySupervisorUrl || "").trim();
-  if (!supervisorUrl) return receipt("disabled");
+  const privateUds = (context.supervisorTransport ?? process.env.KENDALL_SUPERVISOR_TRANSPORT) === "private_uds";
+  if (!supervisorUrl && !privateUds) return receipt("disabled");
 
   let endpoint;
   try {
-    endpoint = resolveLoopbackLaneClarityHandoffEndpoint(supervisorUrl);
+    endpoint = resolveLaneClarityHandoffTransport(supervisorUrl, context).endpoint;
   } catch {
-    return receipt("rejected", { failureCode: "loopback_endpoint_rejected" });
+    return receipt("rejected", { failureCode: privateUds ? "private_uds_transport_rejected" : "loopback_endpoint_rejected" });
   }
 
   const requestContext = buildRequestContext(summary);
@@ -31,7 +32,7 @@ export async function publishManagerCycleLaneClarity(summary = {}, options = {},
   const sync = context.sync || syncManagerSupervisorLaneClarity;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      const persisted = await sync(summary, supervisorUrl, requestContext);
+      const persisted = await sync(summary, supervisorUrl, { ...context, ...requestContext });
       return receipt("published", {
         attemptCount: attempt,
         endpoint,
@@ -42,7 +43,7 @@ export async function publishManagerCycleLaneClarity(summary = {}, options = {},
         persisted: persisted?.handoffId === request.handoffId,
       });
     } catch (error) {
-      const failure = classifyFailure(error);
+      const failure = classifyFailure(error, privateUds);
       if (!failure.retryable || attempt === MAX_ATTEMPTS) {
         return receipt(failure.state, {
           attemptCount: attempt,
@@ -56,7 +57,7 @@ export async function publishManagerCycleLaneClarity(summary = {}, options = {},
       }
     }
   }
-  return receipt("unavailable", { failureCode: "loopback_transport_unavailable" });
+  return receipt("unavailable", { failureCode: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable" });
 }
 
 function buildRequestContext(summary = {}) {
@@ -106,13 +107,13 @@ function isCoherentCurrentLaneClarity(clarity = {}) {
       ["operator_drift_concern", "second_qualified_recovery_detour"].includes(posture.qualification)));
 }
 
-function classifyFailure(error) {
+function classifyFailure(error, privateUds) {
   const message = String(error?.message || "");
   const status = Number(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1]);
   if ((Number.isInteger(status) && status >= 400 && status < 500) || /conflict|canonical|must be|requires/i.test(message)) {
     return { state: "rejected", code: "supervisor_handoff_rejected", retryable: false };
   }
-  return { state: "unavailable", code: "loopback_transport_unavailable", retryable: true };
+  return { state: "unavailable", code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable", retryable: true };
 }
 
 function receipt(state, details = {}) {

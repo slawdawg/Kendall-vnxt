@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
+import { privateSupervisorUdsEndpoint, requestPrivateSupervisorUds, resolvePrivateSupervisorUdsPath } from "./private-supervisor-uds.mjs";
 import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 import {
   MANAGER_LANE_CLARITY_HANDOFF_ID_PATTERN,
@@ -21,6 +22,13 @@ export function deriveManagerLaneClarityHandoffId(idempotencyKey) {
 
 export function resolveLoopbackLaneClarityHandoffEndpoint(supervisorUrl) {
   return new URL(HANDOFF_PATH, parseLoopbackSupervisorUrl(supervisorUrl)).href;
+}
+
+export function resolveLaneClarityHandoffTransport(supervisorUrl, context = {}) {
+  const socketPath = resolvePrivateSupervisorUdsPath(context);
+  return socketPath
+    ? { kind: "private_uds", socketPath, endpoint: privateSupervisorUdsEndpoint(socketPath, HANDOFF_PATH) }
+    : { kind: "loopback", endpoint: resolveLoopbackLaneClarityHandoffEndpoint(supervisorUrl) };
 }
 
 export function buildManagerLaneClarityHandoffRequest(summary, context = {}) {
@@ -58,18 +66,24 @@ export function buildManagerLaneClarityHandoffRequest(summary, context = {}) {
 }
 
 export async function syncManagerSupervisorLaneClarity(summary, supervisorUrl, context = {}) {
-  const endpoint = resolveLoopbackLaneClarityHandoffEndpoint(supervisorUrl);
+  const transport = resolveLaneClarityHandoffTransport(supervisorUrl, context);
+  const endpoint = transport.endpoint;
   const request = buildManagerLaneClarityHandoffRequest(summary, context);
-  const fetchImpl = context.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") throw new TypeError("Lane clarity handoff requires a fetch implementation.");
   const timeoutMs = normalizeSupervisorTimeoutMs(context.timeoutMs);
-  const post = await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(request), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+  const fetchImpl = context.fetchImpl ?? globalThis.fetch;
+  if (transport.kind === "loopback" && typeof fetchImpl !== "function") throw new TypeError("Lane clarity handoff requires a fetch implementation.");
+  const post = transport.kind === "private_uds"
+    ? await requestPrivateSupervisorUds(transport.socketPath, HANDOFF_PATH, { method: "POST", body: request, timeoutMs })
+    : await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(request), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!post?.ok) throw new TypeError(`Lane clarity handoff failed with HTTP ${post?.status ?? "unknown"}.`);
   const receipt = (await post.json())?.data;
   if (!receipt || !sameRequestFields(request, receipt)) {
     throw new TypeError("Lane clarity handoff response conflicts with the submitted metadata.");
   }
-  const readback = await fetchImpl(`${endpoint}/${encodeURIComponent(request.handoffId)}`, { method: "GET", headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+  const readbackPath = `${HANDOFF_PATH}/${encodeURIComponent(request.handoffId)}`;
+  const readback = transport.kind === "private_uds"
+    ? await requestPrivateSupervisorUds(transport.socketPath, readbackPath, { method: "GET", timeoutMs })
+    : await fetchImpl(`${endpoint}/${encodeURIComponent(request.handoffId)}`, { method: "GET", headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!readback?.ok) throw new TypeError(`Lane clarity handoff readback failed with HTTP ${readback?.status ?? "unknown"}.`);
   const persisted = (await readback.json())?.data;
   if (!persisted || !sameRequestFields(request, persisted)) {
