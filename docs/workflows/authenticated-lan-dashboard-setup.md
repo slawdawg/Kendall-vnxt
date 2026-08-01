@@ -334,27 +334,42 @@ hostname, exact Host allow-list, and certificate DNS SAN remain mandatory.
 ### Tailnet address rotation, health proof, and controlled recovery
 
 When a Tailnet address changes, do not repeatedly restart the dashboard or
-edit its unit file. Re-run the same read-only preflight, then restart only if
-it passes:
+edit its unit file. `lan-cockpit:preflight` validates the configuration passed
+in its invoking shell; it does not inspect a running systemd service. Before a
+prospective rotation check, source or export the same canonical configuration
+used for installation, including the all-interface pair only when that is the
+installed bind mode:
 
 ```bash
 cd "$HOME/Kendall_Nxt"
+export AUTH_DIR="$HOME/kendall-lan-auth"
+export KENDALL_LAN_AUTH_DIR="$AUTH_DIR"
+export KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME="kendallvnxt-1.tail045dec.ts.net" # replace from tailscale status --json Self.DNSName, without the trailing dot
+export KENDALL_DASHBOARD_TLS_CERT_FILE="$AUTH_DIR/dashboard-leaf.crt"
+export KENDALL_DASHBOARD_TLS_KEY_FILE="$AUTH_DIR/dashboard-leaf.key"
+# Required only when the installed cockpit intentionally listens on every interface:
+export KENDALL_DASHBOARD_BIND_MODE=all-interfaces
+export KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true
 pnpm run lan-cockpit:preflight
 pnpm run lan-cockpit:restart
 pnpm run lan-cockpit:status
 ```
 
-Then verify the trusted HTTPS runtime proof and the private supervisor boundary.
-Do not pass `--insecure` in routine checks. Use exactly one trust path: a
-locally signed leaf uses the retained local CA; a `tailscale cert` leaf uses
-the system trust store because it is not issued by that local CA.
+For an installed-runtime audit, inspect the generated unit environment and
+prove the canonical URL through each intended interface. The URL stays on the
+canonical hostname; `--resolve` changes only the probe's address selection.
+Do not pass `--insecure` in routine checks.
 
 ```bash
 export TAILNET_HOST="$KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME"
-# Local CA-signed leaf only:
-curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
-# Tailscale-issued leaf only (system trust):
-curl --fail --silent --show-error "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
+export LAN_IPV4="192.168.1.8" # replace with the current LAN address
+export TAILNET_IPV4="$(tailscale ip -4)"
+systemctl --user show kendall-lan-supervisor.service kendall-lan-dashboard.service -p WorkingDirectory -p Environment --no-pager
+# Local CA-signed leaf only. The retained dashboard.crt is the trust root:
+curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" --resolve "${TAILNET_HOST}:3000:${LAN_IPV4}" "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
+curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" --resolve "${TAILNET_HOST}:3000:${TAILNET_IPV4}" "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
+# For a Tailscale-issued leaf, use the same two canonical-host --resolve probes
+# without --cacert so normal system trust validates its actual issuer.
 curl --fail --silent --show-error --unix-socket "$AUTH_DIR/supervisor.sock" http://localhost/internal/lan-auth/startup-gate
 ```
 
