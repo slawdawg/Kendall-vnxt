@@ -28,24 +28,48 @@ an alternate lifecycle model.
 
 ## Normal flow
 
-1. Run the normal manager continuous loop with its configured loopback
-   supervisor URL. The same cycle computes the canonical coordination snapshot,
-   posts it to `/manager-control-plane/coordination-health-handoffs`, and
-   verifies the exact supervisor GET readback.
-2. Open `http://localhost:3000/pipeline`. The dashboard receives only the
+1. Run the normal manager continuous loop. In ordinary local development it
+   uses the configured loopback supervisor URL. In authenticated LAN mode,
+   load the generated LAN runtime environment first; the same cycle detects
+   `KENDALL_SUPERVISOR_TRANSPORT=private_uds` and uses the configured private
+   `KENDALL_SUPERVISOR_UDS_PATH` instead. In either mode it computes the
+   canonical coordination snapshot, posts it to
+   `/manager-control-plane/coordination-health-handoffs`, and verifies the
+   exact supervisor GET readback.
+2. Open the configured dashboard origin (the installed LAN runtime exposes it
+   as `$KENDALL_DASHBOARD_ORIGIN/pipeline`). The dashboard receives only the
    supervisor projection and renders the peer panel.
 3. Follow its next safe action. Incomplete, dirty-preserve, or journal-hold
    states remain non-mutating until canonical manager evidence changes.
 
-The dashboard normally uses supervisor port `8000`. If it is unavailable, do
-not start a substitute service or treat the panel as current; restore the
-normal supervisor startup path, then publish a newer manager receipt.
+The dashboard normally uses supervisor port `8000` only in loopback development.
+In authenticated LAN mode, never open or restore a TCP supervisor listener:
+restore the existing private supervisor service and socket, then publish a
+newer manager receipt.
 
 ## Recovery and verification
 
 Use the manager's normal cycle to resend a newer canonical snapshot. Same-key
 replays are idempotent; a changed snapshot needs a newer source sequence. Do
-not edit supervisor data or bypass the loopback receipt/readback boundary.
+not edit supervisor data or bypass the configured receipt/readback boundary.
+
+For the installed authenticated LAN runtime, start a one-cycle recovery from
+the canonical checkout after loading the same private environment file used by
+the user services:
+
+```bash
+cd "$HOME/Kendall_Nxt"
+set -a
+. "${KENDALL_LAN_AUTH_ENV_FILE:-$HOME/kendall-lan-auth/lan-auth.env}"
+set +a
+node ./scripts/manager-run-loop.mjs --summary-json --once
+```
+
+The output must show both `laneClarityHandoff.state` and
+`coordinationHealthHandoff.state` as `published`, with `private-uds:` endpoints
+and `persisted: true`. A missing, unsafe, or unreachable socket is fail-closed;
+repair the private supervisor startup path rather than adding a loopback or
+LAN listener.
 
 Focused verification:
 

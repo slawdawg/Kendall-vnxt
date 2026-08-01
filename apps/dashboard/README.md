@@ -55,9 +55,11 @@ manager workspace-inventory receipt; it never scans worktrees or constructs a
 second tracker in the browser. Missing, stale, malformed, or unavailable
 receipts render as unavailable. See the [Coordination Health operator
 guide](../../docs/workflows/pipeline-coordination-health.md) for startup,
-recovery, holds, and focused verification. The normal supervisor port is 8000;
-if it is unavailable, restore that service rather than treating the panel as
-current or starting a substitute listener.
+recovery, holds, and focused verification. The normal supervisor port is 8000
+only for loopback development. In authenticated LAN mode, the manager cycle
+publishes the same receipt through the configured private UDS and verifies its
+readback; do not expose a substitute TCP listener or treat an unavailable
+receipt as current.
 
 ## Packet Detail Review route
 

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { parseLoopbackSupervisorUrl } from "./loopback-supervisor.mjs";
+import { privateSupervisorUdsEndpoint, requestPrivateSupervisorUds, resolvePrivateSupervisorUdsPath } from "./private-supervisor-uds.mjs";
 import { normalizeSupervisorTimeoutMs } from "./supervisor-timeout.mjs";
 import {
   MANAGER_COORDINATION_HEALTH_HANDOFF_ID_PATTERN,
@@ -21,6 +22,13 @@ export function deriveManagerCoordinationHealthHandoffId(idempotencyKey) {
 
 export function resolveLoopbackCoordinationHealthHandoffEndpoint(supervisorUrl) {
   return new URL(HANDOFF_PATH, parseLoopbackSupervisorUrl(supervisorUrl)).href;
+}
+
+export function resolveCoordinationHealthHandoffTransport(supervisorUrl, context = {}) {
+  const socketPath = resolvePrivateSupervisorUdsPath(context);
+  return socketPath
+    ? { kind: "private_uds", socketPath, endpoint: privateSupervisorUdsEndpoint(socketPath, HANDOFF_PATH) }
+    : { kind: "loopback", endpoint: resolveLoopbackCoordinationHealthHandoffEndpoint(supervisorUrl) };
 }
 
 export function buildManagerCoordinationHealthHandoffRequest(coordinationHealth, context = {}) {
@@ -50,16 +58,22 @@ function canonicalIdempotencyKey(runId, observedAt, sourceSequence) {
 }
 
 export async function syncManagerSupervisorCoordinationHealth(coordinationHealth, supervisorUrl, context = {}) {
-  const endpoint = resolveLoopbackCoordinationHealthHandoffEndpoint(supervisorUrl);
+  const transport = resolveCoordinationHealthHandoffTransport(supervisorUrl, context);
+  const endpoint = transport.endpoint;
   const request = buildManagerCoordinationHealthHandoffRequest(coordinationHealth, context);
-  const fetchImpl = context.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") throw new TypeError("Coordination health handoff requires a fetch implementation.");
   const timeoutMs = normalizeSupervisorTimeoutMs(context.timeoutMs);
-  const post = await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(request), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+  const fetchImpl = context.fetchImpl ?? globalThis.fetch;
+  if (transport.kind === "loopback" && typeof fetchImpl !== "function") throw new TypeError("Coordination health handoff requires a fetch implementation.");
+  const post = transport.kind === "private_uds"
+    ? await requestPrivateSupervisorUds(transport.socketPath, HANDOFF_PATH, { method: "POST", body: request, timeoutMs })
+    : await fetchImpl(endpoint, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(request), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!post?.ok) throw new TypeError(`Coordination health handoff failed with HTTP ${post?.status ?? "unknown"}.`);
   const receipt = (await post.json())?.data;
   if (!receipt || !sameRequestFields(request, receipt)) throw new TypeError("Coordination health handoff response conflicts with the submitted metadata.");
-  const readback = await fetchImpl(`${endpoint}/${encodeURIComponent(request.handoffId)}`, { method: "GET", headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+  const readbackPath = `${HANDOFF_PATH}/${encodeURIComponent(request.handoffId)}`;
+  const readback = transport.kind === "private_uds"
+    ? await requestPrivateSupervisorUds(transport.socketPath, readbackPath, { method: "GET", timeoutMs })
+    : await fetchImpl(`${endpoint}/${encodeURIComponent(request.handoffId)}`, { method: "GET", headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   if (!readback?.ok) throw new TypeError(`Coordination health handoff readback failed with HTTP ${readback?.status ?? "unknown"}.`);
   const persisted = (await readback.json())?.data;
   if (!persisted || !sameRequestFields(request, persisted)) throw new TypeError("Coordination health handoff readback conflicts with the submitted metadata.");
