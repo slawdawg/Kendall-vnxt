@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderLanCockpitUnits } from "../scripts/lan-cockpit-systemd.mjs";
-import { assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveDashboardTlsPaths, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
+import { assertDashboardKeyMatchesCertificate, assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveDashboardTlsPaths, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
 
 test("renders private-UDS authenticated Tailnet cockpit units", () => {
   const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/home/kendall/kendall-lan-auth/dashboard-leaf.crt", keyPath: "/home/kendall/kendall-lan-auth/dashboard-leaf.key" });
@@ -132,4 +132,19 @@ test("Tailnet runtime keeps the CA trust root separate from explicit private lea
   });
   assert.throws(() => resolveDashboardTlsPaths({ KENDALL_DASHBOARD_TLS_CERT_FILE: "/tmp/leaf.crt" }, authDir), /private LAN auth directory/);
   assert.throws(() => resolveDashboardTlsPaths({ KENDALL_DASHBOARD_TLS_KEY_FILE: authDir }, authDir), /distinct file/);
+});
+
+test("Tailnet preflight requires a private key that matches the selected leaf certificate", () => {
+  const authDir = mkdtempSync(join(tmpdir(), "kendall-tailnet-leaf-"));
+  chmodSync(authDir, 0o700);
+  const certificatePath = join(authDir, "dashboard-leaf.crt");
+  const keyPath = join(authDir, "dashboard-leaf.key");
+  writeFileSync(certificatePath, "certificate", { mode: 0o600 });
+  writeFileSync(keyPath, "private-key", { mode: 0o600 });
+  const loader = () => ({ publicKey: { export: () => Buffer.from("same-key") } });
+  const publicKeyForPrivate = () => ({ export: () => Buffer.from("same-key") });
+  assert.doesNotThrow(() => assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader: loader, privateKeyLoader: () => ({}), publicKeyForPrivate }));
+  assert.throws(() => assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader: loader, privateKeyLoader: () => ({}), publicKeyForPrivate: () => ({ export: () => Buffer.from("other-key") }) }), /does not match/);
+  chmodSync(keyPath, 0o644);
+  assert.throws(() => assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader: loader, privateKeyLoader: () => ({}), publicKeyForPrivate }), /ownership or permissions/);
 });

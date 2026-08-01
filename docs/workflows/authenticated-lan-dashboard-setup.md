@@ -345,11 +345,16 @@ pnpm run lan-cockpit:status
 ```
 
 Then verify the trusted HTTPS runtime proof and the private supervisor boundary.
-Do not pass `--insecure` in routine checks:
+Do not pass `--insecure` in routine checks. Use exactly one trust path: a
+locally signed leaf uses the retained local CA; a `tailscale cert` leaf uses
+the system trust store because it is not issued by that local CA.
 
 ```bash
 export TAILNET_HOST="$KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME"
+# Local CA-signed leaf only:
 curl --fail --silent --show-error --cacert "$AUTH_DIR/dashboard.crt" "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
+# Tailscale-issued leaf only (system trust):
+curl --fail --silent --show-error "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
 curl --fail --silent --show-error --unix-socket "$AUTH_DIR/supervisor.sock" http://localhost/internal/lan-auth/startup-gate
 ```
 
