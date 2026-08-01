@@ -239,10 +239,15 @@ async def enforce_private_lan_transport(request: Request, call_next):
 
 
 def request_has_local_operational_transport(request: Request) -> bool:
-    client_host = request.client.host if request.client else None
+    client = request.client
+    if client is None:
+        # Uvicorn exposes a UDS peer without a TCP client address.  Treat that
+        # shape as local only in the already-validated LAN private-UDS mode;
+        # an absent client on an ordinary ASGI request must not widen access.
+        return settings.lan_auth_enabled and settings.supervisor_transport == "private_uds"
     try:
-        return client_host is not None and ip_address(client_host).is_loopback
-    except ValueError:
+        return ip_address(client.host).is_loopback
+    except (TypeError, ValueError):
         return False
 
 
@@ -251,7 +256,7 @@ def require_local_operational_boundary(request: Request) -> None:
         raise HTTPException(
             status_code=403,
             detail=error_response(
-                "Operational approval and action endpoints require a loopback request.",
+                "Operational approval and action endpoints require a private UDS or loopback request.",
                 "local_operational_boundary_required",
             ).model_dump(),
         )
