@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, parseNumericLanBind, resolveDashboardRuntime } from "./secure-dashboard-runtime.mjs";
+import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, isAllowedDashboardHost, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, parseNumericLanBind, resolveCanonicalDashboardIdentity, resolveDashboardRuntime, runtimeHealthPayload } from "./secure-dashboard-runtime.mjs";
 
 test("LAN auth responses include HSTS while local HTTP stays unchanged", () => {
   const headers = new Map();
@@ -64,6 +64,52 @@ test("LAN auth validates private mandatory files and fixed UDS path", () => {
   assert.throws(() => resolveDashboardRuntime({ ...env, KENDALL_DASHBOARD_TLS_CERT_FILE: files[0] + "-missing" }), LanAuthConfigurationError);
   chmodSync(files[0], 0o644);
   assert.throws(() => resolveDashboardRuntime(env), LanAuthConfigurationError);
+});
+
+test("LAN auth exposes one configured canonical HTTPS identity and rejects arbitrary Host headers", () => {
+  const identity = resolveCanonicalDashboardIdentity({
+    KENDALL_DASHBOARD_ORIGIN: "https://kendallvnxt-1.tail045dec.ts.net:3000",
+    KENDALL_DASHBOARD_ALLOWED_HOST: "kendallvnxt-1.tail045dec.ts.net:3000",
+  }, 3000);
+  assert.deepEqual(identity, {
+    origin: "https://kendallvnxt-1.tail045dec.ts.net:3000",
+    allowedHost: "kendallvnxt-1.tail045dec.ts.net:3000",
+  });
+  assert.equal(isAllowedDashboardHost({ headers: { host: identity.allowedHost } }, identity), true);
+  assert.equal(isAllowedDashboardHost({ headers: { host: "attacker.invalid" } }, identity), false);
+  assert.deepEqual(resolveCanonicalDashboardIdentity({
+    KENDALL_DASHBOARD_ORIGIN: "https://[fd7a:115c:a1e0::9e3b:9a64]:3000",
+    KENDALL_DASHBOARD_ALLOWED_HOST: "[fd7a:115c:a1e0::9e3b:9a64]:3000",
+  }, 3000), {
+    origin: "https://[fd7a:115c:a1e0::9e3b:9a64]:3000",
+    allowedHost: "[fd7a:115c:a1e0::9e3b:9a64]:3000",
+  });
+  assert.throws(() => resolveCanonicalDashboardIdentity({
+    KENDALL_DASHBOARD_ORIGIN: "https://kendallvnxt-1.tail045dec.ts.net:3000",
+    KENDALL_DASHBOARD_ALLOWED_HOST: "other.tail045dec.ts.net:3000",
+  }, 3000), LanAuthConfigurationError);
+  assert.deepEqual(runtimeHealthPayload(identity, { KENDALL_DASHBOARD_RUNTIME_REVISION: "0139bc69" }), {
+    schemaVersion: "kendall-dashboard-runtime-health/v1",
+    state: "ready",
+    origin: "https://kendallvnxt-1.tail045dec.ts.net:3000",
+    revision: "0139bc69",
+  });
+});
+
+test("LAN auth permits all-interface binding only with an explicit safety switch", () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-lan-auth-all-interfaces-"));
+  chmodSync(directory, 0o700);
+  const files = ["cert", "key"].map((name) => join(directory, name));
+  for (const file of files) { writeFileSync(file, "private"); chmodSync(file, 0o600); }
+  const env = {
+    KENDALL_LAN_AUTH_ENABLED: "true",
+    KENDALL_DASHBOARD_BIND_ADDRESS: "0.0.0.0",
+    KENDALL_DASHBOARD_TLS_CERT_FILE: files[0],
+    KENDALL_DASHBOARD_TLS_KEY_FILE: files[1],
+    KENDALL_SUPERVISOR_UDS_PATH: "/run/kendall/supervisor.sock",
+  };
+  assert.throws(() => resolveDashboardRuntime(env), LanAuthConfigurationError);
+  assert.equal(resolveDashboardRuntime({ ...env, KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES: "true" }).host, "0.0.0.0");
 });
 
 test("LAN auth requires the supervisor-owned bootstrap startup gate over the fixed UDS", async () => {

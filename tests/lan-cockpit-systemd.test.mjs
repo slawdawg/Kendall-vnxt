@@ -4,15 +4,16 @@ import { test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderLanCockpitUnits } from "../scripts/lan-cockpit-systemd.mjs";
-import { assertTailnetOriginState, tailnetOriginStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState } from "../scripts/lan-cockpit-runtime.mjs";
+import { assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
 
 test("renders private-UDS authenticated Tailnet cockpit units", () => {
-  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv" });
+  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net" });
   assert.match(units["kendall-lan-cockpit.target"], /WantedBy=default\.target/);
   assert.match(units["kendall-lan-cockpit.target"], /Conflicts=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-cockpit.target"], /Before=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_LAN_AUTH_DIR=%h\/kendall-lan-auth/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_UV_PATH=\/home\/kendall\/\.local\/bin\/uv/);
+  assert.match(units["kendall-lan-supervisor.service"], /KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=kendallvnxt-1\.tail045dec\.ts\.net/);
   assert.match(units["kendall-lan-supervisor.service"], /PartOf=kendall-lan-cockpit\.target/);
   assert.match(units["kendall-lan-supervisor.service"], /lan-cockpit-runtime\.mjs supervisor/);
   assert.doesNotMatch(units["kendall-lan-supervisor.service"], /SUPERVISOR_PORT|0\.0\.0\.0/);
@@ -22,6 +23,13 @@ test("renders private-UDS authenticated Tailnet cockpit units", () => {
   assert.match(units["kendall-lan-dashboard.service"], /Requires=kendall-lan-supervisor\.service/);
   assert.match(units["kendall-lan-dashboard.service"], /BindsTo=kendall-lan-supervisor\.service/);
   assert.doesNotMatch(units["kendall-lan-dashboard.service"], /NEXT_PUBLIC_SUPERVISOR_URL|SUPERVISOR_INTERNAL_URL/);
+});
+
+test("Tailnet unit generation requires a hostname and explicit all-interface admission", () => {
+  const base = { repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv" };
+  assert.throws(() => renderLanCockpitUnits(base), /canonical hostname/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces" }), /explicit approval/);
+  assert.match(renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces", allowAllInterfaces: true })["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true/);
 });
 
 test("Tailnet installer fences legacy port-3000 cockpit services and starts the supervisor through resolved uv", () => {
@@ -71,4 +79,38 @@ test("records only the paired Tailnet origin with private file permissions", () 
   const statePath = tailnetOriginStatePath(authDir);
   assert.deepEqual(JSON.parse(readFileSync(statePath, "utf8")), { origin });
   assert.equal(statSync(statePath).mode & 0o777, 0o600);
+});
+
+test("canonical Tailnet hostname is explicit, node-bound, and certificate-gated", () => {
+  const run = (command, args) => {
+    assert.equal(command, "tailscale");
+    assert.deepEqual(args, ["status", "--json"]);
+    return { status: 0, stdout: JSON.stringify({ Self: { DNSName: "kendallvnxt-1.tail045dec.ts.net." } }) };
+  };
+  assert.equal(normalizeTailnetHostname("KENDALLVNXT-1.tail045dec.ts.net."), "kendallvnxt-1.tail045dec.ts.net");
+  assert.equal(resolveCanonicalTailnetHostname({ KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME: "kendallvnxt-1.tail045dec.ts.net" }, run), "kendallvnxt-1.tail045dec.ts.net");
+  assert.throws(() => resolveCanonicalTailnetHostname({ KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME: "other.tail045dec.ts.net" }, run), /does not match/);
+  assert.doesNotThrow(() => certificateCoversIdentity({ subjectAltName: "DNS:kendallvnxt-1.tail045dec.ts.net", checkHost: (host) => host }, "100.86.154.99", "kendallvnxt-1.tail045dec.ts.net"));
+  assert.throws(() => certificateCoversIdentity({ subjectAltName: "DNS:other.tail045dec.ts.net", checkHost: () => undefined }, "100.86.154.99", "kendallvnxt-1.tail045dec.ts.net"), /DNS SAN/);
+  assert.throws(() => certificateCoversIdentity({ subjectAltName: "", checkHost: (host) => host }, "100.86.154.99", "kendallvnxt-1.tail045dec.ts.net"), /DNS SAN/);
+});
+
+test("runtime bind and revision state are explicit and must match across the paired services", () => {
+  assert.equal(resolveDashboardBindAddress({}, "100.86.154.99"), "100.86.154.99");
+  assert.throws(() => resolveDashboardBindAddress({ KENDALL_DASHBOARD_BIND_MODE: "all-interfaces" }, "100.86.154.99"), /explicit/);
+  assert.equal(resolveDashboardBindAddress({ KENDALL_DASHBOARD_BIND_MODE: "all-interfaces", KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES: "true" }, "100.86.154.99"), "0.0.0.0");
+  assert.equal(resolveRuntimeRevision({ KENDALL_DASHBOARD_RUNTIME_REVISION: "0139bc69" }), "0139bc69");
+  const authDir = mkdtempSync(join(tmpdir(), "kendall-tailnet-runtime-"));
+  const state = {
+    schemaVersion: "kendall-tailnet-runtime/v1",
+    origin: "https://kendallvnxt-1.tail045dec.ts.net:3000",
+    allowedHost: "kendallvnxt-1.tail045dec.ts.net:3000",
+    revision: "0139bc69",
+    bindAddress: "100.86.154.99",
+  };
+  writeTailnetRuntimeState(authDir, state);
+  assert.equal(tailnetRuntimeStatePath(authDir), `${authDir}/tailnet-runtime.json`);
+  assert.doesNotThrow(() => assertTailnetRuntimeState(authDir, state));
+  assert.throws(() => assertTailnetRuntimeState(authDir, { ...state, revision: "different" }), /does not match/);
+  assert.equal(statSync(tailnetRuntimeStatePath(authDir)).mode & 0o777, 0o600);
 });

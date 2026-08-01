@@ -188,6 +188,53 @@ function formatDashboardHost(host, port) {
   return net.isIP(host) === 6 ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
+export function resolveCanonicalDashboardIdentity(environment, port) {
+  const origin = environment.KENDALL_DASHBOARD_ORIGIN;
+  const allowedHost = environment.KENDALL_DASHBOARD_ALLOWED_HOST;
+  if (typeof origin !== "string" || typeof allowedHost !== "string" || !origin || !allowedHost) {
+    fail("LAN auth requires a configured canonical dashboard origin and allowed host.");
+  }
+  if (/[\s/?#@\\]/.test(allowedHost)) fail("LAN auth allowed host is invalid.");
+  let parsed;
+  try { parsed = new URL(origin); } catch { fail("LAN auth dashboard origin is invalid."); }
+  if (
+    parsed.protocol !== "https:"
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== "/"
+    || parsed.search
+    || parsed.hash
+    || parsed.host !== allowedHost.toLowerCase()
+    || parsed.port !== (String(port) === "443" ? "" : String(port))
+  ) {
+    fail("LAN auth dashboard origin and allowed host must be one canonical HTTPS identity.");
+  }
+  return { origin: parsed.origin, allowedHost: parsed.host };
+}
+
+export function isAllowedDashboardHost(request, identity) {
+  return typeof request.headers.host === "string" && request.headers.host.toLowerCase() === identity.allowedHost;
+}
+
+export function runtimeHealthPayload(identity, environment = process.env) {
+  return {
+    schemaVersion: "kendall-dashboard-runtime-health/v1",
+    state: "ready",
+    origin: identity.origin,
+    revision: environment.KENDALL_DASHBOARD_RUNTIME_REVISION || "unversioned",
+  };
+}
+
+function sendJson(response, statusCode, payload) {
+  const body = JSON.stringify(payload);
+  response.writeHead(statusCode, {
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+  });
+  response.end(body);
+}
+
 function validatePrivateDirectory(value) {
   let current = path.dirname(value);
   while (true) {
@@ -247,7 +294,10 @@ export function resolveDashboardRuntime(environment = process.env) {
     const containerBind = environment.KENDALL_DASHBOARD_CONTAINER_MODE === "true" && environment.KENDALL_DASHBOARD_HOST === "0.0.0.0";
     return { lanAuthEnabled: false, host: containerBind ? "0.0.0.0" : "127.0.0.1", protocol: "http" };
   }
-  const bindAddress = parseNumericLanBind(environment.KENDALL_DASHBOARD_BIND_ADDRESS);
+  const allInterfaces = environment.KENDALL_DASHBOARD_BIND_ADDRESS === "0.0.0.0";
+  const bindAddress = allInterfaces
+    ? (environment.KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES === "true" ? "0.0.0.0" : fail("LAN auth all-interface bind requires explicit KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true."))
+    : parseNumericLanBind(environment.KENDALL_DASHBOARD_BIND_ADDRESS);
   const certificate = validatePrivateFile(environment.KENDALL_DASHBOARD_TLS_CERT_FILE, "certificate file");
   const key = validatePrivateFile(environment.KENDALL_DASHBOARD_TLS_KEY_FILE, "key file");
   if (!path.isAbsolute(environment.KENDALL_SUPERVISOR_UDS_PATH || "")) fail("LAN auth requires the fixed supervisor UDS path.");
@@ -293,6 +343,7 @@ async function main() {
   if (!/^\d+$/.test(rawPort)) fail("Dashboard port is invalid.");
   const port = Number(rawPort);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) fail("Dashboard port is invalid.");
+  const identity = config.lanAuthEnabled ? resolveCanonicalDashboardIdentity(process.env, port) : null;
   const { server } = createDashboardServer(() => {}, process.env);
   const dashboard = next({ dev: process.argv.includes("--dev") });
   await dashboard.prepare();
@@ -313,6 +364,14 @@ async function main() {
   const nextHandler = dashboard.getRequestHandler();
   server.on("request", async (request, response) => {
     applyLanAuthSecurityHeaders(response, config);
+    if (identity && !isAllowedDashboardHost(request, identity)) {
+      sendJson(response, 421, { state: "unavailable" });
+      return;
+    }
+    if (identity && request.method === "GET" && request.url === "/_kendall/runtime-health") {
+      sendJson(response, 200, runtimeHealthPayload(identity));
+      return;
+    }
     if (mediator && await mediator(request, response)) return;
     if (authProxy && await authProxy(request, response)) return;
     if (supervisorProxy && await supervisorProxy(request, response)) return;
