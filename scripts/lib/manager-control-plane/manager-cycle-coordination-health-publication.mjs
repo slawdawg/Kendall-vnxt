@@ -39,7 +39,7 @@ function classifyFailure(error, privateUds) {
   const message = String(error?.message || "");
   const status = Number(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1]);
   if ((Number.isInteger(status) && status >= 400 && status < 500) || /conflict|canonical|must be|requires/i.test(message)) return { state: "rejected", code: "supervisor_handoff_rejected", retryable: false };
-  const sandboxBoundary = privateUds && isSandboxBoundaryError(error);
+  const sandboxBoundary = isSandboxBoundaryError(error);
   return {
     state: "unavailable",
     code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable",

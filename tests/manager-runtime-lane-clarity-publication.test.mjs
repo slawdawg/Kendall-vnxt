@@ -225,6 +225,25 @@ test("private UDS publication marks socket permission failures as sandbox bounda
   assert.equal(healthCalls, 1);
 });
 
+test("loopback publication marks socket permission failures as sandbox boundaries", async () => {
+  const permissionError = new Error("connect: operation not permitted");
+  permissionError.code = "EPERM";
+  let laneCalls = 0;
+  let healthCalls = 0;
+  const laneReceipt = await publishManagerCycleLaneClarity(coherentSummary(), { laneClaritySupervisorUrl: "http://127.0.0.1:8000" }, {
+    sync: async () => { laneCalls += 1; throw permissionError; },
+  });
+  const healthReceipt = await publishManagerCycleCoordinationHealth(coordinationHealth(), { laneClaritySupervisorUrl: "http://127.0.0.1:8000" }, {
+    sync: async () => { healthCalls += 1; throw permissionError; },
+  });
+  assert.equal(laneReceipt.state, "unavailable");
+  assert.equal(laneReceipt.sandboxBoundary, true);
+  assert.equal(laneCalls, 1);
+  assert.equal(healthReceipt.state, "unavailable");
+  assert.equal(healthReceipt.sandboxBoundary, true);
+  assert.equal(healthCalls, 1);
+});
+
 test("normal manager cycle publishes only after its coherent plan completes", async () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-runtime-lane-clarity-"));
   try {

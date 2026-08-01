@@ -114,7 +114,7 @@ function classifyFailure(error, privateUds) {
   if ((Number.isInteger(status) && status >= 400 && status < 500) || /conflict|canonical|must be|requires/i.test(message)) {
     return { state: "rejected", code: "supervisor_handoff_rejected", retryable: false };
   }
-  const sandboxBoundary = privateUds && isSandboxBoundaryError(error);
+  const sandboxBoundary = isSandboxBoundaryError(error);
   return {
     state: "unavailable",
     code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable",
