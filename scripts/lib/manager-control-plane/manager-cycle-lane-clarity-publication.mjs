@@ -53,6 +53,7 @@ export async function publishManagerCycleLaneClarity(summary = {}, options = {},
           handoffId: request.handoffId,
           idempotencyKey: request.idempotencyKey,
           failureCode: failure.code,
+          sandboxBoundary: failure.sandboxBoundary,
         });
       }
     }
@@ -113,7 +114,13 @@ function classifyFailure(error, privateUds) {
   if ((Number.isInteger(status) && status >= 400 && status < 500) || /conflict|canonical|must be|requires/i.test(message)) {
     return { state: "rejected", code: "supervisor_handoff_rejected", retryable: false };
   }
-  return { state: "unavailable", code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable", retryable: true };
+  const sandboxBoundary = privateUds && isSandboxBoundaryError(error);
+  return {
+    state: "unavailable",
+    code: privateUds ? "private_uds_transport_unavailable" : "loopback_transport_unavailable",
+    retryable: !sandboxBoundary,
+    sandboxBoundary,
+  };
 }
 
 function receipt(state, details = {}) {
@@ -128,9 +135,15 @@ function receipt(state, details = {}) {
     idempotencyKey: details.idempotencyKey || null,
     persisted: details.persisted === true,
     failureCode: details.failureCode || null,
+    sandboxBoundary: details.sandboxBoundary === true,
     metadataOnly: true,
     rawPayloadRetained: false,
   };
+}
+
+function isSandboxBoundaryError(error) {
+  const code = String(error?.code || "").toUpperCase();
+  return ["EACCES", "EPERM", "EROFS"].includes(code) || /operation not permitted|permission denied|read-only file system|sandbox/i.test(String(error?.message || ""));
 }
 
 function text(value, maxLength) {

@@ -202,6 +202,29 @@ test("private UDS mode fails closed without a safe socket path", async () => {
   assert.equal(calls, 0);
 });
 
+test("private UDS publication marks socket permission failures as sandbox boundaries", async () => {
+  const permissionError = new Error("connect: operation not permitted");
+  permissionError.code = "EPERM";
+  let laneCalls = 0;
+  let healthCalls = 0;
+  const laneReceipt = await publishManagerCycleLaneClarity(coherentSummary(), {}, {
+    supervisorTransport: "private_uds",
+    supervisorUdsPath: "/private/supervisor.sock",
+    sync: async () => { laneCalls += 1; throw permissionError; },
+  });
+  const healthReceipt = await publishManagerCycleCoordinationHealth(coordinationHealth(), {}, {
+    supervisorTransport: "private_uds",
+    supervisorUdsPath: "/private/supervisor.sock",
+    sync: async () => { healthCalls += 1; throw permissionError; },
+  });
+  assert.equal(laneReceipt.state, "unavailable");
+  assert.equal(laneReceipt.sandboxBoundary, true);
+  assert.equal(laneCalls, 1);
+  assert.equal(healthReceipt.state, "unavailable");
+  assert.equal(healthReceipt.sandboxBoundary, true);
+  assert.equal(healthCalls, 1);
+});
+
 test("normal manager cycle publishes only after its coherent plan completes", async () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-runtime-lane-clarity-"));
   try {
@@ -364,11 +387,7 @@ test("blocked manager preflight classifies a read-only publication sandbox bound
       {
         buildPreflight: () => ({ ok: false, status: "blocked", summary: {}, blockers: [], warnings: [] }),
         buildManagerCoordinationHealth: () => coordinationHealth(),
-        publishManagerCycleLaneClarity: async () => {
-          const error = new Error("connect: operation not permitted");
-          error.code = "EPERM";
-          throw error;
-        },
+        publishManagerCycleLaneClarity: async () => ({ state: "unavailable", sandboxBoundary: true, metadataOnly: true, rawPayloadRetained: false }),
         publishManagerCycleCoordinationHealth: async () => { throw new Error("peer handoff must not retry after sandbox boundary"); },
         writePacket: (packet) => packets.push(packet),
       },

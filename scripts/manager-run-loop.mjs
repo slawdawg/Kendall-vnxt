@@ -695,6 +695,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
             options,
             context.laneClarityPublicationContext || {},
           );
+          publicationSandboxBoundary = publicationSandboxBoundaryFromReceipt(result.summary.laneClarityHandoff);
         } catch (error) {
           result.summary.laneClarityHandoff = unavailableLaneClarityHandoff();
           publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
@@ -707,6 +708,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
             options,
             context.coordinationHealthPublicationContext || {},
           );
+          publicationSandboxBoundary = publicationSandboxBoundaryFromReceipt(result.summary.coordinationHealthHandoff);
         } catch (error) {
           result.summary.coordinationHealthHandoff = unavailableCoordinationHealthHandoff();
           publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
@@ -972,6 +974,19 @@ function publicationSandboxBoundaryFromError(error) {
     boundary: true,
     class: "sandbox",
     signature: code || "known_sandbox_boundary",
+    command: currentInvocationCommand(),
+    safe_rerun: "exact_command_outside_sandbox_when_read_only",
+    mutation: "none",
+    next_action: "Request approval to rerun the exact same read-only manager command outside the sandbox once.",
+  };
+}
+
+function publicationSandboxBoundaryFromReceipt(receipt) {
+  if (receipt?.sandboxBoundary !== true) return null;
+  return {
+    boundary: true,
+    class: "sandbox",
+    signature: "private_uds_transport_sandbox_boundary",
     command: currentInvocationCommand(),
     safe_rerun: "exact_command_outside_sandbox_when_read_only",
     mutation: "none",
