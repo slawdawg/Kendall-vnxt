@@ -50,8 +50,13 @@ newer manager receipt.
 ## Recovery and verification
 
 Use the manager's normal cycle to resend a newer canonical snapshot. Same-key
-replays are idempotent; a changed snapshot needs a newer source sequence. Do
-not edit supervisor data or bypass the configured receipt/readback boundary.
+replays are idempotent; a changed snapshot needs a newer source sequence. An
+ordinary manager preflight hold still republishes its read-only
+`manager_workspace_inventory` Coordination Health receipt (and coherent Lane
+Clarity when available) before returning the same blocked, non-mutating result.
+This makes current blocked, idle, or stale-owner evidence visible; it does not
+authorize dispatch, takeover, cleanup, or any other manager mutation. Do not
+edit supervisor data or bypass the configured receipt/readback boundary.
 
 For the installed authenticated LAN runtime, start a one-cycle recovery from
 the canonical checkout after loading the same private environment file used by
@@ -65,9 +70,11 @@ set +a
 node ./scripts/manager-run-loop.mjs --summary-json --once
 ```
 
-The output must show both `laneClarityHandoff.state` and
-`coordinationHealthHandoff.state` as `published`, with `private-uds:` endpoints
-and `persisted: true`. A missing, unsafe, or unreachable socket is fail-closed;
+The output must show `coordinationHealthHandoff.state` as `published`, with a
+`private-uds:` endpoint and `persisted: true`. `laneClarityHandoff` is
+`published` only when the cycle has a coherent canonical Lane Clarity summary;
+otherwise it remains explicitly `unavailable` and does not invent or post a
+replacement summary. A missing, unsafe, or unreachable socket is fail-closed;
 repair the private supervisor startup path rather than adding a loopback or
 LAN listener.
 

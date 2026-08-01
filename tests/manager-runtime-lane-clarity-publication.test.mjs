@@ -238,3 +238,177 @@ test("normal manager cycle publishes only after its coherent plan completes", as
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test("blocked manager preflight preserves and publishes a coherent preflight lane summary without selecting mutation", async () => {
+  const packets = [];
+  const published = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { maxIterations: 1, heartbeatEvery: 1, laneClaritySupervisorUrl: "http://127.0.0.1:8100" },
+      {
+        buildPreflight: () => ({
+          ok: false,
+          status: "blocked",
+          summary: { managerExecutionLaneSummary: coherentSummary() },
+          blockers: [{ code: "no-dispatchable-lane", message: "No lane is eligible.", nextAction: "Keep mutation blocked." }],
+          warnings: [],
+        }),
+        buildContinuousRunPlan: () => { throw new Error("blocked preflight must not select a manager plan"); },
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async (summary) => {
+          published.push({ kind: "lane", summary });
+          return { state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false };
+        },
+        publishManagerCycleCoordinationHealth: async (health) => {
+          published.push({ kind: "health", health });
+          return { state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false };
+        },
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.deepEqual(published.map(({ kind }) => kind), ["lane", "health"]);
+    assert.equal(published[0].summary.laneClarity, laneClarity);
+    assert.equal(published[1].health.source, "manager_workspace_inventory");
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].ok, false);
+    assert.equal(packets[0].status, "blocked");
+    assert.equal(packets[0].summary.stopReason, "preflight_blocked");
+    assert.equal(packets[0].summary.laneClarityHandoff.state, "published");
+    assert.equal(packets[0].summary.coordinationHealthHandoff.state, "published");
+    assert.deepEqual(packets[0].blockers, [{ code: "no-dispatchable-lane", message: "No lane is eligible.", nextAction: "Keep mutation blocked." }]);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("blocked manager preflight keeps incoherent lane clarity unavailable without fabricating it", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { maxIterations: 1, heartbeatEvery: 1, laneClaritySupervisorUrl: "http://127.0.0.1:8100" },
+      {
+        buildPreflight: () => ({ ok: false, status: "blocked", summary: {}, blockers: [], warnings: [] }),
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async (summary) => {
+          assert.equal(summary.laneClarity, null);
+          return { state: "unavailable", failureCode: "coherent_lane_clarity_unavailable", metadataOnly: true, rawPayloadRetained: false };
+        },
+        publishManagerCycleCoordinationHealth: async () => ({ state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false }),
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(packets[0].status, "blocked");
+    assert.equal(packets[0].summary.laneClarityHandoff.state, "unavailable");
+    assert.equal(packets[0].summary.coordinationHealthHandoff.state, "published");
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("blocked manager preflight records unavailable handoffs when read-only publication fails", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { maxIterations: 1, heartbeatEvery: 1, laneClaritySupervisorUrl: "http://127.0.0.1:8100" },
+      {
+        buildPreflight: () => ({ ok: false, status: "blocked", summary: {}, blockers: [], warnings: [] }),
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async () => { throw new Error("lane handoff unavailable"); },
+        publishManagerCycleCoordinationHealth: async () => { throw new Error("health handoff unavailable"); },
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].status, "blocked");
+    assert.equal(packets[0].summary.laneClarityHandoff.state, "unavailable");
+    assert.equal(packets[0].summary.coordinationHealthHandoff.state, "unavailable");
+    assert.equal(packets[0].summary.coordinationHealthHandoff.failureCode, "blocked_preflight_readonly_publication_unavailable");
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("blocked manager preflight writes its packet when canonical health cannot be derived", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { maxIterations: 1, heartbeatEvery: 1, laneClaritySupervisorUrl: "http://127.0.0.1:8100" },
+      {
+        buildPreflight: () => ({ ok: false, status: "blocked", summary: {}, blockers: [], warnings: [] }),
+        buildManagerCoordinationHealth: () => { throw new Error("inventory unavailable"); },
+        publishManagerCycleLaneClarity: async () => ({ state: "unavailable", metadataOnly: true, rawPayloadRetained: false }),
+        publishManagerCycleCoordinationHealth: async () => { throw new Error("health publication must not run without canonical health"); },
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].status, "blocked");
+    assert.equal(packets[0].summary.coordinationHealth, undefined);
+    assert.equal(packets[0].summary.coordinationHealthHandoff.state, "unavailable");
+    assert.equal(packets[0].summary.coordinationHealthHandoff.failureCode, "blocked_preflight_readonly_publication_unavailable");
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("blocked manager preflight classifies a read-only publication sandbox boundary without retrying its peer handoff", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { maxIterations: 1, heartbeatEvery: 1, laneClaritySupervisorUrl: "http://127.0.0.1:8100" },
+      {
+        buildPreflight: () => ({ ok: false, status: "blocked", summary: {}, blockers: [], warnings: [] }),
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async () => {
+          const error = new Error("connect: operation not permitted");
+          error.code = "EPERM";
+          throw error;
+        },
+        publishManagerCycleCoordinationHealth: async () => { throw new Error("peer handoff must not retry after sandbox boundary"); },
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].status, "known_sandbox_boundary");
+    assert.equal(packets[0].summary.stopReason, "known_sandbox_boundary");
+    assert.equal(packets[0].summary.sandboxBoundaryPacket.boundary, true);
+    assert.equal(packets[0].summary.laneClarityHandoff.state, "unavailable");
+    assert.equal(packets[0].summary.coordinationHealthHandoff, undefined);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("sandbox-boundary preflight remains a no-publication stop", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { maxIterations: 1, heartbeatEvery: 1 },
+      {
+        buildPreflight: () => ({
+          ok: false,
+          status: "blocked",
+          summary: {},
+          blockers: [{ sandboxBoundary: true, nextAction: "Use the exact approved outside-sandbox command." }],
+          warnings: [],
+        }),
+        buildManagerCoordinationHealth: () => { throw new Error("sandbox boundary must not derive health"); },
+        publishManagerCycleLaneClarity: async () => { throw new Error("sandbox boundary must not publish lane clarity"); },
+        publishManagerCycleCoordinationHealth: async () => { throw new Error("sandbox boundary must not publish health"); },
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].status, "known_sandbox_boundary");
+    assert.equal(packets[0].summary.laneClarityHandoff, undefined);
+    assert.equal(packets[0].summary.coordinationHealthHandoff, undefined);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
