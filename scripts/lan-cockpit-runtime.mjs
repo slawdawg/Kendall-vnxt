@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { homedir } from "node:os";
 import { isIP } from "node:net";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 
 function fail(message) {
   throw new Error(`Kendall LAN cockpit: ${message}`);
@@ -119,11 +119,31 @@ export function resolveRuntimeRevision(environment = process.env, run = spawnSyn
   return revision.toLowerCase();
 }
 
+export function resolveDashboardTlsPaths(environment, authDir) {
+  const resolvePrivatePath = (name, fallback) => {
+    const configured = environment[name] || fallback;
+    if (!isAbsolute(configured)) fail(`${name} must be an absolute path inside the private LAN auth directory.`);
+    const root = resolvePath(authDir);
+    const candidate = resolvePath(configured);
+    const segment = relative(root, candidate);
+    if (!segment || segment === ".." || segment.startsWith(`..${pathSeparator()}`)) fail(`${name} must be a distinct file inside the private LAN auth directory.`);
+    return candidate;
+  };
+  return {
+    certificatePath: resolvePrivatePath("KENDALL_DASHBOARD_TLS_CERT_FILE", join(authDir, "dashboard.crt")),
+    keyPath: resolvePrivatePath("KENDALL_DASHBOARD_TLS_KEY_FILE", join(authDir, "dashboard.key")),
+  };
+}
+
+function pathSeparator() {
+  return process.platform === "win32" ? "\\" : "/";
+}
+
 export function lanCockpitEnvironment(environment = process.env, run = spawnSync) {
   const authDir = environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth");
   const address = resolveTailnetIpv4(run);
   const hostname = resolveCanonicalTailnetHostname(environment, run);
-  const certificatePath = join(authDir, "dashboard.crt");
+  const { certificatePath, keyPath } = resolveDashboardTlsPaths(environment, authDir);
   assertCertificateMatchesIdentity(certificatePath, address, hostname);
   const bindAddress = resolveDashboardBindAddress(environment, address);
   const rawPort = environment.KENDALL_DASHBOARD_PORT || "3000";
@@ -144,7 +164,7 @@ export function lanCockpitEnvironment(environment = process.env, run = spawnSync
     KENDALL_DASHBOARD_BIND_ADDRESS: bindAddress,
     KENDALL_DASHBOARD_PORT: port,
     KENDALL_DASHBOARD_TLS_CERT_FILE: certificatePath,
-    KENDALL_DASHBOARD_TLS_KEY_FILE: join(authDir, "dashboard.key"),
+    KENDALL_DASHBOARD_TLS_KEY_FILE: keyPath,
     KENDALL_DASHBOARD_ORIGIN: origin,
     KENDALL_DASHBOARD_ALLOWED_HOST: allowedHost,
     KENDALL_DASHBOARD_RUNTIME_REVISION: revision,

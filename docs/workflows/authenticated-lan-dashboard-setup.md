@@ -291,10 +291,14 @@ not do it if that disclosure is unacceptable in your environment.
 export AUTH_DIR="$HOME/kendall-lan-auth"
 export KENDALL_LAN_AUTH_DIR="$AUTH_DIR"
 export KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME="kendallvnxt-1.tail045dec.ts.net" # replace from tailscale status --json Self.DNSName, without the trailing dot
-# After Tailnet HTTPS is enabled, issue/install a certificate whose DNS SAN
-# covers the configured hostname.
-tailscale cert --cert-file "$AUTH_DIR/dashboard.crt" --key-file "$AUTH_DIR/dashboard.key" "$KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME"
-chmod 600 "$AUTH_DIR/dashboard.crt" "$AUTH_DIR/dashboard.key"
+# Keep dashboard.crt/dashboard.key as the existing private CA trust root. The
+# active dashboard must use a separate least-privilege leaf pair.
+export KENDALL_DASHBOARD_TLS_CERT_FILE="$AUTH_DIR/dashboard-leaf.crt"
+export KENDALL_DASHBOARD_TLS_KEY_FILE="$AUTH_DIR/dashboard-leaf.key"
+# After Tailnet HTTPS is enabled, issue/install a leaf whose DNS SAN covers the
+# configured hostname at the two leaf paths above. Do not replace the CA files.
+tailscale cert --cert-file "$KENDALL_DASHBOARD_TLS_CERT_FILE" --key-file "$KENDALL_DASHBOARD_TLS_KEY_FILE" "$KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME"
+chmod 600 "$KENDALL_DASHBOARD_TLS_CERT_FILE" "$KENDALL_DASHBOARD_TLS_KEY_FILE"
 
 # Read-only: proves current node identity, certificate DNS SAN, canonical
 # origin, and source revision before any unit is written or stopped.

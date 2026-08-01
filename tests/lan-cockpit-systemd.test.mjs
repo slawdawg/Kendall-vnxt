@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderLanCockpitUnits } from "../scripts/lan-cockpit-systemd.mjs";
-import { assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
+import { assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveDashboardTlsPaths, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
 
 test("renders private-UDS authenticated Tailnet cockpit units", () => {
   const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net" });
@@ -113,4 +113,17 @@ test("runtime bind and revision state are explicit and must match across the pai
   assert.doesNotThrow(() => assertTailnetRuntimeState(authDir, state));
   assert.throws(() => assertTailnetRuntimeState(authDir, { ...state, revision: "different" }), /does not match/);
   assert.equal(statSync(tailnetRuntimeStatePath(authDir)).mode & 0o777, 0o600);
+});
+
+test("Tailnet runtime keeps the CA trust root separate from explicit private leaf paths", () => {
+  const authDir = "/private/kendall-lan-auth";
+  assert.deepEqual(resolveDashboardTlsPaths({
+    KENDALL_DASHBOARD_TLS_CERT_FILE: `${authDir}/dashboard-leaf.crt`,
+    KENDALL_DASHBOARD_TLS_KEY_FILE: `${authDir}/dashboard-leaf.key`,
+  }, authDir), {
+    certificatePath: `${authDir}/dashboard-leaf.crt`,
+    keyPath: `${authDir}/dashboard-leaf.key`,
+  });
+  assert.throws(() => resolveDashboardTlsPaths({ KENDALL_DASHBOARD_TLS_CERT_FILE: "/tmp/leaf.crt" }, authDir), /private LAN auth directory/);
+  assert.throws(() => resolveDashboardTlsPaths({ KENDALL_DASHBOARD_TLS_KEY_FILE: authDir }, authDir), /distinct file/);
 });
