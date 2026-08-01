@@ -25,7 +25,7 @@ export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath, ca
   if (!["tailnet-ip", "all-interfaces"].includes(dashboardBindMode)) throw new Error("Kendall Tailnet cockpit bind mode is invalid.");
   if (dashboardBindMode === "all-interfaces" && !allowAllInterfaces) throw new Error("Kendall Tailnet cockpit all-interface bind requires explicit approval.");
   if (Boolean(certificatePath) !== Boolean(keyPath)) throw new Error("Kendall Tailnet cockpit TLS certificate and key paths must be configured together.");
-  if ([certificatePath, keyPath].filter(Boolean).some((value) => /\s/.test(value))) throw new Error("Kendall Tailnet cockpit TLS paths cannot contain whitespace.");
+  if ([certificatePath, keyPath].filter(Boolean).some((value) => !/^\/[A-Za-z0-9._/-]+$/.test(value))) throw new Error("Kendall Tailnet cockpit TLS paths contain unsafe systemd characters.");
   const authDir = "%h/kendall-lan-auth";
   const tlsEnvironment = certificatePath ? `\nEnvironment=KENDALL_DASHBOARD_TLS_CERT_FILE=${certificatePath}\nEnvironment=KENDALL_DASHBOARD_TLS_KEY_FILE=${keyPath}` : "";
   const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}\nEnvironment=KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=${hostname}\nEnvironment=KENDALL_DASHBOARD_BIND_MODE=${dashboardBindMode}${allowAllInterfaces ? "\nEnvironment=KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true" : ""}${tlsEnvironment}`;

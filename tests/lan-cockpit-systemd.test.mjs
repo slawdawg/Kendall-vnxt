@@ -35,7 +35,8 @@ test("Tailnet unit generation requires a hostname and explicit all-interface adm
   assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces" }), /explicit approval/);
   assert.match(renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces", allowAllInterfaces: true })["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true/);
   assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt" }), /configured together/);
-  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt\nEnvironment=UNSAFE", keyPath: "/private/dashboard-leaf.key" }), /cannot contain whitespace/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt\nEnvironment=UNSAFE", keyPath: "/private/dashboard-leaf.key" }), /unsafe systemd characters/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard\"-leaf.crt", keyPath: "/private/dashboard-leaf.key" }), /unsafe systemd characters/);
 });
 
 test("Tailnet installer fences legacy port-3000 cockpit services and starts the supervisor through resolved uv", () => {
