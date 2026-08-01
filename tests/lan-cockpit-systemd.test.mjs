@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderLanCockpitUnits } from "../scripts/lan-cockpit-systemd.mjs";
-import { assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
+import { assertDashboardKeyMatchesCertificate, assertTailnetOriginState, assertTailnetRuntimeState, certificateCoversIdentity, normalizeTailnetHostname, resolveCanonicalTailnetHostname, resolveDashboardBindAddress, resolveDashboardTlsPaths, resolveRuntimeRevision, tailnetOriginStatePath, tailnetRuntimeStatePath, waitForPrivateSupervisorStartupGate, writeTailnetOriginState, writeTailnetRuntimeState } from "../scripts/lan-cockpit-runtime.mjs";
 
 test("renders private-UDS authenticated Tailnet cockpit units", () => {
-  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net" });
+  const units = renderLanCockpitUnits({ repoRoot: "/home/kendall/Kendall_Nxt", nodePath: "/usr/bin/node", pnpmPath: "/usr/bin/pnpm", uvPath: "/home/kendall/.local/bin/uv", canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/home/kendall/kendall-lan-auth/dashboard-leaf.crt", keyPath: "/home/kendall/kendall-lan-auth/dashboard-leaf.key" });
   assert.match(units["kendall-lan-cockpit.target"], /WantedBy=default\.target/);
   assert.match(units["kendall-lan-cockpit.target"], /Conflicts=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-cockpit.target"], /Before=kendall-cockpit\.target kendall-cockpit-supervisor\.service kendall-cockpit-dashboard\.service kendall-lan-auth\.target kendall-lan-auth-supervisor\.service kendall-lan-auth-dashboard\.service/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_LAN_AUTH_DIR=%h\/kendall-lan-auth/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_UV_PATH=\/home\/kendall\/\.local\/bin\/uv/);
   assert.match(units["kendall-lan-supervisor.service"], /KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=kendallvnxt-1\.tail045dec\.ts\.net/);
+  assert.match(units["kendall-lan-supervisor.service"], /KENDALL_DASHBOARD_TLS_CERT_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.crt/);
+  assert.match(units["kendall-lan-supervisor.service"], /KENDALL_DASHBOARD_TLS_KEY_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.key/);
   assert.match(units["kendall-lan-supervisor.service"], /PartOf=kendall-lan-cockpit\.target/);
   assert.match(units["kendall-lan-supervisor.service"], /lan-cockpit-runtime\.mjs supervisor/);
   assert.doesNotMatch(units["kendall-lan-supervisor.service"], /SUPERVISOR_PORT|0\.0\.0\.0/);
@@ -22,6 +24,8 @@ test("renders private-UDS authenticated Tailnet cockpit units", () => {
   assert.match(units["kendall-lan-dashboard.service"], /PartOf=kendall-lan-cockpit\.target/);
   assert.match(units["kendall-lan-dashboard.service"], /Requires=kendall-lan-supervisor\.service/);
   assert.match(units["kendall-lan-dashboard.service"], /BindsTo=kendall-lan-supervisor\.service/);
+  assert.match(units["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_TLS_CERT_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.crt/);
+  assert.match(units["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_TLS_KEY_FILE=\/home\/kendall\/kendall-lan-auth\/dashboard-leaf\.key/);
   assert.doesNotMatch(units["kendall-lan-dashboard.service"], /NEXT_PUBLIC_SUPERVISOR_URL|SUPERVISOR_INTERNAL_URL/);
 });
 
@@ -30,6 +34,9 @@ test("Tailnet unit generation requires a hostname and explicit all-interface adm
   assert.throws(() => renderLanCockpitUnits(base), /canonical hostname/);
   assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces" }), /explicit approval/);
   assert.match(renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", dashboardBindMode: "all-interfaces", allowAllInterfaces: true })["kendall-lan-dashboard.service"], /KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt" }), /configured together/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard-leaf.crt\nEnvironment=UNSAFE", keyPath: "/private/dashboard-leaf.key" }), /unsafe systemd characters/);
+  assert.throws(() => renderLanCockpitUnits({ ...base, canonicalHostname: "kendallvnxt-1.tail045dec.ts.net", certificatePath: "/private/dashboard\"-leaf.crt", keyPath: "/private/dashboard-leaf.key" }), /unsafe systemd characters/);
 });
 
 test("Tailnet installer fences legacy port-3000 cockpit services and starts the supervisor through resolved uv", () => {
@@ -113,4 +120,32 @@ test("runtime bind and revision state are explicit and must match across the pai
   assert.doesNotThrow(() => assertTailnetRuntimeState(authDir, state));
   assert.throws(() => assertTailnetRuntimeState(authDir, { ...state, revision: "different" }), /does not match/);
   assert.equal(statSync(tailnetRuntimeStatePath(authDir)).mode & 0o777, 0o600);
+});
+
+test("Tailnet runtime keeps the CA trust root separate from explicit private leaf paths", () => {
+  const authDir = "/private/kendall-lan-auth";
+  assert.deepEqual(resolveDashboardTlsPaths({
+    KENDALL_DASHBOARD_TLS_CERT_FILE: `${authDir}/dashboard-leaf.crt`,
+    KENDALL_DASHBOARD_TLS_KEY_FILE: `${authDir}/dashboard-leaf.key`,
+  }, authDir), {
+    certificatePath: `${authDir}/dashboard-leaf.crt`,
+    keyPath: `${authDir}/dashboard-leaf.key`,
+  });
+  assert.throws(() => resolveDashboardTlsPaths({ KENDALL_DASHBOARD_TLS_CERT_FILE: "/tmp/leaf.crt" }, authDir), /private LAN auth directory/);
+  assert.throws(() => resolveDashboardTlsPaths({ KENDALL_DASHBOARD_TLS_KEY_FILE: authDir }, authDir), /distinct file/);
+});
+
+test("Tailnet preflight requires a private key that matches the selected leaf certificate", () => {
+  const authDir = mkdtempSync(join(tmpdir(), "kendall-tailnet-leaf-"));
+  chmodSync(authDir, 0o700);
+  const certificatePath = join(authDir, "dashboard-leaf.crt");
+  const keyPath = join(authDir, "dashboard-leaf.key");
+  writeFileSync(certificatePath, "certificate", { mode: 0o600 });
+  writeFileSync(keyPath, "private-key", { mode: 0o600 });
+  const loader = () => ({ publicKey: { export: () => Buffer.from("same-key") } });
+  const publicKeyForPrivate = () => ({ export: () => Buffer.from("same-key") });
+  assert.doesNotThrow(() => assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader: loader, privateKeyLoader: () => ({}), publicKeyForPrivate }));
+  assert.throws(() => assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader: loader, privateKeyLoader: () => ({}), publicKeyForPrivate: () => ({ export: () => Buffer.from("other-key") }) }), /does not match/);
+  chmodSync(keyPath, 0o644);
+  assert.throws(() => assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader: loader, privateKeyLoader: () => ({}), publicKeyForPrivate }), /ownership or permissions/);
 });

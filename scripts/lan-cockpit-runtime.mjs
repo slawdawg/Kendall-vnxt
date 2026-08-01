@@ -1,10 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
-import { X509Certificate } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createPrivateKey, createPublicKey, timingSafeEqual, X509Certificate } from "node:crypto";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { homedir } from "node:os";
 import { isIP } from "node:net";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 
 function fail(message) {
   throw new Error(`Kendall LAN cockpit: ${message}`);
@@ -103,6 +103,41 @@ export function assertCertificateMatchesIdentity(certificatePath, address, hostn
   certificateCoversIdentity(new X509Certificate(readFileSync(certificatePath)), address, hostname);
 }
 
+function readPrivateDashboardKey(keyPath) {
+  const keyParent = dirname(resolvePath(keyPath));
+  let current = keyParent;
+  while (true) {
+    let details;
+    try { details = lstatSync(current); } catch { fail("dashboard TLS key parent is unavailable or unsafe."); }
+    const stickySharedTemp = (details.mode & 0o1000) !== 0 && (details.mode & 0o022) === 0o022 && current !== keyParent;
+    if (!details.isDirectory() || details.isSymbolicLink() || ((details.mode & 0o022) !== 0 && !stickySharedTemp)) fail("dashboard TLS key parent is unsafe.");
+    const parent = resolvePath(current, "..");
+    if (parent === current) break;
+    current = parent;
+  }
+  let descriptor;
+  try {
+    descriptor = openSync(keyPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(descriptor);
+    const linked = lstatSync(keyPath);
+    if (opened.dev !== linked.dev || opened.ino !== linked.ino || !opened.isFile() || opened.uid !== process.getuid() || (opened.mode & 0o077) !== 0) fail("dashboard TLS key ownership or permissions are unsafe.");
+    return readFileSync(descriptor);
+  } catch (error) {
+    if (error?.message?.startsWith("Kendall LAN cockpit:")) throw error;
+    fail("dashboard TLS key is unavailable or unsafe.");
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+export function assertDashboardKeyMatchesCertificate(certificatePath, keyPath, { certificateLoader = (value) => new X509Certificate(value), privateKeyLoader = createPrivateKey, publicKeyForPrivate = createPublicKey } = {}) {
+  const certificate = certificateLoader(readFileSync(certificatePath));
+  const privateKey = privateKeyLoader(readPrivateDashboardKey(keyPath));
+  const certificatePublicKey = certificate.publicKey.export({ format: "der", type: "spki" });
+  const privatePublicKey = publicKeyForPrivate(privateKey).export({ format: "der", type: "spki" });
+  if (certificatePublicKey.length !== privatePublicKey.length || !timingSafeEqual(certificatePublicKey, privatePublicKey)) fail("dashboard TLS key does not match the selected certificate.");
+}
+
 export function resolveDashboardBindAddress(environment, tailnetAddress) {
   const mode = environment.KENDALL_DASHBOARD_BIND_MODE || "tailnet-ip";
   if (mode === "tailnet-ip") return tailnetAddress;
@@ -119,12 +154,29 @@ export function resolveRuntimeRevision(environment = process.env, run = spawnSyn
   return revision.toLowerCase();
 }
 
+export function resolveDashboardTlsPaths(environment, authDir) {
+  const resolvePrivatePath = (name, fallback) => {
+    const configured = environment[name] || fallback;
+    if (!isAbsolute(configured)) fail(`${name} must be an absolute path inside the private LAN auth directory.`);
+    const root = resolvePath(authDir);
+    const candidate = resolvePath(configured);
+    const segment = relative(root, candidate);
+    if (!segment || segment === ".." || segment.startsWith("../")) fail(`${name} must be a distinct file inside the private LAN auth directory.`);
+    return candidate;
+  };
+  return {
+    certificatePath: resolvePrivatePath("KENDALL_DASHBOARD_TLS_CERT_FILE", join(authDir, "dashboard.crt")),
+    keyPath: resolvePrivatePath("KENDALL_DASHBOARD_TLS_KEY_FILE", join(authDir, "dashboard.key")),
+  };
+}
+
 export function lanCockpitEnvironment(environment = process.env, run = spawnSync) {
   const authDir = environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth");
   const address = resolveTailnetIpv4(run);
   const hostname = resolveCanonicalTailnetHostname(environment, run);
-  const certificatePath = join(authDir, "dashboard.crt");
+  const { certificatePath, keyPath } = resolveDashboardTlsPaths(environment, authDir);
   assertCertificateMatchesIdentity(certificatePath, address, hostname);
+  assertDashboardKeyMatchesCertificate(certificatePath, keyPath);
   const bindAddress = resolveDashboardBindAddress(environment, address);
   const rawPort = environment.KENDALL_DASHBOARD_PORT || "3000";
   if (!/^\d+$/.test(rawPort) || Number(rawPort) < 1 || Number(rawPort) > 65535) fail("dashboard port is invalid.");
@@ -144,7 +196,7 @@ export function lanCockpitEnvironment(environment = process.env, run = spawnSync
     KENDALL_DASHBOARD_BIND_ADDRESS: bindAddress,
     KENDALL_DASHBOARD_PORT: port,
     KENDALL_DASHBOARD_TLS_CERT_FILE: certificatePath,
-    KENDALL_DASHBOARD_TLS_KEY_FILE: join(authDir, "dashboard.key"),
+    KENDALL_DASHBOARD_TLS_KEY_FILE: keyPath,
     KENDALL_DASHBOARD_ORIGIN: origin,
     KENDALL_DASHBOARD_ALLOWED_HOST: allowedHost,
     KENDALL_DASHBOARD_RUNTIME_REVISION: revision,
