@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 
 import { useOperatorProfile } from "../lib/operator-profile";
-import { getSupervisorBaseUrl } from "../lib/supervisor";
+import { requestSupervisorMutation } from "../lib/dashboard-supervisor-transport";
 
 export function EscalationPanel({
   workItemId,
@@ -19,7 +18,6 @@ export function EscalationPanel({
   escalationReason?: string | null;
   escalatedByLabel?: string | null;
 }) {
-  const router = useRouter();
   const { profile } = useOperatorProfile();
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState(escalationReason ?? "");
@@ -32,7 +30,7 @@ export function EscalationPanel({
   function submit(clear: boolean) {
     startTransition(async () => {
       try {
-        const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/escalation`, {
+        const response = await requestSupervisorMutation(`/work-items/${workItemId}/escalation`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -50,7 +48,7 @@ export function EscalationPanel({
         if (clear) {
           setReason("");
         }
-        router.refresh();
+        window.location.reload();
       } catch {
         setMessage("Unable to update escalation right now.");
       }

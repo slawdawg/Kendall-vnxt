@@ -38,6 +38,7 @@ test("LAN pipeline browser reads stay out of the Node UDS module and use the aut
   assert.match(proxySource, /\/work-packets/);
   assert.match(proxySource, /requestSupervisor\(supervisorUdsPath, "\/auth\/session"/);
   assert.match(cockpitSource, /projectionSupportsOperationalActions/);
+  assert.match(cockpitSource, /readOnly/);
   assert.match(cockpitSource, /until the supervisor projection is current live truth/);
   assert.match(cockpitSource, /sourceState\.kind !== "runtime" && sourceState\.kind !== "stale"/);
 });
@@ -50,8 +51,9 @@ test("LAN Packet Detail uses the authenticated mediator with explicit expiry and
   assert.match(client, /\/api\/packet-detail\//);
   assert.match(client, /setPacket\(null\)/);
   assert.match(client, /setState\("ready"\)/);
-  assert.match(client, /setTimeout\(\(\) => controller\.abort\(\), 5000\)/);
-  assert.match(client, /if \(active\) setState\("unavailable"\)/);
+  assert.match(client, /let settled = false/);
+  assert.match(client, /if \(!active \|\| settled\) return/);
+  assert.match(client, /if \(!active \|\| settled \|\| controller\.signal\.aborted\) return/);
   assert.match(client, /Session expired/);
   assert.match(client, /Packet detail unavailable/);
 });
@@ -61,4 +63,6 @@ test("LAN pipeline client distinguishes expired sessions from unavailable reads"
   assert.match(client, /Session expired/);
   assert.match(client, /401/);
   assert.match(client, /Return to sign in/);
+  assert.match(client, /Retry pipeline/);
+  assert.match(client, /8_000/);
 });

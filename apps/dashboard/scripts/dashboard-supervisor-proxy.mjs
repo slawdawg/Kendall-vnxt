@@ -27,6 +27,19 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
+const SAVED_VIEW_SCOPES = new Set(["active-work", "attention", "queue", "audit"]);
+
+function allowedReadQuery(url, method) {
+  if (!url.search) return true;
+  // Saved-view scopes are the only authenticated dashboard reads that need a
+  // query. Preserve a one-key, one-value contract instead of allowing a
+  // generic query pass-through to the private supervisor.
+  return method === "GET"
+    && url.pathname === `${PREFIX}operator-views`
+    && [...url.searchParams].length === 1
+    && url.searchParams.getAll("scope").length === 1
+    && SAVED_VIEW_SCOPES.has(url.searchParams.get("scope"));
+}
 
 function sendJson(response, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -76,7 +89,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
   return async function proxy(request, response) {
     let url;
     try { url = new URL(request.url || "/", "https://dashboard.invalid"); } catch { return false; }
-    if (!url.pathname.startsWith(PREFIX) || url.search) return false;
+    if (!url.pathname.startsWith(PREFIX) || !allowedReadQuery(url, request.method)) return false;
     if (!request.headers.cookie) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
     if (["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port"].some((name) => request.headers[name])) {
       sendJson(response, 400, { state: "unavailable" });
@@ -108,7 +121,8 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         await streamSupervisor(supervisorUdsPath, targetPath, request.headers, response, timeoutMs);
         return true;
       }
-      const upstream = await requestSupervisor(supervisorUdsPath, targetPath, request.method, request.headers, body, timeoutMs);
+      const upstreamPath = url.search ? `${targetPath}?${url.searchParams.toString()}` : targetPath;
+      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, timeoutMs);
       // A viewer revocation concurrent with an in-flight read must win before
       // the browser receives data. Operator requests retain existing behavior.
       if (role === "test_viewer") {

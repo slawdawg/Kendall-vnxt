@@ -1,4 +1,5 @@
 import type { ApiEnvelope } from "@kendall/contracts";
+import { readCookieValue } from "./browser-cookie.mjs";
 
 const configuredPublicBaseUrl = process.env.NEXT_PUBLIC_SUPERVISOR_URL;
 const publicBaseUrl = configuredPublicBaseUrl ?? "http://localhost:8000";
@@ -71,4 +72,21 @@ export async function requestSupervisorJson<T>(path: string, options: Supervisor
     }
     detachCallerAbort?.();
   }
+}
+
+/** Browser mutations must use the same authenticated proxy and synchronizer
+ * token as logout. This preserves the proxy's strict Origin/CSRF rejection
+ * instead of teaching each dashboard action a slightly different variant. */
+export async function requestSupervisorMutation(path: string, init: RequestInit): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (typeof window !== "undefined") {
+    headers.set("origin", window.location.origin);
+    headers.set("x-csrf-token", readCookieValue(document.cookie, "kendall_operator_csrf"));
+  }
+  return fetch(`${getSupervisorBaseUrl()}${path}`, {
+    ...init,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
 }

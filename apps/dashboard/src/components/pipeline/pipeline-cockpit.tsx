@@ -110,6 +110,7 @@ type ActiveBoardCockpitPacket = PipelineFixturePacket & {
 export function PipelineCockpit({
   fixtureMode,
   managerExecutionLane,
+  readOnly = false,
   packets,
   projection,
   projectionError,
@@ -117,6 +118,8 @@ export function PipelineCockpit({
 }: {
   fixtureMode: PipelineRuntimeSourceState;
   managerExecutionLane?: PipelineManagerExecutionLaneState | null;
+  /** Fixed test_viewer sessions can inspect truth but never receive action affordances. */
+  readOnly?: boolean;
   packets: PipelineFixturePacket[];
   projection?: PipelineDashboardProjectionV0 | null;
   projectionError?: string | null;
@@ -190,7 +193,7 @@ export function PipelineCockpit({
     && !dashboardPackets.some((packet) => packet.packetId === selectedItem.id)
     && !currentProjection?.workPackets.some((packet) => packet.packetId === selectedItem.id)
     && !currentProjection?.selectedPacketDetails.some((detail) => detail.packetId === selectedItem.id);
-  const selectedContextualActionStrip = selectedItem?.type === "packet"
+  const selectedContextualActionStrip = !readOnly && selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
     : null;
   const effectiveProjectionLabels = currentProjection ? projectionEffectiveLabels(currentProjection, projectionTruthClock) : null;
@@ -201,7 +204,7 @@ export function PipelineCockpit({
         effectiveProjectionLabels?.freshnessState ?? "unavailable"
       ).canSatisfyLiveProof
     : false;
-  const runtimeActionStrip = currentProjection && fixtureMode.kind === "runtime" && projectionSupportsOperationalActions
+  const runtimeActionStrip = !readOnly && currentProjection && fixtureMode.kind === "runtime" && projectionSupportsOperationalActions
     ? buildRuntimeOperationalActionStrip(currentProjection)
     : null;
   const blockedGateCount = dashboardPackets.filter((packet) => packet.currentStage === "human_gate").length;
@@ -249,6 +252,10 @@ export function PipelineCockpit({
     );
   }, []);
   const handleOperationalAction = useCallback(async (action: PipelineContextualActionStrip["actions"][number], packetId: string) => {
+    if (readOnly) {
+      setActionFeedback("This dashboard account is read-only.");
+      return;
+    }
     if (fixtureMode.kind !== "runtime") {
       setActionFeedback("Operational actions are unavailable outside supervisor runtime mode.");
       return;
@@ -375,7 +382,7 @@ export function PipelineCockpit({
     } catch (error) {
       setActionFeedback(error instanceof Error ? error.message : "Operational action failed.");
     }
-  }, [currentProjection, fixtureMode.kind]);
+  }, [currentProjection, fixtureMode.kind, readOnly]);
   const registerPacketButton = useCallback((packetId: string, node: HTMLButtonElement | null) => {
     if (node) {
       packetButtonRefs.current.set(packetId, node);

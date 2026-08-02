@@ -36,18 +36,26 @@ type PacketDetail = {
 export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabled: boolean; packetId: string }) {
   const [packet, setPacket] = useState<PacketDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "unavailable" | "expired">("loading");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    const timeout = window.setTimeout(() => controller.abort(), 5000);
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (!active || settled) return;
+      settled = true;
+      controller.abort();
+      setState("unavailable");
+    }, 5000);
     setPacket(null);
     setState("loading");
     void fetch(`/api/packet-detail/${encodeURIComponent(packetId)}`, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json().catch(() => null) as { state?: string; packet?: PacketDetail } | null;
+        if (!active || settled || controller.signal.aborted) return;
+        settled = true;
         window.clearTimeout(timeout);
-        if (!active) return;
         if (response.status === 401 || payload?.state === "sign_in_required") {
           setState("expired");
           return;
@@ -60,21 +68,23 @@ export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabl
         setState("ready");
       })
       .catch(() => {
+        if (!active || settled) return;
+        settled = true;
         window.clearTimeout(timeout);
-        if (active) setState("unavailable");
+        setState("unavailable");
       });
     return () => {
       active = false;
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [packetId]);
+  }, [packetId, attempt]);
 
   if (state === "expired") {
     return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Session expired" body="Your authenticated Packet Detail session ended. Return to the dashboard to sign in again." action="Return to sign in" /></Shell>;
   }
   if (state === "unavailable") {
-    return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Packet detail unavailable" body="The authenticated Packet Detail read could not be completed." action="Back to pipeline" /></Shell>;
+    return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Packet detail unavailable" body="The authenticated Packet Detail read could not be completed." action="Back to pipeline" onRetry={() => setAttempt((value) => value + 1)} /></Shell>;
   }
   if (state === "loading" || !packet) {
     return <Shell compactHeader lanAuthEnabled={lanAuthEnabled} realtimeRefresh={false} wide><Message title="Loading packet detail" body="Reading the authenticated Packet Detail mediator." action="" /></Shell>;
@@ -131,8 +141,8 @@ export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabl
   );
 }
 
-function Message({ title, body, action }: { title: string; body: string; action: string }) {
-  return <section className="rounded-[0.5rem] border bg-[var(--panel)] p-6 shadow-sm" role={title === "Loading packet detail" ? "status" : "alert"}><h1 className="text-lg font-semibold">{title}</h1><p className="mt-2 text-sm leading-6 text-[var(--muted)]">{body}</p>{action ? <Link className="mt-4 inline-block rounded-[0.375rem] border px-3 py-2 text-xs font-medium" href={action === "Return to sign in" ? "/" : "/pipeline"}>{action}</Link> : null}</section>;
+function Message({ title, body, action, onRetry }: { title: string; body: string; action: string; onRetry?: () => void }) {
+  return <section className="rounded-[0.5rem] border bg-[var(--panel)] p-6 shadow-sm" role={title === "Loading packet detail" ? "status" : "alert"}><h1 className="text-lg font-semibold">{title}</h1><p className="mt-2 text-sm leading-6 text-[var(--muted)]">{body}</p>{onRetry ? <button className="mt-4 rounded-[0.375rem] border px-3 py-2 text-xs font-medium" type="button" onClick={onRetry}>Retry detail</button> : null}{action ? <Link className="mt-4 ml-2 inline-block rounded-[0.375rem] border px-3 py-2 text-xs font-medium" href={action === "Return to sign in" ? "/" : "/pipeline"}>{action}</Link> : null}</section>;
 }
 
 function DetailField({ label, value }: { label: string; value: string }) {

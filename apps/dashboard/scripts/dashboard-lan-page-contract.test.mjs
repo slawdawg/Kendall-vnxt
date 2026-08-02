@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const root = new URL("../", import.meta.url);
+const manifestUrl = new URL("src/lib/dashboard-page-read-manifest.json", root);
+const boundaryUrl = new URL("src/lib/authenticated-page-read.ts", root);
+const stateUrl = new URL("src/components/authenticated-page-state.tsx", root);
+const navUrl = new URL("src/components/operational-nav.tsx", root);
+const transportUrl = new URL("src/lib/dashboard-supervisor-transport.ts", root);
+
+test("LAN operator pages declare exact read contracts and do not replace the server LAN guard", async () => {
+  const manifest = JSON.parse(await readFile(manifestUrl, "utf8"));
+  const expected = ["active-work", "attention", "queue", "audit", "proposed-work", "work-item-detail", "pipeline"];
+  assert.deepEqual(manifest.map((entry) => entry.page), expected);
+  for (const page of manifest.filter((entry) => entry.page !== "pipeline")) {
+    assert.deepEqual(page.roles, ["operator"]);
+    assert.ok(page.reads.every((read) => read.method === "GET"));
+  }
+  assert.deepEqual(manifest.at(-1).roles, ["operator", "test_viewer"]);
+  const [boundary, state, transport] = await Promise.all([readFile(boundaryUrl, "utf8"), readFile(stateUrl, "utf8"), readFile(transportUrl, "utf8")]);
+  assert.match(boundary, /8_000/);
+  assert.match(boundary, /sign_in_required/);
+  assert.match(state, /Session expired/);
+  assert.match(state, /Record not found/);
+  assert.match(transport, /rejectServerLanAuth/);
+  assert.match(transport, /requestSupervisorMutation/);
+  assert.match(transport, /credentials:\s*["']same-origin["']/);
+  assert.match(transport, /headers\.set\(["']origin["']/);
+  assert.match(transport, /headers\.set\(["']x-csrf-token["']/);
+});
+
+test("named pages use the authenticated LAN client boundary rather than SSR supervisor reads", async () => {
+  for (const route of ["active-work", "attention", "queue", "audit", "proposed-work"]) {
+    const source = await readFile(new URL(`src/app/${route}/page.tsx`, root), "utf8");
+    assert.match(source, /KENDALL_LAN_AUTH_ENABLED/);
+    assert.match(source, /LanOperatorPage/);
+  }
+  const detail = await readFile(new URL("src/app/work-items/[work-item-id]/page.tsx", root), "utf8");
+  assert.match(detail, /"use client"/);
+  assert.match(detail, /useAuthenticatedPageRead/);
+  assert.match(detail, /AuthenticatedPageState/);
+  assert.match(detail, /const load = useCallback\(async \(signal: AbortSignal\)/);
+  assert.match(detail, /getWorkItem\(workItemId, options\)/);
+  assert.match(detail, /getWorkPacket\(`work_item:\$\{workItemId\}`, options\)/);
+});
+
+test("test viewer navigation contains only the pipeline surface while its session role is unknown or viewer", async () => {
+  const nav = await readFile(navUrl, "utf8");
+  assert.match(nav, /useDashboardSessionRole/);
+  assert.match(nav, /link\.href === "\/pipeline"/);
+});

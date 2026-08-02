@@ -1,0 +1,77 @@
+[
+  {
+    "page": "active-work",
+    "route": "/active-work",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/work-items" },
+      { "method": "GET", "path": "/operator-views", "query": { "scope": "active-work" } }
+    ]
+  },
+  {
+    "page": "attention",
+    "route": "/attention",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/work-items" },
+      { "method": "GET", "path": "/operator-views", "query": { "scope": "attention" } }
+    ]
+  },
+  {
+    "page": "queue",
+    "route": "/queue",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/work-items" },
+      { "method": "GET", "path": "/operator-views", "query": { "scope": "queue" } }
+    ]
+  },
+  {
+    "page": "audit",
+    "route": "/audit",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/work-items" },
+      { "method": "GET", "path": "/audit-events" },
+      { "method": "GET", "path": "/operator-views", "query": { "scope": "audit" } }
+    ]
+  },
+  {
+    "page": "proposed-work",
+    "route": "/proposed-work",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/candidate-work" },
+      { "method": "GET", "path": "/work-items" }
+    ]
+  },
+  {
+    "page": "work-item-detail",
+    "route": "/work-items/:id",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/work-items/:id" },
+      { "method": "GET", "path": "/work-items/:id/events" },
+      { "method": "GET", "path": "/work-items/:id/execution-attempts" },
+      { "method": "GET", "path": "/work-items/:id/routing-preview" },
+      { "method": "GET", "path": "/work-items/:id/runtime-evidence-export" },
+      { "method": "GET", "path": "/work-items/:id/trusted-delivery-eligibility-report" },
+      { "method": "GET", "path": "/work-items/:id/low-risk-delivery-plan" },
+      { "method": "GET", "path": "/work-items/:id/cleanup-plan" },
+      { "method": "GET", "path": "/work-items/:id/recipe-gate-audit" },
+      { "method": "GET", "path": "/work-items/:id/local-worktree-plan" },
+      { "method": "GET", "path": "/work-packets/work_item::id" },
+      { "method": "GET", "path": "/supervisor/runtime-evidence-review-report" }
+    ]
+  },
+  {
+    "page": "pipeline",
+    "route": "/pipeline",
+    "roles": ["operator", "test_viewer"],
+    "reads": [
+      { "method": "GET", "path": "/pipeline-control-plane/projection" },
+      { "method": "GET", "path": "/pipeline-control-plane/work-packets" },
+      { "method": "GET", "path": "/work-packets" }
+    ]
+  }
+]

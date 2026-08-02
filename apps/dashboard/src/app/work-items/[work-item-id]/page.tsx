@@ -1,3 +1,6 @@
+"use client";
+
+import { use, useCallback } from "react";
 import { AssignmentPanel } from "../../../components/assignment-panel";
 import { AttentionBadge } from "../../../components/attention-badge";
 import { BranchPreparationPanel } from "../../../components/branch-preparation-panel";
@@ -14,7 +17,9 @@ import { MemoryProposalReviewPanel } from "../../../components/memory-proposal-r
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
-import { ServerShell as Shell } from "../../../components/server-shell";
+import { AuthenticatedPageState } from "../../../components/authenticated-page-state";
+import { Shell } from "../../../components/shell";
+import { useAuthenticatedPageRead } from "../../../lib/authenticated-page-read";
 import { SubscriptionLaunchReadinessPanel } from "../../../components/subscription-launch-readiness-panel";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
@@ -37,39 +42,50 @@ import {
 } from "../../../lib/supervisor";
 import { formatLane, formatWorkflowState } from "../../../lib/workflow-display";
 
-export default async function WorkItemDetailPage({
+export default function WorkItemDetailPage({
   params,
 }: {
   params: Promise<{ "work-item-id": string }>;
 }) {
-  const { "work-item-id": workItemId } = await params;
-  const [
-    item,
-    events,
-    items,
-    routingPreview,
-    executionAttempts,
-    runtimeEvidenceExport,
-    runtimeEvidenceReviewReport,
-    trustedDeliveryReport,
-    lowRiskDeliveryPlan,
-    cleanupPlan,
-    workPacket,
-  ] = await Promise.all([
-    getWorkItem(workItemId),
-    getWorkItemEvents(workItemId),
-    getWorkItems(),
-    getRoutingPreview(workItemId),
-    getExecutionAttempts(workItemId),
-    getRuntimeEvidenceExport(workItemId),
-    getRuntimeEvidenceReviewReport(),
-    getWorkItemTrustedDeliveryEligibilityReport(workItemId),
-    getWorkItemLowRiskDeliveryPlan(workItemId),
-    getWorkItemCleanupPlan(workItemId),
-    getWorkPacket(`work_item:${workItemId}`),
-  ]);
-  const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
-  const localWorktreePlan = item.executionRecipe ? await getLocalWorktreePlan(workItemId) : null;
+  const { "work-item-id": workItemId } = use(params);
+  const load = useCallback(async (signal: AbortSignal) => {
+    const options = { signal };
+    const [
+      item,
+      events,
+      items,
+      routingPreview,
+      executionAttempts,
+      runtimeEvidenceExport,
+      runtimeEvidenceReviewReport,
+      trustedDeliveryReport,
+      lowRiskDeliveryPlan,
+      cleanupPlan,
+      workPacket,
+    ] = await Promise.all([
+      getWorkItem(workItemId, options),
+      getWorkItemEvents(workItemId, options),
+      getWorkItems(options),
+      getRoutingPreview(workItemId, options),
+      getExecutionAttempts(workItemId, options),
+      getRuntimeEvidenceExport(workItemId, options),
+      getRuntimeEvidenceReviewReport(options),
+      getWorkItemTrustedDeliveryEligibilityReport(workItemId, options),
+      getWorkItemLowRiskDeliveryPlan(workItemId, options),
+      getWorkItemCleanupPlan(workItemId, options),
+      getWorkPacket(`work_item:${workItemId}`, options),
+    ]);
+    const [recipeGateAudit, localWorktreePlan] = await Promise.all([
+      item.executionRecipe ? getRecipeGateAudit(workItemId, options) : null,
+      item.executionRecipe ? getLocalWorktreePlan(workItemId, options) : null,
+    ]);
+    return { item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket, recipeGateAudit, localWorktreePlan };
+  }, [workItemId]);
+  const { state, retry } = useAuthenticatedPageRead(load, [workItemId]);
+  if (state.kind !== "ready" && state.kind !== "empty") {
+    return <AuthenticatedPageState title="work item detail" state={state.kind} onRetry={retry} />;
+  }
+  const { item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket, recipeGateAudit, localWorktreePlan } = state.data;
   const metadata = item.metadata ?? {};
   const navStats = buildNavStats(items);
   const retryCount = Math.max(0, events.filter((event) => event.eventType === "work_item.implementing").length - 1);
@@ -77,7 +93,7 @@ export default async function WorkItemDetailPage({
     runtimeEvidenceReviewReport.workItems.find((reviewItem) => reviewItem.workItemId === workItemId) ?? null;
 
   return (
-    <Shell navStats={navStats}>
+    <Shell lanAuthEnabled={window.location.protocol === "https:"} navStats={navStats}>
       <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           {item.needsAttention ? <AttentionBadge reason={item.attentionReason} /> : null}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import type { NavStats } from "../lib/nav-stats";
+import { useDashboardSessionRole } from "../lib/dashboard-session-role";
 
 type ShellLink = {
   href: string;
@@ -76,6 +77,14 @@ function NavBadge({ link, navStats }: { link: ShellLink; navStats?: NavStats }) 
 export function OperationalNav({ compact = false, navStats }: { compact?: boolean; navStats?: NavStats }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const role = useDashboardSessionRole();
+  // A test viewer has one read-only surface. Keep the menu honest while the
+  // session role is resolving, then restore full operator navigation.
+  const visibleGroups = role === "operator"
+    ? linkGroups
+    : linkGroups
+      .map((group) => ({ ...group, links: group.links.filter((link) => link.href === "/pipeline") }))
+      .filter((group) => group.links.length > 0);
 
   if (compact) {
     return (
@@ -89,7 +98,7 @@ export function OperationalNav({ compact = false, navStats }: { compact?: boolea
             </span>
           </summary>
           <div className="dashboard-page-menu-links">
-            {linkGroups.map((group) => {
+            {visibleGroups.map((group) => {
               const groupId = `dashboard-page-menu-${group.label.toLowerCase()}`;
               return (
                 <section aria-labelledby={groupId} className="dashboard-page-menu-group" key={group.label}>
@@ -128,7 +137,7 @@ export function OperationalNav({ compact = false, navStats }: { compact?: boolea
 
   return (
     <nav aria-label="Dashboard sections" className="grid w-full max-w-full gap-3 xl:min-w-0 xl:grid-cols-[1fr_1fr_auto]">
-      {linkGroups.map((group) => {
+      {visibleGroups.map((group) => {
         const groupId = `dashboard-nav-${group.label.toLowerCase()}`;
         return (
           <section key={group.label} aria-labelledby={groupId} className="min-w-0 rounded-[0.5rem] border bg-[var(--surface)] p-2.5">
