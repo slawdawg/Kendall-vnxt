@@ -76,6 +76,13 @@ routing, dashboard E2E runners, or manager-control-plane verification. Use
 `pnpm run check:sandbox-fast`, or `pnpm run check:dashboard-fast` for a narrower
 first pass when only one surface changed.
 
+For a managed lane whose changed paths are exclusively dashboard sources,
+dashboard tests/configuration, dashboard runners, and documentation,
+`finish-pr --verify scoped` selects `check:dashboard-delivery`. Its manifest
+records that exact command after success. It is an explicit dashboard proof
+that excludes unrelated workspace lifecycle fixtures; mixed or unknown paths
+continue to use `check:fast`.
+
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:fast`,
 `pnpm run test:check-plan`,

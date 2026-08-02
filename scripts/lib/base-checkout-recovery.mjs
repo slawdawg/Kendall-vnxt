@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 
 const MAX_TEXT_LENGTH = 256;
 const RECOVERY_PROJECTION = Object.freeze({
@@ -15,10 +17,14 @@ const RECOVERY_PROJECTION = Object.freeze({
  */
 export function inspectBaseCheckoutRecovery(input = {}, context = {}) {
   const git = context.git || defaultGit;
-  const primary = trustedPrimaryWorktree(git, context.cwd);
+  const worktrees = trustedWorktrees(git, context.cwd);
+  const primary = boundedText(worktrees[0]?.path);
   if (!primary) return unknownRecovery();
 
-  const checkout = checkoutMetadata(primary, git);
+  const checkout = checkoutMetadata(primary, git, {
+    registeredManagedWorktreePaths: registeredManagedWorktreePaths(input.managedWorktreePaths, worktrees),
+    readdir: context.readdir || readdirSync,
+  });
   if (!checkout) return unknownRecovery();
   const marker = recoveryMarker(input.recoveryMarker, checkout);
   if (marker?.status === "invalid") return unknownRecovery("recovery.break_glass_marker_invalid");
@@ -96,14 +102,13 @@ function recoveryMarkerEvidence(marker) {
   });
 }
 
-function trustedPrimaryWorktree(git, cwd) {
+function trustedWorktrees(git, cwd) {
   const result = git(["worktree", "list", "--porcelain"], { cwd });
-  if (result?.code !== 0) return null;
-  const first = parseWorktreePorcelain(result.stdout)[0];
-  return boundedText(first?.path);
+  if (result?.code !== 0) return [];
+  return parseWorktreePorcelain(result.stdout);
 }
 
-function checkoutMetadata(path, git) {
+function checkoutMetadata(path, git, context = {}) {
   const inside = git(["rev-parse", "--is-inside-work-tree"], { cwd: path });
   if (inside?.code !== 0 || String(inside.stdout || "").trim() !== "true") return null;
 
@@ -115,29 +120,79 @@ function checkoutMetadata(path, git) {
   const head = boundedText(headResult.stdout);
   if (!head) return null;
 
+  const changes = changedPathRecords(statusResult.stdout);
+  const changedPathCount = changes.filter((change) => !isVerifiedManagedWorktreeContainer(change, path, context)).length;
+
   return Object.freeze({
     identity: "primary_worktree",
     path,
     branch: boundedText(branchResult?.stdout) || "DETACHED",
     head,
-    changedPathCount: changedPathCount(statusResult.stdout),
+    changedPathCount,
   });
 }
 
-function changedPathCount(value) {
+function changedPathRecords(value) {
   const records = String(value || "").split("\0");
-  let count = 0;
+  const changes = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
     if (!record) continue;
-    count += 1;
     const indexStatus = record[0] || " ";
     const worktreeStatus = record[1] || " ";
+    changes.push({ indexStatus, worktreeStatus, path: record.slice(3) });
     if (indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C") {
       index += 1;
     }
   }
-  return count;
+  return changes;
+}
+
+function registeredManagedWorktreePaths(value, worktrees) {
+  if (!Array.isArray(value)) return new Set();
+  const registered = new Set(worktrees.map((worktree) => resolvedPath(worktree.path)).filter(Boolean));
+  return new Set(
+    value
+      .map((path) => resolvedPath(path))
+      .filter((path) => path && registered.has(path)),
+  );
+}
+
+function isVerifiedManagedWorktreeContainer(change, checkoutPath, context) {
+  if (change.indexStatus !== "?" || change.worktreeStatus !== "?" || !change.path.endsWith("/")) return false;
+  const containerPath = resolvedChildPath(checkoutPath, change.path);
+  if (!containerPath || context.registeredManagedWorktreePaths?.size === 0) return false;
+  const managedRoots = [...context.registeredManagedWorktreePaths].filter((path) => isDescendant(path, containerPath));
+  if (managedRoots.length === 0) return false;
+  let entries;
+  try {
+    entries = context.readdir(containerPath, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(entries) || entries.length === 0) return false;
+  return entries.every((entry) => {
+    if (!entry?.name || !entry.isDirectory?.()) return false;
+    const entryPath = resolvedChildPath(containerPath, entry.name);
+    return entryPath && managedRoots.some((root) => root === entryPath);
+  });
+}
+
+function resolvedPath(value) {
+  const text = boundedText(value);
+  return text && isAbsolute(text) ? resolve(text) : null;
+}
+
+function resolvedChildPath(parent, child) {
+  const text = typeof child === "string" ? child : "";
+  if (!text || isAbsolute(text)) return null;
+  const target = resolve(parent, text);
+  return isDescendant(target, resolve(parent)) ? target : null;
+}
+
+function isDescendant(path, parent) {
+  const relation = relative(parent, path);
+  return Boolean(relation) && !relation.startsWith("..") && !isAbsolute(relation);
 }
 
 function parseWorktreePorcelain(value) {

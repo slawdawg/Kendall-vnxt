@@ -7322,6 +7322,93 @@ try {
     }
   });
 
+  test("finish-pr scoped verification selects the fixed dashboard delivery profile for dashboard-only diffs", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      featurePath: "apps/dashboard/src/app/pipeline/page.tsx",
+      featureContent: "export const dashboardDeliveryFixture = true;\n",
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "scoped", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("pnpm run check:dashboard-delivery"), result.stdout);
+      assert(!result.stdout.includes("pnpm run check:fast"), result.stdout);
+      assert(!result.stdout.includes("pnpm run check:workspace-fast"), result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr scoped verification includes Gate4 dashboard browser-contract paths", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      featurePath: "scripts/gate4-bmad-dashboard-e2e.mjs",
+      featureContent: "export const gate4DashboardDeliveryFixture = true;\n",
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "scoped", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("pnpm run check:dashboard-delivery"), result.stdout);
+      assert(!result.stdout.includes("pnpm run check:fast"), result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr dashboard verification records the fixed command only after success", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      featurePath: "apps/dashboard/src/app/pipeline/page.tsx",
+      featureContent: "export const dashboardDeliveryEvidenceFixture = true;\n",
+    });
+    try {
+      installFixtureVerificationProfileCommand(fixture, "dashboard", "success");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.last_verification_command === "fixture-verification ./scripts/dashboard-delivery.mjs", "dashboard profile did not record its fixed command");
+      assert(Boolean(manifest.last_verified_at), "dashboard profile did not record successful verification time");
+      assert(manifest.events.some((event) => event.type === "verified" && event.message === "fixture-verification ./scripts/dashboard-delivery.mjs"), "dashboard verification event is missing or ambiguous");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr scoped verification keeps mixed dashboard and unknown diffs on generic fast checks", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      featurePath: "apps/dashboard/src/app/pipeline/page.tsx",
+      featureContent: "export const dashboardMixedFixture = true;\n",
+    });
+    try {
+      writeFileSync(join(fixture.worktree, "unclassified.txt"), "unknown\n");
+      runGit(fixture.worktree, ["add", "unclassified.txt"]);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "scoped", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("pnpm run check:fast"), result.stdout);
+      assert(!result.stdout.includes("pnpm run check:dashboard-delivery"), result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr scoped verification falls back to fast checks for mixed unknown diffs", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -7497,7 +7584,7 @@ try {
       assert(manifest.status === "pr_open", `unexpected manifest status ${manifest.status}`);
       const source = readFileSync(scriptPath, "utf8");
       assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 600_000;"), "codex-workspace profile must retain its reviewed fixed 600s budget");
-      assert(source.includes("return profile === \"codex-workspace\" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;"), "profile timeout selection must remain fixed in source");
+      assert(source.includes('if (profile === "codex-workspace") return codexWorkspaceVerificationTimeoutMs;'), "codex-workspace timeout selection must remain fixed in source");
       const boundedRunner = source.match(/function runBoundedVerification[\s\S]*?function verificationOutcome/);
       assert(boundedRunner, "bounded verification runner missing");
       assert(!boundedRunner[0].includes("options.timeout"), "finish-pr verification must not expose a user-controlled timeout override");
@@ -12142,12 +12229,14 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
   const fixtureSource = readFileSync(fixture.script, "utf8");
   const commands = {
     check: 'check: ["pnpm", "run", "check"],',
+    dashboard: 'dashboard: ["pnpm", "run", "check:dashboard-delivery"],',
     "codex-workspace": '"codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],',
   };
   const original = commands[profile];
   assert(original, `unsupported fixture verification profile ${profile}`);
   assert(fixtureSource.includes(original), `fixture did not contain the ${profile} verification command`);
-  let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", "./scripts/test-codex-workspace.mjs"],`);
+  const fixtureScript = profile === "dashboard" ? "./scripts/dashboard-delivery.mjs" : "./scripts/test-codex-workspace.mjs";
+  let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", ${JSON.stringify(fixtureScript)}],`);
   if (mode === "ambiguous-result") {
     const spawnLine = "const result = spawnSync(resolved.command, resolved.args, spawnOptions);";
     assert(patchedSource.includes(spawnLine), "fixture did not contain the verification spawn boundary");

@@ -51,6 +51,57 @@ test("a dirty trusted primary checkout becomes bounded recovery-needed work with
   assertReadOnlyGitCalls(calls);
 });
 
+test("a registered active managed worktree container does not make the primary checkout dirty", () => {
+  const calls = [];
+  const managedWorktreePath = `${PRIMARY}/.codex-workspaces/dashboard-delivery-profile`;
+  const result = inspectBaseCheckoutRecovery({ managedWorktreePaths: [managedWorktreePath] }, {
+    git: fixtureGit(calls, { status: "?? .codex-workspaces/\0", worktreePath: managedWorktreePath }),
+    readdir(path) {
+      assert.equal(path, `${PRIMARY}/.codex-workspaces`);
+      return [{ name: "dashboard-delivery-profile", isDirectory: () => true }];
+    },
+  });
+
+  assert.equal(result.status, "clear");
+  assert.equal(result.reasonCode, "recovery.base_checkout_clean");
+  assert.equal(result.checkout.changedPathCount, 0);
+  assertReadOnlyGitCalls(calls);
+});
+
+test("a managed worktree container with an unregistered sibling remains recovery-needed", () => {
+  const calls = [];
+  const managedWorktreePath = `${PRIMARY}/.codex-workspaces/dashboard-delivery-profile`;
+  const result = inspectBaseCheckoutRecovery({ managedWorktreePaths: [managedWorktreePath] }, {
+    git: fixtureGit(calls, { status: "?? .codex-workspaces/\0", worktreePath: managedWorktreePath }),
+    readdir() {
+      return [
+        { name: "dashboard-delivery-profile", isDirectory: () => true },
+        { name: "unmanaged-sibling", isDirectory: () => true },
+      ];
+    },
+  });
+
+  assert.equal(result.status, "recovery_required");
+  assert.equal(result.reasonCode, "recovery.base_checkout_dirty");
+  assert.equal(result.checkout.changedPathCount, 1);
+  assertReadOnlyGitCalls(calls);
+});
+
+test("a nested registered path does not exempt a broader untracked container", () => {
+  const calls = [];
+  const managedWorktreePath = `${PRIMARY}/.codex-workspaces/group/dashboard-delivery-profile`;
+  const result = inspectBaseCheckoutRecovery({ managedWorktreePaths: [managedWorktreePath] }, {
+    git: fixtureGit(calls, { status: "?? .codex-workspaces/\0", worktreePath: managedWorktreePath }),
+    readdir() {
+      return [{ name: "group", isDirectory: () => true }];
+    },
+  });
+
+  assert.equal(result.status, "recovery_required");
+  assert.equal(result.checkout.changedPathCount, 1);
+  assertReadOnlyGitCalls(calls);
+});
+
 test("an explicit break-glass edit remains recovery-needed even when the trusted primary checkout is currently clean", () => {
   const calls = [];
   const result = inspectBaseCheckoutRecovery({ explicitBreakGlass: true }, { git: fixtureGit(calls, { status: "" }) });
@@ -161,12 +212,12 @@ test("an unavailable primary inspection fails closed without inventing dirty-dif
   assertReadOnlyGitCalls(calls);
 });
 
-function fixtureGit(calls, { status }) {
+function fixtureGit(calls, { status, worktreePath = "/repo/lane" }) {
   return (args, options = {}) => {
     calls.push({ args, options });
     const command = args.join(" ");
     if (command === "worktree list --porcelain") {
-      return { code: 0, stdout: `worktree ${PRIMARY}\nHEAD 0123456789abcdef0123456789abcdef01234567\nbranch refs/heads/dev\n\nworktree /repo/lane\nHEAD fedcba9876543210fedcba9876543210fedcba98\nbranch refs/heads/codex/lane\n` };
+      return { code: 0, stdout: `worktree ${PRIMARY}\nHEAD 0123456789abcdef0123456789abcdef01234567\nbranch refs/heads/dev\n\nworktree ${worktreePath}\nHEAD fedcba9876543210fedcba9876543210fedcba98\nbranch refs/heads/codex/lane\n` };
     }
     if (command === "rev-parse --is-inside-work-tree") return { code: 0, stdout: "true" };
     if (command === "symbolic-ref --quiet --short HEAD") return { code: 0, stdout: "dev" };
