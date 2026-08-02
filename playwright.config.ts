@@ -11,6 +11,7 @@ const tempDir = process.env.TEMP ?? path.join(localDataDir, "tmp");
 const browserPath = process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(localDataDir, "ms-playwright");
 process.env.PLAYWRIGHT_BROWSERS_PATH = browserPath;
 const enableWebKitProjects = process.env.PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS === "true";
+const enableDashboardDemoRoutes = process.env.PLAYWRIGHT_DASHBOARD_ENABLE_DEMO_ROUTES !== "false";
 const expectUnavailableSupervisor = process.env.PLAYWRIGHT_EXPECT_UNAVAILABLE_SUPERVISOR === "true";
 const supervisorCommand = `uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 127.0.0.1 --port ${supervisorPort}`;
 const dashboardCommand = `pnpm --filter @kendall/dashboard exec next dev --hostname 127.0.0.1 --port ${dashboardPort}`;
@@ -80,6 +81,7 @@ export default defineConfig({
             env: {
               NEXT_PUBLIC_SUPERVISOR_URL: supervisorUrl,
               SUPERVISOR_INTERNAL_URL: supervisorUrl,
+              KENDALL_DASHBOARD_ENABLE_DEMO_ROUTES: enableDashboardDemoRoutes ? "true" : "false",
               PLAYWRIGHT_BROWSERS_PATH: browserPath,
               TEMP: tempDir,
               TMP: tempDir,
@@ -111,6 +113,7 @@ export default defineConfig({
           env: {
             NEXT_PUBLIC_SUPERVISOR_URL: supervisorUrl,
             SUPERVISOR_INTERNAL_URL: supervisorUrl,
+            KENDALL_DASHBOARD_ENABLE_DEMO_ROUTES: enableDashboardDemoRoutes ? "true" : "false",
             PLAYWRIGHT_BROWSERS_PATH: browserPath,
             TEMP: tempDir,
             TMP: tempDir,

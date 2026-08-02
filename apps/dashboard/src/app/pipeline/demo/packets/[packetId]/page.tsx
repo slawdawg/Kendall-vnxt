@@ -6,6 +6,7 @@ import {
   pipelineGoldenPathSnapshots,
   pipelineSourceBoundaryChecklist,
 } from "../../../../../lib/pipeline-fixtures";
+import { dashboardDemoRoutesEnabled } from "../../../../../lib/dashboard-demo-routes";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export default async function PipelineDemoPacketPage({
 }: {
   params: Promise<{ packetId: string }>;
 }) {
+  if (!dashboardDemoRoutesEnabled()) notFound();
   const { packetId } = await params;
   let decodedPacketId: string;
   try {

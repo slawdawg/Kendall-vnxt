@@ -23,6 +23,21 @@ In LAN-auth mode the custom runtime serves the standalone sign-in surface and
 proxies only the fixed authentication routes over the supervisor UDS. Protected
 Next routes are session-gated; Packet Detail reads use the bounded read mediator.
 
+## Local preferences and fixture routes
+
+`/settings` stores only presentation preferences in browser local storage. It
+does not configure a provider, connect to provider services, retain credentials,
+or alter supervisor behavior. If browser storage is unavailable, defaults apply
+for that session; reload the page or re-enable both usage graphs to recover the
+normal presentation.
+
+`/pipeline/demo/**` is unavailable from the authenticated LAN cockpit and
+returns a guided 404. Fixture packets can be enabled only for a local
+development/test server by setting both of these conditions: leave
+`KENDALL_LAN_AUTH_ENABLED` unset and set
+`KENDALL_DASHBOARD_ENABLE_DEMO_ROUTES=true`. Never set that demo flag in the
+canonical LAN service; use `/pipeline` for supervisor-backed data.
+
 ## Packet Detail Work Graph
 
 When the supervisor has a current, validated advisory parallel-wave snapshot,
