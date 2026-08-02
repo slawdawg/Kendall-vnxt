@@ -243,7 +243,7 @@ export async function waitForPrivateSupervisorStartupGate(socketPath, { check = 
 
 async function main() {
   const mode = process.argv[2];
-  if (mode !== "supervisor" && mode !== "dashboard" && mode !== "preflight") fail("expected supervisor, dashboard, or preflight mode.");
+  if (mode !== "supervisor" && mode !== "manager" && mode !== "dashboard" && mode !== "preflight") fail("expected supervisor, manager, dashboard, or preflight mode.");
   const pnpmPath = process.env.KENDALL_PNPM_PATH;
   const uvPath = process.env.KENDALL_UV_PATH;
   if (mode === "dashboard" && !pnpmPath) fail("KENDALL_PNPM_PATH is required for the dashboard.");
@@ -264,14 +264,18 @@ async function main() {
     writeTailnetOriginState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), environment.KENDALL_DASHBOARD_ORIGIN);
     writeTailnetRuntimeState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), runtimeState);
   }
-  if (mode === "dashboard") {
+  if (mode === "dashboard" || mode === "manager") {
     await waitForPrivateSupervisorStartupGate(environment.KENDALL_SUPERVISOR_UDS_PATH);
+  }
+  if (mode === "dashboard") {
     assertTailnetRuntimeState(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"), runtimeState);
   }
-  const command = mode === "supervisor" ? uvPath : pnpmPath;
+  const command = mode === "supervisor" ? uvPath : mode === "dashboard" ? pnpmPath : process.execPath;
   const args = mode === "supervisor"
     ? ["run", "--directory", "services/supervisor", "supervisor"]
-    : ["run", "dev:dashboard"];
+    : mode === "dashboard"
+      ? ["run", "dev:dashboard"]
+      : ["scripts/manager-run-loop.mjs", "--dry-run", "--runtime-mode", "read_only_projection", "--interval-ms", "5000", "--summary-json"];
   const child = spawn(command, args, {
     cwd: process.cwd(),
     env: environment,
