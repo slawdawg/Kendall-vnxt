@@ -41,12 +41,25 @@ test("dashboard development origins use the validated configured LAN or Tailscal
   const tailnetConfig = await loadNextConfig({
     KENDALL_LAN_AUTH_ENABLED: "true",
     KENDALL_DASHBOARD_BIND_ADDRESS: "100.86.154.99",
+    KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME: "kendallvnxt-1.tail045dec.ts.net.",
   });
-  assert.deepEqual([...tailnetConfig.allowedDevOrigins], ["localhost", "127.0.0.1", "100.86.154.99"]);
+  assert.deepEqual([...tailnetConfig.allowedDevOrigins], ["localhost", "127.0.0.1", "100.86.154.99", "kendallvnxt-1.tail045dec.ts.net"]);
 
   const invalidConfig = await loadNextConfig({
     KENDALL_LAN_AUTH_ENABLED: "true",
     KENDALL_DASHBOARD_BIND_ADDRESS: "dashboard.local",
   });
   assert.deepEqual([...invalidConfig.allowedDevOrigins], ["localhost", "127.0.0.1"]);
+
+  const invalidHostnameConfig = await loadNextConfig({
+    KENDALL_LAN_AUTH_ENABLED: "true",
+    KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME: "https://not-a-host.example",
+  });
+  assert.deepEqual([...invalidHostnameConfig.allowedDevOrigins], ["localhost", "127.0.0.1"]);
+
+  const publicHostnameConfig = await loadNextConfig({
+    KENDALL_LAN_AUTH_ENABLED: "true",
+    KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME: "dashboard.example.com",
+  });
+  assert.deepEqual([...publicHostnameConfig.allowedDevOrigins], ["localhost", "127.0.0.1"]);
 });
