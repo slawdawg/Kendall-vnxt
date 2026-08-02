@@ -185,8 +185,12 @@ function acquireLifecycleLock(passwordFile) {
 }
 
 async function main(argv = process.argv.slice(2), environment = process.env) {
-  const [action] = argv;
-  if (argv.length !== 1 || !ACTIONS.has(action)) fail("usage: dashboard-test-viewer-lifecycle.mjs <status|enable|rotate|revoke>");
+  // `pnpm run <script> -- <arg>` intentionally forwards its separator too.
+  // Accept precisely that one documented invocation shape, while leaving all
+  // other extra argv values rejected.
+  const values = argv[0] === "--" ? argv.slice(1) : argv;
+  const [action] = values;
+  if (values.length !== 1 || !ACTIONS.has(action)) fail("usage: dashboard-test-viewer-lifecycle.mjs <status|enable|rotate|revoke>");
   const { socketPath, passwordFile } = resolveConfig(environment);
   privateSocket(socketPath);
   const release = acquireLifecycleLock(passwordFile);

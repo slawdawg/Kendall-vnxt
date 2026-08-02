@@ -31,7 +31,7 @@ test("local helper generates a private secret, uses only the fixed UDS lifecycle
   try {
     await listen(supervisor, socketPath);
     const environment = { KENDALL_LAN_AUTH_DIR: authDir, KENDALL_SUPERVISOR_UDS_PATH: socketPath, KENDALL_TEST_VIEWER_PASSWORD_FILE: passwordPath };
-    const enabled = await main(["enable"], environment);
+    const enabled = await main(["--", "enable"], environment);
     assert.equal(enabled.enabled, true);
     assert.equal(statSync(passwordPath).mode & 0o777, 0o600);
     const first = readFileSync(passwordPath, "utf8");
@@ -95,4 +95,14 @@ test("rejects viewer credential paths that collide with fixed LAN auth state", (
     () => resolveConfig({ KENDALL_LAN_AUTH_DIR: authDir, KENDALL_TEST_VIEWER_PASSWORD_FILE: join(authDir, "unrelated-private-file") }),
     /fixed local test-viewer-password name/,
   );
+});
+
+test("accepts only one action after an optional pnpm separator", async () => {
+  const authDir = mkdtempSync(join(tmpdir(), "kendall-test-viewer-argv-"));
+  const socketPath = join(authDir, "supervisor.sock");
+  const passwordPath = join(authDir, "test-viewer-password");
+  const environment = { KENDALL_LAN_AUTH_DIR: authDir, KENDALL_SUPERVISOR_UDS_PATH: socketPath, KENDALL_TEST_VIEWER_PASSWORD_FILE: passwordPath };
+  for (const argv of [[], ["--"], ["--", "enable", "extra"], ["enable", "extra"], ["--", "--", "enable"], ["unknown"]]) {
+    await assert.rejects(main(argv, environment), /usage: dashboard-test-viewer-lifecycle/);
+  }
 });
