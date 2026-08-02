@@ -4,7 +4,7 @@ import test from "node:test";
 
 test("work item detail surfaces persisted memory proposal review controls", async () => {
   const [pageSource, panelSource, runtimeSource] = await Promise.all([
-    readFile("apps/dashboard/src/app/work-items/[work-item-id]/page.tsx", "utf8"),
+    readFile("apps/dashboard/src/components/work-item-detail-page.tsx", "utf8"),
     readFile("apps/dashboard/src/components/memory-proposal-review-panel.tsx", "utf8"),
     readFile("apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", "utf8"),
   ]);

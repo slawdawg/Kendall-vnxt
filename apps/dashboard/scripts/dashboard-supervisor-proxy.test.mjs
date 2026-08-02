@@ -33,6 +33,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
       if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
       if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "packet-1" }] })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
+      if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
       if (request.url === "/operator-views?scope=queue") { forwarded.push(request.url); response.end(JSON.stringify({ data: [] })); return; }
       response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
     });
@@ -51,6 +52,8 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     const legacy = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok" } });
     assert.equal(legacy.status, 200);
     assert.deepEqual(legacy.body.data, [{ packetId: "legacy-packet-1" }]);
+    const runtimeEvidenceReview = await request(port, "/api/supervisor/supervisor/runtime-evidence-review-report", { headers: { cookie: "session=ok" } });
+    assert.equal(runtimeEvidenceReview.status, 200);
     const savedViews = await request(port, "/api/supervisor/operator-views?scope=queue", { headers: { cookie: "session=ok" } });
     assert.equal(savedViews.status, 200);
     assert.deepEqual(forwarded, ["/operator-views?scope=queue"]);

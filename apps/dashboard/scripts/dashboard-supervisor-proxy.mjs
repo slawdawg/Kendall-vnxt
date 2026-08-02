@@ -19,6 +19,7 @@ const TEST_VIEWER_READ_PATHS = [
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
   /^\/supervisor\/status$/,
+  /^\/supervisor\/runtime-evidence-review-report$/,
   /^\/events$/,
   /^\/audit-events$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,

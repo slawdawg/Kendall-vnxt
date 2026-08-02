@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { useOperatorProfile } from "../lib/operator-profile";
+import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
 import { assignWorkItem } from "../lib/supervisor";
 
 export function AssignmentPanel({
@@ -40,6 +41,7 @@ export function AssignmentPanel({
         });
         setMessage(nextAssigneeId || nextAssigneeLabel ? `Assigned to ${nextAssigneeLabel ?? nextAssigneeId}.` : "Ownership released.");
         router.refresh();
+        invalidateAuthenticatedPageData();
       } catch {
         setMessage("Unable to update work item ownership right now.");
       }

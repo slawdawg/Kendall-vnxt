@@ -12,9 +12,9 @@ export function useDashboardSessionRole(): DashboardSessionRole {
     void fetch("/auth/session", { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json().catch(() => null) as { authenticated?: boolean; role?: string } | null;
-        setRole(response.ok && payload?.authenticated === true && (payload.role === "operator" || payload.role === "test_viewer") ? payload.role : "operator");
+        setRole(response.ok && payload?.authenticated === true && (payload.role === "operator" || payload.role === "test_viewer") ? payload.role : "unknown");
       })
-      .catch(() => setRole("operator"))
+      .catch(() => setRole("unknown"))
       .finally(() => window.clearTimeout(timeout));
     return () => {
       window.clearTimeout(timeout);

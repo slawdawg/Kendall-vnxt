@@ -36,13 +36,18 @@ test("named pages use the authenticated LAN client boundary rather than SSR supe
     assert.match(source, /KENDALL_LAN_AUTH_ENABLED/);
     assert.match(source, /LanOperatorPage/);
   }
-  const detail = await readFile(new URL("src/app/work-items/[work-item-id]/page.tsx", root), "utf8");
-  assert.match(detail, /"use client"/);
-  assert.match(detail, /useAuthenticatedPageRead/);
-  assert.match(detail, /AuthenticatedPageState/);
-  assert.match(detail, /const load = useCallback\(async \(signal: AbortSignal\)/);
-  assert.match(detail, /getWorkItem\(workItemId, options\)/);
-  assert.match(detail, /getWorkPacket\(`work_item:\$\{workItemId\}`, options\)/);
+  const [detailRoute, detailClient] = await Promise.all([
+    readFile(new URL("src/app/work-items/[work-item-id]/page.tsx", root), "utf8"),
+    readFile(new URL("src/components/work-item-detail-page.tsx", root), "utf8"),
+  ]);
+  assert.match(detailRoute, /KENDALL_LAN_AUTH_ENABLED/);
+  assert.match(detailRoute, /getWorkItem\(workItemId\)/);
+  assert.match(detailRoute, /<WorkItemDetailPage workItemId=\{workItemId\} lanAuthEnabled \/>/);
+  assert.match(detailClient, /"use client"/);
+  assert.match(detailClient, /useAuthenticatedPageRead/);
+  assert.match(detailClient, /AuthenticatedPageState/);
+  assert.match(detailClient, /loadWorkItemDetail\(workItemId, signal\)/);
+  assert.match(detailClient, /getWorkPacket\(`work_item:\$\{workItemId\}`, options\)/);
 });
 
 test("test viewer navigation contains only the pipeline surface while its session role is unknown or viewer", async () => {

@@ -50,6 +50,7 @@
     "route": "/work-items/:id",
     "roles": ["operator"],
     "reads": [
+      { "method": "GET", "path": "/work-items" },
       { "method": "GET", "path": "/work-items/:id" },
       { "method": "GET", "path": "/work-items/:id/events" },
       { "method": "GET", "path": "/work-items/:id/execution-attempts" },

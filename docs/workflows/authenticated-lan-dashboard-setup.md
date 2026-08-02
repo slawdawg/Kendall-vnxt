@@ -220,6 +220,21 @@ The LAN runtime does not provide self-signup, generic user management, or SSO.
 Those remain future extensions behind the same supervisor-owned authentication
 boundary.
 
+## Authenticated operator pages
+
+In LAN-auth mode, `/active-work`, `/attention`, `/queue`, `/audit`,
+`/proposed-work`, and `/work-items/:id` read only through the session-bound
+dashboard proxy. They are available to `operator`; `test_viewer` remains
+limited to the read-only `/pipeline` surface. A missing, expired, or malformed
+session stays read-only and shows an explicit sign-in or unavailable state.
+
+If an operator page shows **Unavailable**, confirm the supervisor is running,
+the dashboard and supervisor use the same private UDS path, and sign in again.
+Use the page retry control after recovery; do not expose the UDS, bootstrap
+password, cookies, CSRF token, or supervisor TCP port to diagnose the problem.
+The normal non-LAN dashboard retains server-side supervisor reads through
+`SUPERVISOR_INTERNAL_URL`.
+
 ## Independently revocable dashboard verification credential
 
 After the reviewed source contract is installed and the existing private-UDS

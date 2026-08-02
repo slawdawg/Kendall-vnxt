@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+const AUTHENTICATED_PAGE_DATA_CHANGED = "kendall:authenticated-page-data-changed";
+
+export function invalidateAuthenticatedPageData() {
+  window.dispatchEvent(new Event(AUTHENTICATED_PAGE_DATA_CHANGED));
+}
+
 export type DashboardReadState<T> =
   | { kind: "loading"; data: null; error: null }
   | { kind: "ready"; data: T; error: null }
@@ -26,11 +32,14 @@ export function useAuthenticatedPageRead<T>(
   load: (signal: AbortSignal) => Promise<T>,
   dependencies: readonly unknown[],
   isEmpty: (data: T) => boolean = () => false,
+  enabled = true,
 ) {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<DashboardReadState<T>>({ kind: "loading", data: null, error: null });
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   useEffect(() => {
+    if (!enabled) return;
     const controller = new AbortController();
     let active = true;
     const deadline = window.setTimeout(() => {
@@ -54,7 +63,13 @@ export function useAuthenticatedPageRead<T>(
     };
   // load is intentionally owned by the page callback; dependencies describe its stable inputs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...dependencies, attempt]);
+  }, [...dependencies, attempt, enabled]);
 
-  return { state, retry: useCallback(() => setAttempt((value) => value + 1), []) };
+  useEffect(() => {
+    if (!enabled) return;
+    window.addEventListener(AUTHENTICATED_PAGE_DATA_CHANGED, retry);
+    return () => window.removeEventListener(AUTHENTICATED_PAGE_DATA_CHANGED, retry);
+  }, [enabled, retry]);
+
+  return { state, retry };
 }
