@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const usageVisibilityOptions = [
   {
@@ -17,33 +17,35 @@ const usageVisibilityOptions = [
 
 function readStoredUsageVisible(key: string) {
   try {
-    return window.localStorage.getItem(key) !== "false";
+    return { available: true, value: window.localStorage.getItem(key) !== "false" };
   } catch {
-    return true;
+    return { available: false, value: true };
   }
 }
 
 function writeStoredUsageVisible(key: string, checked: boolean) {
   try {
     window.localStorage.setItem(key, checked ? "true" : "false");
+    return true;
   } catch {
-    return;
+    return false;
   }
 }
 
 export function UsageVisibilitySettings() {
-  const [visibility, setVisibility] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(
-      usageVisibilityOptions.map((option) => [
-        option.key,
-        typeof window === "undefined" ? true : readStoredUsageVisible(option.key),
-      ])
-    )
-  );
+  const [visibility, setVisibility] = useState<Record<string, boolean>>(() => Object.fromEntries(usageVisibilityOptions.map((option) => [option.key, true])));
+  const [storageState, setStorageState] = useState<"loading" | "saved" | "unavailable">("loading");
+
+  useEffect(() => {
+    const entries = usageVisibilityOptions.map((option) => [option.key, readStoredUsageVisible(option.key)] as const);
+    setVisibility(Object.fromEntries(entries.map(([key, result]) => [key, result.value])));
+    setStorageState(entries.every(([, result]) => result.available) ? "saved" : "unavailable");
+  }, []);
 
   function setOption(key: string, checked: boolean) {
-    writeStoredUsageVisible(key, checked);
+    const saved = writeStoredUsageVisible(key, checked);
     setVisibility((current) => ({ ...current, [key]: checked }));
+    setStorageState(saved ? "saved" : "unavailable");
     window.dispatchEvent(new Event("kendall-usage-visibility-change"));
   }
 
@@ -51,6 +53,9 @@ export function UsageVisibilitySettings() {
     <section aria-label="Usage graph visibility settings" className="rounded-[0.5rem] border bg-[var(--panel)] p-4">
       <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent)]">Visibility</p>
       <h2 className="mt-2 text-xl font-semibold">Pipeline usage graphs</h2>
+      <p className="mt-2 text-sm text-[var(--muted)]" role="status">
+        {storageState === "loading" ? "Loading local preferences…" : storageState === "saved" ? "Saved only in this browser." : "Browser storage is unavailable; preferences use the defaults for this session."}
+      </p>
       <div className="mt-4 grid gap-2">
         {usageVisibilityOptions.map((option) => (
           <label key={option.key} className="flex min-w-0 items-start gap-3 rounded-[0.375rem] border bg-[var(--surface)] p-3">

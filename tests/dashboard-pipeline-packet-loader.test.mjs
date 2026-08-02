@@ -1116,6 +1116,9 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoRouteSource, /label: "Demo fixtures"/);
   assert.match(demoDetailRouteSource, /sourceKind: "demo-fixture"/);
   assert.match(demoDetailRouteSource, /cannot satisfy live proof or invoke supervisor authority/);
+  assert.match(demoRouteSource, /dashboardDemoRoutesEnabled\(\)/);
+  assert.match(demoDetailRouteSource, /dashboardDemoRoutesEnabled\(\)/);
+  assert.match(demoRouteSource, /notFound\(\)/);
 });
 
 test("dedicated runtime delegates timeout and LAN-auth policy to shared transport", async () => {

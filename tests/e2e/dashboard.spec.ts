@@ -866,7 +866,7 @@ test.describe("dashboard workflow coverage", () => {
     await page.goto("/pipeline/demo");
 
     await expect(page.getByText("Demo fixtures", { exact: true })).toBeVisible();
-    await expect(page.locator(".pipeline-mini-packet-proof", { hasText: "non-live fixture" }).first()).toBeVisible();
+    await expect(page.getByText("Demo fixtures cannot prove live work.", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("Supervisor runtime", { exact: true })).toHaveCount(0);
     await page.locator(".pipeline-mini-packet").first().click();
     await expect(page.getByText("Fixture/non-live packet; cannot satisfy live proof.", { exact: true })).toBeVisible();
@@ -1668,7 +1668,7 @@ test.describe("dashboard workflow coverage", () => {
     expect(forbiddenExternalRequests).toEqual([]);
   });
 
-  test("opens settings with usage source configuration placeholders", async ({ page }) => {
+  test("opens settings with truthful local preferences and preserves a choice", async ({ page }) => {
     await page.goto("/settings");
 
     await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
@@ -1676,22 +1676,20 @@ test.describe("dashboard workflow coverage", () => {
     await settingsMenu.click();
     await expect(page.locator("nav a[href=\"/settings\"]")).toHaveAttribute("aria-current", "page");
     await settingsMenu.click();
-    await expect(page.getByRole("heading", { name: "Configuration", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Local dashboard preferences", exact: true })).toBeVisible();
     const settings = page.getByRole("main", { name: "Dashboard settings" });
     await expect(settings).toBeVisible();
-    await expect(settings.getByLabel("Usage source settings")).toBeVisible();
-    await expect(settings.getByText("Codex and Claude limits", { exact: true })).toBeVisible();
-    await expect(settings.getByText("Codex", { exact: true })).toBeVisible();
-    await expect(settings.getByText("Claude", { exact: true })).toBeVisible();
-    await expect(settings.getByText("No read-only source selected", { exact: true })).toHaveCount(2);
-    await expect(settings.getByText("ccusage local summary", { exact: true })).toHaveCount(2);
+    await expect(settings.getByLabel("Local usage source status")).toBeVisible();
+    await expect(settings.getByText("No local usage-summary adapter is configured", { exact: false })).toBeVisible();
+    await expect(settings.getByText("Provider network access", { exact: true })).toBeVisible();
+    await expect(settings.getByText("Not connected", { exact: true })).toHaveCount(0);
     await expect(settings.getByLabel("Usage graph visibility settings")).toBeVisible();
     await expect(settings.getByLabel("Codex usage")).toBeChecked();
     await expect(settings.getByLabel("Claude usage")).toBeChecked();
     await settings.getByLabel("Claude usage").uncheck();
     await expect(settings.getByLabel("Claude usage")).not.toBeChecked();
-    await expect(settings.getByText("Do not store provider credentials in dashboard settings", { exact: true })).toBeVisible();
-    await expect(settings.getByText("Show unknown usage as not connected", { exact: true })).toBeVisible();
+    await expect(settings.getByLabel("Settings recovery guidance")).toBeVisible();
+    await expect(settings.getByText("Saved only in this browser.", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /connect|save|authorize|login/i })).toHaveCount(0);
     await page.reload();
     await expect(page.getByRole("main", { name: "Dashboard settings" }).getByLabel("Claude usage")).not.toBeChecked();

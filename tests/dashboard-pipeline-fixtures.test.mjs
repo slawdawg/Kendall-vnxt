@@ -2643,13 +2643,14 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /currentItem\?\.type === "packet" && currentItem\.id === packetId/);
   assert.match(navSource, /href:\s*"\/settings"/);
   assert.match(settingsRouteSource, /Dashboard settings/);
-  assert.match(settingsRouteSource, /Usage source settings/);
-  assert.match(settingsRouteSource, /Codex and Claude limits/);
+  assert.match(settingsRouteSource, /Local usage source status/);
+  assert.match(settingsRouteSource, /No local usage-summary adapter is configured/);
   assert.match(settingsRouteSource, /UsageVisibilitySettings/);
   assert.match(settingsUsageVisibilitySource, /kendall\.dashboard\.usage\.codex\.visible/);
   assert.match(settingsUsageVisibilitySource, /kendall\.dashboard\.usage\.claude\.visible/);
   assert.match(settingsUsageVisibilitySource, /Usage graph visibility settings/);
-  assert.match(settingsRouteSource, /ccusage local summary/);
+  assert.match(settingsRouteSource, /Settings recovery guidance/);
+  assert.doesNotMatch(settingsRouteSource, /Not connected|ccusage local summary/);
   assert.doesNotMatch(settingsRouteSource + settingsUsageVisibilitySource, /fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon|api\.openai|api\.anthropic|claude\.ai/);
 
   for (const visibleLabel of [
