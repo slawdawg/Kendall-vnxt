@@ -48,6 +48,7 @@ pnpm run check:ci-fast
 pnpm run check:workspace-fast
 pnpm run check:sandbox-fast
 pnpm run check:dashboard-fast
+pnpm run check:dashboard-delivery
 pnpm run check:static
 pnpm run check:static-bundles
 pnpm run test:static-bundle-summary
@@ -62,6 +63,15 @@ Use the narrower fast suites when the change touches only one friction surface:
 - `check:sandbox-fast` for sandbox-boundary and anti-churn routing.
 - `check:dashboard-fast` for dashboard E2E runner contracts and pipeline
   fixture smoke coverage.
+- `check:dashboard-delivery` for a dashboard-only managed lane. It is selected
+  by `finish-pr --verify scoped` only when every changed path is a dashboard
+  source, dashboard contract/e2e test, dashboard runner/configuration file, or
+  documentation path. It runs docs validation, the dashboard type/build
+  boundary and build, authenticated runtime/proxy contracts, pipeline loader
+  and fixture contracts, and browser/E2E runner contracts. It deliberately
+  excludes `check:workspace-fast` and `test:codex-workspace`; mixed or unknown
+  changes still use the generic `check:fast` profile. It is not a replacement
+  for the repository `check` gate or PR CI.
 - `check:static-<bundle>` for one static bundle lane.
 - `node ./scripts/summarize-static-bundle-reports.mjs --reports-dir <dir>` for
   the same-head summary used by the CI artifact.

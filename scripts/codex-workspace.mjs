@@ -38,6 +38,7 @@ const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
 const codexWorkspaceVerificationTimeoutMs = 600_000;
+const dashboardVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
 const resumableCheckInvocationBudgetMs = 180_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
@@ -332,7 +333,7 @@ resume options:
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
   --stage-all               Stage all current worktree changes before commit.
-  --verify <profile>        Verification profile: scoped, preflight, check, check-fast, workspace-fast, manager-control-plane, docs, codex-workspace.
+  --verify <profile>        Verification profile: scoped, preflight, check, check-fast, dashboard, workspace-fast, manager-control-plane, docs, codex-workspace.
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
@@ -7265,11 +7266,19 @@ function buildRebuildIndexSummary({ state, records, planned, skipped }) {
 function assertBaseCheckoutRecoveryClearForDelivery(state) {
   const markerPath = baseCheckoutRecoveryMarkerPath(state);
   const recoveryMarker = readBaseCheckoutRecoveryMarker(markerPath);
-  const recovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+  const recovery = inspectBaseCheckoutRecovery(baseCheckoutRecoveryInput(state, recoveryMarker), { cwd: repoRoot });
   if (recovery.status !== "clear") {
     throw new Error(`Base Checkout recovery prevents delivery (${recovery.reasonCode}). ${recovery.nextSafeAction}`);
   }
   return recovery;
+}
+
+function baseCheckoutRecoveryInput(state, recoveryMarker) {
+  const managedWorktreePaths = readManifests(state)
+    .map((record) => record.manifest)
+    .filter((manifest) => manifest.status !== "closed" && typeof manifest.worktree_path === "string" && manifest.worktree_path.length > 0)
+    .map((manifest) => manifest.worktree_path);
+  return { recoveryMarker, managedWorktreePaths };
 }
 
 function doctor(argv) {
@@ -7285,7 +7294,7 @@ function doctor(argv) {
 
   const markerPath = baseCheckoutRecoveryMarkerPath(state);
   let recoveryMarker = readBaseCheckoutRecoveryMarker(markerPath);
-  let baseCheckoutRecovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+  let baseCheckoutRecovery = inspectBaseCheckoutRecovery(baseCheckoutRecoveryInput(state, recoveryMarker), { cwd: repoRoot });
   let recoveryMutation = "none; inspection only";
   if (options.breakGlass === true) {
     if (!baseCheckoutRecovery.checkout) {
@@ -7293,7 +7302,7 @@ function doctor(argv) {
     }
     recoveryMarker = activeBreakGlassMarker(baseCheckoutRecovery.checkout);
     writeJsonAtomic(markerPath, recoveryMarker);
-    baseCheckoutRecovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+    baseCheckoutRecovery = inspectBaseCheckoutRecovery(baseCheckoutRecoveryInput(state, recoveryMarker), { cwd: repoRoot });
     recoveryMutation = "metadata-only break-glass recovery marker recorded";
   } else if (options.resolveBreakGlass === true) {
     const resolution = boundedRecoveryResolution(options.resolution);
@@ -7306,7 +7315,7 @@ function doctor(argv) {
       resolution,
     };
     writeJsonAtomic(markerPath, recoveryMarker);
-    baseCheckoutRecovery = inspectBaseCheckoutRecovery({ recoveryMarker }, { cwd: repoRoot });
+    baseCheckoutRecovery = inspectBaseCheckoutRecovery(baseCheckoutRecoveryInput(state, recoveryMarker), { cwd: repoRoot });
     recoveryMutation = "metadata-only break-glass recovery marker resolved";
   }
 
@@ -8021,6 +8030,7 @@ function scopedVerificationProfile(changedFiles = []) {
   if (files.every((file) => isDocsOnlyVerificationPath(file))) return "docs";
   if (files.every((file) => isManagerControlPlaneVerificationPath(file))) return "manager-control-plane";
   if (files.every((file) => isCodexWorkspaceVerificationPath(file))) return "codex-workspace";
+  if (files.every((file) => isDashboardDeliveryVerificationPath(file))) return "dashboard";
   return "check-fast";
 }
 
@@ -8050,6 +8060,20 @@ function isCodexWorkspaceVerificationPath(file) {
   );
 }
 
+function isDashboardDeliveryVerificationPath(file) {
+  return (
+    /^apps\/dashboard\//.test(file) ||
+    /^tests\/dashboard-[^/]+\.test\.(?:mjs|ts)$/.test(file) ||
+    /^tests\/e2e\/dashboard[^/]*\.ts$/.test(file) ||
+    file === "tests/gate4-bmad-dashboard-e2e.test.mjs" ||
+    file === "tests/fixtures/pipeline/gate4-bmad-dashboard-e2e-proof-2026-07-12.json" ||
+    /^scripts\/(?:check-dashboard-[^/]+|dashboard-[^/]+|run-(?:controls|detail|mobile|managed(?:-mobile-recipe)?|provider-raw-output-ui)-e2e)\.mjs$/.test(file) ||
+    file === "scripts/gate4-bmad-dashboard-e2e.mjs" ||
+    /^playwright\.config\.(?:ts|mjs)$/.test(file) ||
+    /^docs\/.*\.md$/.test(file)
+  );
+}
+
 function verificationChangedFiles(manifest, worktreeStatus) {
   const files = new Set(statusPaths(worktreeStatus));
   for (const file of committedChangedFiles(manifest)) {
@@ -8073,20 +8097,22 @@ function verificationCommand(profile) {
     preflight: ["node", "./scripts/preflight.mjs"],
     check: ["pnpm", "run", "check"],
     "check-fast": ["pnpm", "run", "check:fast"],
+    dashboard: ["pnpm", "run", "check:dashboard-delivery"],
     "workspace-fast": ["pnpm", "run", "check:workspace-fast"],
     "manager-control-plane": ["pnpm", "run", "check:manager-control-plane:delivery"],
     docs: ["pnpm", "run", "check:docs"],
     "codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],
   };
   if (!profiles[profile]) {
-    throw new Error(`Unknown verification profile: ${profile}. Use scoped, preflight, check, check-fast, workspace-fast, manager-control-plane, docs, or codex-workspace.`);
+    throw new Error(`Unknown verification profile: ${profile}. Use scoped, preflight, check, check-fast, dashboard, workspace-fast, manager-control-plane, docs, or codex-workspace.`);
   }
   return profiles[profile];
 }
 
 function verificationTimeoutMs(profile) {
   if (profile === "check") return checkVerificationTimeoutMs;
-  return profile === "codex-workspace" ? codexWorkspaceVerificationTimeoutMs : defaultVerificationTimeoutMs;
+  if (profile === "codex-workspace") return codexWorkspaceVerificationTimeoutMs;
+  return profile === "dashboard" ? dashboardVerificationTimeoutMs : defaultVerificationTimeoutMs;
 }
 
 function resumableCheckPlan(cwd) {

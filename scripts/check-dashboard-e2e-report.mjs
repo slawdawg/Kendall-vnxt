@@ -146,6 +146,17 @@ assertCondition(
   "Aggregate check scripts must run pnpm run check:fast before broad dashboard checks",
   failures,
 );
+assertCondition(
+  packageJson.scripts?.["check:dashboard-delivery"] === "pnpm run check:docs && pnpm run test:dashboard-build-boundary && pnpm run build:dashboard && pnpm run test:dashboard-auth-runtime && pnpm run check:dashboard-pipeline-boundary && pnpm run test:dashboard-pipeline-loader && pnpm run test:dashboard-pipeline-fixtures && pnpm run test:gate4-bmad-dashboard-contract && pnpm run check:e2e-report && pnpm run test:dashboard-e2e-runner",
+  "Dashboard delivery profile must retain its fixed docs, build, auth/proxy, pipeline, and E2E contract command",
+  failures,
+);
+assertCondition(
+  !packageJson.scripts?.["check:dashboard-delivery"]?.includes("check:workspace-fast") &&
+    !packageJson.scripts?.["check:dashboard-delivery"]?.includes("test:codex-workspace"),
+  "Dashboard delivery profile must not include unrelated workspace lifecycle fixtures",
+  failures,
+);
 for (const dashboardFastCommand of [
   '"check:e2e-report"',
   '"test:dashboard-e2e-runner"',
