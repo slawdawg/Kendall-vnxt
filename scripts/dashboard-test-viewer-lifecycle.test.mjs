@@ -4,7 +4,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { main } from "./dashboard-test-viewer-lifecycle.mjs";
+import { main, resolveConfig } from "./dashboard-test-viewer-lifecycle.mjs";
 
 function listen(server, target) { return new Promise((resolve) => server.listen(target, resolve)); }
 function close(server) { return new Promise((resolve) => server.close(resolve)); }
@@ -69,7 +69,7 @@ test("reclaims a stale private lifecycle lock without exposing the credential", 
   });
   try {
     await listen(supervisor, socketPath);
-    writeFileSync(`${passwordPath}.lock`, "999999\n", { mode: 0o600 });
+    writeFileSync(`${passwordPath}.lock`, "999999:0\n", { mode: 0o600 });
     const environment = { KENDALL_LAN_AUTH_DIR: authDir, KENDALL_SUPERVISOR_UDS_PATH: socketPath, KENDALL_TEST_VIEWER_PASSWORD_FILE: passwordPath };
     const status = await main(["status"], environment);
     assert.equal(status.enabled, false);
@@ -77,4 +77,22 @@ test("reclaims a stale private lifecycle lock without exposing the credential", 
   } finally {
     if (supervisor.listening) await close(supervisor);
   }
+});
+
+test("rejects viewer credential paths that collide with fixed LAN auth state", () => {
+  const authDir = mkdtempSync(join(tmpdir(), "kendall-test-viewer-paths-"));
+  const socketPath = join(authDir, "test-viewer-password");
+  const bootstrapPath = join(authDir, "test-viewer-password");
+  assert.throws(
+    () => resolveConfig({ KENDALL_LAN_AUTH_DIR: authDir, KENDALL_SUPERVISOR_UDS_PATH: socketPath, KENDALL_TEST_VIEWER_PASSWORD_FILE: socketPath }),
+    /conflicts with reserved LAN auth state/,
+  );
+  assert.throws(
+    () => resolveConfig({ KENDALL_LAN_AUTH_DIR: authDir, KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE: bootstrapPath, KENDALL_TEST_VIEWER_PASSWORD_FILE: bootstrapPath }),
+    /conflicts with reserved LAN auth state/,
+  );
+  assert.throws(
+    () => resolveConfig({ KENDALL_LAN_AUTH_DIR: authDir, KENDALL_TEST_VIEWER_PASSWORD_FILE: join(authDir, "unrelated-private-file") }),
+    /fixed local test-viewer-password name/,
+  );
 });

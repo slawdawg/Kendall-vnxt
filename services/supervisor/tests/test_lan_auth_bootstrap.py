@@ -157,7 +157,7 @@ def test_test_viewer_lifecycle_isolated_from_bootstrap_and_sessions(tmp_path, mo
             session.add(DashboardSession(operator_id=operator.id, token_hash="operator-token", csrf_token_hash="operator-csrf", expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
         async with SessionLocal.begin() as session:
             result = await enable_or_rotate_test_viewer(session, b"viewer-password", rotate=False)
-            assert result.created and result.enabled and not result.rotated
+            assert result.created and result.configured and result.enabled and not result.rotated
         async with SessionLocal.begin() as session:
             viewer = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "test_viewer"))).scalar_one()
             session.add(DashboardSession(operator_id=viewer.id, token_hash="viewer-token", csrf_token_hash="viewer-csrf", expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
@@ -170,11 +170,18 @@ def test_test_viewer_lifecycle_isolated_from_bootstrap_and_sessions(tmp_path, mo
             assert next(item for item in sessions if item.token_hash == "viewer-token").revoked_at is not None
         async with SessionLocal.begin() as session:
             revoked = await revoke_test_viewer(session)
-            assert not revoked.enabled
+            assert revoked.configured and not revoked.enabled
+        async with SessionLocal.begin() as session:
+            from supervisor.application.lan_auth_bootstrap import LanAuthConfigurationError
+
+            with pytest.raises(LanAuthConfigurationError):
+                await enable_or_rotate_test_viewer(session, b"viewer-password-after-revoke", rotate=True)
+            enabled_again = await enable_or_rotate_test_viewer(session, b"viewer-password-after-revoke", rotate=False)
+            assert enabled_again.configured and enabled_again.enabled and not enabled_again.rotated
         async with SessionLocal() as session:
             state = await test_viewer_status(session)
             operator = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "operator"))).scalar_one()
-            assert state.created and not state.enabled and operator.enabled
+            assert state.configured and state.enabled and operator.enabled
 
     asyncio.run(run())
 

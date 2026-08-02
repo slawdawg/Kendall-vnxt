@@ -57,9 +57,15 @@ function resolveConfig(environment = process.env) {
   const authDir = privateDirectory(environment.KENDALL_LAN_AUTH_DIR || join(homedir(), "kendall-lan-auth"));
   const socketPath = environment.KENDALL_SUPERVISOR_UDS_PATH || join(authDir, "supervisor.sock");
   const passwordFile = environment.KENDALL_TEST_VIEWER_PASSWORD_FILE || join(authDir, "test-viewer-password");
-  if (!isAbsolute(socketPath) || dirname(resolve(socketPath)) !== authDir) fail("supervisor UDS must be inside the private auth directory.");
-  if (!isAbsolute(passwordFile) || dirname(resolve(passwordFile)) !== authDir) fail("credential file must be inside the private auth directory.");
-  return { authDir, socketPath: resolve(socketPath), passwordFile: resolve(passwordFile) };
+  const bootstrapFile = environment.KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE || join(authDir, "bootstrap-password");
+  const resolvedSocket = resolve(socketPath);
+  const resolvedPassword = resolve(passwordFile);
+  const resolvedBootstrap = resolve(bootstrapFile);
+  if (!isAbsolute(socketPath) || dirname(resolvedSocket) !== authDir) fail("supervisor UDS must be inside the private auth directory.");
+  if (!isAbsolute(passwordFile) || dirname(resolvedPassword) !== authDir) fail("credential file must be inside the private auth directory.");
+  if (basename(resolvedPassword) !== "test-viewer-password") fail("credential file must use the fixed local test-viewer-password name.");
+  if (resolvedPassword === resolvedSocket || resolvedPassword === resolvedBootstrap) fail("credential file conflicts with reserved LAN auth state.");
+  return { authDir, socketPath: resolvedSocket, passwordFile: resolvedPassword };
 }
 
 function requestLifecycle(socketPath, payload) {
@@ -110,13 +116,33 @@ function createPendingCredential(passwordFile) {
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     writeAllSync(descriptor, `${secret}\n`);
   } catch {
-    rmSync(temporary, { force: true });
+    try { rmSync(temporary, { force: true }); } catch { /* fixed failure below */ }
     fail("could not create the private credential file.");
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
-  privateRegularFile(temporary);
+  try {
+    privateRegularFile(temporary);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch { /* caller receives a fixed safe error */ }
+    throw error;
+  }
   return { temporary, secret };
+}
+
+function processStartIdentity(pid) {
+  try {
+    const statLine = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = statLine.lastIndexOf(")");
+    const fields = close >= 0 ? statLine.slice(close + 2).trim().split(/\s+/) : [];
+    const startedAt = fields[19]; // Linux proc stat field 22, after pid/comm.
+    if (!/^\d+$/.test(startedAt || "")) fail("test-viewer lifecycle lock cannot be verified.");
+    return startedAt;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ESRCH") return null;
+    if (error?.message?.startsWith("Kendall test viewer:")) throw error;
+    fail("test-viewer lifecycle lock cannot be verified.");
+  }
 }
 
 function acquireLifecycleLock(passwordFile) {
@@ -126,7 +152,9 @@ function acquireLifecycleLock(passwordFile) {
   try {
     descriptor = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     created = true;
-    writeAllSync(descriptor, `${process.pid}\n`);
+    const startedAt = processStartIdentity(process.pid);
+    if (!startedAt) fail("test-viewer lifecycle lock cannot be verified.");
+    writeAllSync(descriptor, `${process.pid}:${startedAt}\n`);
     privateRegularFile(lockPath);
   } catch (error) {
     if (descriptor !== undefined) closeSync(descriptor);
@@ -137,24 +165,22 @@ function acquireLifecycleLock(passwordFile) {
     if (error?.code !== "EEXIST") fail("could not acquire the test-viewer lifecycle lock.");
     privateRegularFile(lockPath);
     const ownerText = readFileSync(lockPath, "utf8");
-    if (!/^[1-9]\d*\n$/.test(ownerText)) fail("test-viewer lifecycle lock is unsafe.");
-    const owner = Number.parseInt(ownerText, 10);
+    const match = /^([1-9]\d*):(\d+)\n$/.exec(ownerText);
+    if (!match) fail("test-viewer lifecycle lock is unsafe.");
+    const owner = Number.parseInt(match[1], 10);
     if (!Number.isSafeInteger(owner)) fail("test-viewer lifecycle lock is unsafe.");
-    let ownerIsRunning = false;
-    try {
-      process.kill(owner, 0);
-      ownerIsRunning = true;
-    } catch (ownerError) {
-      if (ownerError?.code === "EPERM") fail("another test-viewer lifecycle operation is already running.");
-      if (ownerError?.code !== "ESRCH") fail("test-viewer lifecycle lock cannot be verified.");
-    }
-    if (ownerIsRunning) fail("another test-viewer lifecycle operation is already running.");
+    const actualStart = processStartIdentity(owner);
+    if (actualStart === match[2]) fail("another test-viewer lifecycle operation is already running.");
     rmSync(lockPath);
     return acquireLifecycleLock(passwordFile);
   }
   return () => {
-    closeSync(descriptor);
-    rmSync(lockPath, { force: true });
+    try {
+      closeSync(descriptor);
+      rmSync(lockPath, { force: true });
+    } catch {
+      fail("could not release the test-viewer lifecycle lock.");
+    }
   };
 }
 
@@ -179,13 +205,18 @@ async function main(argv = process.argv.slice(2), environment = process.env) {
       if (state.enabled) fail("test viewer is already enabled; use rotate or revoke.");
     }
     const pending = createPendingCredential(passwordFile);
+    let published = false;
     try {
       const result = await requestLifecycle(socketPath, { action, password: pending.secret });
       renameSync(pending.temporary, passwordFile);
+      published = true;
       privateRegularFile(passwordFile);
       return result;
     } catch (error) {
-      rmSync(pending.temporary, { force: true });
+      try { rmSync(pending.temporary, { force: true }); } catch { /* outer handler stays redacted */ }
+      if (published) {
+        try { rmSync(passwordFile, { force: true }); } catch { /* outer handler stays redacted */ }
+      }
       throw error;
     }
   } finally {
@@ -196,7 +227,13 @@ async function main(argv = process.argv.slice(2), environment = process.env) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().then(
     (result) => process.stdout.write(`${JSON.stringify({ schemaVersion: result.schemaVersion, role: result.role, configured: result.configured, enabled: result.enabled, rotated: result.rotated })}\n`),
-    (error) => { process.stderr.write(`${error instanceof Error ? error.message : "Kendall test viewer: failed."}\n`); process.exitCode = 1; },
+    (error) => {
+      const message = error instanceof Error && error.message.startsWith("Kendall test viewer:")
+        ? error.message
+        : "Kendall test viewer: lifecycle operation failed.";
+      process.stderr.write(`${message}\n`);
+      process.exitCode = 1;
+    },
   );
 }
 

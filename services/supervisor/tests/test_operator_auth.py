@@ -481,7 +481,13 @@ def test_test_viewer_lifecycle_route_is_private_uds_only_and_never_returns_secre
         }
         assert secret.encode() not in body
         status, _, body = await _asgi_request(main.app, "POST", "/internal/lan-auth/test-viewer", body={"action": "status"}, headers=lifecycle_headers)
-        assert status == 200 and json.loads(body)["enabled"] is True
+        assert status == 200 and json.loads(body) == {
+            "schemaVersion": "kendall-test-viewer-lifecycle/v1",
+            "role": "test_viewer",
+            "configured": True,
+            "enabled": True,
+            "rotated": False,
+        }
 
         # A normal TCP-shaped request never reaches the lifecycle handler.
         messages = []

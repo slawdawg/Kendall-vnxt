@@ -12,7 +12,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from sqlalchemy import case, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.application.lan_auth_bootstrap import PASSWORD_HASHER
+from supervisor.application.lan_auth_bootstrap import PASSWORD_HASHER, TEST_VIEWER_AUTH_LIFECYCLE_LOCK
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.models import (
     DashboardAuditEvent,
@@ -294,6 +294,13 @@ async def authenticate_dashboard_account(
 ) -> tuple[bool, str | None, str]:
     """Serialize role-scoped rate limit state for one of two fixed accounts."""
 
+    # Viewer verification and session creation share the lifecycle lock with
+    # enable/rotate/revoke. This makes rotation's session revocation atomic
+    # relative to an old-password login through its committing session write.
+    if normalize_dashboard_account(account) == TEST_VIEWER_ROLE:
+        async with TEST_VIEWER_AUTH_LIFECYCLE_LOCK:
+            async with _RATE_LIMIT_LOCK:
+                return await _authenticate_dashboard_account(session, password, source_key, settings, account)
     async with _RATE_LIMIT_LOCK:
         return await _authenticate_dashboard_account(session, password, source_key, settings, account)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import socket
 import stat
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,10 +42,15 @@ class TestViewerIdentityResult:
     created: bool
     rotated: bool
     enabled: bool
+    configured: bool
 
 
 MAX_BOOTSTRAP_PASSWORD_BYTES = 4096
 TEST_VIEWER_ROLE = "test_viewer"
+# One supervisor process owns both fixed-viewer login and lifecycle writes.
+# Holding this lock through the session commit prevents a pre-rotation password
+# verification from committing a new viewer session after rotation revokes it.
+TEST_VIEWER_AUTH_LIFECYCLE_LOCK = asyncio.Lock()
 
 
 def _validate_bootstrap_password(password: bytes) -> bytes:
@@ -256,7 +262,7 @@ async def test_viewer_status(session: AsyncSession) -> TestViewerIdentityResult:
             select(DashboardOperator).where(DashboardOperator.role == TEST_VIEWER_ROLE)
         )
     ).scalar_one_or_none()
-    return TestViewerIdentityResult(created=record is not None, rotated=False, enabled=bool(record and record.enabled))
+    return TestViewerIdentityResult(created=False, rotated=False, enabled=bool(record and record.enabled), configured=record is not None)
 
 
 async def enable_or_rotate_test_viewer(
@@ -274,6 +280,8 @@ async def enable_or_rotate_test_viewer(
         )
     ).scalar_one_or_none()
     if record is None:
+        if rotate:
+            raise LanAuthConfigurationError("Test viewer lifecycle request was not accepted.")
         record = DashboardOperator(
             role=TEST_VIEWER_ROLE,
             password_hash=PASSWORD_HASHER.hash(secret),
@@ -290,7 +298,12 @@ async def enable_or_rotate_test_viewer(
                 policy_version="epic-26-auth/v1",
             )
         )
-        return TestViewerIdentityResult(created=True, rotated=False, enabled=True)
+        return TestViewerIdentityResult(created=True, rotated=False, enabled=True, configured=True)
+
+    if rotate and not record.enabled:
+        # Rotation only replaces the active verification secret. It must never
+        # recreate or re-enable a principal that an explicit revoke disabled.
+        raise LanAuthConfigurationError("Test viewer lifecycle request was not accepted.")
 
     if record.enabled and not rotate:
         # A caller must use explicit rotation to replace an active verifier.
@@ -299,16 +312,14 @@ async def enable_or_rotate_test_viewer(
         raise LanAuthConfigurationError("Test viewer lifecycle request was not accepted.")
 
     # Enabling a disabled viewer always replaces the verifier so a stale local
-    # file cannot silently regain access. Explicit rotation does the same.
-    changed = rotate or not record.enabled
-    if changed:
-        record.password_hash = PASSWORD_HASHER.hash(secret)
-        record.password_policy_version = "argon2id/v1"
-        await _revoke_principal_sessions(
-            session,
-            record.id,
-            "test_viewer_rotation" if rotate else "test_viewer_enable",
-        )
+    # file cannot silently regain access. A verified active rotation does too.
+    record.password_hash = PASSWORD_HASHER.hash(secret)
+    record.password_policy_version = "argon2id/v1"
+    await _revoke_principal_sessions(
+        session,
+        record.id,
+        "test_viewer_rotation" if rotate else "test_viewer_enable",
+    )
     record.enabled = True
     session.add(
         DashboardAuditEvent(
@@ -319,7 +330,7 @@ async def enable_or_rotate_test_viewer(
         )
     )
     await session.flush()
-    return TestViewerIdentityResult(created=False, rotated=changed, enabled=True)
+    return TestViewerIdentityResult(created=False, rotated=rotate, enabled=True, configured=True)
 
 
 async def revoke_test_viewer(session: AsyncSession) -> TestViewerIdentityResult:
@@ -339,7 +350,7 @@ async def revoke_test_viewer(session: AsyncSession) -> TestViewerIdentityResult:
                 policy_version="epic-26-auth/v1",
             )
         )
-        return TestViewerIdentityResult(created=False, rotated=False, enabled=False)
+        return TestViewerIdentityResult(created=False, rotated=False, enabled=False, configured=False)
     record.enabled = False
     await _revoke_principal_sessions(session, record.id, "test_viewer_revoked")
     session.add(
@@ -351,4 +362,4 @@ async def revoke_test_viewer(session: AsyncSession) -> TestViewerIdentityResult:
         )
     )
     await session.flush()
-    return TestViewerIdentityResult(created=True, rotated=False, enabled=False)
+    return TestViewerIdentityResult(created=False, rotated=False, enabled=False, configured=True)

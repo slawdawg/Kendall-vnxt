@@ -162,6 +162,7 @@ from supervisor.application.operator_auth import (
 from supervisor.application.service import SupervisorService
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
+    TEST_VIEWER_AUTH_LIFECYCLE_LOCK,
     enable_or_rotate_test_viewer,
     ensure_bootstrap_operator,
     read_private_bootstrap_password,
@@ -198,7 +199,6 @@ startup_gate_ready = False
 bus = EventBus()
 service = SupervisorService(settings, bus)
 poller = Poller(service, settings.poll_interval_seconds)
-_TEST_VIEWER_LIFECYCLE_LOCK = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -618,7 +618,7 @@ async def test_viewer_lifecycle(
 
     _private_test_viewer_lifecycle_request(request)
     action = payload.action
-    async with _TEST_VIEWER_LIFECYCLE_LOCK:
+    async with TEST_VIEWER_AUTH_LIFECYCLE_LOCK:
         if action == "status" and payload.password is None:
             result = await test_viewer_status(session)
         elif action in {"enable", "rotate"} and isinstance(payload.password, str):
@@ -640,7 +640,7 @@ async def test_viewer_lifecycle(
     return {
         "schemaVersion": "kendall-test-viewer-lifecycle/v1",
         "role": "test_viewer",
-        "configured": result.created,
+        "configured": result.configured,
         "enabled": result.enabled,
         "rotated": result.rotated,
     }
