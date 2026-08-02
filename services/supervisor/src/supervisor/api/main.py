@@ -148,7 +148,8 @@ from supervisor.application.operator_auth import (
     GENERIC_LOGIN_FAILURE,
     SESSION_ABSOLUTE_SECONDS,
     SESSION_COOKIE_NAME,
-    authenticate_operator,
+    authenticate_dashboard_account,
+    can_dashboard_read,
     consume_login_csrf_challenge,
     create_login_csrf_challenge,
     exact_https_origin,
@@ -161,9 +162,12 @@ from supervisor.application.operator_auth import (
 from supervisor.application.service import SupervisorService
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
+    enable_or_rotate_test_viewer,
     ensure_bootstrap_operator,
     read_private_bootstrap_password,
     prepare_private_uds_path,
+    revoke_test_viewer,
+    test_viewer_status,
     validate_private_uds_path,
 )
 from supervisor.config.settings import get_settings
@@ -179,12 +183,22 @@ from pydantic import BaseModel
 
 class OperatorLoginRequest(BaseModel):
     password: str
+    # Only these literal values ever authorize an account. Keeping this as a
+    # string allows an invalid selector to receive the same generic failure as
+    # an absent/disabled fixed principal rather than a schema oracle.
+    account: object = "operator"
+
+
+class TestViewerLifecycleRequest(BaseModel):
+    action: str
+    password: str | None = None
 
 settings = get_settings()
 startup_gate_ready = False
 bus = EventBus()
 service = SupervisorService(settings, bus)
 poller = Poller(service, settings.poll_interval_seconds)
+_TEST_VIEWER_LIFECYCLE_LOCK = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -475,6 +489,18 @@ def _expired_session_response() -> JSONResponse:
     return response
 
 
+def _private_test_viewer_lifecycle_request(request: Request) -> None:
+    """Lifecycle writes are callable only by a same-user private UDS peer."""
+
+    if (
+        not settings.lan_auth_enabled
+        or settings.supervisor_transport != "private_uds"
+        or request.client is not None
+        or any(request.headers.get(name) for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port"))
+    ):
+        raise HTTPException(status_code=404, detail="Not found.")
+
+
 PACKET_DETAIL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 PACKET_DETAIL_MEDIATOR = "packet-detail/v1"
 
@@ -529,7 +555,13 @@ async def operator_login(payload: OperatorLoginRequest, request: Request, respon
     if not await consume_login_csrf_challenge(session, request.headers.get("x-csrf-token")):
         await record_auth_audit(session, "login_failure", "csrf_denied")
         raise HTTPException(status_code=403, detail=GENERIC_LOGIN_FAILURE)
-    success, raw_token, raw_csrf = await authenticate_operator(session, payload.password, _auth_source_key(request), settings)
+    success, raw_token, raw_csrf = await authenticate_dashboard_account(
+        session,
+        payload.password,
+        _auth_source_key(request),
+        settings,
+        payload.account,
+    )
     if not success or raw_token is None or raw_csrf is None:
         raise HTTPException(status_code=401, detail=GENERIC_LOGIN_FAILURE)
     response.set_cookie(
@@ -541,7 +573,7 @@ async def operator_login(payload: OperatorLoginRequest, request: Request, respon
         samesite="strict",
         path="/",
     )
-    return {"authenticated": True, "csrfToken": raw_csrf, "role": "operator"}
+    return {"authenticated": True, "csrfToken": raw_csrf, "role": payload.account}
 
 
 @app.get("/auth/login-csrf")
@@ -556,7 +588,10 @@ async def operator_session(request: Request, response: Response, session: AsyncS
     stored, reason = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
     if stored is None:
         return _expired_session_response()
-    return {"authenticated": True, "role": "operator", "sessionState": "active"}
+    principal = await session.get(DashboardOperator, stored.operator_id)
+    if principal is None or not can_dashboard_read(principal.role):
+        return _expired_session_response()
+    return {"authenticated": True, "role": principal.role, "sessionState": "active"}
 
 
 @app.post("/auth/logout")
@@ -571,6 +606,44 @@ async def operator_logout(request: Request, response: Response, session: AsyncSe
         raise HTTPException(status_code=403, detail="Logout was not accepted.")
     _clear_session_cookie(response)
     return {"signedOut": True}
+
+
+@app.post("/internal/lan-auth/test-viewer")
+async def test_viewer_lifecycle(
+    payload: TestViewerLifecycleRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """The only test-viewer lifecycle route; intentionally not browser-proxied."""
+
+    _private_test_viewer_lifecycle_request(request)
+    action = payload.action
+    async with _TEST_VIEWER_LIFECYCLE_LOCK:
+        if action == "status" and payload.password is None:
+            result = await test_viewer_status(session)
+        elif action in {"enable", "rotate"} and isinstance(payload.password, str):
+            try:
+                result = await enable_or_rotate_test_viewer(
+                    session,
+                    payload.password.encode("utf-8"),
+                    rotate=action == "rotate",
+                )
+                await session.commit()
+            except (UnicodeEncodeError, LanAuthConfigurationError):
+                await session.rollback()
+                raise HTTPException(status_code=400, detail="Test viewer lifecycle request was not accepted.")
+        elif action == "revoke" and payload.password is None:
+            result = await revoke_test_viewer(session)
+            await session.commit()
+        else:
+            raise HTTPException(status_code=400, detail="Test viewer lifecycle request was not accepted.")
+    return {
+        "schemaVersion": "kendall-test-viewer-lifecycle/v1",
+        "role": "test_viewer",
+        "configured": result.created,
+        "enabled": result.enabled,
+        "rotated": result.rotated,
+    }
 
 
 @app.get("/internal/dashboard/packet-detail/{packet_id}")
@@ -597,7 +670,7 @@ async def authenticated_packet_detail(
         return _packet_detail_error(403, "Packet detail is unavailable.")
     stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
     operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
-    if stored is None or operator is None or operator.role != "operator":
+    if stored is None or operator is None or not can_dashboard_read(operator.role):
         await record_auth_audit(session, "packet_detail_read", "denied")
         return _packet_detail_error(401, "Sign-in required.")
     try:

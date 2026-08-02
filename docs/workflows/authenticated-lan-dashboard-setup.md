@@ -216,8 +216,53 @@ cards remain name/status-only; packet detail is available after authentication.
   supervisor before the dashboard. Do not expose the supervisor TCP port to the
   LAN.
 
-The LAN runtime does not provide self-signup, multiple roles, or SSO. Those are
-future extensions behind the same supervisor-owned authentication boundary.
+The LAN runtime does not provide self-signup, generic user management, or SSO.
+Those remain future extensions behind the same supervisor-owned authentication
+boundary.
+
+## Independently revocable dashboard verification credential
+
+After the reviewed source contract is installed and the existing private-UDS
+supervisor is running, a local operator can create one disposable read-only
+browser credential without reading, rotating, or sharing the bootstrap
+operator password:
+
+```bash
+cd "$HOME/Kendall_Nxt"
+pnpm run dashboard:test-viewer -- enable
+```
+
+The helper generates the password itself, writes it only to the owner-private
+`$AUTH_DIR/test-viewer-password` file, and sends it only across the existing
+private supervisor UDS. It prints metadata only—never the password. Use the
+**Test viewer** account selection on the canonical HTTPS sign-in page, then
+copy the password directly from that private local file into the browser.
+Do not place it in a shell variable, terminal history, chat, `.env`, systemd
+unit, source control, or test evidence.
+
+The account is named `test_viewer`, defaults to disabled/absent, and has only
+`dashboard_read`: authenticated Pipeline reads, Packet Detail reads,
+`/auth/session`, and its own logout. The dashboard mediator rejects every
+write, credential action, worker/manager/provider/GitHub operation, and any
+other supervisor path before it can reach the private UDS. Lifecycle endpoints
+are not browser-routable.
+
+Check, rotate, or revoke it locally:
+
+```bash
+pnpm run dashboard:test-viewer -- status
+pnpm run dashboard:test-viewer -- rotate
+pnpm run dashboard:test-viewer -- revoke
+```
+
+`rotate` and `revoke` invalidate only `test_viewer` sessions immediately; the
+bootstrap operator record and its active sessions are not changed. `revoke`
+also removes the local viewer credential file. If the file is lost, run
+`revoke` followed by `enable`; no dashboard or supervisor restart is needed.
+If the private directory, password file, or UDS ownership/modes are unsafe,
+the helper fails closed without printing a path or secret. The normal runtime
+restart policy is unchanged: a real supervisor restart revokes all dashboard
+sessions.
 
 ## Durable user-systemd startup
 

@@ -13,7 +13,7 @@ def utcnow() -> datetime:
 
 
 class DashboardOperator(Base):
-    """The sole app-owned operator record; plaintext credentials never persist."""
+    """One of the two fixed dashboard principals; plaintext credentials never persist."""
 
     __tablename__ = "dashboard_operators"
 
@@ -21,6 +21,9 @@ class DashboardOperator(Base):
     role: Mapped[str] = mapped_column(String(32), unique=True, default="operator")
     password_hash: Mapped[str] = mapped_column(Text)
     password_policy_version: Mapped[str] = mapped_column(String(32), default="argon2id/v1")
+    # `operator` remains enabled by the bootstrap lifecycle. `test_viewer` is
+    # created only by the private-UDS lifecycle and is inactive by default.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

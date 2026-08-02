@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, isAllowedDashboardHost, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, parseNumericLanBind, resolveCanonicalDashboardIdentity, resolveDashboardRuntime, runtimeHealthPayload } from "./secure-dashboard-runtime.mjs";
+import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, isAllowedDashboardHost, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, isTestViewerDashboardRoute, parseNumericLanBind, resolveCanonicalDashboardIdentity, resolveDashboardRuntime, runtimeHealthPayload, signInPageSafe } from "./secure-dashboard-runtime.mjs";
 
 test("LAN auth responses include HSTS while local HTTP stays unchanged", () => {
   const headers = new Map();
@@ -44,6 +44,20 @@ test("LAN auth gates every dashboard page and defaults unknown app paths to deny
   for (const url of ["/pipeline%2Fpackets%2Fpacket-1", "/pipeline%2fpackets%2fpacket-1", "/pipeline%5Cpackets%5Cpacket-1", "/pipeline%2e%2e%2fadmin", "/foo/%2e%2e/pipeline", "/foo/%2e%2e%2fpipeline", "/pipeline%ZZ"]) {
     assert.equal(isProtectedNextRoute({ url }), true, url);
   }
+});
+
+test("sign-in sends one explicit fixed account selector without exposing lifecycle controls", () => {
+  const page = signInPageSafe("/pipeline");
+  assert.match(page, /<select id="account" name="account">/);
+  assert.match(page, /value="operator" selected/);
+  assert.match(page, /value="test_viewer"/);
+  assert.match(page, /JSON\.stringify\(\{ account: account\.value, password: password\.value \}\)/);
+  assert.doesNotMatch(page, /provision|rotate|revoke|credential management/i);
+});
+
+test("test viewer dashboard surface is limited to pipeline pages", () => {
+  for (const url of ["/pipeline", "/pipeline/", "/pipeline/packets/packet-1"]) assert.equal(isTestViewerDashboardRoute({ url }), true, url);
+  for (const url of ["/", "/controls", "/audit", "/settings", "/work-items/item-1", "/pipeline%252fescape"]) assert.equal(isTestViewerDashboardRoute({ url }), false, url);
 });
 
 test("numeric LAN parser rejects wildcard, loopback, hostnames and localhost", () => {

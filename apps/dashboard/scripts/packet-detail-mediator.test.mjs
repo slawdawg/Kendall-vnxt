@@ -53,6 +53,7 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   const directory = mkdtempSync(join(tmpdir(), "kendall-packet-detail-"));
   const socketPath = join(directory, "supervisor.sock");
   const observed = [];
+  let sessionRevokedAfterRead = false;
   const supervisor = http.createServer((req, res) => {
     observed.push({ method: req.method, url: req.url, cookie: req.headers.cookie, mediator: req.headers["x-kendall-dashboard-mediator"] });
     if (!req.headers.cookie) {
@@ -60,7 +61,16 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
       return;
     }
     res.setHeader("content-type", "application/json");
+    if (req.url === "/auth/session") {
+      if (sessionRevokedAfterRead) {
+        res.writeHead(401).end(JSON.stringify({ authenticated: false }));
+        return;
+      }
+      res.end(JSON.stringify({ authenticated: true, role: "test_viewer" }));
+      return;
+    }
     const packetId = decodeURIComponent(req.url.split("/").at(-1));
+    if (packetId === "revoked-after-read") sessionRevokedAfterRead = true;
     const workGraph = unavailableWorkGraph(packetId);
     if (packetId === "malformed") workGraph.reason = "raw provider payload copied here";
     if (packetId === "bad-report-identity") workGraph.reportIdentity = "report:unsafe";
@@ -196,12 +206,20 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   assert.equal(allowed.status, 200);
   assert.equal(allowed.headers["cache-control"], "no-store");
   assert.equal(allowed.body.packet.packetId, "packet-1");
-  assert.deepEqual(observed, [{ method: "GET", url: "/internal/dashboard/packet-detail/packet-1", cookie: "kendall_operator_session=opaque", mediator: "packet-detail/v1" }]);
+  assert.deepEqual(observed, [
+    { method: "GET", url: "/internal/dashboard/packet-detail/packet-1", cookie: "kendall_operator_session=opaque", mediator: "packet-detail/v1" },
+    { method: "GET", url: "/auth/session", cookie: "kendall_operator_session=opaque", mediator: undefined },
+  ]);
 
   const colonId = await request(port, "/api/packet-detail/packet%3A1", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(colonId.status, 200);
   assert.equal(colonId.body.packet.packetId, "packet:1");
-  assert.equal(observed.length, 2);
+  assert.equal(observed.length, 4);
+
+  const revokedDuringRead = await request(port, "/api/packet-detail/revoked-after-read", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(revokedDuringRead.status, 401);
+  assert.deepEqual(revokedDuringRead.body, { state: "sign_in_required" });
+  sessionRevokedAfterRead = false;
 
   const legacy = await request(port, "/api/packet-detail/legacy", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(legacy.status, 200);
@@ -257,13 +275,13 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   const denied = await request(port, "/api/packet-detail/does-not-exist");
   assert.equal(denied.status, 401);
   assert.deepEqual(denied.body, { state: "sign_in_required" });
-  assert.equal(observed.length, 17);
+  assert.equal(observed.length, 36);
 
   const mutation = await request(port, "/api/packet-detail/packet-1", { method: "POST" });
   assert.equal(mutation.status, 405);
   const forwarded = await request(port, "/api/packet-detail/packet-1", { headers: { "x-forwarded-for": "127.0.0.1" } });
   assert.equal(forwarded.status, 400);
-  assert.equal(observed.length, 17);
+  assert.equal(observed.length, 36);
 
   await close(dashboard);
   await close(supervisor);

@@ -189,7 +189,13 @@ export function createPacketDetailMediator({ supervisorUdsPath, expectedHost, ex
     try {
       const result = await requestSupervisor(supervisorUdsPath, parsed.packetId, request.headers.cookie, timeoutMs);
       const payload = normalizeLegacyPacketDetailPayload(result.payload, parsed.packetId);
-      if (result.statusCode === 401 || result.statusCode === 403) {
+      // The supervisor validates the cookie before the packet read. Confirm it
+      // again immediately before returning data so a concurrent test-viewer
+      // revocation wins over an in-flight mediated response.
+      const confirmation = await requestSupervisorSession(supervisorUdsPath, request.headers.cookie, timeoutMs);
+      if (confirmation.statusCode !== 200 || !isDashboardReadSession(confirmation.payload)) {
+        sendJson(response, 401, DENIED_BODY);
+      } else if (result.statusCode === 401 || result.statusCode === 403) {
         sendJson(response, 401, DENIED_BODY);
       } else if (
         result.statusCode !== 200
@@ -214,6 +220,43 @@ export function createPacketDetailMediator({ supervisorUdsPath, expectedHost, ex
     }
     return true;
   };
+}
+
+function isDashboardReadSession(payload) {
+  return payload?.authenticated === true && (payload.role === "operator" || payload.role === "test_viewer");
+}
+
+function requestSupervisorSession(socketPath, cookie, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      socketPath,
+      path: "/auth/session",
+      method: "GET",
+      headers: { accept: "application/json", ...(cookie ? { cookie } : {}) },
+    }, (response) => {
+      const chunks = [];
+      let total = 0;
+      response.on("data", (chunk) => {
+        total += chunk.length;
+        if (total <= PACKET_DETAIL_MAX_BYTES) chunks.push(chunk);
+        else request.destroy(new Error("Packet detail session response exceeded limit."));
+      });
+      response.on("end", () => {
+        clearTimeout(deadline);
+        if (total > PACKET_DETAIL_MAX_BYTES) return reject(new Error("Packet detail session response exceeded limit."));
+        let payload = null;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* stable denial mapping */ }
+        resolve({ statusCode: response.statusCode, payload });
+      });
+    });
+    const deadline = setTimeout(() => request.destroy(new Error("Packet detail session deadline exceeded.")), timeoutMs);
+    request.setTimeout(timeoutMs, () => request.destroy(new Error("Packet detail session timed out.")));
+    request.on("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    request.end();
+  });
 }
 
 function requestSupervisor(socketPath, packetId, cookie, timeoutMs) {

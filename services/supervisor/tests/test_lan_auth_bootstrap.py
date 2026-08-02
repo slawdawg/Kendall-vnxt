@@ -134,6 +134,51 @@ def test_bootstrap_rehashes_legacy_argon2i_to_argon2id(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_test_viewer_lifecycle_isolated_from_bootstrap_and_sessions(tmp_path, monkeypatch):
+    db_path = tmp_path / "test-viewer.db"
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    async def run():
+        from supervisor.application.lan_auth_bootstrap import (
+            enable_or_rotate_test_viewer,
+            ensure_bootstrap_operator,
+            revoke_test_viewer,
+            test_viewer_status,
+        )
+        from supervisor.infrastructure.db.database import SessionLocal, init_db
+        from supervisor.infrastructure.db.models import DashboardOperator, DashboardSession
+
+        await init_db()
+        async with SessionLocal.begin() as session:
+            await ensure_bootstrap_operator(session, b"operator-password")
+            operator = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "operator"))).scalar_one()
+            session.add(DashboardSession(operator_id=operator.id, token_hash="operator-token", csrf_token_hash="operator-csrf", expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
+        async with SessionLocal.begin() as session:
+            result = await enable_or_rotate_test_viewer(session, b"viewer-password", rotate=False)
+            assert result.created and result.enabled and not result.rotated
+        async with SessionLocal.begin() as session:
+            viewer = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "test_viewer"))).scalar_one()
+            session.add(DashboardSession(operator_id=viewer.id, token_hash="viewer-token", csrf_token_hash="viewer-csrf", expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
+        async with SessionLocal.begin() as session:
+            rotated = await enable_or_rotate_test_viewer(session, b"viewer-password-next", rotate=True)
+            assert rotated.rotated and rotated.enabled
+        async with SessionLocal() as session:
+            sessions = (await session.execute(select(DashboardSession))).scalars().all()
+            assert next(item for item in sessions if item.token_hash == "operator-token").revoked_at is None
+            assert next(item for item in sessions if item.token_hash == "viewer-token").revoked_at is not None
+        async with SessionLocal.begin() as session:
+            revoked = await revoke_test_viewer(session)
+            assert not revoked.enabled
+        async with SessionLocal() as session:
+            state = await test_viewer_status(session)
+            operator = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "operator"))).scalar_one()
+            assert state.created and not state.enabled and operator.enabled
+
+    asyncio.run(run())
+
+
 def test_legacy_dashboard_session_table_gets_auth_columns_and_unique_token_index(tmp_path, monkeypatch):
     db_path = tmp_path / "legacy-sessions.db"
     database_url = f"sqlite+aiosqlite:///{db_path}"
@@ -176,6 +221,30 @@ def test_legacy_dashboard_session_table_gets_auth_columns_and_unique_token_index
         await engine.dispose()
         # Keep SessionLocal referenced so module initialization is exercised.
         assert SessionLocal is not None
+
+    asyncio.run(run())
+
+
+def test_legacy_operator_table_preserves_bootstrap_enabled_state(tmp_path, monkeypatch):
+    db_path = tmp_path / "legacy-operators.db"
+    database_url = f"sqlite+aiosqlite:///{db_path}"
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", database_url)
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    async def run():
+        legacy_engine = create_async_engine(database_url)
+        async with legacy_engine.begin() as connection:
+            await connection.execute(text("CREATE TABLE dashboard_operators (id VARCHAR(36) PRIMARY KEY, role VARCHAR(32) UNIQUE, password_hash TEXT, password_policy_version VARCHAR(32), created_at DATETIME, updated_at DATETIME)"))
+            await connection.execute(text("INSERT INTO dashboard_operators (id, role, password_hash) VALUES ('legacy-operator', 'operator', 'hash')"))
+        await legacy_engine.dispose()
+        from supervisor.infrastructure.db.database import SessionLocal, engine, init_db
+        from supervisor.infrastructure.db.models import DashboardOperator
+        await init_db()
+        async with SessionLocal() as session:
+            operator = await session.get(DashboardOperator, "legacy-operator")
+            assert operator is not None and operator.enabled is True
+        await engine.dispose()
 
     asyncio.run(run())
 
