@@ -8,6 +8,15 @@ const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?)$/,
 ];
+// This is deliberately smaller than the operator read surface. It is the
+// complete browser-to-supervisor capability of the fixed verification account.
+const TEST_VIEWER_READ_PATHS = [
+  // Target IDs are decoded exactly once before this check. `%` is excluded so
+  // a second decoder in an upstream library can never reinterpret a permitted
+  // viewer packet ID as a path separator or dot segment.
+  /^\/work-packets(?:\/[A-Za-z0-9._:-]+)?$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:-]+)?)$/,
+];
 const ALLOWED_SUPERVISOR_PATHS = [
   /^\/supervisor\/status$/,
   /^\/events$/,
@@ -51,6 +60,17 @@ function readBody(request) {
   });
 }
 
+function sessionRole(body) {
+  try {
+    const payload = JSON.parse(body.toString("utf8"));
+    return payload?.authenticated === true && (payload.role === "operator" || payload.role === "test_viewer")
+      ? payload.role
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS }) {
   if (typeof supervisorUdsPath !== "string" || !supervisorUdsPath.startsWith("/")) throw new Error("Supervisor proxy requires a fixed absolute UDS path.");
   return async function proxy(request, response) {
@@ -70,11 +90,16 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     if (body === null) { sendJson(response, 413, { state: "unavailable" }); return true; }
     try {
       const session = await requestSupervisor(supervisorUdsPath, "/auth/session", "GET", { cookie: request.headers.cookie }, Buffer.alloc(0), timeoutMs);
-      if (session.statusCode !== 200) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
+      const role = session.statusCode === 200 ? sessionRole(session.body) : null;
+      if (!role) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
       let targetPath;
       try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath))) { sendJson(response, 404, { state: "unavailable" }); return true; }
+      if (role === "test_viewer" && (!TEST_VIEWER_READ_PATHS.some((pattern) => pattern.test(targetPath)) || !["GET", "HEAD"].includes(request.method))) {
+        sendJson(response, ["GET", "HEAD"].includes(request.method) ? 404 : 405, { state: "unavailable" });
+        return true;
+      }
       if (READ_ONLY_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !["GET", "HEAD"].includes(request.method)) {
         sendJson(response, 405, { state: "unavailable" });
         return true;
@@ -84,6 +109,15 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         return true;
       }
       const upstream = await requestSupervisor(supervisorUdsPath, targetPath, request.method, request.headers, body, timeoutMs);
+      // A viewer revocation concurrent with an in-flight read must win before
+      // the browser receives data. Operator requests retain existing behavior.
+      if (role === "test_viewer") {
+        const confirmation = await requestSupervisor(supervisorUdsPath, "/auth/session", "GET", { cookie: request.headers.cookie }, Buffer.alloc(0), timeoutMs);
+        if (confirmation.statusCode !== 200 || sessionRole(confirmation.body) !== "test_viewer") {
+          sendJson(response, 401, { state: "sign_in_required" });
+          return true;
+        }
+      }
       const headers = { "cache-control": "no-store", "content-type": upstream.contentType || "application/json; charset=utf-8" };
       if (upstream.setCookie) headers["set-cookie"] = upstream.setCookie;
       response.writeHead(upstream.statusCode, headers);

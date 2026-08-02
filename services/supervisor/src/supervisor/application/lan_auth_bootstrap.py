@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import socket
 import stat
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,7 +37,20 @@ class BootstrapIdentityResult:
     rotated: bool
 
 
+@dataclass(frozen=True)
+class TestViewerIdentityResult:
+    created: bool
+    rotated: bool
+    enabled: bool
+    configured: bool
+
+
 MAX_BOOTSTRAP_PASSWORD_BYTES = 4096
+TEST_VIEWER_ROLE = "test_viewer"
+# One supervisor process owns both fixed-viewer login and lifecycle writes.
+# Holding this lock through the session commit prevents a pre-rotation password
+# verification from committing a new viewer session after rotation revokes it.
+TEST_VIEWER_AUTH_LIFECYCLE_LOCK = asyncio.Lock()
 
 
 def _validate_bootstrap_password(password: bytes) -> bytes:
@@ -178,6 +192,7 @@ async def ensure_bootstrap_operator(session: AsyncSession, bootstrap_password: b
                         role="operator",
                         password_hash=PASSWORD_HASHER.hash(password),
                         password_policy_version="argon2id/v1",
+                        enabled=True,
                     )
                 )
                 await session.flush()
@@ -211,3 +226,140 @@ async def _revoke_operator_sessions(session: AsyncSession, operator_id: str, out
         stored.revoked_at = current
     if sessions:
         session.add(DashboardAuditEvent(event_type="session_revoked", outcome=outcome, policy_version="epic-26-auth/v1"))
+
+
+async def _revoke_principal_sessions(session: AsyncSession, principal_id: str, outcome: str) -> int:
+    """Revoke only one fixed principal's sessions; never touch bootstrap sessions."""
+
+    sessions = list(
+        (
+            await session.execute(
+                select(DashboardSession).where(
+                    DashboardSession.operator_id == principal_id,
+                    DashboardSession.revoked_at.is_(None),
+                )
+            )
+        ).scalars()
+    )
+    current = utcnow()
+    for stored in sessions:
+        stored.revoked_at = current
+    if sessions:
+        session.add(
+            DashboardAuditEvent(
+                event_type="session_revoked",
+                outcome=outcome,
+                target_ref=TEST_VIEWER_ROLE,
+                policy_version="epic-26-auth/v1",
+            )
+        )
+    return len(sessions)
+
+
+async def test_viewer_status(session: AsyncSession) -> TestViewerIdentityResult:
+    record = (
+        await session.execute(
+            select(DashboardOperator).where(DashboardOperator.role == TEST_VIEWER_ROLE)
+        )
+    ).scalar_one_or_none()
+    return TestViewerIdentityResult(created=False, rotated=False, enabled=bool(record and record.enabled), configured=record is not None)
+
+
+async def enable_or_rotate_test_viewer(
+    session: AsyncSession,
+    password: bytes,
+    *,
+    rotate: bool,
+) -> TestViewerIdentityResult:
+    """Create/enable the one viewer or rotate it without changing operator state."""
+
+    secret = _validate_bootstrap_password(password).decode("utf-8")
+    record = (
+        await session.execute(
+            select(DashboardOperator).where(DashboardOperator.role == TEST_VIEWER_ROLE)
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        if rotate:
+            raise LanAuthConfigurationError("Test viewer lifecycle request was not accepted.")
+        record = DashboardOperator(
+            role=TEST_VIEWER_ROLE,
+            password_hash=PASSWORD_HASHER.hash(secret),
+            password_policy_version="argon2id/v1",
+            enabled=True,
+        )
+        session.add(record)
+        await session.flush()
+        session.add(
+            DashboardAuditEvent(
+                event_type="test_viewer_enabled",
+                outcome="allowed",
+                target_ref=TEST_VIEWER_ROLE,
+                policy_version="epic-26-auth/v1",
+            )
+        )
+        return TestViewerIdentityResult(created=True, rotated=False, enabled=True, configured=True)
+
+    if rotate and not record.enabled:
+        # Rotation only replaces the active verification secret. It must never
+        # recreate or re-enable a principal that an explicit revoke disabled.
+        raise LanAuthConfigurationError("Test viewer lifecycle request was not accepted.")
+
+    if record.enabled and not rotate:
+        # A caller must use explicit rotation to replace an active verifier.
+        # This prevents a locally generated helper secret from being written
+        # over the known-good file without changing the server verifier.
+        raise LanAuthConfigurationError("Test viewer lifecycle request was not accepted.")
+
+    # Enabling a disabled viewer always replaces the verifier so a stale local
+    # file cannot silently regain access. A verified active rotation does too.
+    record.password_hash = PASSWORD_HASHER.hash(secret)
+    record.password_policy_version = "argon2id/v1"
+    await _revoke_principal_sessions(
+        session,
+        record.id,
+        "test_viewer_rotation" if rotate else "test_viewer_enable",
+    )
+    record.enabled = True
+    session.add(
+        DashboardAuditEvent(
+            event_type="test_viewer_rotated" if rotate else "test_viewer_enabled",
+            outcome="allowed",
+            target_ref=TEST_VIEWER_ROLE,
+            policy_version="epic-26-auth/v1",
+        )
+    )
+    await session.flush()
+    return TestViewerIdentityResult(created=False, rotated=rotate, enabled=True, configured=True)
+
+
+async def revoke_test_viewer(session: AsyncSession) -> TestViewerIdentityResult:
+    """Disable the fixed viewer and revoke only its sessions; idempotent by design."""
+
+    record = (
+        await session.execute(
+            select(DashboardOperator).where(DashboardOperator.role == TEST_VIEWER_ROLE)
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        session.add(
+            DashboardAuditEvent(
+                event_type="test_viewer_revoked",
+                outcome="allowed",
+                target_ref=TEST_VIEWER_ROLE,
+                policy_version="epic-26-auth/v1",
+            )
+        )
+        return TestViewerIdentityResult(created=False, rotated=False, enabled=False, configured=False)
+    record.enabled = False
+    await _revoke_principal_sessions(session, record.id, "test_viewer_revoked")
+    session.add(
+        DashboardAuditEvent(
+            event_type="test_viewer_revoked",
+            outcome="allowed",
+            target_ref=TEST_VIEWER_ROLE,
+            policy_version="epic-26-auth/v1",
+        )
+    )
+    await session.flush()
+    return TestViewerIdentityResult(created=False, rotated=False, enabled=False, configured=True)

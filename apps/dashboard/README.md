@@ -92,7 +92,9 @@ transport, or provider call is introduced. To diagnose a local change, run
 
 See the repository's [Authenticated LAN dashboard setup](../../docs/workflows/authenticated-lan-dashboard-setup.md)
 for first-time host configuration, private-file permissions, certificate setup,
-startup order, and failure diagnosis.
+startup order, failure diagnosis, and the independently revocable local-only
+`test_viewer` verification credential. It is disabled until the private-UDS
+helper enables it and has only dashboard read access.
 
 For the default-disabled local attestation detail panel, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).
 

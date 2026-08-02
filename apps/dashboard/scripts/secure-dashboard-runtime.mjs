@@ -8,7 +8,7 @@ import path from "node:path";
 import next from "next";
 import { fileURLToPath } from "node:url";
 import { createPacketDetailMediator } from "./packet-detail-mediator.mjs";
-import { createAuthProxy, safeReturnPath, supervisorSessionIsValid } from "./dashboard-auth-proxy.mjs";
+import { createAuthProxy, safeReturnPath, supervisorSessionRole } from "./dashboard-auth-proxy.mjs";
 import { createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
 
 export class LanAuthConfigurationError extends Error {}
@@ -66,6 +66,13 @@ function isDashboardPagePath(pathname) {
     || canonicalPath.startsWith("/work-items/");
 }
 
+export function isTestViewerDashboardRoute(request) {
+  const pathname = parseDashboardPath(request);
+  if (pathname === null) return false;
+  const canonicalPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return canonicalPath === "/pipeline" || canonicalPath.startsWith("/pipeline/");
+}
+
 export function isDashboardEntryRoute(request) {
   const pathname = parseDashboardPath(request);
   return pathname !== null && (isDashboardPagePath(pathname) || pathname.startsWith("/api/"));
@@ -99,6 +106,7 @@ export function signInPageSafe(returnPath, message = "") {
     : `<p id="auth-message" role="status" aria-live="polite" class="message"></p>`;
   const script = `
     const form = document.getElementById("sign-in-form");
+    const account = document.getElementById("account");
     const password = document.getElementById("password");
     const message = document.getElementById("auth-message");
     const returnPath = ${safePath};
@@ -115,7 +123,7 @@ export function signInPageSafe(returnPath, message = "") {
           method: "POST",
           credentials: "same-origin",
           headers: requestHeaders,
-          body: JSON.stringify({ password: password.value }),
+          body: JSON.stringify({ account: account.value, password: password.value }),
         });
         if (!login.ok) throw new Error();
         location.assign(returnPath);
@@ -127,7 +135,7 @@ export function signInPageSafe(returnPath, message = "") {
         password.focus();
       }
     });`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secure operator access</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1018;color:#eef2f7;font:16px system-ui,sans-serif}.card{width:min(28rem,calc(100% - 2rem));padding:2rem;background:#141c28;border:1px solid #314052;border-radius:.5rem}label{display:block;margin-top:1rem;font-size:.9rem}input,button{box-sizing:border-box;width:100%;margin-top:.5rem;padding:.7rem;border:1px solid #536579;border-radius:.375rem;background:#0e1622;color:inherit;font:inherit}button{cursor:pointer;background:#2b6de0;border-color:#2b6de0}.message{min-height:1.5rem;color:#ffb4ab}h1{font-size:1.5rem}</style></head><body><main class="card" aria-labelledby="sign-in-heading"><h1 id="sign-in-heading" tabindex="-1">Secure operator access</h1><p>Sign in to continue to the Kendall dashboard.</p><form id="sign-in-form" method="post" action="/auth/login"><label for="password">Operator password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus aria-describedby="auth-message"><button type="submit">Sign in</button></form>${messageHtml}</main><script>${script}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secure dashboard access</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1018;color:#eef2f7;font:16px system-ui,sans-serif}.card{width:min(28rem,calc(100% - 2rem));padding:2rem;background:#141c28;border:1px solid #314052;border-radius:.5rem}label{display:block;margin-top:1rem;font-size:.9rem}input,select,button{box-sizing:border-box;width:100%;margin-top:.5rem;padding:.7rem;border:1px solid #536579;border-radius:.375rem;background:#0e1622;color:inherit;font:inherit}button{cursor:pointer;background:#2b6de0;border-color:#2b6de0}.message{min-height:1.5rem;color:#ffb4ab}h1{font-size:1.5rem}</style></head><body><main class="card" aria-labelledby="sign-in-heading"><h1 id="sign-in-heading" tabindex="-1">Secure dashboard access</h1><p>Sign in to continue to the Kendall dashboard.</p><form id="sign-in-form" method="post" action="/auth/login"><label for="account">Account</label><select id="account" name="account"><option value="operator" selected>Operator</option><option value="test_viewer">Test viewer</option></select><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus aria-describedby="auth-message"><button type="submit">Sign in</button></form>${messageHtml}</main><script>${script}</script></body></html>`;
 }
 
 // Preserve the original helper name while routing all callers to the
@@ -377,9 +385,13 @@ async function main() {
     if (supervisorProxy && await supervisorProxy(request, response)) return;
     if (config.lanAuthEnabled && isDashboardEntryRoute(request)) {
       const cookie = request.headers.cookie;
-      const valid = await supervisorSessionIsValid({ supervisorUdsPath: config.supervisorUdsPath, cookie });
-      if (!valid) {
+      const role = await supervisorSessionRole({ supervisorUdsPath: config.supervisorUdsPath, cookie });
+      if (!role) {
         sendHtml(response, 200, signInPageSafe(request.url || "/", cookie ? "Your session ended. Sign in to continue." : ""));
+        return;
+      }
+      if (role === "test_viewer" && !isTestViewerDashboardRoute(request)) {
+        sendJson(response, 404, { state: "unavailable" });
         return;
       }
     }

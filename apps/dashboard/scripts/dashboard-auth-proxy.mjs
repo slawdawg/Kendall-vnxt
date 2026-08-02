@@ -66,12 +66,20 @@ export function createAuthProxy({ supervisorUdsPath, expectedOrigin, timeoutMs =
 }
 
 export async function supervisorSessionIsValid({ supervisorUdsPath, cookie, timeoutMs = AUTH_TIMEOUT_MS }) {
-  if (!cookie) return false;
+  return (await supervisorSessionRole({ supervisorUdsPath, cookie, timeoutMs })) !== null;
+}
+
+export async function supervisorSessionRole({ supervisorUdsPath, cookie, timeoutMs = AUTH_TIMEOUT_MS }) {
+  if (!cookie) return null;
   try {
     const result = await requestSupervisor(supervisorUdsPath, "/auth/session", "GET", { cookie }, Buffer.alloc(0), timeoutMs);
-    return result.statusCode === 200;
+    if (result.statusCode !== 200) return null;
+    const payload = JSON.parse(result.body.toString("utf8"));
+    return payload?.authenticated === true && (payload.role === "operator" || payload.role === "test_viewer")
+      ? payload.role
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

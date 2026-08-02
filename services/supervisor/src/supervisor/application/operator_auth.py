@@ -12,7 +12,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from sqlalchemy import case, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.application.lan_auth_bootstrap import PASSWORD_HASHER
+from supervisor.application.lan_auth_bootstrap import PASSWORD_HASHER, TEST_VIEWER_AUTH_LIFECYCLE_LOCK
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.models import (
     DashboardAuditEvent,
@@ -33,6 +33,13 @@ SESSION_COOKIE_NAME = "kendall_operator_session"
 GENERIC_LOGIN_FAILURE = "Sign-in unavailable. Check credentials or try again later."
 AUTH_POLICY_VERSION = "epic-26-auth/v1"
 _RATE_LIMIT_LOCK = asyncio.Lock()
+OPERATOR_ROLE = "operator"
+TEST_VIEWER_ROLE = "test_viewer"
+DASHBOARD_ROLES = frozenset((OPERATOR_ROLE, TEST_VIEWER_ROLE))
+# This non-secret verifier keeps invalid/disabled account attempts on the
+# Argon2id path too. It prevents the fixed account selector from becoming an
+# account-state timing oracle.
+_INVALID_ACCOUNT_PASSWORD_HASH = PASSWORD_HASHER.hash("kendall-invalid-dashboard-account-v1")
 
 
 def now_utc() -> datetime:
@@ -191,28 +198,47 @@ async def _record_failed_login(session: AsyncSession, keys: list[str], current: 
     return locked
 
 
-async def _authenticate_operator(
+def normalize_dashboard_account(value: object) -> str | None:
+    return value if isinstance(value, str) and value in DASHBOARD_ROLES else None
+
+
+def can_dashboard_read(role: str | None) -> bool:
+    return role in DASHBOARD_ROLES
+
+
+async def _authenticate_dashboard_account(
     session: AsyncSession,
     password: str,
     source_key: str,
     settings: Settings,
+    account: object = OPERATOR_ROLE,
 ) -> tuple[bool, str | None, str]:
-    """Authenticate and create a session, returning (success, token, csrf)."""
+    """Authenticate one fixed principal and create an opaque session."""
 
     current = now_utc()
-    keys = [f"ip:{source_key}", "account:operator"]
+    selected_account = normalize_dashboard_account(account)
+    # Invalid selectors intentionally share a bounded synthetic dimension and
+    # the same generic response; they never query a principal by attacker text.
+    rate_account = selected_account or "invalid"
+    keys = [f"ip:{source_key}", f"account:{rate_account}"]
     if await _is_rate_limited(session, keys, current):
         _audit(session, "login_rate_limit", "denied")
         await session.commit()
         return False, None, GENERIC_LOGIN_FAILURE
 
-    operator = (await session.execute(select(DashboardOperator).where(DashboardOperator.role == "operator"))).scalar_one_or_none()
-    valid = False
-    if operator is not None:
-        try:
-            valid = settings.lan_auth_enabled and bool(PASSWORD_HASHER.verify(operator.password_hash, password))
-        except (InvalidHashError, VerificationError, VerifyMismatchError):
-            valid = False
+    operator = None
+    if selected_account is not None:
+        operator = (
+            await session.execute(
+                select(DashboardOperator).where(DashboardOperator.role == selected_account)
+            )
+        ).scalar_one_or_none()
+    enabled = bool(operator and (operator.role == OPERATOR_ROLE or operator.enabled))
+    verifier = operator.password_hash if enabled else _INVALID_ACCOUNT_PASSWORD_HASH
+    try:
+        valid = settings.lan_auth_enabled and selected_account is not None and enabled and bool(PASSWORD_HASHER.verify(verifier, password))
+    except (InvalidHashError, VerificationError, VerifyMismatchError):
+        valid = False
     if not valid:
         locked = await _record_failed_login(session, keys, current)
         _audit(session, "login_failure", "rate_limited" if locked else "denied")
@@ -242,7 +268,7 @@ async def _authenticate_operator(
             expires_at=current + timedelta(seconds=SESSION_ABSOLUTE_SECONDS),
         )
     )
-    _audit(session, "login_success", "allowed")
+    _audit(session, "login_success", "allowed", target_ref=selected_account)
     await session.commit()
     return True, raw_token, raw_csrf
 
@@ -253,10 +279,30 @@ async def authenticate_operator(
     source_key: str,
     settings: Settings,
 ) -> tuple[bool, str | None, str]:
-    """Serialize rate-limit mutation and preserve one lock decision per request."""
+    """Compatibility wrapper for the fixed bootstrap `operator` principal."""
 
     async with _RATE_LIMIT_LOCK:
-        return await _authenticate_operator(session, password, source_key, settings)
+        return await _authenticate_dashboard_account(session, password, source_key, settings, OPERATOR_ROLE)
+
+
+async def authenticate_dashboard_account(
+    session: AsyncSession,
+    password: str,
+    source_key: str,
+    settings: Settings,
+    account: object,
+) -> tuple[bool, str | None, str]:
+    """Serialize role-scoped rate limit state for one of two fixed accounts."""
+
+    # Viewer verification and session creation share the lifecycle lock with
+    # enable/rotate/revoke. This makes rotation's session revocation atomic
+    # relative to an old-password login through its committing session write.
+    if normalize_dashboard_account(account) == TEST_VIEWER_ROLE:
+        async with TEST_VIEWER_AUTH_LIFECYCLE_LOCK:
+            async with _RATE_LIMIT_LOCK:
+                return await _authenticate_dashboard_account(session, password, source_key, settings, account)
+    async with _RATE_LIMIT_LOCK:
+        return await _authenticate_dashboard_account(session, password, source_key, settings, account)
 
 
 async def load_valid_session(session: AsyncSession, raw_token: str | None) -> tuple[DashboardSession | None, str | None]:
@@ -264,6 +310,12 @@ async def load_valid_session(session: AsyncSession, raw_token: str | None) -> tu
         return None, "missing"
     stored = (await session.execute(select(DashboardSession).where(DashboardSession.token_hash == digest_secret(raw_token)))).scalar_one_or_none()
     if stored is None or stored.revoked_at is not None:
+        return None, "revoked"
+    principal = await session.get(DashboardOperator, stored.operator_id)
+    if principal is None or principal.role not in DASHBOARD_ROLES or (principal.role == TEST_VIEWER_ROLE and not principal.enabled):
+        stored.revoked_at = now_utc()
+        _audit(session, "session_revoked", "principal_disabled", target_ref=TEST_VIEWER_ROLE if principal and principal.role == TEST_VIEWER_ROLE else None)
+        await session.commit()
         return None, "revoked"
     current = now_utc()
     if current >= _aware(stored.expires_at) or current - _aware(stored.last_seen_at) >= timedelta(seconds=SESSION_IDLE_SECONDS):

@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createAuthProxy, safeReturnPath, supervisorSessionIsValid } from "./dashboard-auth-proxy.mjs";
+import { createAuthProxy, safeReturnPath, supervisorSessionIsValid, supervisorSessionRole } from "./dashboard-auth-proxy.mjs";
 
 const listen = (server, target) => new Promise((resolve) => server.listen(target, resolve));
 const close = (server) => new Promise((resolve) => server.close(resolve));
@@ -46,6 +46,8 @@ test("auth proxy forwards only fixed auth routes and preserves safe return paths
   assert.match(result.headers["set-cookie"][1], /kendall_operator_csrf=/);
   assert.deepEqual(seen, [{ method: "POST", url: "/auth/login", cookie: "kendall_operator_session=old", origin: "https://dashboard.test" }]);
   assert.equal(await supervisorSessionIsValid({ supervisorUdsPath: socketPath, cookie: "kendall_operator_session=opaque" }), true);
+  assert.equal(await supervisorSessionRole({ supervisorUdsPath: socketPath, cookie: "kendall_operator_session=opaque" }), "operator");
+  assert.equal(await supervisorSessionRole({ supervisorUdsPath: socketPath, cookie: "" }), null);
   await close(dashboard);
   await close(supervisor);
 });

@@ -112,6 +112,16 @@ DASHBOARD_SESSION_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("revoked_at", "DATETIME"),
 )
 
+# Existing bootstrap operators predate this field and must remain usable after
+# the additive migration. A viewer is never inserted by migration/startup.
+DASHBOARD_OPERATOR_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("enabled", "BOOLEAN NOT NULL DEFAULT TRUE"),
+)
+
+DASHBOARD_OPERATOR_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("enabled", "BOOLEAN NOT NULL DEFAULT 1"),
+)
+
 SUPERVISOR_CONTROL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
     ("revision", "INTEGER NOT NULL DEFAULT 1"),
 )
@@ -313,6 +323,8 @@ async def init_db() -> None:
             )
         )
         if dialect == "postgresql":
+            for column_name, column_type in DASHBOARD_OPERATOR_POSTGRES_COLUMNS:
+                await connection.execute(text(f"ALTER TABLE dashboard_operators ADD COLUMN IF NOT EXISTS {column_name} {column_type}"))
             for column_name, column_type in DASHBOARD_SESSION_POSTGRES_COLUMNS:
                 await connection.execute(text(f"ALTER TABLE dashboard_sessions ADD COLUMN IF NOT EXISTS {column_name} {column_type}"))
             await connection.execute(
@@ -396,6 +408,7 @@ async def init_db() -> None:
             ))
             await _ensure_postgres_memory_proposals_schema(connection)
         elif dialect == "sqlite":
+            await _sqlite_add_columns(connection, "dashboard_operators", DASHBOARD_OPERATOR_SQLITE_COLUMNS)
             await _sqlite_add_columns(connection, "dashboard_sessions", DASHBOARD_SESSION_SQLITE_COLUMNS)
             await connection.execute(
                 text(

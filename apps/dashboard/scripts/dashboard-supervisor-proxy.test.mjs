@@ -29,7 +29,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
   let dashboard;
   try {
     supervisor = http.createServer((request, response) => {
-      if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true })); return; }
+      if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
       if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "packet-1" }] })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
@@ -77,7 +77,7 @@ test("authenticated POST forwards the follow-up subresource exactly and rejects 
       request.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
         if (request.url === "/auth/session") {
-          response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true }));
+          response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" }));
           return;
         }
         forwarded.push({ method: request.method, url: request.url, body, origin: request.headers.origin || null, csrf: request.headers["x-csrf-token"] || null });
@@ -108,6 +108,43 @@ test("authenticated POST forwards the follow-up subresource exactly and rejects 
     assert.equal(unknown.status, 404);
     assert.deepEqual(forwarded, [{ method: "POST", url: "/work-packets/packet-1/learn-follow-up-candidate-work", body: postBody, origin: `https://127.0.0.1:${port}`, csrf: "csrf-ok" }]);
 
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("test viewer is limited to fixed pipeline reads before any supervisor forward", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-test-viewer-proxy-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") {
+        response.writeHead(request.headers.cookie === "viewer=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "test_viewer" }));
+        return;
+      }
+      forwarded.push({ method: request.method, url: request.url });
+      response.end(JSON.stringify({ data: [] }));
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    const headers = { cookie: "viewer=ok" };
+    assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/audit-events", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", headers: { ...headers, origin: "https://dashboard.test" } })).status, 405);
+    assert.deepEqual(forwarded, [
+      { method: "GET", url: "/pipeline-control-plane/projection" },
+      { method: "GET", url: "/work-packets/packet-1" },
+    ]);
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);

@@ -403,3 +403,104 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             assert any(event.event_type == "packet_detail_read" and event.outcome == "denied" and event.target_ref is None for event in events)
 
     asyncio.run(run())
+
+
+def test_test_viewer_login_is_generic_read_only_and_independently_revocable(tmp_path, monkeypatch):
+    db_path = tmp_path / "viewer-auth.db"
+    private = tmp_path / "private"
+    private.mkdir()
+    private.chmod(0o700)
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("KENDALL_LAN_AUTH_ENABLED", "true")
+    monkeypatch.setenv("KENDALL_SUPERVISOR_TRANSPORT", "private_uds")
+    monkeypatch.setenv("KENDALL_SUPERVISOR_UDS_PATH", str(private / "supervisor.sock"))
+    monkeypatch.setenv("SUPERVISOR_CORS_ORIGINS", "https://dashboard.test")
+    _reset_supervisor_modules()
+
+    async def run():
+        from supervisor.api import main
+        from supervisor.application.lan_auth_bootstrap import enable_or_rotate_test_viewer, ensure_bootstrap_operator, revoke_test_viewer
+        from supervisor.infrastructure.db.database import SessionLocal, init_db
+
+        await init_db()
+        async with SessionLocal.begin() as session:
+            await ensure_bootstrap_operator(session, b"operator-password")
+            await enable_or_rotate_test_viewer(session, b"viewer-password", rotate=False)
+        headers = {"origin": "https://dashboard.test", "content-type": "application/json"}
+        _, _, csrf_body = await _asgi_request(main.app, "GET", "/auth/login-csrf", headers=headers)
+        csrf = json.loads(csrf_body)["csrfToken"]
+        status, response_headers, response_body = await _asgi_request(main.app, "POST", "/auth/login", body={"account": "test_viewer", "password": "viewer-password"}, headers={**headers, "x-csrf-token": csrf})
+        assert status == 200 and json.loads(response_body)["role"] == "test_viewer"
+        viewer_cookie = f"kendall_operator_session={_cookie_value(response_headers, 'kendall_operator_session')}"
+        status, _, response_body = await _asgi_request(main.app, "GET", "/auth/session", cookie=viewer_cookie)
+        assert status == 200 and json.loads(response_body)["role"] == "test_viewer"
+
+        for selector in ["not-a-role", {"role": "test_viewer"}, ["test_viewer"], None]:
+            _, _, invalid_csrf_body = await _asgi_request(main.app, "GET", "/auth/login-csrf", headers=headers)
+            invalid_csrf = json.loads(invalid_csrf_body)["csrfToken"]
+            status, _, invalid_body = await _asgi_request(main.app, "POST", "/auth/login", body={"account": selector, "password": "viewer-password"}, headers={**headers, "x-csrf-token": invalid_csrf})
+            assert status == 401 and b"Sign-in unavailable" in invalid_body
+
+        async with SessionLocal.begin() as session:
+            await revoke_test_viewer(session)
+        status, _, _ = await _asgi_request(main.app, "GET", "/auth/session", cookie=viewer_cookie)
+        assert status == 401
+
+    asyncio.run(run())
+
+
+def test_test_viewer_lifecycle_route_is_private_uds_only_and_never_returns_secret(tmp_path, monkeypatch):
+    db_path = tmp_path / "viewer-lifecycle.db"
+    private = tmp_path / "private"
+    private.mkdir()
+    private.chmod(0o700)
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("KENDALL_LAN_AUTH_ENABLED", "true")
+    monkeypatch.setenv("KENDALL_SUPERVISOR_TRANSPORT", "private_uds")
+    monkeypatch.setenv("KENDALL_SUPERVISOR_UDS_PATH", str(private / "supervisor.sock"))
+    _reset_supervisor_modules()
+
+    async def run():
+        from supervisor.api import main
+        from supervisor.infrastructure.db.database import init_db
+
+        await init_db()
+        secret = "viewer-password-not-retained"
+        lifecycle_headers = {"content-type": "application/json"}
+        status, _, body = await _asgi_request(main.app, "POST", "/internal/lan-auth/test-viewer", body={"action": "enable", "password": secret}, headers=lifecycle_headers)
+        assert status == 200
+        payload = json.loads(body)
+        assert payload == {
+            "schemaVersion": "kendall-test-viewer-lifecycle/v1",
+            "role": "test_viewer",
+            "configured": True,
+            "enabled": True,
+            "rotated": False,
+        }
+        assert secret.encode() not in body
+        status, _, body = await _asgi_request(main.app, "POST", "/internal/lan-auth/test-viewer", body={"action": "status"}, headers=lifecycle_headers)
+        assert status == 200 and json.loads(body) == {
+            "schemaVersion": "kendall-test-viewer-lifecycle/v1",
+            "role": "test_viewer",
+            "configured": True,
+            "enabled": True,
+            "rotated": False,
+        }
+
+        # A normal TCP-shaped request never reaches the lifecycle handler.
+        messages = []
+        received = False
+        async def receive():
+            nonlocal received
+            if received:
+                return {"type": "http.disconnect"}
+            received = True
+            return {"type": "http.request", "body": b'{"action":"revoke"}', "more_body": False}
+        async def send(message):
+            messages.append(message)
+        await main.app({"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1", "method": "POST", "scheme": "https", "path": "/internal/lan-auth/test-viewer", "raw_path": b"/internal/lan-auth/test-viewer", "query_string": b"", "headers": [(b"content-type", b"application/json")], "client": ("127.0.0.1", 12345), "server": None}, receive, send)
+        assert next(message["status"] for message in messages if message["type"] == "http.response.start") == 503
+
+    asyncio.run(run())
