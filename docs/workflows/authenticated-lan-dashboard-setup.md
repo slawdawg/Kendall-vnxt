@@ -321,9 +321,21 @@ pnpm run lan-cockpit:status
 ```
 
 The installer writes `kendall-lan-cockpit.target`,
-`kendall-lan-supervisor.service`, and `kendall-lan-dashboard.service` under
-`~/.config/systemd/user/`. It stores no password or key in the unit files; both
-services reference the existing private `~/kendall-lan-auth/` directory.
+`kendall-lan-supervisor.service`, `kendall-lan-manager.service`, and
+`kendall-lan-dashboard.service` under `~/.config/systemd/user/`. It stores no
+password or key in the unit files; all services reference the existing private
+`~/kendall-lan-auth/` directory.
+
+The target-owned manager service starts only after, requires, and is bound to
+the private-UDS supervisor. It runs the existing manager loop in dry-run,
+`read_only_projection` mode at a five-second cadence and discards its stdout;
+it creates no listener, executes no selected action, and does not retain a
+manager payload in the service journal. That mode skips capability-posture and
+recovery-housekeeping writes while still publishing the existing metadata-only
+handoffs. A blocked preflight still publishes its existing metadata-only
+Coordination Health receipt, then exits nonzero. `Restart=on-failure` with
+`RestartSec=5` deliberately starts the next read-only publication attempt
+before the dashboard's 15-second freshness window expires.
 
 The default listener bind is `tailnet-ip`. Do not use an all-interface bind
 unless it is explicitly required and reviewed; that mode requires both
@@ -354,6 +366,12 @@ pnpm run lan-cockpit:preflight
 pnpm run lan-cockpit:restart
 pnpm run lan-cockpit:status
 ```
+
+`lan-cockpit:status` reports the target, supervisor, manager, and dashboard.
+`lan-cockpit:restart` restarts the supervisor first, then the UDS-gated manager
+and dashboard. The supervisor upholds the manager unit, so a manager stopped by
+a supervisor failure is restarted when that supervisor recovers; the manager
+remains read-only and does not start a TCP service.
 
 For an installed-runtime audit, inspect the generated unit environment and
 prove the canonical URL through each intended interface. The URL stays on the

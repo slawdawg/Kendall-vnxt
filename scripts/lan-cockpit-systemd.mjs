@@ -9,6 +9,7 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const unitNames = {
   target: "kendall-lan-cockpit.target",
   supervisor: "kendall-lan-supervisor.service",
+  manager: "kendall-lan-manager.service",
   dashboard: "kendall-lan-dashboard.service",
 };
 const legacyCockpitUnits = [
@@ -31,8 +32,9 @@ export function renderLanCockpitUnits({ repoRoot, nodePath, pnpmPath, uvPath, ca
   const common = `WorkingDirectory=${repoRoot}\nEnvironment=KENDALL_LAN_AUTH_DIR=${authDir}\nEnvironment=KENDALL_PNPM_PATH=${pnpmPath}\nEnvironment=KENDALL_UV_PATH=${uvPath}\nEnvironment=KENDALL_TAILNET_DASHBOARD_CANONICAL_HOSTNAME=${hostname}\nEnvironment=KENDALL_DASHBOARD_BIND_MODE=${dashboardBindMode}${allowAllInterfaces ? "\nEnvironment=KENDALL_DASHBOARD_ALLOW_ALL_INTERFACES=true" : ""}${tlsEnvironment}`;
   const legacyUnitList = legacyCockpitUnits.join(" ");
   return {
-    [unitNames.target]: `[Unit]\nDescription=Kendall authenticated Tailnet cockpit\nWants=${unitNames.supervisor} ${unitNames.dashboard}\nAfter=network-online.target\nConflicts=${legacyUnitList}\nBefore=${legacyUnitList}\n\n[Install]\nWantedBy=default.target\n`,
-    [unitNames.supervisor]: `[Unit]\nDescription=Kendall authenticated Tailnet supervisor\nPartOf=${unitNames.target}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\n${common}\nExecStart=${nodePath} scripts/lan-cockpit-runtime.mjs supervisor\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=${unitNames.target}\n`,
+    [unitNames.target]: `[Unit]\nDescription=Kendall authenticated Tailnet cockpit\nWants=${unitNames.supervisor} ${unitNames.manager} ${unitNames.dashboard}\nAfter=network-online.target\nConflicts=${legacyUnitList}\nBefore=${legacyUnitList}\n\n[Install]\nWantedBy=default.target\n`,
+    [unitNames.supervisor]: `[Unit]\nDescription=Kendall authenticated Tailnet supervisor\nPartOf=${unitNames.target}\nAfter=network-online.target\nWants=network-online.target\nUpholds=${unitNames.manager}\n\n[Service]\nType=simple\n${common}\nExecStart=${nodePath} scripts/lan-cockpit-runtime.mjs supervisor\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=${unitNames.target}\n`,
+    [unitNames.manager]: `[Unit]\nDescription=Kendall read-only manager coordination health publisher\nPartOf=${unitNames.target}\nRequires=${unitNames.supervisor}\nBindsTo=${unitNames.supervisor}\nAfter=${unitNames.supervisor}\n\n[Service]\nType=simple\n${common}\nExecStart=${nodePath} scripts/lan-cockpit-runtime.mjs manager\nStandardOutput=null\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=${unitNames.target}\n`,
     [unitNames.dashboard]: `[Unit]\nDescription=Kendall authenticated Tailnet dashboard\nPartOf=${unitNames.target}\nRequires=${unitNames.supervisor}\nBindsTo=${unitNames.supervisor}\nAfter=${unitNames.supervisor}\n\n[Service]\nType=simple\n${common}\nExecStart=${nodePath} scripts/lan-cockpit-runtime.mjs dashboard\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=${unitNames.target}\n`,
   };
 }
@@ -100,6 +102,10 @@ function install() {
   stopLegacyCockpitUnits();
   run(["daemon-reload"]);
   run(["enable", "--now", unitNames.target]);
+  // A target already active before an upgrade does not necessarily start a
+  // newly-added Wants dependency. Start this bounded, target-owned publisher
+  // directly without interrupting the paired dashboard.
+  run(["start", unitNames.manager]);
   console.log("Kendall authenticated Tailnet cockpit installed. Run: pnpm run lan-cockpit:status");
 }
 
@@ -125,9 +131,10 @@ function main() {
     return;
   }
   if (command === "install") return install();
-  if (command === "status") return run(["status", unitNames.target, unitNames.supervisor, unitNames.dashboard]);
+  if (command === "status") return run(["status", unitNames.target, unitNames.supervisor, unitNames.manager, unitNames.dashboard]);
   if (command === "restart") {
     run(["restart", unitNames.supervisor]);
+    run(["restart", unitNames.manager]);
     return run(["restart", unitNames.dashboard]);
   }
   console.error("Expected install, print, status, or restart.");

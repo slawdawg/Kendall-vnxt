@@ -281,6 +281,61 @@ test("normal manager cycle publishes only after its coherent plan completes", as
   }
 });
 
+test("read-only projection publishes current handoffs without manager writes or selected-action execution", async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-read-only-projection-"));
+  const packets = [];
+  const published = [];
+  let recoveryWrites = 0;
+  let postureWrites = 0;
+  let executionCalls = 0;
+  try {
+    assert.equal(ledgerCommand({ command: "init", runId: "run-read-only", stateRoot }).status, "ready");
+    await runManagerRunLoop(
+      { runId: "run-read-only", stateRoot, runtimeMode: "read_only_projection", maxIterations: 1, heartbeatEvery: 1 },
+      {
+        buildPreflight: () => ({ ok: true, status: "ready", summary: {}, blockers: [], warnings: [] }),
+        buildContinuousRunPlan: () => ({
+          ok: true,
+          status: "ready",
+          summary: {
+            runId: "run-read-only",
+            workerCounts: { active: 0, warm: 0, paused: 0 }, usageState: "normal", resourceState: "normal",
+            managerCapabilityPosture: { schemaVersion: "manager-capability-posture/v1" },
+            selectedAction: { code: "must-not-execute" },
+            applySelectedAction: { code: "must-not-apply" },
+            runtimeReadiness: { allowedExecutionMode: "read_only_projection" },
+            laneClarity, laneClarityObservedAt: "2026-07-29T00:00:00.000Z",
+          },
+          blockers: [], warnings: [], nextActions: [],
+        }),
+        buildRecoveryHousekeepingEvidenceRecord: () => { recoveryWrites += 1; throw new Error("read-only projection must not write recovery housekeeping"); },
+        writeManagerCapabilityPosture: () => { postureWrites += 1; throw new Error("read-only projection must not write capability posture"); },
+        executeContinuousSelectedAction: () => { executionCalls += 1; throw new Error("read-only projection must not execute a selected action"); },
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async () => {
+          published.push("lane");
+          return { state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false };
+        },
+        publishManagerCycleCoordinationHealth: async () => {
+          published.push("health");
+          return { state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false };
+        },
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(recoveryWrites, 0);
+    assert.equal(postureWrites, 0);
+    assert.equal(executionCalls, 0);
+    assert.deepEqual(published, ["lane", "health"]);
+    assert.equal(packets[0].summary.selectedAction, null);
+    assert.equal(packets[0].summary.applySelectedAction, null);
+    assert.equal(packets[0].summary.capabilityPosturePersistence.writeStatus, "not_written_read_only_projection");
+    assert.equal(packets[0].summary.recoveryHousekeepingEvidence.status, "not_written");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("blocked manager preflight preserves and publishes a coherent preflight lane summary without selecting mutation", async () => {
   const packets = [];
   const published = [];

@@ -95,6 +95,9 @@ listener is created.
 For a first-time, copy-paste setup (including safe private-file permissions,
 certificate creation, startup order, and troubleshooting), see
 [Authenticated LAN dashboard setup](docs/workflows/authenticated-lan-dashboard-setup.md).
+That target also owns a private-UDS-gated, dry-run `read_only_projection`
+manager service which keeps the read-only Pipeline Coordination Health receipt
+fresh without adding a dashboard or supervisor listener.
 
 Important environment variables:
 

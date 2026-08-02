@@ -644,6 +644,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   const buildContinuousRunPlanFn = context.buildContinuousRunPlan || buildContinuousRunPlan;
   const buildManagerCoordinationHealthFn = context.buildManagerCoordinationHealth || buildManagerCoordinationHealth;
   const buildRecoveryHousekeepingEvidenceRecordFn = context.buildRecoveryHousekeepingEvidenceRecord || buildRecoveryHousekeepingEvidenceRecord;
+  const writeManagerCapabilityPostureFn = context.writeManagerCapabilityPosture || writeManagerCapabilityPosture;
   const executeContinuousSelectedActionFn = context.executeContinuousSelectedAction || executeContinuousSelectedAction;
   const publishManagerCycleLaneClarityFn = context.publishManagerCycleLaneClarity || publishManagerCycleLaneClarity;
   const publishManagerCycleCoordinationHealthFn = context.publishManagerCycleCoordinationHealth || publishManagerCycleCoordinationHealth;
@@ -722,6 +723,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   }
 
   const preflightContext = compactPreflightForContinuous(preflight);
+  const publicationOnly = options.runtimeMode === "read_only_projection";
   const maxIterations = options.maxIterations ?? 0;
   let iteration = 0;
   while (maxIterations === 0 || iteration < maxIterations) {
@@ -763,7 +765,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
       persistedManagerCapabilityPosture: persistedCapabilityPosture.summary?.managerCapabilityPosture || null,
     });
     const evidenceRunId = plan.summary?.runId || options.runId || "";
-    const recoveryHousekeepingEvidence = evidenceRunId
+    const recoveryHousekeepingEvidence = !publicationOnly && evidenceRunId
       ? buildRecoveryHousekeepingEvidenceRecordFn({
           runId: evidenceRunId,
           stateRoot: options.stateRoot,
@@ -784,11 +786,11 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
         persistedManagerCapabilityPosture: persistedCapabilityPosture.summary?.managerCapabilityPosture || null,
       });
     }
-    const postureWrite = plan.ok !== false && plan.summary?.managerCapabilityPosture
-      ? writeManagerCapabilityPosture(plan.summary.managerCapabilityPosture, options)
+    const postureWrite = !publicationOnly && plan.ok !== false && plan.summary?.managerCapabilityPosture
+      ? writeManagerCapabilityPostureFn(plan.summary.managerCapabilityPosture, options)
       : null;
-    const selected = plan.summary?.selectedAction || null;
-    const applySelected = plan.summary?.applySelectedAction || null;
+    const selected = publicationOnly ? null : plan.summary?.selectedAction || null;
+    const applySelected = publicationOnly ? null : plan.summary?.applySelectedAction || null;
     const coordinationHealth = buildManagerCoordinationHealthFn(options);
     const result = {
       ok: plan.ok,
@@ -805,7 +807,7 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
         capabilityHolds: plan.summary?.capabilityHolds || null,
         capabilityPosturePersistence: {
           readStatus: persistedCapabilityPosture.status,
-          writeStatus: postureWrite?.status || "not_written",
+          writeStatus: postureWrite?.status || (publicationOnly ? "not_written_read_only_projection" : "not_written"),
           path: postureWrite?.summary?.path || persistedCapabilityPosture.summary?.path || null,
           rawPayloadRetained: false,
         },
