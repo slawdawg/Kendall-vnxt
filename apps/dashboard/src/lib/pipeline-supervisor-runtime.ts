@@ -8,14 +8,14 @@ import {
   normalizePipelineDashboardProjection,
 } from "./pipeline-supervisor-projection";
 import { isWorkPacketV0View } from "./pipeline-supervisor-projector";
-import { requestSupervisorJson } from "./dashboard-supervisor-transport";
+import { requestSupervisorJson, type SupervisorReadOptions } from "./dashboard-supervisor-transport";
 
-function requestJson<T>(path: string): Promise<T> {
-  return requestSupervisorJson<T>(path, { timeoutMs: 10_000, rejectServerLanAuth: true });
+function requestJson<T>(path: string, options: SupervisorReadOptions = {}): Promise<T> {
+  return requestSupervisorJson<T>(path, { ...options, timeoutMs: options.timeoutMs ?? 10_000, rejectServerLanAuth: true });
 }
 
-function requestLegacyJson<T>(path: string): Promise<T> {
-  return requestJson<T>(path);
+function requestLegacyJson<T>(path: string, options: SupervisorReadOptions = {}): Promise<T> {
+  return requestJson<T>(path, options);
 }
 
 const SAFE_PACKET_ID = /^[A-Za-z0-9._:%-]+$/;
@@ -76,14 +76,14 @@ function isNotFoundError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "message" in error && typeof error.message === "string" && /\(404\)$/.test(error.message));
 }
 
-export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {
+export async function getWorkPacket(packetId: string, options?: SupervisorReadOptions): Promise<WorkPacketV0View> {
   const canonicalPath = `/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`;
   const legacyPath = `/work-packets/${encodeURIComponent(packetId)}`;
   try {
-    return canonicalPacket(await requestJson<unknown>(canonicalPath));
+    return canonicalPacket(await requestJson<unknown>(canonicalPath, options));
   } catch (error) {
     if ((!isNotFoundError(error) && !isCanonicalShapeError(error)) || typeof packetId !== "string" || !SAFE_PACKET_ID.test(packetId)) throw error;
-    return requestLegacyJson<WorkPacketV0View>(legacyPath);
+    return requestLegacyJson<WorkPacketV0View>(legacyPath, options);
   }
 }
 

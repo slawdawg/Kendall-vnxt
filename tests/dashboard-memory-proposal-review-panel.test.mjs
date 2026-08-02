@@ -4,16 +4,16 @@ import test from "node:test";
 
 test("work item detail surfaces persisted memory proposal review controls", async () => {
   const [pageSource, panelSource, runtimeSource] = await Promise.all([
-    readFile("apps/dashboard/src/app/work-items/[work-item-id]/page.tsx", "utf8"),
+    readFile("apps/dashboard/src/components/work-item-detail-page.tsx", "utf8"),
     readFile("apps/dashboard/src/components/memory-proposal-review-panel.tsx", "utf8"),
     readFile("apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", "utf8"),
   ]);
 
-  assert.match(runtimeSource, /export async function getWorkPacket\(packetId: string\)/);
+  assert.match(runtimeSource, /export async function getWorkPacket\(packetId: string, options\?: SupervisorReadOptions\)/);
   assert.match(runtimeSource, /\/pipeline-control-plane\/work-packets\/\$\{encodeURIComponent\(packetId\)\}/);
   assert.match(runtimeSource, /export async function getWorkPackets\(\): Promise<WorkPacketV0View\[\]>/);
   assert.match(runtimeSource, /canonicalPackets\(await requestJson<unknown>\("\/pipeline-control-plane\/work-packets"\)\)/);
-  assert.match(pageSource, /getWorkPacket\(`work_item:\$\{workItemId\}`\)/);
+  assert.match(pageSource, /getWorkPacket\(`work_item:\$\{workItemId\}`, options\)/);
   assert.match(pageSource, /<MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/>/);
   assert.match(pageSource, /href="#memory-proposals"/);
 

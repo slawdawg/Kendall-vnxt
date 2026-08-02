@@ -305,7 +305,9 @@ function checkForbiddenCalls(displayPath, source) {
       ? ["network-eventsource"]
       : displayPath === "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"
         ? ["network-fetch"]
-        : displayPath === "apps/dashboard/src/lib/dashboard-supervisor-transport.ts"
+      : displayPath === "apps/dashboard/src/lib/dashboard-supervisor-transport.ts"
+          ? ["network-fetch"]
+        : displayPath === "apps/dashboard/src/lib/dashboard-session-role.ts"
           ? ["network-fetch"]
       : displayPath === "apps/dashboard/src/components/logout-button.tsx"
           ? ["network-fetch"]
@@ -318,6 +320,9 @@ function checkForbiddenCalls(displayPath, source) {
   }
   if (displayPath === "apps/dashboard/src/lib/dashboard-supervisor-transport.ts") {
     checkDashboardSupervisorTransport(displayPath, source);
+  }
+  if (displayPath === "apps/dashboard/src/lib/dashboard-session-role.ts") {
+    checkDashboardSessionRole(displayPath, source);
   }
   if (displayPath === "apps/dashboard/src/components/logout-button.tsx") {
     const logoutFetch = /fetch\(\s*["']\/auth\/logout["']\s*,([\s\S]*?)\n?\s*\}\);/.exec(source)?.[1] || "";
@@ -353,13 +358,33 @@ function checkForbiddenCalls(displayPath, source) {
 }
 
 function checkDashboardSupervisorTransport(displayPath, source) {
+  const readSource = extractFunctionSource(source, "requestSupervisorJson") || "";
+  const mutationSource = extractFunctionSource(source, "requestSupervisorMutation") || "";
+  if (
+    countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 2 ||
+    countMatches(stripCommentsAndStrings(readSource), /\bfetch\s*\(/g) !== 1 ||
+    !/cache:\s*["']no-store["']/.test(readSource) ||
+    /\bmethod\s*:/.test(stripComments(readSource)) ||
+    countMatches(stripCommentsAndStrings(mutationSource), /\bfetch\s*\(/g) !== 1 ||
+    !/credentials:\s*["']same-origin["']/.test(mutationSource) ||
+    !/cache:\s*["']no-store["']/.test(mutationSource) ||
+    !/headers\.set\(["']origin["']/.test(mutationSource) ||
+    !/headers\.set\(["']x-csrf-token["']/.test(mutationSource)
+  ) {
+    failures.push(`${displayPath}: shared transport must contain one read-only no-store fetch and one same-origin CSRF mutation fetch`);
+  }
+}
+
+function checkDashboardSessionRole(displayPath, source) {
   const executableSource = stripCommentsAndStrings(source);
   if (
     countMatches(executableSource, /\bfetch\s*\(/g) !== 1 ||
+    !/fetch\(\s*["']\/auth\/session["']/.test(source) ||
+    !/credentials:\s*["']same-origin["']/.test(source) ||
     !/cache:\s*["']no-store["']/.test(source) ||
-    /\bmethod\s*:/.test(stripComments(source))
+    !/AbortController/.test(source)
   ) {
-    failures.push(`${displayPath}: shared supervisor transport must remain a single read-only no-store fetch`);
+    failures.push(`${displayPath}: session-role read must be one abortable same-origin no-store /auth/session fetch`);
   }
 }
 
@@ -402,7 +427,7 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
   if (
     (usesSharedTransport && countMatches(stripCommentsAndStrings(source), /\bfetch\s*\(/g) !== 0) ||
     (usesSharedTransport && countMatches(stripCommentsAndStrings(requestJsonSource), /\brequestSupervisorJson(?:<[^;\n]*>)?\s*\(/g) !== 1) ||
-    (usesSharedTransport && !/timeoutMs:\s*10_000/.test(requestJsonSourceWithoutComments)) ||
+    (usesSharedTransport && !/timeoutMs:\s*(?:10_000|options\.timeoutMs\s*\?\?\s*10_000)/.test(requestJsonSourceWithoutComments)) ||
     (usesSharedTransport && !/rejectServerLanAuth:\s*true/.test(requestJsonSourceWithoutComments))
   ) {
     if (usesSharedTransport) failures.push(`${displayPath}: pipeline runtime must delegate reads to the shared authenticated transport`);
@@ -453,13 +478,43 @@ function extractFunctionSource(source, functionName) {
   if (!declaration) {
     return null;
   }
-  const bodyStart = source.indexOf("{", declaration.index + declaration[0].length);
+  let bodyStart = -1;
+  let parameterDepth = 0;
+  let sawParameters = false;
+  let quote = null;
+  let escaped = false;
+  for (let index = declaration.index + declaration[0].length; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      parameterDepth += 1;
+      sawParameters = true;
+      continue;
+    }
+    if (char === ")") {
+      parameterDepth -= 1;
+      continue;
+    }
+    if (char === "{" && sawParameters && parameterDepth === 0) {
+      bodyStart = index;
+      break;
+    }
+  }
   if (bodyStart < 0) {
     return null;
   }
   let depth = 0;
-  let quote = null;
-  let escaped = false;
+  quote = null;
+  escaped = false;
   for (let index = bodyStart; index < source.length; index += 1) {
     const char = source[index];
     if (quote) {

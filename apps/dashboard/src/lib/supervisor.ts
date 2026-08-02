@@ -13,6 +13,7 @@ import {
 } from "./pipeline-supervisor-projection";
 import {
   getSupervisorBaseUrl as canonicalGetSupervisorBaseUrl,
+  requestSupervisorMutation,
   requestSupervisorJson,
   type SupervisorReadOptions,
 } from "./dashboard-supervisor-transport";
@@ -113,8 +114,8 @@ export async function getWorkItems(options?: RequestOptions): Promise<WorkItemVi
   return requestJson<WorkItemView[]>("/work-items", options);
 }
 
-export async function getCandidateWork(): Promise<CandidateWorkView[]> {
-  return requestJson<CandidateWorkView[]>("/candidate-work");
+export async function getCandidateWork(options?: RequestOptions): Promise<CandidateWorkView[]> {
+  return requestJson<CandidateWorkView[]>("/candidate-work", options);
 }
 
 export async function importBmadCandidateWork(payload: CandidateWorkBmadImportPayload): Promise<CandidateWorkView> {
@@ -148,7 +149,7 @@ export async function importObsidianMetadataCandidateWork(payload: CandidateWork
 }
 
 export async function updateCandidateWork(candidateWorkId: string, payload: CandidateWorkUpdatePayload): Promise<CandidateWorkView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}`, {
+  const response = await requestSupervisorMutation(`/candidate-work/${candidateWorkId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -161,7 +162,7 @@ export async function updateCandidateWork(candidateWorkId: string, payload: Cand
 }
 
 export async function promoteCandidateWork(candidateWorkId: string): Promise<CandidateWorkPromotionView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}/promote`, {
+  const response = await requestSupervisorMutation(`/candidate-work/${candidateWorkId}/promote`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -174,12 +175,12 @@ export async function promoteCandidateWork(candidateWorkId: string): Promise<Can
   return envelope.data;
 }
 
-export async function getWorkItem(id: string): Promise<WorkItemView> {
-  return requestJson<WorkItemView>(`/work-items/${id}`);
+export async function getWorkItem(id: string, options?: RequestOptions): Promise<WorkItemView> {
+  return requestJson<WorkItemView>(`/work-items/${id}`, options);
 }
 
-export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]> {
-  return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`);
+export async function getWorkItemEvents(id: string, options?: RequestOptions): Promise<WorkflowEventView[]> {
+  return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`, options);
 }
 
 export async function createLearnFollowUpCandidateWork(
@@ -1306,36 +1307,36 @@ function isProjectionWorkGraph(value: unknown, packetId: unknown): boolean {
   );
 }
 
-export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {
-  return requestJson<ExecutionAttemptView[]>(`/work-items/${workItemId}/execution-attempts`);
+export async function getExecutionAttempts(workItemId: string, options?: RequestOptions): Promise<ExecutionAttemptView[]> {
+  return requestJson<ExecutionAttemptView[]>(`/work-items/${workItemId}/execution-attempts`, options);
 }
 
-export async function getRuntimeEvidenceExport(workItemId: string): Promise<RuntimeEvidenceExportView> {
-  return requestJson<RuntimeEvidenceExportView>(`/work-items/${workItemId}/runtime-evidence-export`);
+export async function getRuntimeEvidenceExport(workItemId: string, options?: RequestOptions): Promise<RuntimeEvidenceExportView> {
+  return requestJson<RuntimeEvidenceExportView>(`/work-items/${workItemId}/runtime-evidence-export`, options);
 }
 
-export async function getLocalWorktreePlan(workItemId: string): Promise<LocalWorktreePlanView> {
-  return requestJson<LocalWorktreePlanView>(`/work-items/${workItemId}/local-worktree-plan`);
+export async function getLocalWorktreePlan(workItemId: string, options?: RequestOptions): Promise<LocalWorktreePlanView> {
+  return requestJson<LocalWorktreePlanView>(`/work-items/${workItemId}/local-worktree-plan`, options);
 }
 
-export async function getWorkItemLowRiskDeliveryPlan(workItemId: string): Promise<LowRiskDeliveryPlanReportView> {
-  return requestJson<LowRiskDeliveryPlanReportView>(`/work-items/${workItemId}/low-risk-delivery-plan`);
+export async function getWorkItemLowRiskDeliveryPlan(workItemId: string, options?: RequestOptions): Promise<LowRiskDeliveryPlanReportView> {
+  return requestJson<LowRiskDeliveryPlanReportView>(`/work-items/${workItemId}/low-risk-delivery-plan`, options);
 }
 
-export async function getWorkItemCleanupPlan(workItemId: string): Promise<CleanupPlanView> {
-  return requestJson<CleanupPlanView>(`/work-items/${workItemId}/cleanup-plan`);
+export async function getWorkItemCleanupPlan(workItemId: string, options?: RequestOptions): Promise<CleanupPlanView> {
+  return requestJson<CleanupPlanView>(`/work-items/${workItemId}/cleanup-plan`, options);
 }
 
 export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {
   return requestJson<WorkItemExecutionRecipeView[]>("/execution-recipes");
 }
 
-export async function getRecipeGateAudit(workItemId: string): Promise<WorkItemRecipeGateAuditView> {
-  return requestJson<WorkItemRecipeGateAuditView>(`/work-items/${workItemId}/recipe-gate-audit`);
+export async function getRecipeGateAudit(workItemId: string, options?: RequestOptions): Promise<WorkItemRecipeGateAuditView> {
+  return requestJson<WorkItemRecipeGateAuditView>(`/work-items/${workItemId}/recipe-gate-audit`, options);
 }
 
-export async function getRoutingPreview(workItemId: string): Promise<RoutingPreviewView> {
-  return requestJson<RoutingPreviewView>(`/work-items/${workItemId}/routing-preview`);
+export async function getRoutingPreview(workItemId: string, options?: RequestOptions): Promise<RoutingPreviewView> {
+  return requestJson<RoutingPreviewView>(`/work-items/${workItemId}/routing-preview`, options);
 }
 
 export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
@@ -1409,8 +1410,8 @@ export async function getDevelopmentRunwayReport(): Promise<DevelopmentRunwayRep
   return requestJson<DevelopmentRunwayReportView>("/supervisor/development-runway-report");
 }
 
-export async function getRuntimeEvidenceReviewReport(): Promise<RuntimeEvidenceReviewReportView> {
-  return requestJson<RuntimeEvidenceReviewReportView>("/supervisor/runtime-evidence-review-report");
+export async function getRuntimeEvidenceReviewReport(options?: RequestOptions): Promise<RuntimeEvidenceReviewReportView> {
+  return requestJson<RuntimeEvidenceReviewReportView>("/supervisor/runtime-evidence-review-report", options);
 }
 
 export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {
@@ -1429,8 +1430,8 @@ export async function getTrustedDeliveryEligibilityReport(): Promise<TrustedDeli
   return requestJson<TrustedDeliveryEligibilityReportView>("/supervisor/trusted-delivery-eligibility-report");
 }
 
-export async function getWorkItemTrustedDeliveryEligibilityReport(workItemId: string): Promise<TrustedDeliveryEligibilityReportView> {
-  return requestJson<TrustedDeliveryEligibilityReportView>(`/work-items/${workItemId}/trusted-delivery-eligibility-report`);
+export async function getWorkItemTrustedDeliveryEligibilityReport(workItemId: string, options?: RequestOptions): Promise<TrustedDeliveryEligibilityReportView> {
+  return requestJson<TrustedDeliveryEligibilityReportView>(`/work-items/${workItemId}/trusted-delivery-eligibility-report`, options);
 }
 
 export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
@@ -1485,15 +1486,15 @@ export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
   return requestJson<WorkerRegistryEntryView[]>("/routing/worker-registry");
 }
 
-export async function getAuditEvents(): Promise<
+export async function getAuditEvents(options?: RequestOptions): Promise<
   AuditEventView[]
 > {
-  return requestJson<AuditEventView[]>("/audit-events");
+  return requestJson<AuditEventView[]>("/audit-events", options);
 }
 
-export async function getSavedOperatorViews(scope?: WorkItemFilterScope): Promise<SavedWorkItemView[]> {
+export async function getSavedOperatorViews(scope?: WorkItemFilterScope, options?: RequestOptions): Promise<SavedWorkItemView[]> {
   const query = scope ? `?scope=${encodeURIComponent(scope)}` : "";
-  return requestJson<SavedWorkItemView[]>(`/operator-views${query}`);
+  return requestJson<SavedWorkItemView[]>(`/operator-views${query}`, options);
 }
 
 export async function saveOperatorView(payload: SavedWorkItemViewPayload): Promise<SavedWorkItemView> {

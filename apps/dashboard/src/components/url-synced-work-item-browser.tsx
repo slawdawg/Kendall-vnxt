@@ -17,6 +17,7 @@ import {
   type WorkItemFilterState,
 } from "../lib/work-item-filtering";
 import { deleteOperatorView, saveOperatorView, setOperatorViewDefault } from "../lib/supervisor";
+import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
 import { WorkItemFilterPanel } from "./work-item-filter-panel";
 
 function useSavedViews(
@@ -79,6 +80,7 @@ function useSavedViews(
         });
         setDraftName("");
         router.refresh();
+        invalidateAuthenticatedPageData();
       })
       .finally(() => setPendingSave(false));
   }
@@ -96,6 +98,7 @@ function useSavedViews(
       .then(() => {
         setSavedViews((current) => current.filter((view) => view.id !== viewId));
         router.refresh();
+        invalidateAuthenticatedPageData();
       })
       .finally(() => setPendingSave(false));
   }
@@ -118,6 +121,7 @@ function useSavedViews(
           })),
         );
         router.refresh();
+        invalidateAuthenticatedPageData();
       })
       .finally(() => setPendingSave(false));
   }

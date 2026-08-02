@@ -69,7 +69,7 @@ export function ProposedWorkBoard({ candidates }: { candidates: CandidateWorkVie
         try {
           await action();
           if (refresh) {
-            router.refresh();
+            window.location.reload();
           }
         } catch (error) {
           setMessage(error instanceof Error ? error.message : "Unable to update proposed work.");

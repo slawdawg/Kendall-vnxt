@@ -1,4 +1,5 @@
 import { ActiveWorkBrowser } from "../../components/active-work-browser";
+import { LanOperatorPage } from "../../components/lan-operator-pages";
 import { PageIntro } from "../../components/page-intro";
 import { RouteBrief } from "../../components/route-brief";
 import { ServerShell as Shell } from "../../components/server-shell";
@@ -6,6 +7,9 @@ import { buildNavStats } from "../../lib/nav-stats";
 import { getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
 
 export default async function ActiveWorkPage() {
+  if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    return <LanOperatorPage kind="active-work" />;
+  }
   const [allItems, savedViews] = await Promise.all([getWorkItems(), getSavedOperatorViews("active-work")]);
   const items = allItems.filter((item) =>
     ["implementing", "validating", "reviewing", "awaiting_audit"].includes(item.state),

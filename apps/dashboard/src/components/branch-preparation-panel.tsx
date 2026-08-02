@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { prepareRecipeBranch } from "../lib/supervisor";
+import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
 import { useOperatorProfile } from "../lib/operator-profile";
 
 export function BranchPreparationPanel({
@@ -35,6 +36,7 @@ export function BranchPreparationPanel({
         setMessage(item.blockedReason ?? "Recipe branch preparation recorded.");
         setNote("");
         router.refresh();
+        invalidateAuthenticatedPageData();
       } catch {
         setMessage("The supervisor could not prepare the recipe branch.");
       }

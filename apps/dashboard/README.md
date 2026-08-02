@@ -22,6 +22,11 @@ does not create a plain HTTP LAN listener.
 In LAN-auth mode the custom runtime serves the standalone sign-in surface and
 proxies only the fixed authentication routes over the supervisor UDS. Protected
 Next routes are session-gated; Packet Detail reads use the bounded read mediator.
+The authenticated operator pages (`/active-work`, `/attention`, `/queue`,
+`/audit`, `/proposed-work`, and `/work-items/:id`) use the same proxy, while
+the independently revocable `test_viewer` remains limited to read-only
+`/pipeline`. See the [Authenticated LAN dashboard setup](../../docs/workflows/authenticated-lan-dashboard-setup.md)
+for page availability, startup, recovery, and secret boundaries.
 
 ## Local preferences and fixture routes
 

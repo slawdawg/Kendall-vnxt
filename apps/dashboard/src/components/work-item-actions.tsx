@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import type { WorkflowAction, WorkflowState } from "@kendall/contracts";
 
 import { useOperatorProfile } from "../lib/operator-profile";
-import { getSupervisorBaseUrl } from "../lib/supervisor";
+import { requestSupervisorMutation } from "../lib/dashboard-supervisor-transport";
 import { actionsByState, messageForWorkflowAction, policyHintForState } from "../lib/workflow-actions";
 
 export function WorkItemActions({
@@ -19,7 +18,6 @@ export function WorkItemActions({
   requiresAudit?: boolean;
   compact?: boolean;
 }) {
-  const router = useRouter();
   const { profile } = useOperatorProfile();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState(
@@ -36,7 +34,7 @@ export function WorkItemActions({
   function submit(action: WorkflowAction) {
     startTransition(async () => {
       setMessage("Submitting workflow action...");
-      const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/actions`, {
+      const response = await requestSupervisorMutation(`/work-items/${workItemId}/actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -57,7 +55,7 @@ export function WorkItemActions({
 
       setMessage(messageForWorkflowAction(action));
       setNote("");
-      router.refresh();
+      window.location.reload();
     });
   }
 

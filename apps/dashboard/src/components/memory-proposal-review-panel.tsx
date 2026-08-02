@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { MemoryProposalV0, WorkPacketV0View } from "@kendall/contracts";
 
 import { useOperatorProfile } from "../lib/operator-profile";
+import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
 import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 type ReviewAction = "approve_future_draft" | "edit_needed" | "reject" | "defer";
@@ -150,6 +151,7 @@ export function MemoryProposalReviewPanel({
       setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
       setPendingProposalId(null);
       router.refresh();
+      invalidateAuthenticatedPageData();
     });
   }
 
@@ -209,6 +211,7 @@ export function MemoryProposalReviewPanel({
       setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
       setPendingProposalId(null);
       router.refresh();
+      invalidateAuthenticatedPageData();
     });
   }
 

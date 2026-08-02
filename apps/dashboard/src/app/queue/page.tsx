@@ -1,4 +1,5 @@
 import { PageIntro } from "../../components/page-intro";
+import { LanOperatorPage } from "../../components/lan-operator-pages";
 import { ServerShell as Shell } from "../../components/server-shell";
 import { QueueBrowser } from "../../components/queue-browser";
 import { RouteBrief } from "../../components/route-brief";
@@ -6,6 +7,9 @@ import { buildNavStats } from "../../lib/nav-stats";
 import { getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
 
 export default async function QueuePage() {
+  if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    return <LanOperatorPage kind="queue" />;
+  }
   const [items, savedViews] = await Promise.all([getWorkItems(), getSavedOperatorViews("queue")]);
   const navStats = buildNavStats(items);
   return (

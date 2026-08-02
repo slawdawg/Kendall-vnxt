@@ -1871,9 +1871,12 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(pipelineSupervisorRuntimeSource, /Invalid projection payload/);
   assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 0);
   assert.match(pipelineSupervisorRuntimeSource, /requestSupervisorJson/);
-  assert.equal((dashboardSupervisorTransportSource.match(/\bfetch\s*\(/g) ?? []).length, 1);
+  assert.equal((dashboardSupervisorTransportSource.match(/\bfetch\s*\(/g) ?? []).length, 2);
   assert.match(dashboardSupervisorTransportSource, /cache:\s*["']no-store["']/);
-  assert.doesNotMatch(dashboardSupervisorTransportSource, /method\s*:/);
+  assert.match(dashboardSupervisorTransportSource, /requestSupervisorMutation/);
+  assert.match(dashboardSupervisorTransportSource, /credentials:\s*["']same-origin["']/);
+  assert.match(dashboardSupervisorTransportSource, /headers\.set\(["']origin["']/);
+  assert.match(dashboardSupervisorTransportSource, /headers\.set\(["']x-csrf-token["']/);
   assert.match(cockpitSource, /ProjectionTruthSummary/);
   for (const bannedDefaultSurfacePattern of [
     /route id/i,

@@ -26,6 +26,7 @@ export async function startEpic26NextLanHarness(port = 3103) {
   chmodSync(certPath, 0o600);
   chmodSync(keyPath, 0o600);
   let sessionValid = false;
+  let sessionRole = "operator";
   const readCookie = (header, name) => header.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) ?? "";
   const supervisor = http.createServer((request, response) => {
     const cookie = request.headers.cookie || "";
@@ -38,16 +39,18 @@ export async function startEpic26NextLanHarness(port = 3103) {
       request.on("end", () => {
         let payload = {};
         try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* generic failure */ }
-        if (payload.password !== "test-password") return json(401, { detail: "Sign-in unavailable." });
+        if (payload.password !== "test-password" || !["operator", "test_viewer"].includes(payload.account)) return json(401, { detail: "Sign-in unavailable." });
         sessionValid = true;
+        sessionRole = payload.account;
         response.setHeader("set-cookie", "kendall_operator_session=harness-session; Secure; HttpOnly; SameSite=Strict; Path=/");
-        return json(200, { authenticated: true, csrfToken: "harness-session-csrf", role: "operator" });
+        return json(200, { authenticated: true, csrfToken: "harness-session-csrf", role: sessionRole });
       });
       return;
     }
-    if (request.url === "/auth/session") return json(sessionValid && readCookie(cookie, "kendall_operator_session") === "harness-session" ? 200 : 401, { authenticated: sessionValid, role: "operator" });
+    if (request.url === "/auth/session") return json(sessionValid && readCookie(cookie, "kendall_operator_session") === "harness-session" ? 200 : 401, { authenticated: sessionValid, role: sessionRole });
     if (request.url === "/auth/logout" && request.method === "POST") {
       sessionValid = false;
+      sessionRole = "operator";
       response.setHeader("set-cookie", "kendall_operator_session=; Max-Age=0; Secure; HttpOnly; SameSite=Strict; Path=/");
       return json(200, { signedOut: true });
     }
@@ -94,8 +97,16 @@ export async function startEpic26NextLanHarness(port = 3103) {
   return {
     origin,
     close: async () => {
+      const stopped = new Promise((resolve) => dashboard.once("exit", resolve));
       dashboard.kill("SIGTERM");
-      await new Promise((resolve) => dashboard.once("exit", resolve));
+      const graceful = await Promise.race([
+        stopped.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
+      ]);
+      if (!graceful) {
+        dashboard.kill("SIGKILL");
+        await stopped;
+      }
       await new Promise((resolve) => supervisor.close(resolve));
       fs.rmSync(directory, { recursive: true, force: true });
     },

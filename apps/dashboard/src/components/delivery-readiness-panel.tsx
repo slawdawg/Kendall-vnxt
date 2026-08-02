@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
 import { useOperatorProfile } from "../lib/operator-profile";
+import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
 import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 const prStatuses = ["not_recorded", "recorded", "ready", "waived"];
@@ -59,6 +60,7 @@ export function DeliveryReadinessPanel({
         }
         setMessage("Delivery readiness updated.");
         router.refresh();
+        invalidateAuthenticatedPageData();
       } catch {
         setMessage("Unable to update delivery readiness.");
       }

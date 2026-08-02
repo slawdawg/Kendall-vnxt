@@ -1,10 +1,14 @@
 import { PageIntro } from "../../components/page-intro";
+import { LanOperatorPage } from "../../components/lan-operator-pages";
 import { ProposedWorkBoard } from "../../components/proposed-work-board";
 import { ServerShell as Shell } from "../../components/server-shell";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getCandidateWork, getWorkItems } from "../../lib/supervisor";
 
 export default async function ProposedWorkPage() {
+  if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
+    return <LanOperatorPage kind="proposed-work" />;
+  }
   const [candidates, items] = await Promise.all([getCandidateWork(), getWorkItems()]);
   const proposedCount = candidates.filter((candidate) => candidate.status === "proposed").length;
   const navStats = buildNavStats(items, proposedCount);
