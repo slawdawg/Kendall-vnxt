@@ -4,7 +4,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { main } from "./dashboard-test-viewer-credential.mjs";
+import { main } from "./dashboard-test-viewer-lifecycle.mjs";
 
 function listen(server, target) { return new Promise((resolve) => server.listen(target, resolve)); }
 function close(server) { return new Promise((resolve) => server.close(resolve)); }
