@@ -83,12 +83,12 @@ const resumableCheckNestedStageExpansions = Object.freeze({
     "test:mutation-admission",
     "test:mutation-admission-workspace-handoff",
     "test:mutation-admission-prewrite-guard",
-    "test:codex-workspace",
+    "test:codex-workspace:delivery",
+    "test:workspace-fast-profile",
   ],
   "test:supervisor": resumableCheckSupervisorLeaves,
 });
 const resumableCheckTrailingWorkspaceDuplicates = new Set([
-  "test:codex-workspace",
   "test:codex-workspace-state",
   "test:workspace-command-resolution",
 ]);
@@ -8155,6 +8155,27 @@ function resumableCheckObsoleteSupervisorAggregatePlan(plan) {
   return [...plan.stages.slice(0, firstLeaf), "test:supervisor", ...plan.stages.slice(lastLeaf + 1)];
 }
 
+function resumableCheckPriorWorkspaceFastExpandedPlan(plan) {
+  const stages = plan.stages;
+  const focusedDeliveryIndex = stages.indexOf("test:codex-workspace:delivery");
+  const profileContractIndex = focusedDeliveryIndex + 1;
+  const laterRawFixtureIndex = stages.indexOf("test:codex-workspace", profileContractIndex + 1);
+  if (
+    focusedDeliveryIndex < 1 ||
+    stages[focusedDeliveryIndex - 1] !== "test:mutation-admission-prewrite-guard" ||
+    stages[profileContractIndex] !== "test:workspace-fast-profile" ||
+    laterRawFixtureIndex <= profileContractIndex
+  ) {
+    return null;
+  }
+  return [
+    ...stages.slice(0, focusedDeliveryIndex),
+    "test:codex-workspace",
+    ...stages.slice(profileContractIndex + 1, laterRawFixtureIndex),
+    ...stages.slice(laterRawFixtureIndex + 1),
+  ];
+}
+
 function expandResumableCheckStage(stage) {
   const expansion = resumableCheckNestedStageExpansions[stage];
   return expansion ? expansion.flatMap((nestedStage) => expandResumableCheckStage(nestedStage)) : [stage];
@@ -8260,12 +8281,13 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
     previousCompletedAt = completedAt;
     if (!(evidence.status === null || Number.isInteger(evidence.status)) || !(evidence.signal === null || (typeof evidence.signal === "string" && evidence.signal.length <= 120)) || !(evidence.error_code === null || (typeof evidence.error_code === "string" && evidence.error_code.length <= 120))) invalid("stage evidence is malformed");
   }
-  const candidatePlans = [expected.plan.stages, expected.plan.legacyStages].filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
+  const baseCandidatePlans = [expected.plan.stages, expected.plan.legacyStages, resumableCheckPriorWorkspaceFastExpandedPlan(expected.plan)]
+    .filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
+  const candidatePlans = [...baseCandidatePlans, ...baseCandidatePlans.map((stages) => resumableCheckObsoleteSupervisorAggregatePlan({ stages }))]
+    .filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
   const digestMatchedPlans = candidatePlans.filter((plan) => resumableCheckPlanDigest(plan) === packet.plan_digest);
-  const obsoleteSupervisorAggregatePlan = resumableCheckObsoleteSupervisorAggregatePlan(expected.plan);
-  const obsoletePlanMatches = Array.isArray(obsoleteSupervisorAggregatePlan) && packet.plan_digest === resumableCheckPlanDigest(obsoleteSupervisorAggregatePlan) && history.every((stage, index) => obsoleteSupervisorAggregatePlan[index] === stage);
-  if (digestMatchedPlans.length === 0 && !obsoletePlanMatches) invalid("plan digest is not current or a recognized legacy plan");
-  const matchingPlans = [...digestMatchedPlans, ...(digestMatchedPlans.length === 0 && obsoletePlanMatches ? [obsoleteSupervisorAggregatePlan] : [])].filter((plan) => history.every((stage, index) => plan[index] === stage));
+  if (digestMatchedPlans.length === 0) invalid("plan digest is not current or a recognized legacy plan");
+  const matchingPlans = digestMatchedPlans.filter((plan) => history.every((stage, index) => plan[index] === stage));
   if (matchingPlans.length === 0) invalid("stage evidence is not an ordered plan prefix");
   if (packet.status === "passed") {
     if (packet.stages.length === 0 || !matchingPlans.some((plan) => plan.length === history.length) || packet.next_stage !== null || !Object.hasOwn(packet, "completed_at")) invalid("passed packet completion is invalid");
