@@ -73,6 +73,20 @@ test("check plan maps CI policy drift scripts without full static escalation", (
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-coordination"));
 });
 
+test("check plan maps workspace changes to the bounded workspace delivery profile", () => {
+  const plan = buildCheckPlan([
+    "scripts/codex-workspace.mjs",
+    "scripts/test-codex-workspace.mjs",
+    "tests/workspace-fast-profile.test.mjs",
+  ]);
+
+  assert.equal(plan.requiresFullStatic, false);
+  assert.deepEqual(plan.surfaces, ["workspace"]);
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-coordination"));
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-fast"));
+  assert.ok(!plan.commands.some((command) => command.commandText === "pnpm run test:codex-workspace"));
+});
+
 test("check plan maps manager dispatcher-port helpers to focused dispatcher-port tests", () => {
   const plan = buildCheckPlan([
     "tests/helpers/manager-control-plane/workflow-core-loader.mjs",

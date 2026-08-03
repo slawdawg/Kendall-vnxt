@@ -7718,7 +7718,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
       ];
@@ -7841,9 +7842,11 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
+        "test:codex-workspace",
       ];
       const stageLog = installFixtureResumableCheckPlan(
         fixture,
@@ -7875,7 +7878,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
       ];
       const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:workspace-fast"], ["check:workspace-fast"]);
       installFixtureResumableCheckInterruptAfterStageWrite(fixture);
@@ -7910,7 +7914,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
       ];
@@ -7965,7 +7970,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
       ];
@@ -8314,7 +8320,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
       ];
       const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:workspace-fast"], ["check:workspace-fast"]);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
@@ -12336,12 +12343,14 @@ function installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture) {
     "test:mutation-admission",
     "test:mutation-admission-workspace-handoff",
     "test:mutation-admission-prewrite-guard",
-    "test:codex-workspace",
+    "test:codex-workspace:delivery",
+    "test:workspace-fast-profile",
     "check:sandbox-fast",
     "check:dashboard-fast",
+    "test:codex-workspace",
     "check:handoff-later",
   ];
-  const checkStages = ["check:fast", "check:handoff-later"];
+  const checkStages = ["check:fast", "test:codex-workspace", "check:handoff-later"];
   return {
     stages,
     stageLog: installFixtureResumableCheckPlan(fixture, stages, {}, checkStages, checkStages),

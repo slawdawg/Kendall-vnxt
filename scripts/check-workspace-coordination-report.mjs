@@ -172,17 +172,29 @@ assertCondition(
     "pnpm run check must include pnpm run check:workspace-coordination",
   failures,
 );
-for (const workspaceFastCommand of [
-  '"test:codex-workspace-state"',
-  '"test:workspace-command-resolution"',
-  '"test:codex-workspace"',
-]) {
-  assertCondition(
-    fastWorkflowRunner.includes(workspaceFastCommand),
-    `Fast workflow runner must include workspace command ${workspaceFastCommand}`,
-    failures,
-  );
-}
+const workspaceFastRunnerMatch = fastWorkflowRunner.match(/workspace:\s*\[([\s\S]*?)\],\s*sandbox:/);
+const workspaceFastCommands = workspaceFastRunnerMatch
+  ? [...workspaceFastRunnerMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1])
+  : [];
+assertCondition(
+  JSON.stringify(workspaceFastCommands) === JSON.stringify([
+    "test:codex-workspace-state",
+    "test:workspace-command-resolution",
+    "test:base-checkout-recovery",
+    "test:mutation-admission",
+    "test:mutation-admission-workspace-handoff",
+    "test:mutation-admission-prewrite-guard",
+    "test:codex-workspace:delivery",
+    "test:workspace-fast-profile",
+  ]),
+  "Fast workflow runner must preserve the exact bounded workspace delivery command allowlist",
+  failures,
+);
+assertCondition(
+  !workspaceFastCommands.includes("test:codex-workspace"),
+  "Fast workflow runner must not invoke the raw full Codex workspace fixture",
+  failures,
+);
 
 assertCiHookBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
 assertCiBaseRefBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);

@@ -83,12 +83,12 @@ const resumableCheckNestedStageExpansions = Object.freeze({
     "test:mutation-admission",
     "test:mutation-admission-workspace-handoff",
     "test:mutation-admission-prewrite-guard",
-    "test:codex-workspace",
+    "test:codex-workspace:delivery",
+    "test:workspace-fast-profile",
   ],
   "test:supervisor": resumableCheckSupervisorLeaves,
 });
 const resumableCheckTrailingWorkspaceDuplicates = new Set([
-  "test:codex-workspace",
   "test:codex-workspace-state",
   "test:workspace-command-resolution",
 ]);

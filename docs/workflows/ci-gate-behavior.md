@@ -59,7 +59,11 @@ pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k rout
 Use the narrower fast suites when the change touches only one friction surface:
 
 - `check:ci-fast` for GitHub workflow and workspace coordination policy.
-- `check:workspace-fast` for Codex workspace delivery command readiness.
+- `check:workspace-fast` for the bounded Codex workspace delivery proof: state,
+  command resolution, Base Checkout recovery, admission/handoff/pre-write safety,
+  the focused delivery fixture, and its exact-profile contract. The raw
+  `test:codex-workspace` integration suite remains a separately runnable full
+  static/full-check proof.
 - `check:sandbox-fast` for sandbox-boundary and anti-churn routing.
 - `check:dashboard-fast` for dashboard E2E runner contracts and pipeline
   fixture smoke coverage.

@@ -199,9 +199,12 @@ publisher.
    packet, do not create an empty PR, and close or clean up only through an
    explicit supported lifecycle path.
 
-   When the full raw `codex-workspace` fixture command has a documented
-   capture-duration boundary but `pnpm run check:workspace-fast` has completed
-   successfully for the same workspace surface, use the explicit
+   `pnpm run check:workspace-fast` is the bounded workspace delivery proof: it
+   runs the focused state, command-resolution, recovery, admission, handoff,
+   pre-write, delivery-profile, and exact-allowlist contracts without invoking
+   the raw full fixture. When the separately runnable raw `codex-workspace`
+   fixture command has a documented capture-duration boundary but that bounded
+   profile has completed successfully for the same workspace surface, use the explicit
    `finish-pr --verify workspace-fast` profile. It runs that wrapper while
    retaining the normal manifest lock, anti-churn, commit, push, and PR gates;
    it is not `--no-verify`, `codex-workspace`, or `check-fast`.
