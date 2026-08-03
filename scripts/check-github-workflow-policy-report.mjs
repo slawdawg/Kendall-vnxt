@@ -52,7 +52,7 @@ const fastWorkflowRunner = readWorkspaceFile("scripts/run-fast-workflow-checks.m
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const githubPolicyPanel = readWorkspaceFile("apps/dashboard/src/components/github-workflow-policy-report-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
@@ -354,7 +354,7 @@ for (const text of [
 
 assertIncludes(apiSource, '"/supervisor/github-workflow-policy-report"', "FastAPI routes", failures);
 assertIncludes(dashboardClient, "getGitHubWorkflowPolicyReport", "Dashboard API client", failures);
-assertIncludes(controlsPage, "<GitHubWorkflowPolicyReportPanel report={githubWorkflowPolicyReport} />", "Controls page", failures);
+assertIncludes(controlsPageContent, "<GitHubWorkflowPolicyReportPanel report={data.githubWorkflowPolicyReport} />", "Controls page content", failures);
 assertIncludes(
   reportShortcuts,
   '"GET /supervisor/github-workflow-policy-report": "#github-workflow-policy-report"',
