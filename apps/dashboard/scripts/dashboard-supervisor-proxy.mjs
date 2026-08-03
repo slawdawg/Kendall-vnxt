@@ -2,6 +2,7 @@ import http from "node:http";
 
 const PREFIX = "/api/supervisor/";
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const READ_ONLY_SUPERVISOR_PATHS = [
@@ -25,9 +26,20 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1)?|approvals(?:\/v1)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
+// Controls has a separate exact browser capability. These paths deliberately
+// have no parameters and no query contract.
+export const CONTROLS_READ_PATHS = new Set([
+  "/supervisor/status", "/work-items", "/routing/worker-registry", "/routing/lane-profiles",
+  "/supervisor/execution-readiness-report", "/supervisor/documentation-authority-report", "/supervisor/legacy-planning-artifact-inventory", "/supervisor/verification-readiness-report", "/supervisor/authority-readiness-matrix-report", "/supervisor/dashboard-e2e-report", "/supervisor/report-catalog", "/supervisor/maintenance-readiness-report", "/supervisor/maintenance-action-plan-report", "/supervisor/development-runway-report", "/supervisor/runtime-evidence-review-report", "/supervisor/safe-development-backlog", "/supervisor/runner-assignment-status-report", "/supervisor/managed-recipe-policy-report", "/supervisor/github-workflow-policy-report", "/supervisor/github-delivery-authority-report", "/supervisor/git-hygiene-report", "/supervisor/local-cleanup-readiness-report", "/supervisor/remote-cleanup-sync-readiness-report", "/supervisor/trusted-delivery-eligibility-report", "/supervisor/trusted-autonomy-readiness-report", "/supervisor/epic-6-completion-audit-report", "/supervisor/epic-6-mvp-proof-trial-report", "/supervisor/codex-readiness-report", "/supervisor/codex-implementation-approval-report", "/supervisor/claude-review-readiness-report", "/supervisor/claude-review-approval-report", "/supervisor/review-resource-policy-report", "/supervisor/delivery-readiness-policy-report", "/execution-recipes",
+]);
+export const CONTROLS_MUTATION_PATHS = new Set([
+  "/pipeline-control-plane/actions/v1/capability",
+  "/pipeline-control-plane/approvals/v1",
+  "/pipeline-control-plane/actions/v1",
+]);
 const SAVED_VIEW_SCOPES = new Set(["active-work", "attention", "queue", "audit"]);
 
 function allowedReadQuery(url, method) {
@@ -85,6 +97,10 @@ function sessionRole(body) {
   }
 }
 
+function cookieValue(cookie, name) {
+  return (cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
+}
+
 export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS }) {
   if (typeof supervisorUdsPath !== "string" || !supervisorUdsPath.startsWith("/")) throw new Error("Supervisor proxy requires a fixed absolute UDS path.");
   return async function proxy(request, response) {
@@ -96,10 +112,6 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       sendJson(response, 400, { state: "unavailable" });
       return true;
     }
-    if (MUTATING_METHODS.has(request.method) && (!request.headers.origin || request.headers.origin !== expectedOrigin)) {
-      sendJson(response, 403, { state: "unavailable" });
-      return true;
-    }
     const body = await readBody(request);
     if (body === null) { sendJson(response, 413, { state: "unavailable" }); return true; }
     try {
@@ -109,9 +121,33 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       let targetPath;
       try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
-      if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath))) { sendJson(response, 404, { state: "unavailable" }); return true; }
+      if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
+      const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
+      const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
+      if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
+        sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
+        return true;
+      }
+      if (controlsMutation && (request.method !== "POST" || url.search)) {
+        sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
+        return true;
+      }
+      // Controls method denial is intentionally evaluated before the generic
+      // mutation origin guard, so a non-POST never becomes an origin oracle.
+      if (MUTATING_METHODS.has(request.method) && (!request.headers.origin || request.headers.origin !== expectedOrigin)) {
+        sendJson(response, 403, { state: "unavailable" });
+        return true;
+      }
+      if (role === "test_viewer" && (controlsRead || controlsMutation)) {
+        sendJson(response, 404, { state: "unavailable" });
+        return true;
+      }
       if (role === "test_viewer" && (!TEST_VIEWER_READ_PATHS.some((pattern) => pattern.test(targetPath)) || !["GET", "HEAD"].includes(request.method))) {
         sendJson(response, ["GET", "HEAD"].includes(request.method) ? 404 : 405, { state: "unavailable" });
+        return true;
+      }
+      if (controlsMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
+        sendJson(response, 403, { state: "unavailable" });
         return true;
       }
       if (READ_ONLY_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !["GET", "HEAD"].includes(request.method)) {
@@ -123,7 +159,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         return true;
       }
       const upstreamPath = url.search ? `${targetPath}?${url.searchParams.toString()}` : targetPath;
-      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, timeoutMs);
+      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, timeoutMs, controlsRead ? MAX_CONTROLS_RESPONSE_BYTES : Infinity);
       // A viewer revocation concurrent with an in-flight read must win before
       // the browser receives data. Operator requests retain existing behavior.
       if (role === "test_viewer") {
@@ -160,7 +196,7 @@ function streamSupervisor(socketPath, targetPath, headers, response, timeoutMs) 
   });
 }
 
-function requestSupervisor(socketPath, targetPath, method, headers, body, timeoutMs) {
+function requestSupervisor(socketPath, targetPath, method, headers, body, timeoutMs, maxResponseBytes = Infinity) {
   return new Promise((resolve, reject) => {
     const request = http.request({
       socketPath,
@@ -175,8 +211,14 @@ function requestSupervisor(socketPath, targetPath, method, headers, body, timeou
       },
     }, (response) => {
       const chunks = [];
-      response.on("data", (chunk) => chunks.push(chunk));
+      let total = 0;
+      response.on("data", (chunk) => {
+        total += chunk.length;
+        if (total > maxResponseBytes) { response.destroy(new Error("Supervisor response exceeds the allowed size.")); return; }
+        chunks.push(chunk);
+      });
       response.on("end", () => resolve({ statusCode: response.statusCode || 503, body: Buffer.concat(chunks), contentType: response.headers["content-type"], setCookie: response.headers["set-cookie"] }));
+      response.on("error", reject);
     });
     const deadline = setTimeout(() => request.destroy(new Error("Supervisor proxy deadline exceeded.")), timeoutMs);
     request.on("error", reject);

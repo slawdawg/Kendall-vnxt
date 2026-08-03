@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
+import { CONTROLS_MUTATION_PATHS, CONTROLS_READ_PATHS, createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
 
 function listen(server, target) { return new Promise((resolve) => server.listen(target, resolve)); }
 function close(server) { return new Promise((resolve) => server.close(resolve)); }
@@ -155,6 +155,72 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     assert.deepEqual(forwarded, [
       { method: "GET", url: "/pipeline-control-plane/projection" },
       { method: "GET", url: "/work-packets/packet-1" },
+    ]);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("Controls has a finite operator-only no-query proxy contract with a capped read response", async () => {
+  assert.equal(CONTROLS_READ_PATHS.size, 34);
+  assert.deepEqual([...CONTROLS_MUTATION_PATHS], [
+    "/pipeline-control-plane/actions/v1/capability",
+    "/pipeline-control-plane/approvals/v1",
+    "/pipeline-control-plane/actions/v1",
+  ]);
+  const directory = mkdtempSync(join(tmpdir(), "kendall-controls-proxy-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") {
+        const viewer = request.headers.cookie?.includes("viewer=ok");
+        response.writeHead(200).end(JSON.stringify({ authenticated: true, role: viewer ? "test_viewer" : "operator" }));
+        return;
+      }
+      forwarded.push({ method: request.method, url: request.url, csrf: request.headers["x-csrf-token"] || null });
+      if (request.url === "/supervisor/status") {
+        response.end(JSON.stringify({ data: { mode: "running" } }));
+        return;
+      }
+      if (request.url === "/supervisor/report-catalog") {
+        response.end(JSON.stringify({ data: { report: "x".repeat(1024 * 1024) } }));
+        return;
+      }
+      if (CONTROLS_MUTATION_PATHS.has(request.url)) {
+        response.end(JSON.stringify({ data: { capabilityState: "available" } }));
+        return;
+      }
+      response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    const operator = { cookie: "session=ok; kendall_operator_csrf=csrf-ok" };
+    assert.equal((await request(port, "/api/supervisor/supervisor/status", { headers: operator })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/supervisor/status?extra=1", { headers: operator })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/supervisor/status", { method: "POST", headers: operator })).status, 405);
+    assert.equal((await request(port, "/api/supervisor/supervisor/status", { headers: { cookie: "viewer=ok" } })).status, 404);
+    for (const targetPath of CONTROLS_MUTATION_PATHS) {
+      const path = `/api/supervisor${targetPath}`;
+      assert.equal((await request(port, path, { method: "POST", headers: { ...operator, origin: "https://dashboard.test", "x-csrf-token": "wrong" } })).status, 403);
+      assert.equal((await request(port, `${path}?extra=1`, { method: "POST", headers: { ...operator, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 404);
+      assert.equal((await request(port, path, { method: "GET", headers: { ...operator, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 405);
+      assert.equal((await request(port, path, { method: "POST", headers: { cookie: "viewer=ok; kendall_operator_csrf=csrf-ok", origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 404);
+      assert.equal((await request(port, path, { method: "POST", headers: { ...operator, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 200);
+    }
+    assert.equal((await request(port, "/api/supervisor/supervisor/report-catalog", { headers: operator })).status, 503);
+    assert.deepEqual(forwarded.map(({ method, url }) => ({ method, url })), [
+      { method: "GET", url: "/supervisor/status" },
+      { method: "POST", url: "/pipeline-control-plane/actions/v1/capability" },
+      { method: "POST", url: "/pipeline-control-plane/approvals/v1" },
+      { method: "POST", url: "/pipeline-control-plane/actions/v1" },
+      { method: "GET", url: "/supervisor/report-catalog" },
     ]);
   } finally {
     if (dashboard?.listening) await close(dashboard);

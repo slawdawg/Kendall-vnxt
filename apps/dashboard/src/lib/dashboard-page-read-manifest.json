@@ -46,6 +46,22 @@
     ]
   },
   {
+    "page": "controls",
+    "route": "/controls",
+    "roles": ["operator"],
+    "reads": [
+      { "method": "GET", "path": "/supervisor/status" }, { "method": "GET", "path": "/work-items" }, { "method": "GET", "path": "/routing/worker-registry" }, { "method": "GET", "path": "/routing/lane-profiles" },
+      { "method": "GET", "path": "/supervisor/execution-readiness-report" }, { "method": "GET", "path": "/supervisor/documentation-authority-report" }, { "method": "GET", "path": "/supervisor/legacy-planning-artifact-inventory" }, { "method": "GET", "path": "/supervisor/verification-readiness-report" },
+      { "method": "GET", "path": "/supervisor/authority-readiness-matrix-report" }, { "method": "GET", "path": "/supervisor/dashboard-e2e-report" }, { "method": "GET", "path": "/supervisor/report-catalog" }, { "method": "GET", "path": "/supervisor/maintenance-readiness-report" },
+      { "method": "GET", "path": "/supervisor/maintenance-action-plan-report" }, { "method": "GET", "path": "/supervisor/development-runway-report" }, { "method": "GET", "path": "/supervisor/runtime-evidence-review-report" }, { "method": "GET", "path": "/supervisor/safe-development-backlog" },
+      { "method": "GET", "path": "/supervisor/runner-assignment-status-report" }, { "method": "GET", "path": "/supervisor/managed-recipe-policy-report" }, { "method": "GET", "path": "/supervisor/github-workflow-policy-report" }, { "method": "GET", "path": "/supervisor/github-delivery-authority-report" },
+      { "method": "GET", "path": "/supervisor/git-hygiene-report" }, { "method": "GET", "path": "/supervisor/local-cleanup-readiness-report" }, { "method": "GET", "path": "/supervisor/remote-cleanup-sync-readiness-report" }, { "method": "GET", "path": "/supervisor/trusted-delivery-eligibility-report" },
+      { "method": "GET", "path": "/supervisor/trusted-autonomy-readiness-report" }, { "method": "GET", "path": "/supervisor/epic-6-completion-audit-report" }, { "method": "GET", "path": "/supervisor/epic-6-mvp-proof-trial-report" }, { "method": "GET", "path": "/supervisor/codex-readiness-report" },
+      { "method": "GET", "path": "/supervisor/codex-implementation-approval-report" }, { "method": "GET", "path": "/supervisor/claude-review-readiness-report" }, { "method": "GET", "path": "/supervisor/claude-review-approval-report" }, { "method": "GET", "path": "/supervisor/review-resource-policy-report" },
+      { "method": "GET", "path": "/supervisor/delivery-readiness-policy-report" }, { "method": "GET", "path": "/execution-recipes" }
+    ]
+  },
+  {
     "page": "work-item-detail",
     "route": "/work-items/:id",
     "roles": ["operator"],
