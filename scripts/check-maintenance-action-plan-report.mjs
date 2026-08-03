@@ -20,7 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const actionPlanPanel = readWorkspaceFile("apps/dashboard/src/components/maintenance-action-plan-report-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
@@ -73,8 +73,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("<MaintenanceActionPlanReportPanel report={maintenanceActionPlanReport} />"),
-  "Controls page must render MaintenanceActionPlanReportPanel",
+  controlsPageContent.includes("<MaintenanceActionPlanReportPanel report={data.maintenanceActionPlanReport} />"),
+  "Controls page content must render MaintenanceActionPlanReportPanel",
   failures,
 );
 assertCondition(

@@ -21,6 +21,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const inventoryPanel = readWorkspaceFile("apps/dashboard/src/components/legacy-planning-artifact-inventory-report-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
@@ -70,9 +71,9 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("getLegacyPlanningArtifactInventoryReport") &&
-    controlsPage.includes("<LegacyPlanningArtifactInventoryReportPanel report={legacyPlanningArtifactInventoryReport} />"),
-  "Controls page must fetch and render the legacy planning artifact inventory report",
+  controlsPage.includes("loadControlsPageData") &&
+    controlsPageContent.includes("<LegacyPlanningArtifactInventoryReportPanel report={data.legacyPlanningArtifactInventoryReport} />"),
+  "Controls page loader and content must render the legacy planning artifact inventory report",
   failures,
 );
 assertCondition(

@@ -21,6 +21,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const policyPanel = readWorkspaceFile("apps/dashboard/src/components/review-resource-policy-report-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const reportCatalogCheck = readWorkspaceFile("scripts/check-supervisor-report-catalog.mjs");
@@ -165,9 +166,9 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("getReviewResourcePolicyReport") &&
-    controlsPage.includes("<ReviewResourcePolicyReportPanel report={reviewResourcePolicyReport} />"),
-  "Controls page must fetch and render the review resource policy report",
+  controlsPage.includes("loadControlsPageData") &&
+    controlsPageContent.includes("<ReviewResourcePolicyReportPanel report={data.reviewResourcePolicyReport} />"),
+  "Controls page loader and content must render the review resource policy report",
   failures,
 );
 for (const panelText of [

@@ -20,7 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const documentationPanel = readWorkspaceFile("apps/dashboard/src/components/documentation-authority-report-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
@@ -77,8 +77,8 @@ for (const serviceText of [
 
 assertCondition(dashboardClient.includes("getDocumentationAuthorityReport"), "Dashboard API client must fetch documentation authority report", failures);
 assertCondition(
-  controlsPage.includes("<DocumentationAuthorityReportPanel report={documentationAuthorityReport} />"),
-  "Controls page must render DocumentationAuthorityReportPanel",
+  controlsPageContent.includes("<DocumentationAuthorityReportPanel report={data.documentationAuthorityReport} />"),
+  "Controls page content must render DocumentationAuthorityReportPanel",
   failures,
 );
 

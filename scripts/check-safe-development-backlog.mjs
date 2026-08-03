@@ -21,7 +21,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const backlogPanel = readWorkspaceFile("apps/dashboard/src/components/safe-development-backlog-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
@@ -138,8 +138,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("<SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />"),
-  "Controls page must render SafeDevelopmentBacklogPanel",
+  controlsPageContent.includes("<SafeDevelopmentBacklogPanel report={data.safeDevelopmentBacklog} />"),
+  "Controls page content must render SafeDevelopmentBacklogPanel",
   failures,
 );
 

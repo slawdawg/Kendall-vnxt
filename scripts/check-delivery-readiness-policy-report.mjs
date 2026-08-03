@@ -21,7 +21,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const workItemPage = readWorkspaceFile("apps/dashboard/src/components/work-item-detail-page.tsx");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const policyPanel = readWorkspaceFile("apps/dashboard/src/components/delivery-readiness-policy-report-panel.tsx");
 const deliveryCleanupPlanPanel = readWorkspaceFile("apps/dashboard/src/components/delivery-cleanup-plan-panel.tsx");
@@ -262,8 +262,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("<DeliveryReadinessPolicyReportPanel report={deliveryReadinessPolicyReport} />"),
-  "Controls page must render DeliveryReadinessPolicyReportPanel",
+  controlsPageContent.includes("<DeliveryReadinessPolicyReportPanel report={data.deliveryReadinessPolicyReport} />"),
+  "Controls page content must render DeliveryReadinessPolicyReportPanel",
   failures,
 );
 assertCondition(

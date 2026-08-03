@@ -20,7 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const executionReadinessPanel = readWorkspaceFile("apps/dashboard/src/components/execution-readiness-report-panel.tsx");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
@@ -84,8 +84,8 @@ for (const serviceText of [
 }
 
 assertCondition(
-  controlsPage.includes("<ExecutionReadinessReportPanel report={readinessReport} />"),
-  "Controls page must render ExecutionReadinessReportPanel",
+  controlsPageContent.includes("<ExecutionReadinessReportPanel report={data.readinessReport} />"),
+  "Controls page content must render ExecutionReadinessReportPanel",
   failures,
 );
 for (const panelText of ["ExecutionReadinessReportView", "Provider enablement ladder", "Provider no-call proofs", "Current attempts"]) {
