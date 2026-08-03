@@ -9,9 +9,11 @@ import {
   buildPreflight,
   buildRecoveryHousekeepingEvidenceRecord,
   buildRuntimeReadinessPlan,
+  isExpectedReadOnlyBlockedPreflight,
   ledgerCommand,
   parseCommonArgs,
   readManagerCapabilityPosture,
+  validateReadOnlyBlockedPreflightKeepAlive,
   writeManagerCapabilityPosture,
 } from "./lib/manager-control-plane/core.mjs";
 import { publishManagerCycleLaneClarity } from "./lib/manager-control-plane/manager-cycle-lane-clarity-publication.mjs";
@@ -650,8 +652,24 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   const publishManagerCycleCoordinationHealthFn = context.publishManagerCycleCoordinationHealth || publishManagerCycleCoordinationHealth;
   const writePacketFn = context.writePacket || writePacket;
   const sleepFn = context.sleep || sleep;
+  const blockedPreflightKeepAlive = validateReadOnlyBlockedPreflightKeepAlive(options);
   const preflight = buildPreflightFn(options, { env: context.env || process.env });
   if (!preflight.ok) {
+    if (blockedPreflightKeepAlive.enabled && isExpectedReadOnlyBlockedPreflight(preflight) && !firstSandboxBoundary(preflight)) {
+      await runExpectedBlockedPreflightKeepAlive({
+        options,
+        context,
+        initialPreflight: preflight,
+        buildPreflightFn,
+        buildManagerCoordinationHealthFn,
+        publishManagerCycleLaneClarityFn,
+        publishManagerCycleCoordinationHealthFn,
+        writePacketFn,
+        sleepFn,
+        intervalMs: blockedPreflightKeepAlive.intervalMs,
+      });
+      return;
+    }
     const sandboxBoundary = firstSandboxBoundary(preflight);
     const runtimeReadiness = buildRuntimeReadinessPlan(
       { runtimeMode: options.runtimeMode || "continuous_dry_run" },
@@ -921,6 +939,132 @@ export async function runManagerRunLoop(options = parseCommonArgs(process.argv.s
   }
 }
 
+async function runExpectedBlockedPreflightKeepAlive({ options, context, initialPreflight, buildPreflightFn, buildManagerCoordinationHealthFn, publishManagerCycleLaneClarityFn, publishManagerCycleCoordinationHealthFn, writePacketFn, sleepFn, intervalMs }) {
+  const maxIterations = options.maxIterations ?? 0;
+  let iteration = 0;
+  let preflight = initialPreflight;
+  while (maxIterations === 0 || iteration < maxIterations) {
+    iteration += 1;
+    if (iteration > 1) preflight = buildPreflightFn(options, { env: context.env || process.env });
+    if (!isExpectedReadOnlyBlockedPreflight(preflight) || firstSandboxBoundary(preflight)) {
+      await writeBlockedPreflightResult({
+        preflight,
+        options,
+        context,
+        buildManagerCoordinationHealthFn,
+        publishManagerCycleLaneClarityFn,
+        publishManagerCycleCoordinationHealthFn,
+        writePacketFn,
+        iteration,
+        keepAlive: true,
+        intervalMs,
+      });
+      process.exitCode = 1;
+      return;
+    }
+    const result = await writeBlockedPreflightResult({
+      preflight,
+      options,
+      context,
+      buildManagerCoordinationHealthFn,
+      publishManagerCycleLaneClarityFn,
+      publishManagerCycleCoordinationHealthFn,
+      writePacketFn,
+      iteration,
+      keepAlive: true,
+      intervalMs,
+    });
+    if (!blockedPreflightReceiptPublished(result)) {
+      process.exitCode = 1;
+      return;
+    }
+    if (maxIterations !== 0 && iteration >= maxIterations) {
+      process.exitCode = 0;
+      return;
+    }
+    await sleepFn(intervalMs);
+  }
+}
+
+function blockedPreflightReceiptPublished(result = {}) {
+  const lane = result?.summary?.laneClarityHandoff;
+  const health = result?.summary?.coordinationHealthHandoff;
+  return lane?.state === "published" && lane?.persisted === true &&
+    health?.state === "published" && health?.persisted === true;
+}
+
+async function writeBlockedPreflightResult({ preflight, options, context, buildManagerCoordinationHealthFn, publishManagerCycleLaneClarityFn, publishManagerCycleCoordinationHealthFn, writePacketFn, iteration = null, keepAlive = false, intervalMs = null }) {
+  const sandboxBoundary = firstSandboxBoundary(preflight);
+  const runtimeReadiness = buildRuntimeReadinessPlan(
+    { runtimeMode: options.runtimeMode || "continuous_dry_run" },
+    {
+      cycleStatus: "blocked",
+      usage: { state: options.usageState || "unknown" },
+      resources: { state: options.resourceState || "unknown" },
+      preflight: { status: preflight.status, blockerCount: preflight.blockers?.length || 0 },
+      selectedAction: null,
+    },
+  );
+  const result = {
+    ok: false,
+    status: sandboxBoundary ? "known_sandbox_boundary" : "blocked",
+    summary: {
+      mode: "continuous",
+      phase: "preflight",
+      ...(iteration === null ? {} : { iteration }),
+      timestamp: new Date().toISOString(),
+      stopReason: sandboxBoundary ? "known_sandbox_boundary" : "preflight_blocked",
+      ...(sandboxBoundary ? { sandboxBoundaryPacket: sandboxBoundary } : {}),
+      ...(keepAlive ? { keepAliveOnBlockedPreflight: { enabled: true, intervalMs, mutation: "none; read-only blocked-preflight projection" } } : {}),
+      runtimeReadiness: runtimeReadiness.summary,
+      blockers: preflight.blockers,
+      warnings: preflight.warnings,
+    },
+    blockers: preflight.blockers,
+    warnings: preflight.warnings,
+  };
+  if (!sandboxBoundary) {
+    let coordinationHealth = null;
+    let publicationSandboxBoundary = null;
+    try {
+      coordinationHealth = buildManagerCoordinationHealthFn(options);
+      result.summary.coordinationHealth = coordinationHealth;
+    } catch (error) {
+      result.summary.coordinationHealthHandoff = unavailableCoordinationHealthHandoff();
+      publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
+    }
+    if (!publicationSandboxBoundary) {
+      try {
+        result.summary.laneClarityHandoff = await publishManagerCycleLaneClarityFn(
+          keepAlive ? expectedBlockedPreflightLaneClaritySummary(preflight) : laneClarityPublicationSummary(preflight.summary),
+          options,
+          context.laneClarityPublicationContext || {},
+        );
+        publicationSandboxBoundary = publicationSandboxBoundaryFromReceipt(result.summary.laneClarityHandoff);
+      } catch (error) {
+        result.summary.laneClarityHandoff = unavailableLaneClarityHandoff();
+        publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
+      }
+    }
+    if (coordinationHealth && !publicationSandboxBoundary) {
+      try {
+        result.summary.coordinationHealthHandoff = await publishManagerCycleCoordinationHealthFn(
+          coordinationHealth,
+          options,
+          context.coordinationHealthPublicationContext || {},
+        );
+        publicationSandboxBoundary = publicationSandboxBoundaryFromReceipt(result.summary.coordinationHealthHandoff);
+      } catch (error) {
+        result.summary.coordinationHealthHandoff = unavailableCoordinationHealthHandoff();
+        publicationSandboxBoundary = publicationSandboxBoundaryFromError(error);
+      }
+    }
+    if (publicationSandboxBoundary) applyBlockedPreflightSandboxBoundary(result, publicationSandboxBoundary);
+  }
+  writePacketFn(result, options);
+  return result;
+}
+
 function laneClarityPublicationSummary(summary = {}) {
   const canonical = summary?.managerExecutionLaneSummary;
   if (canonical && typeof canonical === "object") return canonical;
@@ -928,6 +1072,36 @@ function laneClarityPublicationSummary(summary = {}) {
     laneClarity: summary?.laneClarity || null,
     lastObservedAt: summary?.laneClarityObservedAt || summary?.lastObservedAt || null,
     selectedLaneId: summary?.selectedLaneId || null,
+  };
+}
+
+function expectedBlockedPreflightLaneClaritySummary(preflight = {}) {
+  const summary = preflight?.summary || {};
+  const runId = String(summary.runId || "");
+  const observedAt = String(summary.generatedAt || "");
+  const observedEpoch = Date.parse(observedAt);
+  if (!/^[A-Za-z0-9._:@/-]{1,120}$/.test(runId) || !Number.isFinite(observedEpoch) || observedEpoch <= 0) {
+    return laneClarityPublicationSummary(summary);
+  }
+  const sourceCursor = String(Math.trunc(observedEpoch));
+  const evidenceRef = `preflight:${runId}`;
+  const eventWatermark = `preflight:${runId}:${sourceCursor}`;
+  return {
+    laneClarity: {
+      schemaVersion: "manager-lane-clarity/v0",
+      runId,
+      eventWatermark,
+      sourceCursor,
+      goal: { summary: "Publish the safely blocked manager preflight state.", sourceRef: evidenceRef },
+      criteria: [{ criterionId: "criterion:blocked-preflight", summary: "No dispatchable work is selected while terminal evidence remains blocked.", disposition: "blocked", evidenceRefs: [evidenceRef] }],
+      canonicalState: { phase: "blocked", freshness: "fresh", evidenceFreshness: "fresh" },
+      nextGate: { summary: "Resolve terminal reconciliation and stale-owner evidence.", nextSafeAction: "Keep manager mutation disabled until the existing reconciliation gates are satisfied." },
+      posture: { state: "on_scope", reason: "Read-only preflight is safely blocked by bounded terminal evidence.", nextSafeAction: "Continue bounded blocked-state publication without selecting or applying work.", decisionRef: null, qualification: null },
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    lastObservedAt: observedAt,
+    selectedLaneId: `manager-run:${runId}`,
   };
 }
 

@@ -109,6 +109,7 @@ const RECONCILE_PREFLIGHT_PRODUCER = "manager-preflight";
 const RECONCILE_PREFLIGHT_SCHEMA_VERSION = "manager-preflight.v1";
 const RECONCILE_PREFLIGHT_MAX_AGE_MS = 5 * 60 * 1000;
 const RECONCILE_PREFLIGHT_ALLOWED_FUTURE_SKEW_MS = 60 * 1000;
+export const READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS = 30_000;
 const RECONCILE_PROHIBITED_RAW_KEYS = new Set([
   "rawpayload",
   "rawtranscript",
@@ -368,6 +369,7 @@ export function parseCommonArgs(argv = []) {
     capabilityReasonCodes: [],
     capabilitySafeFallbacks: [],
     runtimeMode: "",
+    keepAliveOnBlockedPreflight: false,
     preflightFile: "",
     supervisorUrl: "",
     laneClaritySupervisorUrl: "",
@@ -724,6 +726,8 @@ export function parseCommonArgs(argv = []) {
     } else if (arg.startsWith("--runtime-mode=")) {
       options.runtimeMode = arg.slice("--runtime-mode=".length);
       if (!String(options.runtimeMode || "").trim()) throw new Error("--runtime-mode requires a non-empty value");
+    } else if (arg === "--keep-alive-on-blocked-preflight") {
+      options.keepAliveOnBlockedPreflight = true;
     } else if (arg === "--preflight-file") {
       options.preflightFile = requiredValue(argv, ++index, arg);
     } else if (arg.startsWith("--preflight-file=")) {
@@ -746,9 +750,53 @@ export function parseCommonArgs(argv = []) {
       positionals.push(arg);
     }
   }
+  validateReadOnlyBlockedPreflightKeepAlive(options);
   options.command = options.command || positionals[0] || "";
   if (options.supervisorUrl) resolveLoopbackSourceIntakeEndpoint(options.supervisorUrl);
   return options;
+}
+
+export function validateReadOnlyBlockedPreflightKeepAlive(options = {}) {
+  if (options.keepAliveOnBlockedPreflight !== true) return { enabled: false, intervalMs: null };
+  if (normalizeRuntimeOperationalMode(options.runtimeMode || "") !== "read_only_projection") {
+    throw new Error("--keep-alive-on-blocked-preflight requires --runtime-mode read_only_projection.");
+  }
+  if (options.apply === true) {
+    throw new Error("--keep-alive-on-blocked-preflight is read-only and cannot be combined with --apply.");
+  }
+  const intervalMs = nonNegativeInteger(options.intervalMs);
+  if (intervalMs === null || intervalMs < READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS) {
+    throw new Error(`--keep-alive-on-blocked-preflight requires --interval-ms of at least ${READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS}.`);
+  }
+  return { enabled: true, intervalMs };
+}
+
+export function isExpectedReadOnlyBlockedPreflight(preflight = {}) {
+  if (!preflight || typeof preflight !== "object" || preflight.ok !== false || preflight.status !== "blocked") return false;
+  const summary = preflight.summary;
+  const dispatcher = summary?.dispatcher;
+  const blockers = Array.isArray(preflight.blockers) ? preflight.blockers : [];
+  const codes = new Set(blockers.map((blocker) => String(blocker?.code || "")));
+  const onlyExpectedBlockers = blockers.length > 0 && blockers.every((blocker) => {
+    const code = String(blocker?.code || "");
+    return /^preflight-dispatcher-blocked(?:-\d+)?$/.test(code) ||
+      code === "authoritative-backlog-exhaustion-evidence-required" ||
+      code === "stale-owner-target-evidence-unavailable";
+  });
+  return preflight.producer === RECONCILE_PREFLIGHT_PRODUCER &&
+    preflight.schemaVersion === RECONCILE_PREFLIGHT_SCHEMA_VERSION &&
+    preflight.mutation === RECONCILE_PREFLIGHT_MUTATION &&
+    summary?.mutation === RECONCILE_PREFLIGHT_MUTATION &&
+    summary?.sandboxBoundary !== true &&
+    dispatcher?.status === "blocked" &&
+    Number.isSafeInteger(dispatcher?.dispatchableLanes) && dispatcher.dispatchableLanes === 0 &&
+    Number.isSafeInteger(dispatcher?.activeLanes) && dispatcher.activeLanes === 0 &&
+    dispatcher?.allowed === false &&
+    dispatcher?.dispatchApplyAllowed === false &&
+    onlyExpectedBlockers &&
+    [...codes].some((code) => /^preflight-dispatcher-blocked(?:-\d+)?$/.test(code)) &&
+    codes.has("authoritative-backlog-exhaustion-evidence-required") &&
+    codes.has("stale-owner-target-evidence-unavailable");
 }
 
 function parseDesiredWorkers(value) {
@@ -23908,6 +23956,7 @@ function managerReadOnlyCommandShape(scriptName, options = {}) {
   const operatorFeedback = options.operatorFeedback ?? options.feedback;
   if (operatorFeedback) parts.push("--feedback", operatorFeedback);
   if (options.runtimeMode) parts.push("--runtime-mode", options.runtimeMode);
+  if (options.keepAliveOnBlockedPreflight === true) parts.push("--keep-alive-on-blocked-preflight");
   return renderCommandShape(parts);
 }
 

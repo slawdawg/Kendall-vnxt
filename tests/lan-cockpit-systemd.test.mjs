@@ -71,7 +71,7 @@ test("Tailnet installer fences legacy port-3000 cockpit services, starts the man
   assert.match(installerSource, /run\(\["restart", unitNames\.manager\]\);/);
   assert.match(runtimeSource, /mode !== "supervisor" && mode !== "manager"/);
   assert.match(runtimeSource, /mode === "dashboard" \|\| mode === "manager"/);
-  assert.match(runtimeSource, /\["scripts\/manager-run-loop\.mjs", "--dry-run", "--runtime-mode", "read_only_projection", "--interval-ms", "5000", "--summary-json"\]/);
+  assert.match(runtimeSource, /\["scripts\/manager-run-loop\.mjs", "--dry-run", "--runtime-mode", "read_only_projection", "--keep-alive-on-blocked-preflight", "--interval-ms", "30000", "--summary-json"\]/);
   assert.match(runtimeSource, /mode === "dashboard" \? pnpmPath : process\.execPath/);
   assert.doesNotMatch(runtimeSource, /manager-run-loop\.mjs[^\n]*--apply/);
 });

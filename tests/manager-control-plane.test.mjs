@@ -85,6 +85,7 @@ import {
   countSprintStories,
   ledgerCommand,
   parseCommonArgs,
+  READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS,
   parseCodexFetcherUsage,
   parseCodexUsageOutput,
   readManagerCapabilityPosture,
@@ -22256,6 +22257,22 @@ test("runtime parser rejects empty modes and duplicate exact target flags", () =
       new RegExp(`${flag} may only be provided once`),
     );
   }
+  assert.equal(
+    parseCommonArgs(["--runtime-mode", "read_only_projection", "--keep-alive-on-blocked-preflight", "--interval-ms", String(READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS)]).keepAliveOnBlockedPreflight,
+    true,
+  );
+  assert.throws(
+    () => parseCommonArgs(["--runtime-mode", "continuous_dry_run", "--keep-alive-on-blocked-preflight", "--interval-ms", String(READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS)]),
+    /requires --runtime-mode read_only_projection/,
+  );
+  assert.throws(
+    () => parseCommonArgs(["--runtime-mode", "read_only_projection", "--keep-alive-on-blocked-preflight", "--interval-ms", "29999"]),
+    /requires --interval-ms of at least 30000/,
+  );
+  assert.throws(
+    () => parseCommonArgs(["--runtime-mode", "read_only_projection", "--keep-alive-on-blocked-preflight", "--interval-ms", String(READ_ONLY_BLOCKED_PREFLIGHT_KEEP_ALIVE_MIN_INTERVAL_MS), "--apply"]),
+    /cannot be combined with --apply/,
+  );
 });
 
 test("continuous execution separates dry-run proof from apply mutation", () => {

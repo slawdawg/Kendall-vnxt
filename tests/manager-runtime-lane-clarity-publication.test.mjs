@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { publishManagerCycleLaneClarity } from "../scripts/lib/manager-control-plane/manager-cycle-lane-clarity-publication.mjs";
 import { publishManagerCycleCoordinationHealth } from "../scripts/lib/manager-control-plane/manager-cycle-coordination-health-publication.mjs";
 import { runManagerRunLoop } from "../scripts/manager-run-loop.mjs";
-import { ledgerCommand } from "../scripts/lib/manager-control-plane/core.mjs";
+import { isExpectedReadOnlyBlockedPreflight, ledgerCommand } from "../scripts/lib/manager-control-plane/core.mjs";
 
 const laneClarity = {
   schemaVersion: "manager-lane-clarity/v0",
@@ -28,6 +28,34 @@ function coherentSummary() {
   return {
     laneClarity,
     lastObservedAt: "2026-07-29T00:00:00.000Z",
+  };
+}
+
+function expectedBlockedPreflight() {
+  return {
+    ok: false,
+    status: "blocked",
+    producer: "manager-preflight",
+    schemaVersion: "manager-preflight.v1",
+    mutation: "none; read-only preflight summary",
+    summary: {
+      mutation: "none; read-only preflight summary",
+      dispatcher: {
+        status: "blocked",
+        dispatchableLanes: 0,
+        activeLanes: 0,
+        allowed: false,
+        dispatchApplyAllowed: false,
+      },
+      runId: "manager-safe-block",
+      generatedAt: "2026-08-03T00:00:00.000Z",
+    },
+    blockers: [
+      { code: "preflight-dispatcher-blocked", message: "no dispatchable safe backlog lane found" },
+      { code: "authoritative-backlog-exhaustion-evidence-required", message: "The source-owned sprint is exhausted." },
+      { code: "stale-owner-target-evidence-unavailable", message: "Stale-owner targets unavailable." },
+    ],
+    warnings: [],
   };
 }
 
@@ -374,6 +402,124 @@ test("blocked manager preflight preserves and publishes a coherent preflight lan
     assert.equal(packets[0].summary.laneClarityHandoff.state, "published");
     assert.equal(packets[0].summary.coordinationHealthHandoff.state, "published");
     assert.deepEqual(packets[0].blockers, [{ code: "no-dispatchable-lane", message: "No lane is eligible.", nextAction: "Keep mutation blocked." }]);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("read-only projection keeps expected blocked preflight live for finite cycles without selecting work", async () => {
+  const packets = [];
+  const published = [];
+  const delays = [];
+  const originalExitCode = process.exitCode;
+  let preflightCalls = 0;
+  try {
+    await runManagerRunLoop(
+      {
+        runtimeMode: "read_only_projection",
+        keepAliveOnBlockedPreflight: true,
+        intervalMs: 30_000,
+        maxIterations: 2,
+        laneClaritySupervisorUrl: "http://127.0.0.1:8100",
+      },
+      {
+        buildPreflight: () => {
+          preflightCalls += 1;
+          return expectedBlockedPreflight();
+        },
+        buildContinuousRunPlan: () => { throw new Error("blocked preflight liveness must not select work"); },
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async (summary) => {
+          published.push({ kind: "lane", summary });
+          return { state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false };
+        },
+        publishManagerCycleCoordinationHealth: async () => {
+          published.push({ kind: "health" });
+          return { state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false };
+        },
+        writePacket: (packet) => packets.push(packet),
+        sleep: async (milliseconds) => delays.push(milliseconds),
+      },
+    );
+    assert.equal(preflightCalls, 2);
+    assert.deepEqual(delays, [30_000]);
+    assert.deepEqual(published.map(({ kind }) => kind), ["lane", "health", "lane", "health"]);
+    assert.equal(published[0].summary.laneClarity.runId, "manager-safe-block");
+    assert.equal(published[0].summary.laneClarity.criteria[0].disposition, "blocked");
+    assert.equal(packets.length, 2);
+    assert.ok(packets.every((packet) => packet.status === "blocked" && packet.summary.keepAliveOnBlockedPreflight.enabled === true));
+    assert.ok(packets.every((packet) => packet.summary.selectedAction === undefined && packet.summary.applySelectedAction === undefined));
+    assert.equal(process.exitCode, 0);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("keep-alive accepts only the bounded expected blocked preflight contract", async () => {
+  assert.equal(isExpectedReadOnlyBlockedPreflight(expectedBlockedPreflight()), true);
+  assert.equal(isExpectedReadOnlyBlockedPreflight({ ...expectedBlockedPreflight(), summary: { ...expectedBlockedPreflight().summary, dispatcher: { ...expectedBlockedPreflight().summary.dispatcher, dispatchableLanes: null } } }), false);
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { runtimeMode: "read_only_projection", keepAliveOnBlockedPreflight: true, intervalMs: 30_000, maxIterations: 2 },
+      {
+        buildPreflight: () => ({ ...expectedBlockedPreflight(), blockers: [...expectedBlockedPreflight().blockers, { code: "unexpected-preflight-error", message: "Unexpected error." }] }),
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        writePacket: (packet) => packets.push(packet),
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].status, "blocked");
+    assert.equal(packets[0].summary.keepAliveOnBlockedPreflight, undefined);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("normal CLI blocked preflight remains a single nonzero receipt without the service flag", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { runtimeMode: "read_only_projection", intervalMs: 30_000, maxIterations: 2 },
+      {
+        buildPreflight: () => expectedBlockedPreflight(),
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async () => ({ state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false }),
+        publishManagerCycleCoordinationHealth: async () => ({ state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false }),
+        writePacket: (packet) => packets.push(packet),
+        sleep: async () => { throw new Error("ordinary blocked CLI must not loop"); },
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].summary.keepAliveOnBlockedPreflight, undefined);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("keep-alive exits nonzero when either required blocked receipt cannot be published", async () => {
+  const packets = [];
+  const originalExitCode = process.exitCode;
+  try {
+    await runManagerRunLoop(
+      { runtimeMode: "read_only_projection", keepAliveOnBlockedPreflight: true, intervalMs: 30_000, maxIterations: 2 },
+      {
+        buildPreflight: () => expectedBlockedPreflight(),
+        buildManagerCoordinationHealth: () => coordinationHealth(),
+        publishManagerCycleLaneClarity: async () => ({ state: "unavailable", metadataOnly: true, rawPayloadRetained: false }),
+        publishManagerCycleCoordinationHealth: async () => ({ state: "published", persisted: true, metadataOnly: true, rawPayloadRetained: false }),
+        writePacket: (packet) => packets.push(packet),
+        sleep: async () => { throw new Error("unpublished receipt must not sleep or retry as liveness"); },
+      },
+    );
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].summary.laneClarityHandoff.state, "unavailable");
+    assert.equal(packets[0].summary.coordinationHealthHandoff.state, "published");
+    assert.equal(process.exitCode, 1);
   } finally {
     process.exitCode = originalExitCode;
   }
