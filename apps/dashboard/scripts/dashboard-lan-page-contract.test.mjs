@@ -9,6 +9,10 @@ const stateUrl = new URL("src/components/authenticated-page-state.tsx", root);
 const navUrl = new URL("src/components/operational-nav.tsx", root);
 const transportUrl = new URL("src/lib/dashboard-supervisor-transport.ts", root);
 const controlsContentUrl = new URL("src/components/controls-page-content.tsx", root);
+const controlsDataUrl = new URL("src/lib/controls-page-data.ts", root);
+const lanControlsUrl = new URL("src/components/lan-controls-page.tsx", root);
+const controlsSchedulerUrl = new URL("src/lib/controls-read-scheduler.mjs", root);
+const controlsRouteUrl = new URL("src/app/controls/page.tsx", root);
 const operatorProfileUrl = new URL("src/lib/operator-profile.ts", root);
 
 test("LAN operator pages declare exact read contracts and do not replace the server LAN guard", async () => {
@@ -61,6 +65,29 @@ test("named pages use the authenticated LAN client boundary rather than SSR supe
   assert.match(detailClient, /AuthenticatedPageState/);
   assert.match(detailClient, /loadWorkItemDetail\(workItemId, signal\)/);
   assert.match(detailClient, /getWorkPacket\(`work_item:\$\{workItemId\}`, options\)/);
+});
+
+test("Controls keeps its fixed full-data manifest while using bounded safe diagnostics", async () => {
+  const [controlsData, lanControls, scheduler, pageState, controlsRoute] = await Promise.all([
+    readFile(controlsDataUrl, "utf8"),
+    readFile(lanControlsUrl, "utf8"),
+    readFile(controlsSchedulerUrl, "utf8"),
+    readFile(stateUrl, "utf8"),
+    readFile(controlsRouteUrl, "utf8"),
+  ]);
+  assert.match(controlsData, /runBoundedControlsReads/);
+  assert.match(controlsData, /CONTROLS_PAGE_READ_TIMEOUT_MS = 15_000/);
+  assert.equal((controlsData.match(/alias:/g) || []).length, 34);
+  assert.doesNotMatch(controlsData, /Promise\.all\(\[/);
+  assert.match(lanControls, /timeoutMs: CONTROLS_PAGE_READ_TIMEOUT_MS/);
+  assert.match(lanControls, /safeControlsDiagnostic/);
+  assert.match(lanControls, /ControlsReadFailure/);
+  assert.match(pageState, /diagnostic\?: string \| null/);
+  assert.match(scheduler, /CONTROLS_READ_CONCURRENCY = 8/);
+  assert.match(scheduler, /controller\.abort\(\)/);
+  assert.match(scheduler, /new ControlsReadFailure\(task\.alias, failureCategory\(error\)\)/);
+  assert.doesNotMatch(scheduler, /super\(.*error\.message/);
+  assert.match(controlsRoute, /export const dynamic = "force-dynamic"/);
 });
 
 test("test viewer navigation contains only the pipeline surface while its session role is unknown or viewer", async () => {
