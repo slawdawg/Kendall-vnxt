@@ -14,7 +14,8 @@ const suites = {
     "test:mutation-admission",
     "test:mutation-admission-workspace-handoff",
     "test:mutation-admission-prewrite-guard",
-    "test:codex-workspace",
+    "test:codex-workspace:delivery",
+    "test:workspace-fast-profile",
   ],
   sandbox: [
     "test:sandbox-boundary-classifier",

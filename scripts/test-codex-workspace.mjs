@@ -4504,9 +4504,11 @@ try {
       const assignmentsDir = join(claimStateRoot, "assignments");
       mkdirSync(tasksDir, { recursive: true });
       seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      seedUnrelatedClaimantManifest(claimStateRoot);
       seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug, expected.branch);
       const manifestPath = join(tasksDir, `${expected.slug}-workspace.json`);
-      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeUnrelatedTasks = taskSnapshot(tasksDir, { exclude: [`${expected.slug}-workspace.json`] });
+      assert(readFileSync(manifestPath, "utf8").includes('"owner": ""'), "fixture should start unowned");
 
       const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
 
@@ -4534,9 +4536,9 @@ try {
       assert(!manifest.pr_number, "claim wrote PR number evidence");
       assert(!existsSync(join(assignmentsDir, `${expected.slug}.json`)), "manifest owner claim should not create assignment metadata");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "manifest owner claim should not create a worktree");
-      const afterTasksWithoutClaimedManifest = taskSnapshot(tasksDir).replace(readFileSync(manifestPath, "utf8"), "");
-      assert(beforeTasks.includes('"owner": ""'), "fixture should start unowned");
-      assert(!afterTasksWithoutClaimedManifest.includes("runner-a"), "claim mutated unrelated task manifests");
+      const afterUnrelatedTasks = taskSnapshot(tasksDir, { exclude: [`${expected.slug}-workspace.json`] });
+      assert(beforeUnrelatedTasks.includes('"owner": "runner-a"'), "fixture should preserve unrelated claimant metadata");
+      assert(afterUnrelatedTasks === beforeUnrelatedTasks, "claim mutated unrelated task manifests");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -7718,7 +7720,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
       ];
@@ -7841,9 +7844,11 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
+        "test:codex-workspace",
       ];
       const stageLog = installFixtureResumableCheckPlan(
         fixture,
@@ -7875,7 +7880,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
       ];
       const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:workspace-fast"], ["check:workspace-fast"]);
       installFixtureResumableCheckInterruptAfterStageWrite(fixture);
@@ -7910,7 +7916,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
       ];
@@ -7965,7 +7972,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
         "check:sandbox-fast",
         "check:dashboard-fast",
       ];
@@ -8314,7 +8322,8 @@ try {
         "test:mutation-admission",
         "test:mutation-admission-workspace-handoff",
         "test:mutation-admission-prewrite-guard",
-        "test:codex-workspace",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
       ];
       const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["check:workspace-fast"], ["check:workspace-fast"]);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
@@ -8349,7 +8358,7 @@ try {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
-      const legacyRawStages = ["check:fast", "check:handoff-later"];
+      const legacyRawStages = ["check:fast", "test:codex-workspace", "check:handoff-later"];
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
       const failedAt = new Date(Date.now() - 500).toISOString();
@@ -8378,6 +8387,107 @@ try {
     }
   });
 
+  test("finish-pr --stage-all discards a terminal prior workspace-fast expanded plan after the raw fixture moves later", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
+      const priorStages = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+        "check:handoff-later",
+      ];
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, priorStages, {
+        plan_digest: createHash("sha256").update(priorStages.join("\n")).digest("hex"),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "prior workspace-fast plan recovery did not run the current expanded plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all composes prior workspace-fast and supervisor aggregate migrations", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace:delivery",
+        "test:workspace-fast-profile",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+        ...supervisorCheckLeaves,
+        "test:codex-workspace",
+        "check:handoff-later",
+      ];
+      const sourceStages = ["check:fast", "test:supervisor", "test:codex-workspace", "check:handoff-later"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, sourceStages, sourceStages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const priorStages = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+        "test:supervisor",
+        "check:handoff-later",
+      ];
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, priorStages, {
+        plan_digest: createHash("sha256").update(priorStages.join("\n")).digest("hex"),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "composed migration unexpectedly ran after the fixture pre-stage pause");
+      assert(result.stderr.includes("packet paused before check:ci-fast"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "composed migration launched a stage before the fixture pause");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "partial", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.next_stage === "check:ci-fast", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr --stage-all rejects mixed legacy digest and expanded history packet shapes", () => {
     for (const scenario of [
       {
@@ -8394,7 +8504,7 @@ try {
       const fixture = createFinishPrExistingCommitFixture();
       try {
         const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
-        const legacyRawStages = ["check:fast", "check:handoff-later"];
+        const legacyRawStages = ["check:fast", "test:codex-workspace", "check:handoff-later"];
         const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
         const manifest = readJson(manifestPath);
         const failedAt = new Date(Date.now() - 500).toISOString();
@@ -12014,12 +12124,13 @@ function staleCleanupFixtureEnv(root, options = {}) {
   };
 }
 
-function taskSnapshot(tasksDir) {
+function taskSnapshot(tasksDir, options = {}) {
   if (!existsSync(tasksDir)) {
     return "";
   }
+  const excluded = new Set(options.exclude || []);
   return readdirSync(tasksDir)
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => name.endsWith(".json") && !excluded.has(name))
     .sort()
     .map((name) => `${name}\n${readFileSync(join(tasksDir, name), "utf8")}`)
     .join("\n---\n");
@@ -12336,12 +12447,14 @@ function installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture) {
     "test:mutation-admission",
     "test:mutation-admission-workspace-handoff",
     "test:mutation-admission-prewrite-guard",
-    "test:codex-workspace",
+    "test:codex-workspace:delivery",
+    "test:workspace-fast-profile",
     "check:sandbox-fast",
     "check:dashboard-fast",
+    "test:codex-workspace",
     "check:handoff-later",
   ];
-  const checkStages = ["check:fast", "check:handoff-later"];
+  const checkStages = ["check:fast", "test:codex-workspace", "check:handoff-later"];
   return {
     stages,
     stageLog: installFixtureResumableCheckPlan(fixture, stages, {}, checkStages, checkStages),
@@ -13947,6 +14060,27 @@ function seedUnownedSafeBacklogWorkspace(stateRootPath, laneSlug, branch = `code
         created_at: "2026-06-22T00:00:00.000Z",
         updated_at: "2026-06-22T00:00:00.000Z",
         events: [],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+function seedUnrelatedClaimantManifest(stateRootPath) {
+  const tasksDir = join(stateRootPath, "tasks");
+  mkdirSync(tasksDir, { recursive: true });
+  writeFileSync(
+    join(tasksDir, "closed-unrelated-runner-a.json"),
+    `${JSON.stringify(
+      {
+        task_id: "closed-unrelated-runner-a",
+        branch: "codex/closed-unrelated-runner-a",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "closed",
+        owner: "runner-a",
+        owner_updated_at: "2026-06-22T00:00:00.000Z",
       },
       null,
       2,

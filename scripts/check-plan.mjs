@@ -17,9 +17,7 @@ const COMMANDS = Object.freeze({
   testManagerControlPlanePreflight: ["pnpm", "run", "test:manager-control-plane:preflight"],
   testManagerControlPlaneFull: ["pnpm", "run", "test:manager-control-plane:full"],
   testManagerControlPlaneDispatcherPort: ["pnpm", "run", "test:manager-control-plane-dispatcher-port"],
-  testCodexWorkspace: ["pnpm", "run", "test:codex-workspace"],
-  testCodexWorkspaceState: ["pnpm", "run", "test:codex-workspace-state"],
-  testWorkspaceCommandResolution: ["pnpm", "run", "test:workspace-command-resolution"],
+  checkWorkspaceFast: ["pnpm", "run", "check:workspace-fast"],
   buildDashboard: ["pnpm", "run", "build:dashboard"],
   testDashboardPipelineFixtures: ["pnpm", "run", "test:dashboard-pipeline-fixtures"],
   testDashboardMemoryProposals: ["pnpm", "run", "test:dashboard-memory-proposals"],
@@ -41,7 +39,7 @@ const SURFACE_COMMANDS = Object.freeze({
   workflow: [COMMANDS.checkGithubWorkflowPolicy, COMMANDS.checkWorkspaceCoordination],
   package: [COMMANDS.checkStatic],
   manager: [COMMANDS.testManagerControlPlanePreflight, COMMANDS.testManagerControlPlaneFull, COMMANDS.checkManagerControlPlane],
-  workspace: [COMMANDS.checkWorkspaceCoordination, COMMANDS.testCodexWorkspace, COMMANDS.testCodexWorkspaceState, COMMANDS.testWorkspaceCommandResolution],
+  workspace: [COMMANDS.checkWorkspaceCoordination, COMMANDS.checkWorkspaceFast],
   dashboard: [COMMANDS.buildDashboard, COMMANDS.testDashboardPipelineFixtures, COMMANDS.testDashboardMemoryProposals],
   pipeline: [COMMANDS.checkDashboardPipelineBoundary, COMMANDS.testPipelineImplementationReadiness, COMMANDS.testDashboardPipelineFixtures],
   supervisor: [COMMANDS.testSupervisorRunner, COMMANDS.testSupervisorPreflight, COMMANDS.testSupervisorProfile],
@@ -109,6 +107,14 @@ function classifyFile(path) {
     surfaces.add("supervisor");
     reasons.push(`${file}: supervisor preflight input surface`);
   }
+  if (/^scripts\/run-fast-workflow-checks\.mjs$/.test(file)) {
+    requiresFullStatic = true;
+    reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; escalating to full static`);
+  }
+  if (/^scripts\/test-codex-workspace\.mjs$/.test(file)) {
+    requiresFullStatic = true;
+    reasons.push(`${file}: full workspace fixture runner changes require full static confidence`);
+  }
   if (
     /^scripts\/(?:check-manager-control-plane|run-manager-control-plane-shards)\.mjs$/.test(file) ||
     /^scripts\/manager-/.test(file) ||
@@ -130,9 +136,12 @@ function classifyFile(path) {
   }
   if (
     /^scripts\/codex-workspace\.mjs$/.test(file) ||
+    /^scripts\/test-codex-workspace\.mjs$/.test(file) ||
+    /^scripts\/lib\/(?:base-checkout-recovery|mutation-admission(?:-prewrite-guard|-workspace-handoff)?)\.mjs$/.test(file) ||
     /^scripts\/lib\/codex-workspace/.test(file) ||
     /^scripts\/lib\/workspace-command-resolution\.mjs$/.test(file) ||
     /^tests\/codex-workspace/.test(file) ||
+    /^tests\/workspace-fast-profile\.test\.mjs$/.test(file) ||
     /^tests\/workspace-command-resolution/.test(file) ||
     /^docs\/workflows\/workspace-coordination-report\.md$/.test(file)
   ) {
