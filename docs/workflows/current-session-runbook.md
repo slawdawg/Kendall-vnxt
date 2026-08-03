@@ -30,6 +30,67 @@ Recommended prompt:
 Read AGENTS.md and docs/workflows/current-session-runbook.md, then continue from the repo state as source of truth.
 ```
 
+## Reboot and resume handoff
+
+After a host reboot or a new Codex session, use this exact request:
+
+```text
+Use the Reboot & resume handoff in docs/workflows/current-session-runbook.md and continue the active Kendall_Nxt goal from current repository, manager, and authenticated Tailnet runtime evidence.
+```
+
+Treat the command output below as the handoff. It deliberately derives the
+current revision and MagicDNS name at resume time; it is not a dated snapshot.
+Run it from the canonical checkout on the Ubuntu host:
+
+```bash
+cd "$HOME/Kendall_Nxt"
+git status --short --branch
+git rev-parse HEAD
+pnpm run preflight
+pnpm run lan-cockpit:status
+export AUTH_DIR="$HOME/kendall-lan-auth"
+export TAILNET_HOST="$(tailscale status --json | node -e 'let input=""; process.stdin.on("data", (chunk) => input += chunk).on("end", () => { const name = JSON.parse(input).Self?.DNSName; if (!name) process.exit(1); process.stdout.write(name.replace(/\.$/, "")); })')"
+curl --fail --silent --show-error "https://${TAILNET_HOST}:3000/_kendall/runtime-health"
+curl --fail --silent --show-error --unix-socket "$AUTH_DIR/supervisor.sock" http://localhost/internal/lan-auth/startup-gate
+```
+
+The HTTPS health check intentionally uses normal system trust against the
+canonical MagicDNS hostname. It must succeed without `--insecure` or a
+certificate override. The Unix-socket request is host-local evidence only; it
+does not create, publish, or proxy a supervisor TCP endpoint.
+
+Run this exact read-only manager handoff command **outside the Codex sandbox**
+when sandbox process, Git, tmux, or workspace probes are unavailable:
+
+```bash
+node ./scripts/manager-resume-state.mjs --summary-json
+```
+
+Only if the status, HTTPS health, or private-UDS startup gate fails, inspect
+the first failed command, then perform one paired recovery and re-run the
+checks above:
+
+```bash
+pnpm run lan-cockpit:restart
+pnpm run lan-cockpit:status
+```
+
+If the source preflight itself fails, stop and repair the checkout or its
+dependencies before touching the running cockpit.
+
+Stop instead of restarting when preflight configuration, certificate identity,
+the canonical hostname, paired runtime revision, or the socket safety check is
+rejected. Recover that configuration through the
+[Authenticated LAN dashboard setup](authenticated-lan-dashboard-setup.md),
+including its Tailnet recovery section; it is the authority for certificate,
+systemd, and private-runtime repair.
+
+Stop and ask for direction if recovery would require `--insecure`, reading or
+printing a password/key/cookie/CSRF value, exposing or copying the private UDS,
+or taking over an unknown or dirty managed lane. Preserve the evidence, inspect
+the manager resume packet, and use the documented ownership/takeover workflow
+rather than assuming a previous session's authority.
+
 Local continuity artifacts, dated handoffs, and BMAD work products are not part
 of the GitHub clean-install surface. Keep them under `_bmad-output/` or another
 ignored local workspace path. If their decisions need to survive in Git, rewrite

@@ -99,6 +99,12 @@ That target also owns a private-UDS-gated, dry-run `read_only_projection`
 manager service which keeps the read-only Pipeline Coordination Health receipt
 fresh without adding a dashboard or supervisor listener.
 
+After a reboot or a fresh Codex session, use the
+[Reboot and resume handoff](docs/workflows/current-session-runbook.md#reboot-and-resume-handoff)
+before editing, restarting, or taking over work. It verifies the current Git
+state, paired authenticated Tailnet runtime, private supervisor UDS gate, and
+manager handoff from live evidence.
+
 Important environment variables:
 
 - `NEXT_PUBLIC_SUPERVISOR_URL`: browser-visible supervisor base URL
