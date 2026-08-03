@@ -5526,11 +5526,28 @@ class RunnerAssignmentStatusSummaryView(BaseModel):
     missing: int = 0
 
 
+class RunnerClosedHistoryProjectionView(BaseModel):
+    """Aggregate-only evidence for closed workspace and lane records omitted from the live projection."""
+
+    workspaceRows: int = 0
+    laneRows: int = 0
+    totalRows: int = 0
+    omittedRows: int = 0
+    degradedRows: int = 0
+    warningCounts: dict[str, int] = Field(default_factory=dict)
+    unlistedWarningCount: int = 0
+    retention: Literal["aggregate-only"] = "aggregate-only"
+
+
 class RunnerSourceCompletionRollupView(BaseModel):
     total: int = 0
     assignment: int = 0
     workspace: int = 0
     sourceBacklogItemIds: list[str] = Field(default_factory=list)
+    sourceBacklogItemIdsTotal: int = 0
+    sourceBacklogItemIdsRetained: int = 0
+    sourceBacklogItemIdsOmitted: int = 0
+    sourceBacklogItemIdsStatus: Literal["complete", "truncated"] = "complete"
 
 
 class RunnerDispatcherQueueProofRowView(BaseModel):
@@ -5682,6 +5699,7 @@ class RunnerAssignmentStatusReportView(BaseModel):
     currentOwner: str | None = None
     staleAfterSeconds: int
     summary: RunnerAssignmentStatusSummaryView
+    closedHistory: RunnerClosedHistoryProjectionView = Field(default_factory=RunnerClosedHistoryProjectionView)
     sourceCompletionRollup: RunnerSourceCompletionRollupView = Field(default_factory=RunnerSourceCompletionRollupView)
     dispatcherContinuity: RunnerDispatcherContinuitySnapshotView
     dispatchDecisionExplanations: list[RunnerDispatchDecisionExplanationView] = Field(default_factory=list)

@@ -10085,13 +10085,18 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert lane["branch"] == "codex/dispatcher-continuity-snapshot-refresh"
     assert lane["handoffLifecycleState"] == "claimed"
     assert lane["handoffRecoveryAction"] == "wait-for-owner"
-    cleanup_lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "dispatcher-cleanup-assignment-closure-refresh")
-    assert cleanup_lane["classification"] == "closed"
-    assert cleanup_lane["reasonCode"] == "lane-closed"
-    assert cleanup_lane["branch"] == "codex/dispatcher-cleanup-assignment-closure-refresh"
-    assert cleanup_lane["handoffLifecycleState"] == "cleaned"
-    assert cleanup_lane["handoffRecoveryAction"] == "no-action"
-    assert cleanup_lane["nextSafeAction"] == "No assignment action"
+    assert all(row["assignmentId"] != "dispatcher-cleanup-assignment-closure-refresh" for row in report["laneAssignments"])
+    assert report["closedHistory"] == {
+        "workspaceRows": 0,
+        "laneRows": 1,
+        "totalRows": 1,
+        "omittedRows": 1,
+        "degradedRows": 1,
+        "warningCounts": {"inferred-heartbeat": 1},
+        "unlistedWarningCount": 0,
+        "retention": "aggregate-only",
+    }
+    assert report["summary"]["closed"] >= 1
     backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "report-catalog-shortcut-refresh")
     assert backlog["classification"] == "closed"
     assert backlog["reasonCode"] == "backlog-closed"
@@ -10415,6 +10420,10 @@ def test_runner_assignment_status_report_closes_stale_ready_items_with_source_co
         "assignment": 0,
         "workspace": 0,
         "sourceBacklogItemIds": [],
+        "sourceBacklogItemIdsTotal": 0,
+        "sourceBacklogItemIdsRetained": 0,
+        "sourceBacklogItemIdsOmitted": 0,
+        "sourceBacklogItemIdsStatus": "complete",
     }
     filter_empty_state_shortcut_reason_keyboard_loop_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")
     assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["classification"] == "closed"
@@ -10926,10 +10935,10 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     cleanup_partial_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "cleanup-partial-handoff")
     assert cleanup_partial_row["deliveryState"] == "cleanup-partial"
     assert cleanup_partial_row["handoffRecoveryAction"] == "resume-cleanup"
-    cleaned_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "cleaned-handoff")
-    assert cleaned_row["handoffLifecycleState"] == "cleaned"
-    assert cleaned_row["handoffRecoveryAction"] == "no-action"
-    assert cleaned_row["classification"] == "closed"
+    assert all(item["taskId"] != "cleaned-handoff" for item in counts_report["workspaceAssignments"])
+    assert counts_report["closedHistory"]["workspaceRows"] == 1
+    assert counts_report["closedHistory"]["omittedRows"] == 1
+    assert counts_report["summary"]["closed"] >= 1
 
     capped_path = tasks_dir / "capped-handoff.json"
     capped_path.write_text(
@@ -11004,3 +11013,181 @@ def test_runner_assignment_status_report_treats_unowned_active_workspace_as_assi
     assert workspace["classification"] == "assignable"
     assert workspace["reasonCode"] == "workspace-unowned"
     assert report["summary"]["assignable"] >= 1
+
+
+def test_runner_assignment_status_report_compacts_closed_history_without_omitting_actionable_rows(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "codex-state"
+    tasks_dir = state_root / "tasks"
+    assignments_dir = state_root / "assignments"
+    tasks_dir.mkdir(parents=True)
+    assignments_dir.mkdir()
+    now = datetime.now(timezone.utc).isoformat()
+    verbose_closed_payload = "closed-history-evidence:" + ("x" * 12_000)
+
+    for index in range(150):
+        (tasks_dir / f"closed-workspace-{index:03d}.json").write_text(
+            json.dumps(
+                {
+                    "task_id": f"closed-workspace-{index:03d}",
+                    "title": f"Closed workspace {index:03d}",
+                    "status": "closed",
+                    "owner": "completed-runner",
+                    "owner_updated_at": now,
+                    "current_command": verbose_closed_payload,
+                    "last_result": verbose_closed_payload,
+                }
+            )
+        )
+        (assignments_dir / f"closed-lane-{index:03d}.json").write_text(
+            json.dumps(
+                {
+                    "assignment_id": f"closed-lane-{index:03d}",
+                    "task_id": f"closed-lane-{index:03d}",
+                    "lane_slug": f"closed-lane-{index:03d}",
+                    "title": f"Closed lane {index:03d}",
+                    "status": "closed",
+                    "owner": "completed-runner",
+                    "owner_updated_at": now,
+                    "current_command": verbose_closed_payload,
+                    "last_result": verbose_closed_payload,
+                    **(
+                        {"source_backlog_item": {"item_id": "setup-churn-handoff-hardening"}}
+                        if index == 0
+                        else {}
+                    ),
+                }
+            )
+        )
+
+    (tasks_dir / "malformed-task.json").write_text("not-json")
+
+    (tasks_dir / "active-workspace.json").write_text(
+        json.dumps(
+            {
+                "task_id": "active-workspace",
+                "title": "Active workspace",
+                "status": "active",
+                "owner": "runner-active",
+                "owner_updated_at": now,
+                "current_command": "node ./scripts/active-workspace.mjs",
+                "last_result": "active workspace evidence",
+            }
+        )
+    )
+    (tasks_dir / "assignable-workspace.json").write_text(
+        json.dumps(
+            {
+                "task_id": "assignable-workspace",
+                "title": "Assignable workspace",
+                "status": "active",
+                "current_command": "node ./scripts/assignable-workspace.mjs",
+                "last_result": "assignable workspace evidence",
+            }
+        )
+    )
+    (assignments_dir / "claimed-lane.json").write_text(
+        json.dumps(
+            {
+                "assignment_id": "claimed-lane",
+                "task_id": "claimed-lane",
+                "lane_slug": "claimed-lane",
+                "title": "Claimed lane",
+                "status": "active",
+                "owner": "runner-claimed",
+                "owner_updated_at": now,
+                "current_command": "node ./scripts/claimed-lane.mjs",
+                "last_result": "claimed lane evidence",
+            }
+        )
+    )
+    (assignments_dir / "blocked-lane.json").write_text(
+        json.dumps(
+            {
+                "assignment_id": "blocked-lane",
+                "task_id": "blocked-lane",
+                "lane_slug": "blocked-lane",
+                "title": "Blocked lane",
+                "status": "active",
+                "owner": "runner-stale",
+                "owner_updated_at": "2000-01-01T00:00:00+00:00",
+                "stale_after_seconds": 1,
+                "current_command": "node ./scripts/blocked-lane.mjs",
+                "last_result": "blocked lane evidence",
+            }
+        )
+    )
+
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-compact-history.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    envelope = response.json()
+    report = envelope["data"]
+    assert len(json.dumps(envelope).encode("utf-8")) < 1024 * 1024
+    assert report["closedHistory"] == {
+        "workspaceRows": 150,
+        "laneRows": 150,
+        "totalRows": 300,
+        "omittedRows": 300,
+        "degradedRows": 300,
+        "warningCounts": {"inferred-heartbeat": 300},
+        "unlistedWarningCount": 0,
+        "retention": "aggregate-only",
+    }
+    assert report["summary"]["closed"] >= 300
+    assert report["partial"] is True
+    assert report["stateRootStatus"] == "partial"
+    assert report["currentOwner"] == "runner-active"
+    assert any(item["inputKind"] == "task-manifest" for item in report["degradedInputs"])
+    assert report["sourceCompletionRollup"]["assignment"] >= 1
+    assert "setup-churn-handoff-hardening" in report["sourceCompletionRollup"]["sourceBacklogItemIds"]
+    assert report["sourceCompletionRollup"]["sourceBacklogItemIdsTotal"] >= 1
+    assert report["sourceCompletionRollup"]["sourceBacklogItemIdsRetained"] >= 1
+    assert report["sourceCompletionRollup"]["sourceBacklogItemIdsOmitted"] == 0
+    assert report["sourceCompletionRollup"]["sourceBacklogItemIdsStatus"] == "complete"
+    assert all(row["classification"] != "closed" for row in report["workspaceAssignments"])
+    assert all(row["classification"] != "closed" for row in report["laneAssignments"])
+    active_workspace = next(row for row in report["workspaceAssignments"] if row["taskId"] == "active-workspace")
+    assignable_workspace = next(row for row in report["workspaceAssignments"] if row["taskId"] == "assignable-workspace")
+    claimed_lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "claimed-lane")
+    blocked_lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "blocked-lane")
+    assert active_workspace["classification"] == "active"
+    assert active_workspace["currentCommand"] == "node ./scripts/active-workspace.mjs"
+    assert active_workspace["lastResult"] == "active workspace evidence"
+    assert assignable_workspace["classification"] == "assignable"
+    assert claimed_lane["classification"] == "claimed"
+    assert claimed_lane["currentCommand"] == "node ./scripts/claimed-lane.mjs"
+    assert blocked_lane["classification"] == "blocked_stale_owner_needs_takeover"
+    assert blocked_lane["lastResult"] == "blocked lane evidence"
+
+
+def test_runner_assignment_status_report_retains_closed_warning_aggregate(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "codex-state"
+    tasks_dir = state_root / "tasks"
+    assignments_dir = state_root / "assignments"
+    tasks_dir.mkdir(parents=True)
+    assignments_dir.mkdir()
+    (tasks_dir / "closed-missing-heartbeat.json").write_text(
+        json.dumps(
+            {
+                "task_id": "closed-missing-heartbeat",
+                "title": "Closed missing heartbeat",
+                "status": "closed",
+                "owner": "completed-runner",
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-closed-warning-aggregate.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    assert report["closedHistory"]["workspaceRows"] == 1
+    assert report["closedHistory"]["degradedRows"] == 1
+    assert report["closedHistory"]["warningCounts"] == {"missing-heartbeat": 1}
+    assert report["closedHistory"]["unlistedWarningCount"] == 0
+    assert report["workspaceAssignments"] == []

@@ -82,6 +82,9 @@ PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
 PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY = "pipelineEpic25EvidenceChain"
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY = "pipelineEpic25SourceRevisionAttestation"
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_TYPE = "server-owned-git-source-revision/v0"
+RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES = 256
+RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES = 16 * 1024
+RUNNER_CLOSED_HISTORY_WARNING_CODES_MAX = 16
 
 
 from supervisor.api.schemas import (
@@ -256,6 +259,7 @@ from supervisor.api.schemas import (
     RunnerAssignmentStatusReportView,
     RunnerAssignmentStatusRowView,
     RunnerAssignmentStatusSummaryView,
+    RunnerClosedHistoryProjectionView,
     RunnerAssignmentWarningView,
     RunnerSourceCompletionRollupView,
     RuntimeEvidenceExportView,
@@ -10949,6 +10953,10 @@ class SupervisorService:
     def _runner_source_completion_rollup(self, rows: list[RunnerAssignmentStatusRowView]) -> RunnerSourceCompletionRollupView:
         source_backlog_item_ids: list[str] = []
         seen_item_ids: set[str] = set()
+        # Count the actual JSON list representation rather than raw UTF-8 input.
+        # Control characters expand when serialized, and the 16 KiB boundary must
+        # apply to the response payload, including quotes, commas, and brackets.
+        retained_bytes = 2  # []
         rollup = RunnerSourceCompletionRollupView()
         for row in rows:
             evidence = row.sourceCompletionEvidence
@@ -10961,9 +10969,56 @@ class SupervisorService:
                 rollup.workspace += 1
             if evidence.sourceBacklogItemId not in seen_item_ids:
                 seen_item_ids.add(evidence.sourceBacklogItemId)
-                source_backlog_item_ids.append(evidence.sourceBacklogItemId)
+                rollup.sourceBacklogItemIdsTotal += 1
+                try:
+                    serialized_id_size = len(
+                        json.dumps(
+                            evidence.sourceBacklogItemId,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    )
+                except UnicodeError:
+                    # State-derived IDs are metadata only. A malformed Unicode value must
+                    # not turn the whole read-only report into an unavailable response.
+                    rollup.sourceBacklogItemIdsOmitted += 1
+                    rollup.sourceBacklogItemIdsStatus = "truncated"
+                    continue
+                if (
+                    serialized_id_size <= RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES
+                    and retained_bytes + (1 if source_backlog_item_ids else 0) + serialized_id_size
+                    <= RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES
+                ):
+                    source_backlog_item_ids.append(evidence.sourceBacklogItemId)
+                    retained_bytes += (1 if len(source_backlog_item_ids) > 1 else 0) + serialized_id_size
+                    rollup.sourceBacklogItemIdsRetained += 1
+                else:
+                    rollup.sourceBacklogItemIdsOmitted += 1
+                    rollup.sourceBacklogItemIdsStatus = "truncated"
         rollup.sourceBacklogItemIds = source_backlog_item_ids
         return rollup
+
+    def _runner_closed_history_projection(self, workspace_rows: list[RunnerAssignmentStatusRowView], lane_rows: list[RunnerAssignmentStatusRowView]) -> RunnerClosedHistoryProjectionView:
+        closed_workspace_rows = [row for row in workspace_rows if row.classification == "closed"]
+        closed_lane_rows = [row for row in lane_rows if row.classification == "closed"]
+        closed_rows = [*closed_workspace_rows, *closed_lane_rows]
+        warning_counts: dict[str, int] = {}
+        unlisted_warning_count = 0
+        for row in closed_rows:
+            for warning in row.warnings:
+                if warning.code in warning_counts or len(warning_counts) < RUNNER_CLOSED_HISTORY_WARNING_CODES_MAX:
+                    warning_counts[warning.code] = warning_counts.get(warning.code, 0) + 1
+                else:
+                    unlisted_warning_count += 1
+        return RunnerClosedHistoryProjectionView(
+            workspaceRows=len(closed_workspace_rows),
+            laneRows=len(closed_lane_rows),
+            totalRows=len(closed_rows),
+            omittedRows=len(closed_rows),
+            degradedRows=sum(1 for row in closed_rows if row.degraded),
+            warningCounts=dict(sorted(warning_counts.items())),
+            unlistedWarningCount=unlisted_warning_count,
+        )
 
     def _runner_dispatch_decision_explanations(
         self,
@@ -11249,7 +11304,6 @@ class SupervisorService:
         workspace_records: list[dict] = []
         assignment_records: list[dict] = []
         state_root_status = "available"
-        current_owner: str | None = None
 
         tasks_dir = state_root / "tasks"
         assignments_dir = state_root / "assignments"
@@ -11290,9 +11344,6 @@ class SupervisorService:
                     continue
 
                 workspace_records.append({**manifest, "_evidence_path": str(path)})
-                owner = manifest.get("owner") or manifest.get("owner_thread_id")
-                if current_owner is None and owner:
-                    current_owner = str(owner)
                 workspace_rows.append(self._runner_assignment_row(manifest, path, state_root, deadline, now, stale_after_seconds, "workspace"))
             for path in assignment_files[:500]:
                 if path.is_symlink():
@@ -11307,9 +11358,6 @@ class SupervisorService:
                     degraded_inputs.append(self._runner_degraded_input("assignment-record", str(path), "blocking", "Assignment record is malformed or unreadable."))
                     continue
                 assignment_records.append({**assignment, "_evidence_path": str(path)})
-                owner = assignment.get("owner") or assignment.get("owner_thread_id")
-                if current_owner is None and owner:
-                    current_owner = str(owner)
                 lane_rows.append(self._runner_assignment_row(assignment, path, state_root, deadline, now, stale_after_seconds, "lane"))
 
         try:
@@ -11378,6 +11426,10 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
+        visible_workspace_rows = [row for row in workspace_rows if row.classification != "closed"]
+        visible_lane_rows = [row for row in lane_rows if row.classification != "closed"]
+        current_owner = next((row.owner for row in [*visible_workspace_rows, *visible_lane_rows] if row.owner), None)
+        closed_history = self._runner_closed_history_projection(workspace_rows, lane_rows)
         preferred_successor_ids = (
             "setup-churn-handoff-hardening",
             "queue-zero-runway-relay-refresh",
@@ -11486,11 +11538,12 @@ class SupervisorService:
             currentOwner=current_owner,
             staleAfterSeconds=stale_after_seconds,
             summary=summary,
+            closedHistory=closed_history,
             sourceCompletionRollup=source_completion_rollup,
             dispatcherContinuity=dispatcher_continuity,
             dispatchDecisionExplanations=dispatch_decision_explanations,
-            workspaceAssignments=workspace_rows,
-            laneAssignments=lane_rows,
+            workspaceAssignments=visible_workspace_rows,
+            laneAssignments=visible_lane_rows,
             backlogCandidates=backlog_rows,
             degradedInputs=degraded_inputs,
         )

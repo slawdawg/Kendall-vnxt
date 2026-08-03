@@ -2759,11 +2759,26 @@ export interface RunnerAssignmentStatusSummaryView {
   missing: number;
 }
 
+export interface RunnerClosedHistoryProjectionView {
+  workspaceRows: number;
+  laneRows: number;
+  totalRows: number;
+  omittedRows: number;
+  degradedRows: number;
+  warningCounts: Record<string, number>;
+  unlistedWarningCount: number;
+  retention: "aggregate-only";
+}
+
 export interface RunnerSourceCompletionRollupView {
   total: number;
   assignment: number;
   workspace: number;
   sourceBacklogItemIds: string[];
+  sourceBacklogItemIdsTotal: number;
+  sourceBacklogItemIdsRetained: number;
+  sourceBacklogItemIdsOmitted: number;
+  sourceBacklogItemIdsStatus: "complete" | "truncated";
 }
 
 export interface RunnerDispatcherQueueProofRowView {
@@ -2912,6 +2927,7 @@ export interface RunnerAssignmentStatusReportView {
   currentOwner?: string | null;
   staleAfterSeconds: number;
   summary: RunnerAssignmentStatusSummaryView;
+  closedHistory: RunnerClosedHistoryProjectionView;
   sourceCompletionRollup: RunnerSourceCompletionRollupView;
   dispatcherContinuity: RunnerDispatcherContinuitySnapshotView;
   dispatchDecisionExplanations: RunnerDispatchDecisionExplanationView[];
