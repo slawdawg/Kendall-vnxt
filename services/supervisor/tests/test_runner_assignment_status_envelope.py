@@ -63,6 +63,8 @@ def test_runner_assignment_status_envelope_exposes_typed_closed_history_projecti
                 "laneRows": 252,
                 "totalRows": 752,
                 "omittedRows": 752,
+                "degradedRows": 3,
+                "warningCounts": {"missing-heartbeat": 3},
             },
         }
     )
@@ -71,6 +73,9 @@ def test_runner_assignment_status_envelope_exposes_typed_closed_history_projecti
     assert report.closedHistory.laneRows == 252
     assert report.closedHistory.totalRows == 752
     assert report.closedHistory.omittedRows == 752
+    assert report.closedHistory.degradedRows == 3
+    assert report.closedHistory.warningCounts == {"missing-heartbeat": 3}
+    assert report.closedHistory.unlistedWarningCount == 0
 
 
 def test_runner_assignment_status_rollup_bounds_verbose_source_ids_without_losing_exact_counts():
@@ -148,5 +153,6 @@ def test_shared_typescript_runner_assignment_contract_matches_python_model():
     assert "data: RunnerAssignmentStatusReportView;" in contract_source
     assert "export interface RunnerClosedHistoryProjectionView" in contract_source
     assert "closedHistory: RunnerClosedHistoryProjectionView;" in contract_source
+    assert "warningCounts: Record<string, number>;" in contract_source
     assert "sourceBacklogItemIdsOmitted: number;" in contract_source
     assert 'sourceBacklogItemIdsStatus: "complete" | "truncated";' in contract_source

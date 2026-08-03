@@ -84,6 +84,7 @@ PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY = "pipelineEpic25SourceRevision
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_TYPE = "server-owned-git-source-revision/v0"
 RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES = 256
 RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES = 16 * 1024
+RUNNER_CLOSED_HISTORY_WARNING_CODES_MAX = 16
 
 
 from supervisor.api.schemas import (
@@ -10987,6 +10988,28 @@ class SupervisorService:
         rollup.sourceBacklogItemIds = source_backlog_item_ids
         return rollup
 
+    def _runner_closed_history_projection(self, workspace_rows: list[RunnerAssignmentStatusRowView], lane_rows: list[RunnerAssignmentStatusRowView]) -> RunnerClosedHistoryProjectionView:
+        closed_workspace_rows = [row for row in workspace_rows if row.classification == "closed"]
+        closed_lane_rows = [row for row in lane_rows if row.classification == "closed"]
+        closed_rows = [*closed_workspace_rows, *closed_lane_rows]
+        warning_counts: dict[str, int] = {}
+        unlisted_warning_count = 0
+        for row in closed_rows:
+            for warning in row.warnings:
+                if warning.code in warning_counts or len(warning_counts) < RUNNER_CLOSED_HISTORY_WARNING_CODES_MAX:
+                    warning_counts[warning.code] = warning_counts.get(warning.code, 0) + 1
+                else:
+                    unlisted_warning_count += 1
+        return RunnerClosedHistoryProjectionView(
+            workspaceRows=len(closed_workspace_rows),
+            laneRows=len(closed_lane_rows),
+            totalRows=len(closed_rows),
+            omittedRows=len(closed_rows),
+            degradedRows=sum(1 for row in closed_rows if row.degraded),
+            warningCounts=dict(sorted(warning_counts.items())),
+            unlistedWarningCount=unlisted_warning_count,
+        )
+
     def _runner_dispatch_decision_explanations(
         self,
         summary: RunnerAssignmentStatusSummaryView,
@@ -11402,14 +11425,7 @@ class SupervisorService:
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         visible_workspace_rows = [row for row in workspace_rows if row.classification != "closed"]
         visible_lane_rows = [row for row in lane_rows if row.classification != "closed"]
-        closed_workspace_rows = len(workspace_rows) - len(visible_workspace_rows)
-        closed_lane_rows = len(lane_rows) - len(visible_lane_rows)
-        closed_history = RunnerClosedHistoryProjectionView(
-            workspaceRows=closed_workspace_rows,
-            laneRows=closed_lane_rows,
-            totalRows=closed_workspace_rows + closed_lane_rows,
-            omittedRows=closed_workspace_rows + closed_lane_rows,
-        )
+        closed_history = self._runner_closed_history_projection(workspace_rows, lane_rows)
         preferred_successor_ids = (
             "setup-churn-handoff-hardening",
             "queue-zero-runway-relay-refresh",

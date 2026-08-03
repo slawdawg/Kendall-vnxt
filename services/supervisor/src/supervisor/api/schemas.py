@@ -5533,6 +5533,9 @@ class RunnerClosedHistoryProjectionView(BaseModel):
     laneRows: int = 0
     totalRows: int = 0
     omittedRows: int = 0
+    degradedRows: int = 0
+    warningCounts: dict[str, int] = Field(default_factory=dict)
+    unlistedWarningCount: int = 0
     retention: Literal["aggregate-only"] = "aggregate-only"
 
 

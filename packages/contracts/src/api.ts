@@ -2764,6 +2764,9 @@ export interface RunnerClosedHistoryProjectionView {
   laneRows: number;
   totalRows: number;
   omittedRows: number;
+  degradedRows: number;
+  warningCounts: Record<string, number>;
+  unlistedWarningCount: number;
   retention: "aggregate-only";
 }
 

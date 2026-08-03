@@ -33,6 +33,9 @@ const EMPTY_CLOSED_HISTORY = {
   laneRows: 0,
   totalRows: 0,
   omittedRows: 0,
+  degradedRows: 0,
+  warningCounts: {},
+  unlistedWarningCount: 0,
   retention: "aggregate-only" as const,
 };
 
@@ -788,6 +791,15 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               ? `${closedHistory.omittedRows} closed workspace/lane rows are retained as aggregate-only, non-dispatchable proof (${closedHistory.workspaceRows} workspace; ${closedHistory.laneRows} lane).`
               : `${closedAssignmentEvidenceRows.length} closed assignment evidence ${closedAssignmentEvidenceRows.length === 1 ? "row" : "rows"} retained as non-dispatchable proof.`}
           </p>
+          {closedHistory.totalRows > 0 ? (
+            <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+              <p>Closed degraded rows: {closedHistory.degradedRows}</p>
+              <p className="break-all">
+                Closed warning aggregate: {Object.entries(closedHistory.warningCounts).map(([code, count]) => `${code} (${count})`).join(", ") || "none"}
+              </p>
+              {closedHistory.unlistedWarningCount > 0 ? <p>Additional closed warnings not listed: {closedHistory.unlistedWarningCount}</p> : null}
+            </div>
+          ) : null}
           <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
             {closedAssignmentEvidenceRows.slice(0, 8).map((row) => (
               <p key={`${row.id}:closed-assignment-evidence`} className="break-all">

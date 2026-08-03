@@ -104,6 +104,8 @@ for (const serviceText of [
   "stop_lines",
   "worktree-outside-managed-root",
   "runner-assignment-status-report-v1",
+  "warningCounts",
+  "unlistedWarningCount",
   "No assignment action",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Runner assignment service must include ${serviceText}`, failures);

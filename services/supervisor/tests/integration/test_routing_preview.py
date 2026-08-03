@@ -11128,6 +11128,9 @@ def test_runner_assignment_status_report_compacts_closed_history_without_omittin
         "laneRows": 150,
         "totalRows": 300,
         "omittedRows": 300,
+        "degradedRows": 300,
+        "warningCounts": {"inferred-heartbeat": 300},
+        "unlistedWarningCount": 0,
         "retention": "aggregate-only",
     }
     assert report["summary"]["closed"] >= 300
@@ -11142,7 +11145,6 @@ def test_runner_assignment_status_report_compacts_closed_history_without_omittin
     assert report["sourceCompletionRollup"]["sourceBacklogItemIdsStatus"] == "complete"
     assert all(row["classification"] != "closed" for row in report["workspaceAssignments"])
     assert all(row["classification"] != "closed" for row in report["laneAssignments"])
-
     active_workspace = next(row for row in report["workspaceAssignments"] if row["taskId"] == "active-workspace")
     assignable_workspace = next(row for row in report["workspaceAssignments"] if row["taskId"] == "assignable-workspace")
     claimed_lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "claimed-lane")
@@ -11155,3 +11157,33 @@ def test_runner_assignment_status_report_compacts_closed_history_without_omittin
     assert claimed_lane["currentCommand"] == "node ./scripts/claimed-lane.mjs"
     assert blocked_lane["classification"] == "blocked_stale_owner_needs_takeover"
     assert blocked_lane["lastResult"] == "blocked lane evidence"
+
+
+def test_runner_assignment_status_report_retains_closed_warning_aggregate(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "codex-state"
+    tasks_dir = state_root / "tasks"
+    assignments_dir = state_root / "assignments"
+    tasks_dir.mkdir(parents=True)
+    assignments_dir.mkdir()
+    (tasks_dir / "closed-missing-heartbeat.json").write_text(
+        json.dumps(
+            {
+                "task_id": "closed-missing-heartbeat",
+                "title": "Closed missing heartbeat",
+                "status": "closed",
+                "owner": "completed-runner",
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-closed-warning-aggregate.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    assert report["closedHistory"]["workspaceRows"] == 1
+    assert report["closedHistory"]["degradedRows"] == 1
+    assert report["closedHistory"]["warningCounts"] == {"missing-heartbeat": 1}
+    assert report["closedHistory"]["unlistedWarningCount"] == 0
+    assert report["workspaceAssignments"] == []

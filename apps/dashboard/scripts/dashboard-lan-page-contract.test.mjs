@@ -100,6 +100,8 @@ test("test viewer navigation contains only the pipeline surface while its sessio
 test("runner assignment history stays explicit and cache-compatible after compact projection", async () => {
   const panel = await readFile(runnerAssignmentPanelUrl, "utf8");
   assert.match(panel, /report\.closedHistory \?\? EMPTY_CLOSED_HISTORY/);
+  assert.match(panel, /Closed degraded rows/);
+  assert.match(panel, /Closed warning aggregate/);
   assert.match(panel, /sourceBacklogItemIdsOmitted/);
   assert.match(panel, /sourceBacklogItemIdsStatus \?\? "complete"/);
   assert.match(panel, /Source item IDs omitted/);
