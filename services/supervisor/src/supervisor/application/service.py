@@ -82,6 +82,8 @@ PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
 PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY = "pipelineEpic25EvidenceChain"
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY = "pipelineEpic25SourceRevisionAttestation"
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_TYPE = "server-owned-git-source-revision/v0"
+RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES = 256
+RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES = 16 * 1024
 
 
 from supervisor.api.schemas import (
@@ -256,6 +258,7 @@ from supervisor.api.schemas import (
     RunnerAssignmentStatusReportView,
     RunnerAssignmentStatusRowView,
     RunnerAssignmentStatusSummaryView,
+    RunnerClosedHistoryProjectionView,
     RunnerAssignmentWarningView,
     RunnerSourceCompletionRollupView,
     RuntimeEvidenceExportView,
@@ -10949,6 +10952,7 @@ class SupervisorService:
     def _runner_source_completion_rollup(self, rows: list[RunnerAssignmentStatusRowView]) -> RunnerSourceCompletionRollupView:
         source_backlog_item_ids: list[str] = []
         seen_item_ids: set[str] = set()
+        retained_bytes = 0
         rollup = RunnerSourceCompletionRollupView()
         for row in rows:
             evidence = row.sourceCompletionEvidence
@@ -10961,7 +10965,18 @@ class SupervisorService:
                 rollup.workspace += 1
             if evidence.sourceBacklogItemId not in seen_item_ids:
                 seen_item_ids.add(evidence.sourceBacklogItemId)
-                source_backlog_item_ids.append(evidence.sourceBacklogItemId)
+                rollup.sourceBacklogItemIdsTotal += 1
+                encoded_id_size = len(evidence.sourceBacklogItemId.encode("utf-8"))
+                if (
+                    encoded_id_size <= RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES
+                    and retained_bytes + encoded_id_size <= RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES
+                ):
+                    source_backlog_item_ids.append(evidence.sourceBacklogItemId)
+                    retained_bytes += encoded_id_size
+                    rollup.sourceBacklogItemIdsRetained += 1
+                else:
+                    rollup.sourceBacklogItemIdsOmitted += 1
+                    rollup.sourceBacklogItemIdsStatus = "truncated"
         rollup.sourceBacklogItemIds = source_backlog_item_ids
         return rollup
 
@@ -11378,6 +11393,16 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
+        visible_workspace_rows = [row for row in workspace_rows if row.classification != "closed"]
+        visible_lane_rows = [row for row in lane_rows if row.classification != "closed"]
+        closed_workspace_rows = len(workspace_rows) - len(visible_workspace_rows)
+        closed_lane_rows = len(lane_rows) - len(visible_lane_rows)
+        closed_history = RunnerClosedHistoryProjectionView(
+            workspaceRows=closed_workspace_rows,
+            laneRows=closed_lane_rows,
+            totalRows=closed_workspace_rows + closed_lane_rows,
+            omittedRows=closed_workspace_rows + closed_lane_rows,
+        )
         preferred_successor_ids = (
             "setup-churn-handoff-hardening",
             "queue-zero-runway-relay-refresh",
@@ -11486,11 +11511,12 @@ class SupervisorService:
             currentOwner=current_owner,
             staleAfterSeconds=stale_after_seconds,
             summary=summary,
+            closedHistory=closed_history,
             sourceCompletionRollup=source_completion_rollup,
             dispatcherContinuity=dispatcher_continuity,
             dispatchDecisionExplanations=dispatch_decision_explanations,
-            workspaceAssignments=workspace_rows,
-            laneAssignments=lane_rows,
+            workspaceAssignments=visible_workspace_rows,
+            laneAssignments=visible_lane_rows,
             backlogCandidates=backlog_rows,
             degradedInputs=degraded_inputs,
         )

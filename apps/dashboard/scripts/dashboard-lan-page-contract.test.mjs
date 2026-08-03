@@ -14,6 +14,7 @@ const lanControlsUrl = new URL("src/components/lan-controls-page.tsx", root);
 const controlsSchedulerUrl = new URL("src/lib/controls-read-scheduler.mjs", root);
 const controlsRouteUrl = new URL("src/app/controls/page.tsx", root);
 const operatorProfileUrl = new URL("src/lib/operator-profile.ts", root);
+const runnerAssignmentPanelUrl = new URL("src/components/runner-assignment-status-report-panel.tsx", root);
 
 test("LAN operator pages declare exact read contracts and do not replace the server LAN guard", async () => {
   const manifest = JSON.parse(await readFile(manifestUrl, "utf8"));
@@ -94,4 +95,12 @@ test("test viewer navigation contains only the pipeline surface while its sessio
   const nav = await readFile(navUrl, "utf8");
   assert.match(nav, /useDashboardSessionRole/);
   assert.match(nav, /link\.href === "\/pipeline"/);
+});
+
+test("runner assignment history stays explicit and cache-compatible after compact projection", async () => {
+  const panel = await readFile(runnerAssignmentPanelUrl, "utf8");
+  assert.match(panel, /report\.closedHistory \?\? EMPTY_CLOSED_HISTORY/);
+  assert.match(panel, /sourceBacklogItemIdsOmitted/);
+  assert.match(panel, /sourceBacklogItemIdsStatus \?\? "complete"/);
+  assert.match(panel, /Source item IDs omitted/);
 });

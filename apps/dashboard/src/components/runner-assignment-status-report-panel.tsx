@@ -28,6 +28,14 @@ type FilteredSourceKindSummary = {
   sourceCompletionNone: number;
 };
 
+const EMPTY_CLOSED_HISTORY = {
+  workspaceRows: 0,
+  laneRows: 0,
+  totalRows: 0,
+  omittedRows: 0,
+  retention: "aggregate-only" as const,
+};
+
 function formatGenerated(value: string): string {
   return new Date(value).toLocaleString();
 }
@@ -668,6 +676,11 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     (entry): entry is [SourceCompletionPresetFilter, string] => entry[1] !== null,
   );
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
+  const closedHistory = report.closedHistory ?? EMPTY_CLOSED_HISTORY;
+  const sourceBacklogItemIdsTotal = report.sourceCompletionRollup.sourceBacklogItemIdsTotal ?? report.sourceCompletionRollup.sourceBacklogItemIds.length;
+  const sourceBacklogItemIdsRetained = report.sourceCompletionRollup.sourceBacklogItemIdsRetained ?? report.sourceCompletionRollup.sourceBacklogItemIds.length;
+  const sourceBacklogItemIdsOmitted = report.sourceCompletionRollup.sourceBacklogItemIdsOmitted ?? 0;
+  const sourceBacklogItemIdsStatus = report.sourceCompletionRollup.sourceBacklogItemIdsStatus ?? "complete";
   return (
     <section className="rounded-[0.5rem] border bg-[var(--surface)] p-4 shadow-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -705,6 +718,8 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
           <p>Assignment: {report.sourceCompletionRollup.assignment}</p>
           <p>Workspace: {report.sourceCompletionRollup.workspace}</p>
           <p className="break-all">Source backlog items: {report.sourceCompletionRollup.sourceBacklogItemIds.join(", ") || "none"}</p>
+          <p>Source item IDs retained: {sourceBacklogItemIdsRetained}/{sourceBacklogItemIdsTotal}</p>
+          <p>Source item IDs omitted: {sourceBacklogItemIdsOmitted} ({sourceBacklogItemIdsStatus})</p>
         </div>
       </div>
 
@@ -765,12 +780,13 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         </div>
       </div>
 
-      {closedAssignmentEvidenceRows.length > 0 ? (
+      {closedHistory.totalRows > 0 || closedAssignmentEvidenceRows.length > 0 ? (
         <div data-testid="closed-assignment-evidence" className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Closed assignment evidence</p>
           <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-            {closedAssignmentEvidenceRows.length} closed assignment evidence {closedAssignmentEvidenceRows.length === 1 ? "row" : "rows"} retained as
-            non-dispatchable proof.
+            {closedHistory.totalRows > 0
+              ? `${closedHistory.omittedRows} closed workspace/lane rows are retained as aggregate-only, non-dispatchable proof (${closedHistory.workspaceRows} workspace; ${closedHistory.laneRows} lane).`
+              : `${closedAssignmentEvidenceRows.length} closed assignment evidence ${closedAssignmentEvidenceRows.length === 1 ? "row" : "rows"} retained as non-dispatchable proof.`}
           </p>
           <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
             {closedAssignmentEvidenceRows.slice(0, 8).map((row) => (
