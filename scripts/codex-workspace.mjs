@@ -8281,14 +8281,13 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
     previousCompletedAt = completedAt;
     if (!(evidence.status === null || Number.isInteger(evidence.status)) || !(evidence.signal === null || (typeof evidence.signal === "string" && evidence.signal.length <= 120)) || !(evidence.error_code === null || (typeof evidence.error_code === "string" && evidence.error_code.length <= 120))) invalid("stage evidence is malformed");
   }
-  const priorWorkspaceFastExpandedPlan = resumableCheckPriorWorkspaceFastExpandedPlan(expected.plan);
-  const candidatePlans = [expected.plan.stages, expected.plan.legacyStages, priorWorkspaceFastExpandedPlan]
+  const baseCandidatePlans = [expected.plan.stages, expected.plan.legacyStages, resumableCheckPriorWorkspaceFastExpandedPlan(expected.plan)]
+    .filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
+  const candidatePlans = [...baseCandidatePlans, ...baseCandidatePlans.map((stages) => resumableCheckObsoleteSupervisorAggregatePlan({ stages }))]
     .filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
   const digestMatchedPlans = candidatePlans.filter((plan) => resumableCheckPlanDigest(plan) === packet.plan_digest);
-  const obsoleteSupervisorAggregatePlan = resumableCheckObsoleteSupervisorAggregatePlan(expected.plan);
-  const obsoletePlanMatches = Array.isArray(obsoleteSupervisorAggregatePlan) && packet.plan_digest === resumableCheckPlanDigest(obsoleteSupervisorAggregatePlan) && history.every((stage, index) => obsoleteSupervisorAggregatePlan[index] === stage);
-  if (digestMatchedPlans.length === 0 && !obsoletePlanMatches) invalid("plan digest is not current or a recognized legacy plan");
-  const matchingPlans = [...digestMatchedPlans, ...(digestMatchedPlans.length === 0 && obsoletePlanMatches ? [obsoleteSupervisorAggregatePlan] : [])].filter((plan) => history.every((stage, index) => plan[index] === stage));
+  if (digestMatchedPlans.length === 0) invalid("plan digest is not current or a recognized legacy plan");
+  const matchingPlans = digestMatchedPlans.filter((plan) => history.every((stage, index) => plan[index] === stage));
   if (matchingPlans.length === 0) invalid("stage evidence is not an ordered plan prefix");
   if (packet.status === "passed") {
     if (packet.stages.length === 0 || !matchingPlans.some((plan) => plan.length === history.length) || packet.next_stage !== null || !Object.hasOwn(packet, "completed_at")) invalid("passed packet completion is invalid");

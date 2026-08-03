@@ -111,6 +111,10 @@ function classifyFile(path) {
     requiresFullStatic = true;
     reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; escalating to full static`);
   }
+  if (/^scripts\/test-codex-workspace\.mjs$/.test(file)) {
+    requiresFullStatic = true;
+    reasons.push(`${file}: full workspace fixture runner changes require full static confidence`);
+  }
   if (
     /^scripts\/(?:check-manager-control-plane|run-manager-control-plane-shards)\.mjs$/.test(file) ||
     /^scripts\/manager-/.test(file) ||

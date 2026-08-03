@@ -76,7 +76,6 @@ test("check plan maps CI policy drift scripts without full static escalation", (
 test("check plan maps workspace changes to the bounded workspace delivery profile", () => {
   const plan = buildCheckPlan([
     "scripts/codex-workspace.mjs",
-    "scripts/test-codex-workspace.mjs",
     "tests/workspace-fast-profile.test.mjs",
   ]);
 
@@ -85,6 +84,15 @@ test("check plan maps workspace changes to the bounded workspace delivery profil
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-coordination"));
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-fast"));
   assert.ok(!plan.commands.some((command) => command.commandText === "pnpm run test:codex-workspace"));
+});
+
+test("check plan escalates changes to the full workspace fixture runner", () => {
+  const plan = buildCheckPlan(["scripts/test-codex-workspace.mjs"]);
+
+  assert.equal(plan.requiresFullStatic, true);
+  assert.deepEqual(plan.surfaces, ["workspace"]);
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:static"));
+  assert.ok(plan.reasons.some((reason) => reason.includes("full workspace fixture runner changes require full static confidence")));
 });
 
 test("check plan conservatively escalates the shared fast workflow runner", () => {
