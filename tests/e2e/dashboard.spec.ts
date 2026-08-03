@@ -2508,7 +2508,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runnerAssignmentPanel.getByText("Runner Assignment Status")).toBeVisible();
     const closedAssignmentEvidence = runnerAssignmentPanel.getByTestId("closed-assignment-evidence");
     await expect(closedAssignmentEvidence.getByText("Closed assignment evidence", { exact: true })).toBeVisible();
-    await expect(closedAssignmentEvidence.getByText("dispatcher-cleanup-assignment-closure-refresh: lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh - No assignment action")).toBeVisible();
+    await expect(closedAssignmentEvidence.getByText("2 closed workspace/lane rows are retained as aggregate-only, non-dispatchable proof (1 workspace; 1 lane).")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh: closed (backlog-closed)")).toBeVisible();
     const sourceCompletionRollup = runnerAssignmentPanel.getByTestId("source-completion-rollup");
     await expect(sourceCompletionRollup.getByText("Source completion rollup", { exact: true })).toBeVisible();
@@ -2516,6 +2516,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(sourceCompletionRollup.getByText("Assignment: 0", { exact: true })).toBeVisible();
     await expect(sourceCompletionRollup.getByText("Workspace: 1", { exact: true })).toBeVisible();
     await expect(sourceCompletionRollup.getByText("Source backlog items: setup-churn-handoff-hardening", { exact: true })).toBeVisible();
+    await expect(sourceCompletionRollup.getByText("Source item IDs retained: 1/1", { exact: true })).toBeVisible();
+    await expect(sourceCompletionRollup.getByText("Source item IDs omitted: 0 (complete)", { exact: true })).toBeVisible();
     const assignmentRowFilters = runnerAssignmentPanel.getByTestId("assignment-row-filters");
     await expect(assignmentRowFilters.getByText("Assignment row filters", { exact: true })).toBeVisible();
     await expect(assignmentRowFilters.getByLabel("Source completion")).toBeVisible();
@@ -2685,12 +2687,11 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Classification").selectOption("closed");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("lane");
     await assignmentRowFilters.getByLabel("Source completion").selectOption("all");
-    await expect(assignmentRowFilters.getByText(/Showing [1-9]\d*\/\d+ rows for closed from Lane assignment with all source-completion states\./)).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing 0\/\d+ rows for closed from Lane assignment with all source-completion states\./)).toBeVisible();
     await expect(
-      runnerAssignmentPanel
-        .locator("article")
-        .filter({ hasText: "codex/dispatcher-cleanup-assignment-closure-refresh" })
-        .getByText("source: Lane assignment"),
+      runnerAssignmentPanel.getByText(
+        "No assignment rows match the current filters. This filtered view has 0 rows for closed from Lane assignment with all source-completion states. Reset filters to return to the default needs-attention view before deciding the queue is empty.",
+      ),
     ).toBeVisible();
     await expect(runnerAssignmentPanel.getByText(/^Candidate: /)).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("attention");
