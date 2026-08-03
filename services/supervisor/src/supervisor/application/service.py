@@ -10953,7 +10953,10 @@ class SupervisorService:
     def _runner_source_completion_rollup(self, rows: list[RunnerAssignmentStatusRowView]) -> RunnerSourceCompletionRollupView:
         source_backlog_item_ids: list[str] = []
         seen_item_ids: set[str] = set()
-        retained_bytes = 0
+        # Count the actual JSON list representation rather than raw UTF-8 input.
+        # Control characters expand when serialized, and the 16 KiB boundary must
+        # apply to the response payload, including quotes, commas, and brackets.
+        retained_bytes = 2  # []
         rollup = RunnerSourceCompletionRollupView()
         for row in rows:
             evidence = row.sourceCompletionEvidence
@@ -10968,7 +10971,13 @@ class SupervisorService:
                 seen_item_ids.add(evidence.sourceBacklogItemId)
                 rollup.sourceBacklogItemIdsTotal += 1
                 try:
-                    encoded_id_size = len(evidence.sourceBacklogItemId.encode("utf-8"))
+                    serialized_id_size = len(
+                        json.dumps(
+                            evidence.sourceBacklogItemId,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    )
                 except UnicodeError:
                     # State-derived IDs are metadata only. A malformed Unicode value must
                     # not turn the whole read-only report into an unavailable response.
@@ -10976,11 +10985,12 @@ class SupervisorService:
                     rollup.sourceBacklogItemIdsStatus = "truncated"
                     continue
                 if (
-                    encoded_id_size <= RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES
-                    and retained_bytes + encoded_id_size <= RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES
+                    serialized_id_size <= RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES
+                    and retained_bytes + (1 if source_backlog_item_ids else 0) + serialized_id_size
+                    <= RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES
                 ):
                     source_backlog_item_ids.append(evidence.sourceBacklogItemId)
-                    retained_bytes += encoded_id_size
+                    retained_bytes += (1 if len(source_backlog_item_ids) > 1 else 0) + serialized_id_size
                     rollup.sourceBacklogItemIdsRetained += 1
                 else:
                     rollup.sourceBacklogItemIdsOmitted += 1
@@ -11294,7 +11304,6 @@ class SupervisorService:
         workspace_records: list[dict] = []
         assignment_records: list[dict] = []
         state_root_status = "available"
-        current_owner: str | None = None
 
         tasks_dir = state_root / "tasks"
         assignments_dir = state_root / "assignments"
@@ -11335,9 +11344,6 @@ class SupervisorService:
                     continue
 
                 workspace_records.append({**manifest, "_evidence_path": str(path)})
-                owner = manifest.get("owner") or manifest.get("owner_thread_id")
-                if current_owner is None and owner:
-                    current_owner = str(owner)
                 workspace_rows.append(self._runner_assignment_row(manifest, path, state_root, deadline, now, stale_after_seconds, "workspace"))
             for path in assignment_files[:500]:
                 if path.is_symlink():
@@ -11352,9 +11358,6 @@ class SupervisorService:
                     degraded_inputs.append(self._runner_degraded_input("assignment-record", str(path), "blocking", "Assignment record is malformed or unreadable."))
                     continue
                 assignment_records.append({**assignment, "_evidence_path": str(path)})
-                owner = assignment.get("owner") or assignment.get("owner_thread_id")
-                if current_owner is None and owner:
-                    current_owner = str(owner)
                 lane_rows.append(self._runner_assignment_row(assignment, path, state_root, deadline, now, stale_after_seconds, "lane"))
 
         try:
@@ -11425,6 +11428,7 @@ class SupervisorService:
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         visible_workspace_rows = [row for row in workspace_rows if row.classification != "closed"]
         visible_lane_rows = [row for row in lane_rows if row.classification != "closed"]
+        current_owner = next((row.owner for row in [*visible_workspace_rows, *visible_lane_rows] if row.owner), None)
         closed_history = self._runner_closed_history_projection(workspace_rows, lane_rows)
         preferred_successor_ids = (
             "setup-churn-handoff-hardening",

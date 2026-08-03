@@ -11139,6 +11139,7 @@ def test_runner_assignment_status_report_compacts_closed_history_without_omittin
     assert report["summary"]["closed"] >= 300
     assert report["partial"] is True
     assert report["stateRootStatus"] == "partial"
+    assert report["currentOwner"] == "runner-active"
     assert any(item["inputKind"] == "task-manifest" for item in report["degradedInputs"])
     assert report["sourceCompletionRollup"]["assignment"] >= 1
     assert "setup-churn-handoff-hardening" in report["sourceCompletionRollup"]["sourceBacklogItemIds"]
