@@ -62,6 +62,7 @@ import type {
   PipelineOperationalActionResultV0,
   PipelineOperationalActionApprovalRequestV1,
   PipelineOperationalActionApprovalV1,
+  PipelineOperationalActionCapabilityV1,
   PipelineOperationalActionRequestV1,
   PipelineOperationalActionResultV1,
   RuntimeEvidenceReviewReportView,
@@ -249,7 +250,7 @@ export async function issuePipelineOperationalApproval(
 export async function applyPipelineOperationalActionV1(
   payload: PipelineOperationalActionRequestV1,
 ): Promise<PipelineOperationalActionResultV1> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/actions/v1`, {
+  const response = await requestSupervisorMutation("/pipeline-control-plane/actions/v1", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -266,7 +267,7 @@ export async function applyPipelineOperationalActionV1(
 export async function issuePipelineOperationalApprovalV1(
   payload: PipelineOperationalActionApprovalRequestV1,
 ): Promise<PipelineOperationalActionApprovalV1> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/pipeline-control-plane/approvals/v1`, {
+  const response = await requestSupervisorMutation("/pipeline-control-plane/approvals/v1", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -276,6 +277,22 @@ export async function issuePipelineOperationalApprovalV1(
   if (!response.ok || !envelope.data) {
     const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
     throw new Error(detail.detail?.error?.message ?? `Operational v1 approval failed: ${response.status}`);
+  }
+  return envelope.data;
+}
+
+export async function requestPipelineOperationalCapabilityV1(
+  payload: PipelineOperationalActionApprovalRequestV1,
+): Promise<PipelineOperationalActionCapabilityV1> {
+  const response = await requestSupervisorMutation("/pipeline-control-plane/actions/v1/capability", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const envelope = (await response.json()) as ApiEnvelope<PipelineOperationalActionCapabilityV1>;
+  if (!response.ok || !envelope.data) {
+    const detail = envelope as ApiEnvelope<unknown> & { detail?: { error?: { message?: string } } };
+    throw new Error(detail.detail?.error?.message ?? `Operational v1 capability failed: ${response.status}`);
   }
   return envelope.data;
 }
@@ -1327,8 +1344,8 @@ export async function getWorkItemCleanupPlan(workItemId: string, options?: Reque
   return requestJson<CleanupPlanView>(`/work-items/${workItemId}/cleanup-plan`, options);
 }
 
-export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {
-  return requestJson<WorkItemExecutionRecipeView[]>("/execution-recipes");
+export async function getExecutionRecipes(options?: RequestOptions): Promise<WorkItemExecutionRecipeView[]> {
+  return requestJson<WorkItemExecutionRecipeView[]>("/execution-recipes", options);
 }
 
 export async function getRecipeGateAudit(workItemId: string, options?: RequestOptions): Promise<WorkItemRecipeGateAuditView> {
@@ -1339,8 +1356,8 @@ export async function getRoutingPreview(workItemId: string, options?: RequestOpt
   return requestJson<RoutingPreviewView>(`/work-items/${workItemId}/routing-preview`, options);
 }
 
-export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
-  return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles");
+export async function getRoutingLaneProfiles(options?: RequestOptions): Promise<RoutingLaneEvidenceProfileView[]> {
+  return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles", options);
 }
 
 export async function createLocalEvidenceExplanation(
@@ -1362,128 +1379,128 @@ export async function createLocalEvidenceExplanation(
   return envelope.data;
 }
 
-export async function getExecutionReadinessReport(): Promise<ExecutionReadinessReportView> {
-  return requestJson<ExecutionReadinessReportView>("/supervisor/execution-readiness-report");
+export async function getExecutionReadinessReport(options?: RequestOptions): Promise<ExecutionReadinessReportView> {
+  return requestJson<ExecutionReadinessReportView>("/supervisor/execution-readiness-report", options);
 }
 
-export async function getDocumentationAuthorityReport(): Promise<DocumentationAuthorityReportView> {
-  return requestJson<DocumentationAuthorityReportView>("/supervisor/documentation-authority-report");
+export async function getDocumentationAuthorityReport(options?: RequestOptions): Promise<DocumentationAuthorityReportView> {
+  return requestJson<DocumentationAuthorityReportView>("/supervisor/documentation-authority-report", options);
 }
 
-export async function getLegacyPlanningArtifactInventoryReport(): Promise<LegacyPlanningArtifactInventoryReportView> {
-  return requestJson<LegacyPlanningArtifactInventoryReportView>("/supervisor/legacy-planning-artifact-inventory");
+export async function getLegacyPlanningArtifactInventoryReport(options?: RequestOptions): Promise<LegacyPlanningArtifactInventoryReportView> {
+  return requestJson<LegacyPlanningArtifactInventoryReportView>("/supervisor/legacy-planning-artifact-inventory", options);
 }
 
-export async function getVerificationReadinessReport(): Promise<VerificationReadinessReportView> {
-  return requestJson<VerificationReadinessReportView>("/supervisor/verification-readiness-report");
+export async function getVerificationReadinessReport(options?: RequestOptions): Promise<VerificationReadinessReportView> {
+  return requestJson<VerificationReadinessReportView>("/supervisor/verification-readiness-report", options);
 }
 
-export async function getAuthorityReadinessMatrixReport(): Promise<AuthorityReadinessMatrixReportView> {
-  return requestJson<AuthorityReadinessMatrixReportView>("/supervisor/authority-readiness-matrix-report");
+export async function getAuthorityReadinessMatrixReport(options?: RequestOptions): Promise<AuthorityReadinessMatrixReportView> {
+  return requestJson<AuthorityReadinessMatrixReportView>("/supervisor/authority-readiness-matrix-report", options);
 }
 
-export async function getDashboardE2EReport(): Promise<DashboardE2EReportView> {
-  return requestJson<DashboardE2EReportView>("/supervisor/dashboard-e2e-report");
+export async function getDashboardE2EReport(options?: RequestOptions): Promise<DashboardE2EReportView> {
+  return requestJson<DashboardE2EReportView>("/supervisor/dashboard-e2e-report", options);
 }
 
-export async function getSupervisorReportCatalog(): Promise<SupervisorReportCatalogView> {
-  return requestJson<SupervisorReportCatalogView>("/supervisor/report-catalog");
+export async function getSupervisorReportCatalog(options?: RequestOptions): Promise<SupervisorReportCatalogView> {
+  return requestJson<SupervisorReportCatalogView>("/supervisor/report-catalog", options);
 }
 
-export async function getMaintenanceReadinessReport(): Promise<MaintenanceReadinessReportView> {
-  return requestJson<MaintenanceReadinessReportView>("/supervisor/maintenance-readiness-report");
+export async function getMaintenanceReadinessReport(options?: RequestOptions): Promise<MaintenanceReadinessReportView> {
+  return requestJson<MaintenanceReadinessReportView>("/supervisor/maintenance-readiness-report", options);
 }
 
-export async function getMaintenanceActionPlanReport(): Promise<MaintenanceActionPlanReportView> {
-  return requestJson<MaintenanceActionPlanReportView>("/supervisor/maintenance-action-plan-report");
+export async function getMaintenanceActionPlanReport(options?: RequestOptions): Promise<MaintenanceActionPlanReportView> {
+  return requestJson<MaintenanceActionPlanReportView>("/supervisor/maintenance-action-plan-report", options);
 }
 
-export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopmentBacklogReportView> {
-  return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog");
+export async function getSafeDevelopmentBacklogReport(options?: RequestOptions): Promise<SafeDevelopmentBacklogReportView> {
+  return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog", options);
 }
 
-export async function getRunnerAssignmentStatusReport(): Promise<RunnerAssignmentStatusReportView> {
-  return requestJson<RunnerAssignmentStatusReportView>("/supervisor/runner-assignment-status-report");
+export async function getRunnerAssignmentStatusReport(options?: RequestOptions): Promise<RunnerAssignmentStatusReportView> {
+  return requestJson<RunnerAssignmentStatusReportView>("/supervisor/runner-assignment-status-report", options);
 }
 
-export async function getDevelopmentRunwayReport(): Promise<DevelopmentRunwayReportView> {
-  return requestJson<DevelopmentRunwayReportView>("/supervisor/development-runway-report");
+export async function getDevelopmentRunwayReport(options?: RequestOptions): Promise<DevelopmentRunwayReportView> {
+  return requestJson<DevelopmentRunwayReportView>("/supervisor/development-runway-report", options);
 }
 
 export async function getRuntimeEvidenceReviewReport(options?: RequestOptions): Promise<RuntimeEvidenceReviewReportView> {
   return requestJson<RuntimeEvidenceReviewReportView>("/supervisor/runtime-evidence-review-report", options);
 }
 
-export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {
-  return requestJson<ManagedRecipePolicyReportView>("/supervisor/managed-recipe-policy-report");
+export async function getManagedRecipePolicyReport(options?: RequestOptions): Promise<ManagedRecipePolicyReportView> {
+  return requestJson<ManagedRecipePolicyReportView>("/supervisor/managed-recipe-policy-report", options);
 }
 
-export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPolicyReportView> {
-  return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report");
+export async function getGitHubWorkflowPolicyReport(options?: RequestOptions): Promise<GitHubWorkflowPolicyReportView> {
+  return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report", options);
 }
 
-export async function getGitHubDeliveryAuthorityReport(): Promise<GitHubDeliveryAuthorityReportView> {
-  return requestJson<GitHubDeliveryAuthorityReportView>("/supervisor/github-delivery-authority-report");
+export async function getGitHubDeliveryAuthorityReport(options?: RequestOptions): Promise<GitHubDeliveryAuthorityReportView> {
+  return requestJson<GitHubDeliveryAuthorityReportView>("/supervisor/github-delivery-authority-report", options);
 }
 
-export async function getTrustedDeliveryEligibilityReport(): Promise<TrustedDeliveryEligibilityReportView> {
-  return requestJson<TrustedDeliveryEligibilityReportView>("/supervisor/trusted-delivery-eligibility-report");
+export async function getTrustedDeliveryEligibilityReport(options?: RequestOptions): Promise<TrustedDeliveryEligibilityReportView> {
+  return requestJson<TrustedDeliveryEligibilityReportView>("/supervisor/trusted-delivery-eligibility-report", options);
 }
 
 export async function getWorkItemTrustedDeliveryEligibilityReport(workItemId: string, options?: RequestOptions): Promise<TrustedDeliveryEligibilityReportView> {
   return requestJson<TrustedDeliveryEligibilityReportView>(`/work-items/${workItemId}/trusted-delivery-eligibility-report`, options);
 }
 
-export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
-  return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report");
+export async function getGitHygieneReport(options?: RequestOptions): Promise<GitHygieneReportView> {
+  return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report", options);
 }
 
-export async function getLocalCleanupReadinessReport(): Promise<LocalCleanupReadinessReportView> {
-  return requestJson<LocalCleanupReadinessReportView>("/supervisor/local-cleanup-readiness-report");
+export async function getLocalCleanupReadinessReport(options?: RequestOptions): Promise<LocalCleanupReadinessReportView> {
+  return requestJson<LocalCleanupReadinessReportView>("/supervisor/local-cleanup-readiness-report", options);
 }
 
-export async function getRemoteCleanupSyncReadinessReport(): Promise<RemoteCleanupSyncReadinessReportView> {
-  return requestJson<RemoteCleanupSyncReadinessReportView>("/supervisor/remote-cleanup-sync-readiness-report");
+export async function getRemoteCleanupSyncReadinessReport(options?: RequestOptions): Promise<RemoteCleanupSyncReadinessReportView> {
+  return requestJson<RemoteCleanupSyncReadinessReportView>("/supervisor/remote-cleanup-sync-readiness-report", options);
 }
 
-export async function getTrustedAutonomyReadinessReport(): Promise<TrustedAutonomyReadinessReportView> {
-  return requestJson<TrustedAutonomyReadinessReportView>("/supervisor/trusted-autonomy-readiness-report");
+export async function getTrustedAutonomyReadinessReport(options?: RequestOptions): Promise<TrustedAutonomyReadinessReportView> {
+  return requestJson<TrustedAutonomyReadinessReportView>("/supervisor/trusted-autonomy-readiness-report", options);
 }
 
-export async function getEpic6CompletionAuditReport(): Promise<EpicCompletionAuditReportView> {
-  return requestJson<EpicCompletionAuditReportView>("/supervisor/epic-6-completion-audit-report");
+export async function getEpic6CompletionAuditReport(options?: RequestOptions): Promise<EpicCompletionAuditReportView> {
+  return requestJson<EpicCompletionAuditReportView>("/supervisor/epic-6-completion-audit-report", options);
 }
 
-export async function getMvpProofTrialReport(): Promise<MvpProofTrialReportView> {
-  return requestJson<MvpProofTrialReportView>("/supervisor/epic-6-mvp-proof-trial-report");
+export async function getMvpProofTrialReport(options?: RequestOptions): Promise<MvpProofTrialReportView> {
+  return requestJson<MvpProofTrialReportView>("/supervisor/epic-6-mvp-proof-trial-report", options);
 }
 
-export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {
-  return requestJson<CodexReadinessReportView>("/supervisor/codex-readiness-report");
+export async function getCodexReadinessReport(options?: RequestOptions): Promise<CodexReadinessReportView> {
+  return requestJson<CodexReadinessReportView>("/supervisor/codex-readiness-report", options);
 }
 
-export async function getCodexImplementationApprovalReport(): Promise<CodexImplementationApprovalReportView> {
-  return requestJson<CodexImplementationApprovalReportView>("/supervisor/codex-implementation-approval-report");
+export async function getCodexImplementationApprovalReport(options?: RequestOptions): Promise<CodexImplementationApprovalReportView> {
+  return requestJson<CodexImplementationApprovalReportView>("/supervisor/codex-implementation-approval-report", options);
 }
 
-export async function getClaudeReviewReadinessReport(): Promise<ClaudeReviewReadinessReportView> {
-  return requestJson<ClaudeReviewReadinessReportView>("/supervisor/claude-review-readiness-report");
+export async function getClaudeReviewReadinessReport(options?: RequestOptions): Promise<ClaudeReviewReadinessReportView> {
+  return requestJson<ClaudeReviewReadinessReportView>("/supervisor/claude-review-readiness-report", options);
 }
 
-export async function getClaudeReviewApprovalReport(): Promise<ClaudeReviewApprovalReportView> {
-  return requestJson<ClaudeReviewApprovalReportView>("/supervisor/claude-review-approval-report");
+export async function getClaudeReviewApprovalReport(options?: RequestOptions): Promise<ClaudeReviewApprovalReportView> {
+  return requestJson<ClaudeReviewApprovalReportView>("/supervisor/claude-review-approval-report", options);
 }
 
-export async function getReviewResourcePolicyReport(): Promise<ReviewResourcePolicyReportView> {
-  return requestJson<ReviewResourcePolicyReportView>("/supervisor/review-resource-policy-report");
+export async function getReviewResourcePolicyReport(options?: RequestOptions): Promise<ReviewResourcePolicyReportView> {
+  return requestJson<ReviewResourcePolicyReportView>("/supervisor/review-resource-policy-report", options);
 }
 
-export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {
-  return requestJson<DeliveryReadinessPolicyReportView>("/supervisor/delivery-readiness-policy-report");
+export async function getDeliveryReadinessPolicyReport(options?: RequestOptions): Promise<DeliveryReadinessPolicyReportView> {
+  return requestJson<DeliveryReadinessPolicyReportView>("/supervisor/delivery-readiness-policy-report", options);
 }
 
-export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
-  return requestJson<WorkerRegistryEntryView[]>("/routing/worker-registry");
+export async function getWorkerRegistry(options?: RequestOptions): Promise<WorkerRegistryEntryView[]> {
+  return requestJson<WorkerRegistryEntryView[]>("/routing/worker-registry", options);
 }
 
 export async function getAuditEvents(options?: RequestOptions): Promise<

@@ -28,6 +28,19 @@ the independently revocable `test_viewer` remains limited to read-only
 `/pipeline`. See the [Authenticated LAN dashboard setup](../../docs/workflows/authenticated-lan-dashboard-setup.md)
 for page availability, startup, recovery, and secret boundaries.
 
+## LAN Controls boundary
+
+`/controls` keeps its existing server-rendered behavior outside LAN-auth mode.
+In LAN-auth mode it performs only the finite, operator-only 34-report read
+manifest through the same-origin UDS proxy. Those reads allow only `GET` or
+`HEAD`, no query string, and a 1 MB upstream response cap; `test_viewer` has no
+Controls access. Runtime buttons use only the server-bound v1
+capability → approval → apply sequence for `pause`, `drain`, and `resume`.
+Each mutation must be an exact proxy target with the canonical Origin, matching
+`kendall_operator_csrf` cookie/header pair, and an operator session. The
+dashboard never exposes the supervisor socket or restores retired legacy
+`/supervisor/{enable,pause,drain,disable}` endpoints.
+
 ## Local preferences and fixture routes
 
 `/settings` stores only presentation preferences in browser local storage. It

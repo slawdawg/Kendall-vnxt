@@ -5,6 +5,7 @@ import type {
   PipelineOperationalActionResultV0,
   PipelineOperationalActionApprovalRequestV1,
   PipelineOperationalActionApprovalV1,
+  PipelineOperationalActionCapabilityV1,
   PipelineOperationalActionRequestV1,
   PipelineOperationalActionResultV1,
 } from "@kendall/contracts";
@@ -14,7 +15,14 @@ import {
   issuePipelineOperationalApproval as issueSupervisorPipelineOperationalApproval,
   applyPipelineOperationalActionV1 as applySupervisorPipelineOperationalActionV1,
   issuePipelineOperationalApprovalV1 as issueSupervisorPipelineOperationalApprovalV1,
+  requestPipelineOperationalCapabilityV1 as requestSupervisorPipelineOperationalCapabilityV1,
 } from "./supervisor";
+
+export async function requestPipelineOperationalCapabilityV1(
+  payload: PipelineOperationalActionApprovalRequestV1,
+): Promise<PipelineOperationalActionCapabilityV1> {
+  return requestSupervisorPipelineOperationalCapabilityV1(payload);
+}
 
 export async function requestPipelineOperationalApproval(
   payload: PipelineOperationalActionApprovalRequestV0,
