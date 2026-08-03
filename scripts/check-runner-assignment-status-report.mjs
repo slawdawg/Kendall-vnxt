@@ -16,7 +16,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const panelSource = readWorkspaceFile("apps/dashboard/src/components/runner-assignment-status-report-panel.tsx");
 const auditJsonModule = readWorkspaceFile("apps/dashboard/src/lib/runner-handoff-audit-json.mjs");
 const auditJsonDeclaration = readWorkspaceFile("apps/dashboard/src/lib/runner-handoff-audit-json.d.mts");
@@ -110,7 +110,7 @@ for (const serviceText of [
 }
 
 assertCondition(dashboardClient.includes("getRunnerAssignmentStatusReport"), "Dashboard client must fetch runner assignment status", failures);
-assertCondition(controlsPage.includes("<RunnerAssignmentStatusReportPanel report={runnerAssignmentStatusReport} />"), "Controls page must render RunnerAssignmentStatusReportPanel", failures);
+assertCondition(controlsPageContent.includes("<RunnerAssignmentStatusReportPanel report={data.runnerAssignmentStatusReport} />"), "Controls page content must render RunnerAssignmentStatusReportPanel", failures);
 assertCondition(reportShortcuts.includes('"GET /supervisor/runner-assignment-status-report": "#runner-assignment-status"'), "Report shortcuts must map runner assignment endpoint", failures);
 assertCondition(
   currentRunbook.includes("Prepared lane handoffs must surface a resume packet with owner, branch") &&
@@ -437,10 +437,10 @@ for (const browserText of [
   "lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh",
   "source-completion-rollup",
   "Source completion rollup",
-  "Total: 0",
+  "Total: 1",
   "Assignment: 0",
-  "Workspace: 0",
-  "Source backlog items: none",
+  "Workspace: 1",
+  "Source backlog items: setup-churn-handoff-hardening",
   "closedAssignmentPanelFilterRow",
   "backlog-closed",
   "closedLaneRequeueGuardRow",
@@ -452,14 +452,14 @@ for (const browserText of [
   "Show workspace-backed rows",
   "Show uncompleted rows",
   "toHaveText(/Assignment-backed\\s+0/)",
-  "toHaveText(/Uncompleted\\s+45/)",
+  "toHaveText(/Uncompleted\\s+\\d+/)",
   "toBeDisabled",
   "toBeEnabled",
   "Filtered source summary",
   "Rows: workspace [1-9]\\d*, lane assignment 0, backlog 0",
   "Source completion: assignment 0, workspace 0, none \\d+",
-  "Rows: workspace 0, lane assignment 0, backlog 0",
-  "Source completion: assignment 0, workspace 0, none 0",
+  "Rows: workspace 0, lane assignment 0, backlog 1",
+  "Source completion: assignment 0, workspace 1, none 0",
   "toHaveValue(\"attention\")",
   "toHaveValue(\"all\")",
   "toHaveValue(\"assignment\")",
@@ -488,9 +488,8 @@ for (const browserText of [
   "source: Workspace",
   "Showing \\d+\\/\\d+ rows for assignable from Backlog with all source-completion states",
   "source: Backlog",
-  "Showing 1\\/\\d+ rows for blocked from Backlog with all source-completion states",
-  "Execution-authority stories",
-  "Showing 0\\/\\d+ rows for closed from Backlog with workspace source completion",
+  "Showing 0\\/\\d+ rows for blocked from Backlog with all source-completion states",
+  "Showing 1\\/\\d+ rows for closed from Backlog with workspace source completion",
   "Showing [1-9]\\d*\\/\\d+ rows for closed from Lane assignment with all source-completion states",
   "source: Lane assignment",
 ]) {

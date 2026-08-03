@@ -20,7 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const workItemDetailPage = readWorkspaceFile("apps/dashboard/src/components/work-item-detail-page.tsx");
 const reviewPanel = readWorkspaceFile("apps/dashboard/src/components/runtime-evidence-review-report-panel.tsx");
 const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
@@ -81,8 +81,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("<RuntimeEvidenceReviewReportPanel report={runtimeEvidenceReviewReport} />"),
-  "Controls page must render RuntimeEvidenceReviewReportPanel",
+  controlsPageContent.includes("<RuntimeEvidenceReviewReportPanel report={data.runtimeEvidenceReviewReport} />"),
+  "Controls page content must render RuntimeEvidenceReviewReportPanel",
   failures,
 );
 assertCondition(

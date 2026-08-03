@@ -24,6 +24,8 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const contractSource = readWorkspaceFile("packages/contracts/src/api.ts");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageData = readWorkspaceFile("apps/dashboard/src/lib/controls-page-data.ts");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
 const exportPanel = readWorkspaceFile("apps/dashboard/src/components/runtime-evidence-export-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
@@ -265,6 +267,12 @@ const reports = [
 const failures = [];
 
 assertCondition(
+  controlsPage.includes("<ControlsPageContent data={await loadControlsPageData()} lanAuthEnabled={false} />"),
+  "Controls page must pass loaded report data to ControlsPageContent",
+  failures,
+);
+
+assertCondition(
   packageJson.scripts?.["check:reports"] === "node ./scripts/check-supervisor-report-catalog.mjs",
   "package.json must define check:reports as node ./scripts/check-supervisor-report-catalog.mjs",
   failures,
@@ -305,8 +313,8 @@ for (const report of reports) {
       failures,
     );
     assertCondition(
-      controlsPage.includes(report.dashboardFetch),
-      `Controls page must fetch ${report.dashboardFetch}`,
+      controlsPage.includes("loadControlsPageData") && controlsPageData.includes(report.dashboardFetch),
+      `Controls page loader must fetch ${report.dashboardFetch}`,
       failures,
     );
   }
@@ -453,8 +461,8 @@ for (const controlsAnchor of [
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(
-    controlsPage.includes(controlsAnchor),
-    `Controls page must expose stable report anchor ${controlsAnchor}`,
+    controlsPageContent.includes(controlsAnchor),
+    `Controls page content must expose stable report anchor ${controlsAnchor}`,
     failures,
   );
 }

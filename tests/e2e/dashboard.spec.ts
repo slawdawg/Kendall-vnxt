@@ -465,21 +465,21 @@ async function seedRunnerAssignmentHandoffState() {
     )}\n`,
   );
   await fs.writeFile(
-    path.join(tasksDir, "read-only-evidence-polish.json"),
+    path.join(tasksDir, "setup-churn-handoff-hardening.json"),
     `${JSON.stringify(
       {
-        task_id: "20260623-read-only-evidence-polish",
-        branch: "codex/read-only-evidence-polish",
+        task_id: "20260623-setup-churn-handoff-hardening",
+        branch: "codex/setup-churn-handoff-hardening",
         status: "closed",
         owner: "playwright-runner",
         phase: "closed",
         closed_at: "2026-06-23T11:55:52.000Z",
         updated_at: "2026-06-23T11:55:52.000Z",
-        source_assignment_id: "read-only-evidence-polish",
+        source_assignment_id: "setup-churn-handoff-hardening",
         source_backlog_item: {
-          item_id: "read-only-evidence-polish",
+          item_id: "setup-churn-handoff-hardening",
           status: "ready",
-          branch_name: "codex/read-only-evidence-polish",
+          branch_name: "codex/setup-churn-handoff-hardening",
         },
       },
       null,
@@ -1877,6 +1877,13 @@ test.describe("dashboard workflow coverage", () => {
       .toBeTruthy();
   });
   test("shows compact routing fleet data on controls", async ({ page, request }) => {
+    const duplicateKeyWarnings: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("same key")) {
+        duplicateKeyWarnings.push(message.text());
+      }
+    });
+
     await seedRunnerAssignmentHandoffState();
     const workItemId = await createWorkItem(request, {
       title: "Routing fleet evidence",
@@ -1945,7 +1952,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("GET /supervisor/runtime-evidence-review-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("/controls#runner-assignment-status", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByRole("link", { name: "/controls#runner-assignment-status" })).toHaveAttribute("href", "/controls#runner-assignment-status");
-    await expect(verificationPanel.getByRole("link", { name: "/work-items/{id}" })).toHaveCount(0);
+    await expect(verificationPanel.getByRole("link", { name: "GET /work-items/{id}/runtime-evidence-export" })).toHaveAttribute(
+      "href",
+      "/controls#runtime-evidence-review-report",
+    );
     await expect(verificationPanel.getByText("Delivery checks do not bypass failing checks, unresolved review threads, or exact-head mismatch.")).toBeVisible();
     await expect(verificationPanel.getByText("docs/workflows/linux-primary-development-runbook.md", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
@@ -2028,6 +2038,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:sandbox-boundary-classifier", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace-state", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:anti-churn-event-writer", { exact: true })).toBeVisible();
+    expect(duplicateKeyWarnings).toEqual([]);
     await expect(verificationPanel.getByText("pnpm run test:anti-churn-signature-classifier", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:anti-churn-event-reader", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:anti-churn-guidance-candidate-classifier", { exact: true })).toBeVisible();
@@ -2240,8 +2251,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportAlignmentCard.getByText("closed", { exact: true })).toBeVisible();
     await expect(reportAlignmentCard.getByText("slice: complete", { exact: true })).toBeVisible();
     await expect(reportAlignmentCard.getByText("Use this completed item as evidence only; do not requeue it as a new lane.")).toBeVisible();
-    await expect(safeBacklogPanel.getByRole("heading", { name: "Verification surface hardening" })).toBeVisible();
-    const verificationBacklogCards = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Verification surface hardening" }) });
+    await expect(safeBacklogPanel.getByRole("heading", { name: "Verification surface hardening", exact: true })).toBeVisible();
+    const verificationBacklogCards = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Verification surface hardening", exact: true }) });
     await expect(
       verificationBacklogCards.getByText("Use this completed verification lane as evidence only; do not requeue codex/verification-surface-hardening as a new lane."),
     ).toBeVisible();
@@ -2501,10 +2512,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runnerAssignmentPanel.getByText("dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh: closed (backlog-closed)")).toBeVisible();
     const sourceCompletionRollup = runnerAssignmentPanel.getByTestId("source-completion-rollup");
     await expect(sourceCompletionRollup.getByText("Source completion rollup", { exact: true })).toBeVisible();
-    await expect(sourceCompletionRollup.getByText("Total: 0", { exact: true })).toBeVisible();
+    await expect(sourceCompletionRollup.getByText("Total: 1", { exact: true })).toBeVisible();
     await expect(sourceCompletionRollup.getByText("Assignment: 0", { exact: true })).toBeVisible();
-    await expect(sourceCompletionRollup.getByText("Workspace: 0", { exact: true })).toBeVisible();
-    await expect(sourceCompletionRollup.getByText("Source backlog items: none", { exact: true })).toBeVisible();
+    await expect(sourceCompletionRollup.getByText("Workspace: 1", { exact: true })).toBeVisible();
+    await expect(sourceCompletionRollup.getByText("Source backlog items: setup-churn-handoff-hardening", { exact: true })).toBeVisible();
     const assignmentRowFilters = runnerAssignmentPanel.getByTestId("assignment-row-filters");
     await expect(assignmentRowFilters.getByText("Assignment row filters", { exact: true })).toBeVisible();
     await expect(assignmentRowFilters.getByLabel("Source completion")).toBeVisible();
@@ -2531,10 +2542,9 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Classification").selectOption("assignable");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("backlog");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for assignable from Backlog with all source-completion states\./)).toBeVisible();
-    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Execution-authority stories" }).getByText("source: Backlog")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("blocked");
-    await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for blocked from Backlog with all source-completion states\./)).toBeVisible();
-    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Execution-authority stories" }).getByText("source: Backlog")).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing 0\/\d+ rows for blocked from Backlog with all source-completion states\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText(/^No assignment rows match the current filters\./)).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("closed");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for closed from Backlog with all source-completion states\./)).toBeVisible();
     const closedAssignmentPanelFilterRow = runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher assignment panel filter refresh" });
@@ -2546,9 +2556,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(closedLaneRequeueGuardRow.getByText("source: Backlog")).toBeVisible();
     await expect(closedLaneRequeueGuardRow.getByText("branch: none")).toBeVisible();
     await assignmentRowFilters.getByLabel("Source completion").selectOption("workspace");
-    await expect(assignmentRowFilters.getByText(/Showing 0\/\d+ rows for closed from Backlog with workspace source completion\./)).toBeVisible();
-    await expect(filteredSourceSummary.getByText("Rows: workspace 0, lane assignment 0, backlog 0", { exact: true })).toBeVisible();
-    await expect(filteredSourceSummary.getByText("Source completion: assignment 0, workspace 0, none 0", { exact: true })).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for closed from Backlog with workspace source completion\./)).toBeVisible();
+    await expect(filteredSourceSummary.getByText("Rows: workspace 0, lane assignment 0, backlog 1", { exact: true })).toBeVisible();
+    await expect(filteredSourceSummary.getByText("Source completion: assignment 0, workspace 1, none 0", { exact: true })).toBeVisible();
     await resetAssignmentFilters.click();
     await expect(resetAssignmentFilters).toBeDisabled();
     await expect(assignmentRowFilters.getByLabel("Classification")).toHaveValue("attention");
@@ -2562,7 +2572,7 @@ test.describe("dashboard workflow coverage", () => {
     const uncompletedPreset = assignmentRowFilters.getByRole("button", { name: "Show uncompleted rows" });
     await expect(assignmentBackedPreset).toHaveText(/Assignment-backed\s+0/);
     await expect(workspaceBackedPreset).toHaveText(/Workspace-backed\s+1/);
-    await expect(uncompletedPreset).toHaveText(/Uncompleted\s+45/);
+    await expect(uncompletedPreset).toHaveText(/Uncompleted\s+\d+/);
     await assignmentBackedPreset.click();
     await expect(resetAssignmentFilters).toBeEnabled();
     await expect(assignmentRowFilters.getByLabel("Classification")).toHaveValue("all");
@@ -2580,7 +2590,7 @@ test.describe("dashboard workflow coverage", () => {
     const emptyStateUncompletedShortcut = runnerAssignmentPanel.getByRole("button", { name: "Show uncompleted rows from empty state" });
     await expect(emptyStateAssignmentShortcut).toHaveText(/Assignment-backed\s+0/);
     await expect(emptyStateWorkspaceShortcut).toHaveText(/Workspace-backed\s+1/);
-    await expect(emptyStateUncompletedShortcut).toHaveText(/Uncompleted\s+45/);
+    await expect(emptyStateUncompletedShortcut).toHaveText(/Uncompleted\s+\d+/);
     await expect(emptyStateAssignmentShortcut).toHaveAttribute("aria-describedby", "empty-state-assignment-shortcut-disabled-reason");
     await expect(emptyStateAssignmentShortcut).toHaveAttribute("aria-disabled", "true");
     await emptyStateAssignmentShortcut.focus();

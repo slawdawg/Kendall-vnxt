@@ -20,7 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
-const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const controlsPageContent = readWorkspaceFile("apps/dashboard/src/components/controls-page-content.tsx");
 const matrixPanel = readWorkspaceFile("apps/dashboard/src/components/authority-readiness-matrix-report-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
@@ -113,8 +113,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  controlsPage.includes("<AuthorityReadinessMatrixReportPanel report={authorityReadinessMatrixReport} />"),
-  "Controls page must render AuthorityReadinessMatrixReportPanel",
+  controlsPageContent.includes("<AuthorityReadinessMatrixReportPanel report={data.authorityReadinessMatrixReport} />"),
+  "Controls page content must render AuthorityReadinessMatrixReportPanel",
   failures,
 );
 assertCondition(
