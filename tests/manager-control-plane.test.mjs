@@ -33937,6 +33937,100 @@ test("manager coordination health handoff binds one canonical metadata-only snap
   assert.deepEqual(persisted.coordinationHealth, coordinationHealth);
 });
 
+test("manager coordination health handoff accepts supervisor RFC3339 UTC-offset normalization", async () => {
+  const coordinationHealth = {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: "manager-coordination-test",
+    observedAt: "2026-07-30T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const normalizeObservedAt = (record) => ({
+    ...record,
+    coordinationHealth: { ...record.coordinationHealth, observedAt: "2026-07-30T00:00:00.000000+00:00" },
+  });
+  const persisted = await syncManagerSupervisorCoordinationHealth(
+    coordinationHealth,
+    "http://127.0.0.1:8000",
+    { fetchImpl: managerSupervisorReadbackFetch({ mutatePost: normalizeObservedAt, mutateReadback: normalizeObservedAt }) },
+  );
+  assert.equal(persisted.coordinationHealth.observedAt, "2026-07-30T00:00:00.000000+00:00");
+});
+
+test("manager coordination health handoff rejects an impossible supervisor RFC3339 calendar date", async () => {
+  const coordinationHealth = {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: "manager-coordination-test",
+    observedAt: "2026-03-02T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const corruptObservedAt = (record) => ({
+    ...record,
+    coordinationHealth: { ...record.coordinationHealth, observedAt: "2026-02-30T00:00:00Z" },
+  });
+  await assert.rejects(
+    syncManagerSupervisorCoordinationHealth(
+      coordinationHealth,
+      "http://127.0.0.1:8000",
+      { fetchImpl: managerSupervisorReadbackFetch({ mutatePost: corruptObservedAt }) },
+    ),
+    /response conflicts with the submitted metadata/,
+  );
+});
+
+test("manager coordination health handoff rejects an unknown RFC3339 offset", async () => {
+  const coordinationHealth = {
+    schemaVersion: "manager-coordination-health/v0",
+    runId: "manager-coordination-test",
+    observedAt: "2026-03-02T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  const unknownOffset = (record) => ({
+    ...record,
+    coordinationHealth: { ...record.coordinationHealth, observedAt: "2026-03-02T00:00:00-00:00" },
+  });
+  await assert.rejects(
+    syncManagerSupervisorCoordinationHealth(
+      coordinationHealth,
+      "http://127.0.0.1:8000",
+      { fetchImpl: managerSupervisorReadbackFetch({ mutatePost: unknownOffset }) },
+    ),
+    /response conflicts with the submitted metadata/,
+  );
+});
+
 test("manager coordination health handoff remains bounded for a maximum-length run ID", () => {
   const request = buildManagerCoordinationHealthHandoffRequest({
     schemaVersion: "manager-coordination-health/v0", runId: "r".repeat(120), observedAt: "2026-07-30T00:00:00.000Z",
@@ -34013,13 +34107,13 @@ function managerSupervisorResponseData(data, status = 200) {
   };
 }
 
-function managerSupervisorReadbackFetch({ readbackStatus = 200, readbackData, mutateReadback } = {}) {
+function managerSupervisorReadbackFetch({ readbackStatus = 200, readbackData, mutatePost, mutateReadback } = {}) {
   let persisted;
   return async (_url, options) => {
     if (options.method === "POST") {
       const request = JSON.parse(options.body);
       persisted = { ...structuredClone(request), owner: "supervisor", createdAt: "2026-07-12T01:02:03.000Z" };
-      return managerSupervisorResponseData(persisted);
+      return managerSupervisorResponseData(mutatePost ? mutatePost(structuredClone(persisted)) : persisted);
     }
     const data = readbackData ?? (mutateReadback ? mutateReadback(structuredClone(persisted)) : persisted);
     return managerSupervisorResponseData(data, readbackStatus);

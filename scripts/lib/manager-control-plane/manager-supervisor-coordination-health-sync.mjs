@@ -82,9 +82,32 @@ export async function syncManagerSupervisorCoordinationHealth(coordinationHealth
 
 function sameRequestFields(request, received) {
   return isDeepStrictEqual(
-    Object.fromEntries(MANAGER_COORDINATION_HEALTH_HANDOFF_REQUEST_FIELDS.map((key) => [key, request[key]])),
-    Object.fromEntries(MANAGER_COORDINATION_HEALTH_HANDOFF_REQUEST_FIELDS.map((key) => [key, received[key]])),
+    comparableRequestFields(request),
+    comparableRequestFields(received),
   );
+}
+
+function comparableRequestFields(payload) {
+  const fields = Object.fromEntries(MANAGER_COORDINATION_HEALTH_HANDOFF_REQUEST_FIELDS.map((key) => [key, payload?.[key]]));
+  const observedAt = fields.coordinationHealth?.observedAt;
+  const canonicalObservedAt = canonicalRfc3339Instant(observedAt);
+  if (canonicalObservedAt) {
+    fields.coordinationHealth = { ...fields.coordinationHealth, observedAt: canonicalObservedAt };
+  }
+  return fields;
+}
+
+function canonicalRfc3339Instant(value) {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, rawYear, rawMonth, rawDay, rawHour, rawMinute, rawSecond, rawFraction = "", offset] = match;
+  const [year, month, day, hour, minute, second] = [rawYear, rawMonth, rawDay, rawHour, rawMinute, rawSecond].map(Number);
+  if (year < 1 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59 || offset === "-00:00" || /[1-9]/.test(rawFraction.slice(3))) return null;
+  const calendar = new Date(Date.UTC(year, month - 1, day, hour, minute, second, Number(rawFraction.slice(0, 3).padEnd(3, "0"))));
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return null;
+  const epoch = Date.parse(value);
+  return Number.isFinite(epoch) ? new Date(epoch).toISOString() : null;
 }
 
 function required(value, label, maxLength) {
