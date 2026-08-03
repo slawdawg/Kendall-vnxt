@@ -10091,6 +10091,9 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
         "laneRows": 1,
         "totalRows": 1,
         "omittedRows": 1,
+        "degradedRows": 1,
+        "warningCounts": {"inferred-heartbeat": 1},
+        "unlistedWarningCount": 0,
         "retention": "aggregate-only",
     }
     assert report["summary"]["closed"] >= 1
