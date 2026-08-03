@@ -87,6 +87,14 @@ test("check plan maps workspace changes to the bounded workspace delivery profil
   assert.ok(!plan.commands.some((command) => command.commandText === "pnpm run test:codex-workspace"));
 });
 
+test("check plan conservatively escalates the shared fast workflow runner", () => {
+  const plan = buildCheckPlan(["scripts/run-fast-workflow-checks.mjs"]);
+
+  assert.equal(plan.requiresFullStatic, true);
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:static"));
+  assert.ok(plan.reasons.some((reason) => reason.includes("shared fast runner dispatches CI, workspace, sandbox, and dashboard suites")));
+});
+
 test("check plan maps manager dispatcher-port helpers to focused dispatcher-port tests", () => {
   const plan = buildCheckPlan([
     "tests/helpers/manager-control-plane/workflow-core-loader.mjs",

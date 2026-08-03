@@ -107,6 +107,10 @@ function classifyFile(path) {
     surfaces.add("supervisor");
     reasons.push(`${file}: supervisor preflight input surface`);
   }
+  if (/^scripts\/run-fast-workflow-checks\.mjs$/.test(file)) {
+    requiresFullStatic = true;
+    reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; escalating to full static`);
+  }
   if (
     /^scripts\/(?:check-manager-control-plane|run-manager-control-plane-shards)\.mjs$/.test(file) ||
     /^scripts\/manager-/.test(file) ||
@@ -129,7 +133,6 @@ function classifyFile(path) {
   if (
     /^scripts\/codex-workspace\.mjs$/.test(file) ||
     /^scripts\/test-codex-workspace\.mjs$/.test(file) ||
-    /^scripts\/run-fast-workflow-checks\.mjs$/.test(file) ||
     /^scripts\/lib\/(?:base-checkout-recovery|mutation-admission(?:-prewrite-guard|-workspace-handoff)?)\.mjs$/.test(file) ||
     /^scripts\/lib\/codex-workspace/.test(file) ||
     /^scripts\/lib\/workspace-command-resolution\.mjs$/.test(file) ||

@@ -8385,6 +8385,46 @@ try {
     }
   });
 
+  test("finish-pr --stage-all discards a terminal prior workspace-fast expanded plan after the raw fixture moves later", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
+      const priorStages = [
+        "check:ci-fast",
+        "test:codex-workspace-state",
+        "test:workspace-command-resolution",
+        "test:base-checkout-recovery",
+        "test:mutation-admission",
+        "test:mutation-admission-workspace-handoff",
+        "test:mutation-admission-prewrite-guard",
+        "test:codex-workspace",
+        "check:sandbox-fast",
+        "check:dashboard-fast",
+        "check:handoff-later",
+      ];
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, priorStages, {
+        plan_digest: createHash("sha256").update(priorStages.join("\n")).digest("hex"),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "prior workspace-fast plan recovery did not run the current expanded plan");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr --stage-all rejects mixed legacy digest and expanded history packet shapes", () => {
     for (const scenario of [
       {

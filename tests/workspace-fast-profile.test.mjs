@@ -31,6 +31,14 @@ function suiteBlock(source, startPattern, endPattern, label) {
   return source.slice(start + startPattern.length, end);
 }
 
+function pnpmStages(command) {
+  return String(command)
+    .split("&&")
+    .map((stage) => stage.trim())
+    .map((stage) => /^pnpm run ([A-Za-z0-9:_-]+)$/.exec(stage)?.[1])
+    .filter(Boolean);
+}
+
 test("workspace-fast profile has the exact bounded delivery allowlist", () => {
   assert.equal(
     packageJson.scripts["check:workspace-fast"],
@@ -61,8 +69,8 @@ test("workspace-fast profile has the exact bounded delivery allowlist", () => {
 
 test("workspace-fast profile keeps the full fixture separately runnable", () => {
   assert.equal(packageJson.scripts["test:codex-workspace"], "node ./scripts/test-codex-workspace.mjs");
-  assert(packageJson.scripts.check.includes("pnpm run test:codex-workspace"), "full check must retain the raw full fixture");
-  assert(packageJson.scripts["check:static"].includes("pnpm run test:codex-workspace"), "full static must retain the raw full fixture");
+  assert(pnpmStages(packageJson.scripts.check).includes("test:codex-workspace"), "full check must retain the raw full fixture as an exact stage");
+  assert(pnpmStages(packageJson.scripts["check:static"]).includes("test:codex-workspace"), "full static must retain the raw full fixture as an exact stage");
   assert(workspaceFixtures.includes(`test("${focusedDeliveryFilter}"`), "focused delivery fixture must remain available");
   assert(workspaceFixtures.includes("CODEX_WORKSPACE_TEST_FILTER matched no tests"), "focused fixture filter must fail closed");
 });
