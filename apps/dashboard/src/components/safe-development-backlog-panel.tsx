@@ -112,9 +112,9 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
       <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related report links</p>
         <div className="mt-2 grid gap-2">
-          {item.relatedReports.map((report) => (
+          {item.relatedReports.map((report, reportIndex) => (
             <Link
-              key={report}
+              key={`${item.itemId}:related-report:${report}:${reportIndex}`}
               href={reportShortcutHref(report)}
               className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
