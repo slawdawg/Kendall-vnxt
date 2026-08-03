@@ -4504,9 +4504,11 @@ try {
       const assignmentsDir = join(claimStateRoot, "assignments");
       mkdirSync(tasksDir, { recursive: true });
       seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      seedUnrelatedClaimantManifest(claimStateRoot);
       seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug, expected.branch);
       const manifestPath = join(tasksDir, `${expected.slug}-workspace.json`);
-      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeUnrelatedTasks = taskSnapshot(tasksDir, { exclude: [`${expected.slug}-workspace.json`] });
+      assert(readFileSync(manifestPath, "utf8").includes('"owner": ""'), "fixture should start unowned");
 
       const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
 
@@ -4534,9 +4536,9 @@ try {
       assert(!manifest.pr_number, "claim wrote PR number evidence");
       assert(!existsSync(join(assignmentsDir, `${expected.slug}.json`)), "manifest owner claim should not create assignment metadata");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "manifest owner claim should not create a worktree");
-      const afterTasksWithoutClaimedManifest = taskSnapshot(tasksDir).replace(readFileSync(manifestPath, "utf8"), "");
-      assert(beforeTasks.includes('"owner": ""'), "fixture should start unowned");
-      assert(!afterTasksWithoutClaimedManifest.includes("runner-a"), "claim mutated unrelated task manifests");
+      const afterUnrelatedTasks = taskSnapshot(tasksDir, { exclude: [`${expected.slug}-workspace.json`] });
+      assert(beforeUnrelatedTasks.includes('"owner": "runner-a"'), "fixture should preserve unrelated claimant metadata");
+      assert(afterUnrelatedTasks === beforeUnrelatedTasks, "claim mutated unrelated task manifests");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -12122,12 +12124,13 @@ function staleCleanupFixtureEnv(root, options = {}) {
   };
 }
 
-function taskSnapshot(tasksDir) {
+function taskSnapshot(tasksDir, options = {}) {
   if (!existsSync(tasksDir)) {
     return "";
   }
+  const excluded = new Set(options.exclude || []);
   return readdirSync(tasksDir)
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => name.endsWith(".json") && !excluded.has(name))
     .sort()
     .map((name) => `${name}\n${readFileSync(join(tasksDir, name), "utf8")}`)
     .join("\n---\n");
@@ -14057,6 +14060,27 @@ function seedUnownedSafeBacklogWorkspace(stateRootPath, laneSlug, branch = `code
         created_at: "2026-06-22T00:00:00.000Z",
         updated_at: "2026-06-22T00:00:00.000Z",
         events: [],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+function seedUnrelatedClaimantManifest(stateRootPath) {
+  const tasksDir = join(stateRootPath, "tasks");
+  mkdirSync(tasksDir, { recursive: true });
+  writeFileSync(
+    join(tasksDir, "closed-unrelated-runner-a.json"),
+    `${JSON.stringify(
+      {
+        task_id: "closed-unrelated-runner-a",
+        branch: "codex/closed-unrelated-runner-a",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "closed",
+        owner: "runner-a",
+        owner_updated_at: "2026-06-22T00:00:00.000Z",
       },
       null,
       2,
