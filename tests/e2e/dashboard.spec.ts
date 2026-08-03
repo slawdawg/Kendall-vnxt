@@ -2543,7 +2543,8 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("backlog");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for assignable from Backlog with all source-completion states\./)).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("blocked");
-    await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for blocked from Backlog with all source-completion states\./)).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing 0\/\d+ rows for blocked from Backlog with all source-completion states\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText(/^No assignment rows match the current filters\./)).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("closed");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for closed from Backlog with all source-completion states\./)).toBeVisible();
     const closedAssignmentPanelFilterRow = runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher assignment panel filter refresh" });
