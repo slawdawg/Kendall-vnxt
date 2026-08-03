@@ -108,6 +108,36 @@ def test_runner_assignment_status_rollup_bounds_verbose_source_ids_without_losin
     assert len(json.dumps(envelope.model_dump(mode="json")).encode("utf-8")) < 1024 * 1024
 
 
+def test_runner_assignment_status_rollup_omits_malformed_unicode_source_id():
+    rows = [
+        RunnerAssignmentStatusRowView(
+            id="closed-malformed-source-id",
+            title="Closed malformed source ID",
+            classification="closed",
+            reasonCode="closed",
+            reason="Closed source completion evidence.",
+            nextSafeAction="No assignment action",
+            staleAfterSeconds=86400,
+            sourceCompletionEvidence=RunnerSourceCompletionEvidenceView(
+                evidenceKind="assignment",
+                recordId="record-malformed-source-id",
+                sourceBacklogItemId="source-\ud800",
+                evidenceSummary="Closed source completion evidence.",
+            ),
+        )
+    ]
+
+    rollup = SupervisorService._runner_source_completion_rollup(None, rows)
+
+    assert rollup.total == 1
+    assert rollup.assignment == 1
+    assert rollup.sourceBacklogItemIds == []
+    assert rollup.sourceBacklogItemIdsTotal == 1
+    assert rollup.sourceBacklogItemIdsRetained == 0
+    assert rollup.sourceBacklogItemIdsOmitted == 1
+    assert rollup.sourceBacklogItemIdsStatus == "truncated"
+
+
 def test_runner_assignment_status_route_uses_typed_envelope():
     assert _route("/supervisor/runner-assignment-status-report").response_model is RunnerAssignmentStatusReportApiEnvelope
 

@@ -10966,7 +10966,14 @@ class SupervisorService:
             if evidence.sourceBacklogItemId not in seen_item_ids:
                 seen_item_ids.add(evidence.sourceBacklogItemId)
                 rollup.sourceBacklogItemIdsTotal += 1
-                encoded_id_size = len(evidence.sourceBacklogItemId.encode("utf-8"))
+                try:
+                    encoded_id_size = len(evidence.sourceBacklogItemId.encode("utf-8"))
+                except UnicodeError:
+                    # State-derived IDs are metadata only. A malformed Unicode value must
+                    # not turn the whole read-only report into an unavailable response.
+                    rollup.sourceBacklogItemIdsOmitted += 1
+                    rollup.sourceBacklogItemIdsStatus = "truncated"
+                    continue
                 if (
                     encoded_id_size <= RUNNER_SOURCE_COMPLETION_ID_MAX_BYTES
                     and retained_bytes + encoded_id_size <= RUNNER_SOURCE_COMPLETION_IDS_MAX_BYTES
