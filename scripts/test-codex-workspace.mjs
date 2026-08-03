@@ -8356,7 +8356,7 @@ try {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
-      const legacyRawStages = ["check:fast", "check:handoff-later"];
+      const legacyRawStages = ["check:fast", "test:codex-workspace", "check:handoff-later"];
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
       const failedAt = new Date(Date.now() - 500).toISOString();
@@ -8401,7 +8401,7 @@ try {
       const fixture = createFinishPrExistingCommitFixture();
       try {
         const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
-        const legacyRawStages = ["check:fast", "check:handoff-later"];
+        const legacyRawStages = ["check:fast", "test:codex-workspace", "check:handoff-later"];
         const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
         const manifest = readJson(manifestPath);
         const failedAt = new Date(Date.now() - 500).toISOString();
