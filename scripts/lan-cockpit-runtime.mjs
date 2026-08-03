@@ -275,7 +275,7 @@ async function main() {
     ? ["run", "--directory", "services/supervisor", "supervisor"]
     : mode === "dashboard"
       ? ["run", "dev:dashboard"]
-      : ["scripts/manager-run-loop.mjs", "--dry-run", "--runtime-mode", "read_only_projection", "--interval-ms", "5000", "--summary-json"];
+      : ["scripts/manager-run-loop.mjs", "--dry-run", "--runtime-mode", "read_only_projection", "--keep-alive-on-blocked-preflight", "--interval-ms", "30000", "--summary-json"];
   const child = spawn(command, args, {
     cwd: process.cwd(),
     env: environment,
