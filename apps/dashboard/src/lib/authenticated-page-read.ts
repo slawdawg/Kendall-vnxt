@@ -16,11 +16,17 @@ export type DashboardReadState<T> =
   | { kind: "not_found"; data: null; error: null }
   | { kind: "unavailable"; data: null; error: string };
 
-function classify(error: unknown): DashboardReadState<never> {
+export type AuthenticatedPageReadOptions = {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+  unavailableMessage?: (error: unknown) => string;
+};
+
+function classify(error: unknown, unavailableMessage?: (error: unknown) => string): DashboardReadState<never> {
   const message = error instanceof Error ? error.message : "Authenticated dashboard data is unavailable.";
   if (/\(401\)|sign_in_required/i.test(message)) return { kind: "expired", data: null, error: null };
   if (/\(404\)/.test(message)) return { kind: "not_found", data: null, error: null };
-  return { kind: "unavailable", data: null, error: message };
+  return { kind: "unavailable", data: null, error: unavailableMessage?.(error) ?? message };
 }
 
 /**
@@ -33,6 +39,7 @@ export function useAuthenticatedPageRead<T>(
   dependencies: readonly unknown[],
   isEmpty: (data: T) => boolean = () => false,
   enabled = true,
+  options: AuthenticatedPageReadOptions = {},
 ) {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<DashboardReadState<T>>({ kind: "loading", data: null, error: null });
@@ -44,8 +51,8 @@ export function useAuthenticatedPageRead<T>(
     let active = true;
     const deadline = window.setTimeout(() => {
       controller.abort();
-      if (active) setState({ kind: "unavailable", data: null, error: "The authenticated read timed out." });
-    }, 8_000);
+      if (active) setState({ kind: "unavailable", data: null, error: options.timeoutMessage ?? "The authenticated read timed out." });
+    }, options.timeoutMs ?? 8_000);
     setState({ kind: "loading", data: null, error: null });
     void load(controller.signal)
       .then((data) => {
@@ -53,7 +60,7 @@ export function useAuthenticatedPageRead<T>(
         setState(isEmpty(data) ? { kind: "empty", data, error: null } : { kind: "ready", data, error: null });
       })
       .catch((error) => {
-        if (active && !controller.signal.aborted) setState(classify(error));
+        if (active && !controller.signal.aborted) setState(classify(error, options.unavailableMessage));
       })
       .finally(() => window.clearTimeout(deadline));
     return () => {
@@ -63,7 +70,7 @@ export function useAuthenticatedPageRead<T>(
     };
   // load is intentionally owned by the page callback; dependencies describe its stable inputs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...dependencies, attempt, enabled]);
+  }, [...dependencies, attempt, enabled, options.timeoutMs, options.timeoutMessage, options.unavailableMessage]);
 
   useEffect(() => {
     if (!enabled) return;
