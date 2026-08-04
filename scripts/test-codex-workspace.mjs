@@ -9572,8 +9572,8 @@ try {
         "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
         "--state-root", fixture.stateRoot,
       ], { cwd: fixture.root, env: fixture.env });
-      assert.notEqual(result.code, 0, result.stdout || result.stderr);
-      assert.match(result.stderr, /Non-required skipped checks do not match the source-owned policy/);
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -9622,8 +9622,8 @@ try {
         "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
         "--state-root", fixture.stateRoot,
       ], { cwd: fixture.root, env: fixture.env });
-      assert.notEqual(result.code, 0, result.stdout || result.stderr);
-      assert.match(result.stderr, /Non-required skipped checks do not match the source-owned policy/);
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -9820,9 +9820,9 @@ try {
         ["adjudicate-current-thread", "resumed-task", "--apply", "false"],
       ]) {
         const result = runFixtureScript(fixture, [...args, "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-        assert.notEqual(result.code, 0, `${args[0]} unexpectedly accepted a valued --apply flag`);
-        assert.match(result.stderr, /requires a bare --apply flag without a value/);
-        assert.equal(readFileSync(manifestPath, "utf8"), before, `${args[0]} mutated the manifest`);
+        assert(result.code !== 0, `${args[0]} unexpectedly accepted a valued --apply flag`);
+        assert(/requires a bare --apply flag without a value/.test(result.stderr), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${args[0]} mutated the manifest`);
       }
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
@@ -10174,12 +10174,12 @@ try {
         ["verify-pr-gates", "resumed-task", "--owner", "runner-a", "--summary-json", "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert.equal(result.code, 0, result.stderr || result.stdout);
+      assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
-      assert.equal(packet.reviewThreads.querySucceeded, true, result.stdout);
-      assert.equal(packet.reviewThreads.hasNextPage, false, result.stdout);
-      assert.equal(packet.reviewThreads.totalCount, 2, result.stdout);
-      assert.equal(packet.reviewThreads.unresolvedNonOutdatedCount, 1, result.stdout);
+      assert(packet.reviewThreads.querySucceeded === true, result.stdout);
+      assert(packet.reviewThreads.hasNextPage === false, result.stdout);
+      assert(packet.reviewThreads.totalCount === 2, result.stdout);
+      assert(packet.reviewThreads.unresolvedNonOutdatedCount === 1, result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
