@@ -9328,12 +9328,17 @@ try {
   });
 
   test("verify-pr-gates blocks unresolved review-thread mutation attempts until an explicit later outcome supersedes them", () => {
-    const gateArgs = (fixture) => [
-      "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
-      "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready", "--delivery-audit-summary", "Exact-head delivery audit passed.",
-      "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt", "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
-      "--state-root", fixture.stateRoot,
-    ];
+    const gateArgs = (fixture) => {
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      return [
+        "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready", "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${manifest.pr_delivery_head_sha}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt", "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ];
+    };
     const recoveryAttempt = {
       attemptId: "attempt-1", threadId: "PRRT_recovery", expectedHeadSha: "fixture-head", repository: { fullName: "slawdawg/Kendall-vnxt" },
       attemptedAt: "2026-08-04T10:00:00.000Z", completedAt: "2026-08-04T10:01:00.000Z", status: "needs-recovery", mutation: { status: "attempt-recorded" },
