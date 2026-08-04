@@ -9921,7 +9921,7 @@ try {
   });
 
   test("verify-pr-gates records clean exact-head checks and review-thread evidence", () => {
-    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true, repository: { owner: "slawdawg", name: "Kendall-vnxt" } });
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const seeded = readJson(manifestPath);
