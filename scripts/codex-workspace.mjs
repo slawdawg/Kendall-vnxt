@@ -493,6 +493,8 @@ verify-pr-gates options:
   --delivery-audit-agent <id> Agent or reviewer id for independent delivery audit evidence.
   --delivery-audit-status <status> Delivery audit recommendation. Must be merge-ready for bounded merge.
   --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
+  --merge-method <text>     Required planned gh pr merge --merge --match-head-commit <expected-head> command; cleanup flags are forbidden.
+  --rollback-path <text>    Required bounded revert or recovery path for a later merge.
   --non-required-checks <list> Comma-separated skipped check names accepted by the named policy.
   --non-required-check-policy <ref> Required source-owned policy reference for --non-required-checks.
   --diff-risk-summary <text> Exact-head diff-risk assessment summary.
@@ -4573,6 +4575,10 @@ function buildPrGateEvidence(manifest, context = {}) {
     checkedAt,
     expectedHeadSha: headState.expectedHeadSha,
   });
+  const mergePlan = shapeExactHeadMergePlanEvidence(context.options || {}, {
+    expectedHeadSha: headState.expectedHeadSha,
+    prNumber: pr.number,
+  });
   const blockers = prGateBlockers(manifest, pr, {
     repository,
     headState,
@@ -4582,6 +4588,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     reviewThreadState,
     deliverySubagentAudit,
     diffRiskEvidence,
+    mergePlan,
     currentResolutionOutcomes: manifest.current_thread_resolution_outcomes,
     outdatedResolutionOutcomes: manifest.outdated_thread_resolution_outcomes,
   });
@@ -4594,6 +4601,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     "thread-aware review query returned no unresolved or pending review state",
     "delivery subagent audit recommends merge-ready for exact head",
     "exact-head diff-risk assessment and focused verification evidence are recorded",
+    "planned exact-head merge command and bounded rollback path are recorded without cleanup flags",
   ];
   const stopLines = [
     "metadata-only evidence; no merge",
@@ -4632,6 +4640,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     reviewThreads: reviewThreadState,
     deliverySubagentAudit,
     diffRiskEvidence,
+    mergePlan,
     blockers,
     requiredGates,
     stopLines,
@@ -4649,6 +4658,7 @@ function buildPrGateEvidence(manifest, context = {}) {
         pr.number ? `pr:${pr.number}` : "",
         headState.expectedHeadSha ? `expected-head:${headState.expectedHeadSha}` : "",
         deliverySubagentAudit.agent ? `delivery-audit-agent:${deliverySubagentAudit.agent}` : "",
+        mergePlan.plannedMergeMethod ? `planned-merge:${mergePlan.plannedMergeMethod}` : "",
       ],
       nextSafeAction:
         blockers.length === 0
@@ -4671,8 +4681,9 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
     throw new Error("Could not load PR state for outdated review-thread adjudication.");
   }
   const headState = prGateHeadState(manifest);
-  const repository = githubRepository(manifest);
-  const reviewThreadState = fetchReviewThreadState(manifest, repository, pr.number);
+  const repositoryRef = githubRepository(manifest);
+  const repository = { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` };
+  const reviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: headState.expectedHeadSha,
     worktreePath: manifest.worktree_path,
@@ -5056,6 +5067,38 @@ function safeMetadataText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function shapeExactHeadMergePlanEvidence(options = {}, context = {}) {
+  const plannedMergeMethod = safeMetadataText(options.mergeMethod, 500);
+  const rollbackPath = safeMetadataText(options.rollbackPath, 500);
+  const expectedHeadSha = safeMetadataText(context.expectedHeadSha, 80);
+  const prNumber = Number(context.prNumber);
+  const blockers = [];
+  if (!plannedMergeMethod) {
+    blockers.push("Planned exact-head merge method is missing; provide --merge-method");
+  } else {
+    const escapedHeadSha = expectedHeadSha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const expectedMatchHead = new RegExp(`(?:^|\\s)--match-head-commit(?:=|\\s+)${escapedHeadSha}(?:\\s|$)`);
+    const expectedPr = new RegExp(`(?:^|\\s)gh\\s+pr\\s+merge\\s+${prNumber}(?:\\s|$)`);
+    if (!expectedPr.test(plannedMergeMethod) || !/(?:^|\s)--merge(?:\s|$)/.test(plannedMergeMethod) || !expectedMatchHead.test(plannedMergeMethod)) {
+      blockers.push("Planned merge method must use gh pr merge <PR> --merge --match-head-commit <expected-head>");
+    }
+    if (/(?:^|\s)--(?:delete-branch|cleanup)(?:\s|=|$)/.test(plannedMergeMethod)) {
+      blockers.push("Planned merge method must not include cleanup flags");
+    }
+  }
+  if (!rollbackPath) {
+    blockers.push("Bounded rollback or recovery path is missing; provide --rollback-path");
+  }
+  return {
+    plannedMergeMethod: plannedMergeMethod || null,
+    rollbackPath: rollbackPath || null,
+    expectedHeadSha: expectedHeadSha || null,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    blockers,
+  };
+}
+
 function prGateHeadState(manifest) {
   const result = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
   if (result.code !== 0 || !result.stdout.trim()) {
@@ -5143,6 +5186,7 @@ function prGateBlockers(manifest, pr, context) {
   }
   blockers.push(...(context.deliverySubagentAudit?.blockers || []));
   blockers.push(...(context.diffRiskEvidence?.blockers || []));
+  blockers.push(...(context.mergePlan?.blockers || []));
   const resolutionOutcomes = [
     ...(context.currentResolutionOutcomes || []).map((outcome) => ({ kind: "current", outcome })),
     ...(context.outdatedResolutionOutcomes || []).map((outcome) => ({ kind: "outdated", outcome })),
@@ -5182,6 +5226,7 @@ function renderPrGateEvidence(packet = {}) {
     `reviewThreads unresolvedNonOutdated=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} unresolvedOutdated=${packet.reviewThreads?.unresolvedOutdatedCount ?? "unknown"} pendingRequests=${packet.reviewThreads?.pendingReviewRequestCount ?? "unknown"}`,
     `deliveryAudit status=${packet.deliverySubagentAudit?.status || "unknown"} agent=${packet.deliverySubagentAudit?.agent || "unknown"}`,
     `diffRisk status=${packet.diffRiskEvidence?.status || "unknown"}`,
+    `mergePlan method=${packet.mergePlan?.plannedMergeMethod || "unknown"} rollback=${packet.mergePlan?.rollbackPath || "unknown"}`,
     `status ${packet.status || "unknown"}`,
   ];
 }
