@@ -9921,7 +9921,7 @@ try {
   });
 
   test("verify-pr-gates records clean exact-head checks and review-thread evidence", () => {
-    const fixture = createFinishPrExistingCommitFixture({ existingPr: true, repository: { owner: "slawdawg", name: "Kendall-vnxt" } });
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const seeded = readJson(manifestPath);
@@ -10015,6 +10015,34 @@ try {
     }
   });
 
+  test("verify-pr-gates rejects an otherwise ready noncanonical repository", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--diff-risk-summary", "Focused canonical-repository gate fixture.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "verify-pr-gates unexpectedly accepted a noncanonical repository");
+      assert(
+        result.stderr.includes("Managed PR gate only accepts the canonical Kendall_Nxt repository"),
+        result.stderr || result.stdout,
+      );
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.pr_gate_evidence, "noncanonical repository gate must not record passed evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates blocks unresolved review-thread mutation attempts until an explicit later outcome supersedes them", () => {
     const gateArgs = (fixture) => [
       "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
@@ -10042,10 +10070,9 @@ try {
       { name: "cross-thread-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, threadId: "PRRT_other" }], expectedCode: 1 },
       { name: "cross-head-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, expectedHeadSha: "other-head" }], expectedCode: 1 },
     ]) {
-      const fixture = createFinishPrExistingCommitFixture({
-        existingPr: true,
-        ...(scenario.expectedCode === 0 ? { repository: { owner: "slawdawg", name: "Kendall-vnxt" } } : {}),
-      });
+      const fixture = scenario.expectedCode === 0
+        ? createCanonicalManagedPrFixture({ existingPr: true })
+        : createFinishPrExistingCommitFixture({ existingPr: true });
       try {
         const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
         const manifest = readJson(manifestPath);
@@ -10231,7 +10258,7 @@ try {
   });
 
   test("verify-pr-gates accepts only exact-head policy-bound skipped checks", () => {
-    const fixture = createFinishPrExistingCommitFixture({
+    const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       statusCheckRollup: [
         { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
@@ -10458,7 +10485,7 @@ try {
   });
 
   test("adjudicate-outdated-thread records bounded exact-head evidence without resolving GitHub state", () => {
-    const fixture = createFinishPrExistingCommitFixture({
+    const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
     });
@@ -10558,7 +10585,7 @@ try {
   });
 
   test("resolve-adjudicated-thread persists mutation, post-audit, and lane evidence after the integrated resolver succeeds", () => {
-    const fixture = createFinishPrExistingCommitFixture({
+    const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
     });
@@ -10587,7 +10614,7 @@ try {
   });
 
   test("resolve-adjudicated-thread retains recovery evidence after an ambiguous GitHub mutation failure", () => {
-    const fixture = createFinishPrExistingCommitFixture({
+    const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       resolveMutationFailure: "ambiguous-resolved",
       reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
@@ -10613,7 +10640,7 @@ try {
   });
 
   test("resolve-adjudicated-thread refuses a thread-aware race before mutation", () => {
-    const fixture = createFinishPrExistingCommitFixture({
+    const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       preMutationCurrentThreadDrift: true,
       reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
@@ -14770,6 +14797,13 @@ function createFinishPrExistingCommitFixture(options = {}) {
     script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
     env,
   };
+}
+
+function createCanonicalManagedPrFixture(options = {}) {
+  return createFinishPrExistingCommitFixture({
+    ...options,
+    repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+  });
 }
 
 function cleanupFinishPrExistingCommitFixture(fixture) {
