@@ -3067,7 +3067,10 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   const repositoryRef = githubRepository(manifest);
   const repository = { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` };
   const pr = prViewForGates(manifest);
-  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, { expectedHeadSha: pr?.headRefOid || "" });
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
+    expectedHeadSha: pr?.headRefOid || "",
+    worktreePath: manifest.worktree_path,
+  });
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : emptyReviewThreadState();
   const blockers = [];
@@ -4163,6 +4166,7 @@ function buildPrGateEvidence(manifest, context = {}) {
   const reviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
+    worktreePath: manifest.worktree_path,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha);
@@ -4276,6 +4280,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
   const reviewThreadState = fetchReviewThreadState(manifest, repository, pr.number);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: headState.expectedHeadSha,
+    worktreePath: manifest.worktree_path,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha);
@@ -4373,7 +4378,10 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
   const repositoryRef = githubRepository(manifest);
   const repository = { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` };
   const reviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
-  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, { expectedHeadSha: headState.expectedHeadSha });
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
+    expectedHeadSha: headState.expectedHeadSha,
+    worktreePath: manifest.worktree_path,
+  });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha);
   const postInspectionPr = prViewForGates(manifest);
@@ -4978,7 +4986,7 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   const names = commaSeparatedMetadata(options.nonRequiredChecks);
   const policyRef = safeMetadataText(options.nonRequiredCheckPolicy, 300);
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
-  const valid = validateSourceOwnedSkipPolicy(policyRef, names);
+  const valid = validateSourceOwnedSkipPolicy(policyRef, names, context.worktreePath, expectedHeadSha);
   const blockers = [];
   if (names.length > 0 && !policyRef) {
     blockers.push("Non-required skipped checks require a source-owned policy reference");
@@ -5000,23 +5008,26 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   };
 }
 
-function validateSourceOwnedSkipPolicy(policyRef, names) {
+function validateSourceOwnedSkipPolicy(policyRef, names, worktreePath, expectedHeadSha) {
+  if (!worktreePath || !exactGitObjectIdOrNull(expectedHeadSha) || names.length === 0) {
+    return false;
+  }
   const canonicalPolicies = {
-    "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks": join(repoRoot, "docs", "workflows", "end-to-end-lane-runner.md"),
-    "AGENTS.md#documented-non-required-checks": join(repoRoot, "AGENTS.md"),
+    "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks": "docs/workflows/end-to-end-lane-runner.md",
+    "AGENTS.md#documented-non-required-checks": "AGENTS.md",
   };
   const policyPath = canonicalPolicies[policyRef];
-  if (!policyPath || names.length === 0) {
+  if (!policyPath) {
     return false;
   }
-  try {
-    const policyText = readFileSync(policyPath, "utf8");
-    const heading = "## Documented Non-Required Checks";
-    const section = policyText.slice(policyText.indexOf(heading), policyText.indexOf("\n## ", policyText.indexOf(heading) + heading.length) || policyText.length);
-    return policyText.includes(heading) && names.every((name) => ["full", "javascript", "supervisor"].includes(name) && section.includes(`- \`${name}\``));
-  } catch {
+  const policyResult = git(["show", `${expectedHeadSha}:${policyPath}`], { cwd: worktreePath, preserveStdout: true });
+  if (policyResult.code !== 0) {
     return false;
   }
+  const policyText = policyResult.stdout;
+  const heading = "## Documented Non-Required Checks";
+  const section = policyText.slice(policyText.indexOf(heading), policyText.indexOf("\n## ", policyText.indexOf(heading) + heading.length) || policyText.length);
+  return policyText.includes(heading) && names.every((name) => ["full", "javascript", "supervisor"].includes(name) && section.includes(`- \`${name}\``));
 }
 
 function shapeDiffRiskEvidence(options = {}, context = {}) {
