@@ -546,6 +546,12 @@ function parseOptions(argv) {
   return { positional, options };
 }
 
+function assertBareApplyOption(options, command) {
+  if (options.apply !== undefined && options.apply !== true) {
+    throw new Error(`${command} requires a bare --apply flag without a value.`);
+  }
+}
+
 function startWorkspace(argv) {
   const { positional, options } = parseOptions(argv);
   const description = positional.join(" ").trim();
@@ -2898,6 +2904,7 @@ function applyExternalCheckStageEvidenceHandoff(manifest, handoff) {
 
 function verifyPrGates(argv) {
   const { positional, options } = parseOptions(argv);
+  assertBareApplyOption(options, "verify-pr-gates");
   if (options.summaryJson && options.apply) {
     throw new Error("verify-pr-gates --summary-json is only supported without --apply.");
   }
@@ -2969,6 +2976,7 @@ function verifyPrGates(argv) {
 
 function refreshPrHead(argv) {
   const { positional, options } = parseOptions(argv);
+  assertBareApplyOption(options, "refresh-pr-head");
   if (options.summaryJson && options.apply) {
     throw new Error("refresh-pr-head --summary-json is only supported without --apply.");
   }
@@ -3200,6 +3208,7 @@ function staleDeliveryAuditAfterHeadRebind(packet, rebind) {
 
 function adjudicateOutdatedThread(argv) {
   const { positional, options } = parseOptions(argv);
+  assertBareApplyOption(options, "adjudicate-outdated-thread");
   if (options.summaryJson && options.apply) {
     throw new Error("adjudicate-outdated-thread --summary-json is only supported without --apply.");
   }
@@ -3381,6 +3390,7 @@ function resolveAdjudicatedThread(argv) {
 
 function adjudicateCurrentThread(argv) {
   const { positional, options } = parseOptions(argv);
+  assertBareApplyOption(options, "adjudicate-current-thread");
   if (options.summaryJson && options.apply) throw new Error("adjudicate-current-thread --summary-json is only supported without --apply.");
   const threadId = safeMetadataText(options.threadId, 160);
   if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) throw new Error("adjudicate-current-thread requires --thread-id <GitHub review-thread id>.");
@@ -4286,6 +4296,8 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha);
   const postInspectionPr = prViewForGates(manifest);
   const mapping = shapeOutdatedThreadMappingEvidence(options, {
+    laneOwner: manifest.owner,
+    currentOwner: currentLaneOwner(options),
     expectedHeadSha: headState.expectedHeadSha,
     changedPaths: changedPathInspection.paths,
     changedPathError: changedPathInspection.error,
@@ -4386,6 +4398,8 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha);
   const postInspectionPr = prViewForGates(manifest);
   const mapping = shapeCurrentThreadMappingEvidence(options, {
+    laneOwner: manifest.owner,
+    currentOwner: currentLaneOwner(options),
     expectedHeadSha: headState.expectedHeadSha,
     changedPaths: changedPathInspection.paths,
     changedPathError: changedPathInspection.error,
@@ -4495,6 +4509,9 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   const verificationExitCode = safeMetadataText(options.verificationExitCode, 12);
   const reviewSummary = safeMetadataText(options.reviewSummary, 500);
   const reviewerId = safeMetadataText(options.reviewerId, 120);
+  const laneOwners = [context.laneOwner, context.currentOwner]
+    .map((owner) => safeMetadataText(owner, 120))
+    .filter(Boolean);
   const requestFingerprint = safeMetadataText(options.requestFingerprint, 80).toLowerCase();
   const riskAuthority = safeMetadataText(options.riskAuthority, 500);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
@@ -4510,6 +4527,7 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   if (verificationExitCode !== "0") blockers.push("Outdated-thread verification result must be exit code 0");
   if (!reviewSummary) blockers.push("Outdated-thread code-review evidence missing");
   if (!reviewerId) blockers.push("Outdated-thread reviewer identity missing");
+  if (reviewerId && laneOwners.includes(reviewerId)) blockers.push("Outdated-thread reviewer identity must not match the lane owner");
   if (!/^[a-f0-9]{64}$/.test(requestFingerprint)) blockers.push("Outdated-thread request fingerprint missing or invalid");
   if (fileSet.error) blockers.push(`Outdated-thread mapped-file evidence is invalid: ${fileSet.error}`);
   if (!context.inspectedHeadSha) blockers.push("Outdated-thread changed-path inspection is not bound to an exact PR head");
@@ -4826,10 +4844,10 @@ function githubRepository(manifest) {
 
 function fetchReviewThreadState(manifest, repository, prNumber) {
   const query = [
-    "query($owner:String!,$name:String!,$number:Int!){",
+    "query($owner:String!,$name:String!,$number:Int!,$after:String){",
     "repository(owner:$owner,name:$name){",
     "pullRequest(number:$number){",
-    "reviewThreads(first:100){",
+    "reviewThreads(first:100,after:$after){",
     "nodes{id,isResolved,isOutdated,path,comments(first:100){nodes{id,url,body}pageInfo{hasNextPage,endCursor}}}",
     "pageInfo{hasNextPage,endCursor}",
     "}",
@@ -4838,33 +4856,37 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     "}",
     "}",
   ].join("");
-  const result = runChecked(
-    "gh",
-    [
-      "api",
-      "graphql",
-      "-f",
-      `query=${query}`,
-      "-F",
-      `owner=${repository.owner}`,
-      "-F",
-      `name=${repository.name}`,
-      "-F",
-      `number=${prNumber}`,
-    ],
-    { cwd: manifest.worktree_path },
-  );
-  const parsed = parseGhJson(result.stdout, "review-thread state");
-  const errors = Array.isArray(parsed?.errors) ? parsed.errors : [];
-  const connection = parsed?.data?.repository?.pullRequest?.reviewThreads;
-  const reviewRequests = parsed?.data?.repository?.pullRequest?.reviewRequests;
-  const connectionComplete = Array.isArray(connection?.nodes)
-    && typeof connection?.pageInfo?.hasNextPage === "boolean"
+  const nodes = [];
+  const errors = [];
+  let reviewRequests = null;
+  let cursor = null;
+  let connectionComplete = true;
+  let hasNextPage = false;
+  let pages = 0;
+  do {
+    if (pages++ >= 100) {
+      hasNextPage = true;
+      connectionComplete = false;
+      break;
+    }
+    const args = ["api", "graphql", "-f", `query=${query}`, "-F", `owner=${repository.owner}`, "-F", `name=${repository.name}`, "-F", `number=${prNumber}`];
+    if (cursor) args.push("-F", `after=${cursor}`);
+    const result = runChecked("gh", args, { cwd: manifest.worktree_path });
+    const parsed = parseGhJson(result.stdout, "review-thread state");
+    errors.push(...(Array.isArray(parsed?.errors) ? parsed.errors : []));
+    const connection = parsed?.data?.repository?.pullRequest?.reviewThreads;
+    if (!reviewRequests) reviewRequests = parsed?.data?.repository?.pullRequest?.reviewRequests;
+    const pageComplete = Array.isArray(connection?.nodes) && typeof connection?.pageInfo?.hasNextPage === "boolean";
+    connectionComplete = connectionComplete && pageComplete;
+    if (!pageComplete) break;
+    nodes.push(...connection.nodes.map((thread) => hydrateReviewThreadComments(manifest, thread)));
+    hasNextPage = Boolean(connection.pageInfo.hasNextPage);
+    cursor = hasNextPage ? connection.pageInfo.endCursor : null;
+    if (hasNextPage && !cursor) throw new Error("Review-thread pagination omitted a next-page cursor");
+  } while (cursor);
+  connectionComplete = connectionComplete
     && Array.isArray(reviewRequests?.nodes)
     && typeof reviewRequests?.pageInfo?.hasNextPage === "boolean";
-  const nodes = Array.isArray(connection?.nodes)
-    ? connection.nodes.map((thread) => hydrateReviewThreadComments(manifest, thread))
-    : [];
   const threadRefs = nodes.map((thread) => {
     const comments = reviewThreadCommentAudit(thread.comments);
     return {
@@ -4890,7 +4912,7 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     unresolvedOutdatedCount: unresolvedOutdated.length,
     outdatedCount: threadRefs.filter((thread) => thread.isOutdated).length,
     resolvedCount: threadRefs.filter((thread) => thread.isResolved).length,
-    hasNextPage: Boolean(connection?.pageInfo?.hasNextPage),
+    hasNextPage,
     pendingReviewRequestCount: Array.isArray(reviewRequests?.nodes) ? reviewRequests.nodes.length : 0,
     reviewRequestHasNextPage: Boolean(reviewRequests?.pageInfo?.hasNextPage),
     unresolvedNonOutdatedRefs: unresolvedNonOutdated.map((thread) => thread.url || thread.id).filter(Boolean),
