@@ -496,7 +496,7 @@ verify-pr-gates options:
   --non-required-checks <list> Comma-separated skipped check names accepted by the named policy.
   --non-required-check-policy <ref> Required source-owned policy reference for --non-required-checks.
   --diff-risk-summary <text> Exact-head diff-risk assessment summary.
-  --diff-risk-files <list> Comma-separated changed paths covered by the assessment.
+  --diff-risk-files <list> Changed paths covered by the assessment; use a JSON string array when paths contain commas or exceed normal metadata lengths.
   --diff-risk-verification <text> Focused verification evidence for the assessment.
 
 refresh-pr-head options:
@@ -3375,6 +3375,10 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   if (!pr?.headRefOid || !exactGitObjectIdOrNull(pr.headRefOid)) blockers.push("Live PR head is missing or invalid");
   if (!localHeadSha || localHeadSha !== pr?.headRefOid) blockers.push("Local worktree HEAD does not match the live PR head");
   if (!remoteHeadSha || remoteHeadSha !== pr?.headRefOid) blockers.push("origin branch HEAD does not match the live PR head");
+  const fastForward = priorHeadSha && pr?.headRefOid
+    ? git(["merge-base", "--is-ancestor", priorHeadSha, pr.headRefOid], { cwd: manifest.worktree_path }).code === 0
+    : false;
+  if (!fastForward) blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (checks.total === 0) blockers.push("No status checks reported for live PR head");
   if (checks.pending.length) blockers.push(`Pending checks: ${checks.pending.map((check) => check.name).join(", ")}`);
@@ -3662,7 +3666,7 @@ function adjudicateCurrentThread(argv) {
   if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) throw new Error("adjudicate-current-thread requires --thread-id <GitHub review-thread id>.");
   const state = workspaceState(options);
   const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
-  assertLaneOwner(manifest, options); requireGh("adjudicate-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  assertLaneOwner(manifest, options); requireGh("adjudicate-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest); assertRegisteredManagedWorktree(manifest, state);
   assertCleanManagedResolutionWorktree(manifest);
   reconcileManifest(manifest, { refreshPr: true });
   const packet = buildCurrentThreadAdjudicationEvidence(manifest, { options, threadId });
@@ -3678,7 +3682,7 @@ function adjudicateCurrentThread(argv) {
   }
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
-    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertCleanManagedResolutionWorktree(locked);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertRegisteredManagedWorktree(locked, state); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
     const lockedPacket = buildCurrentThreadAdjudicationEvidence(locked, { options, threadId });
     if (!lockedPacket.ready) {
@@ -3703,11 +3707,11 @@ function resolveAdjudicatedCurrentThread(argv) {
   if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) throw new Error("resolve-adjudicated-current-thread requires --thread-id <GitHub review-thread id>.");
   const state = workspaceState(options);
   const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
-  assertLaneOwner(manifest, options); requireGh("resolve-adjudicated-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  assertLaneOwner(manifest, options); requireGh("resolve-adjudicated-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest); assertRegisteredManagedWorktree(manifest, state);
   assertCleanManagedResolutionWorktree(manifest);
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
-    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertCleanManagedResolutionWorktree(locked);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertRegisteredManagedWorktree(locked, state); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
     const retained = (locked.current_thread_adjudications || []).find((entry) => entry?.threadId === threadId && entry?.ready === true);
     if (!retained) throw new Error("No ready retained current-thread adjudication exists for the target thread.");
@@ -3716,7 +3720,7 @@ function resolveAdjudicatedCurrentThread(argv) {
     const fresh = buildCurrentThreadAdjudicationEvidence(locked, { threadId, options: {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: (mapping.files || []).join(","), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
-      verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
+      verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId, riskAuthority: mapping.riskAuthority,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
@@ -3757,7 +3761,7 @@ function resolveAdjudicatedCurrentThread(argv) {
     outcome.postResolutionAudit = postResolutionAudit ? compactReviewThreadAudit(postResolutionAudit) : null;
     if (postAuditError) outcome.postAuditError = postAuditError;
     const target = postResolutionAudit?.threadRefs.find((thread) => thread.id === threadId);
-    const postBlockers = currentThreadResolutionPostMutationBlockers(postResolutionAudit, target);
+    const postBlockers = currentThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh);
     if (mutationBlocker) postBlockers.unshift(mutationBlocker);
     if (postAuditError) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditError}`);
     outcome.status = postBlockers.length ? "needs-recovery" : "resolved";
@@ -3792,12 +3796,13 @@ function currentThreadResolutionPreMutationBlockers(pr, headState, audit, fresh)
   return blockers;
 }
 
-function currentThreadResolutionPostMutationBlockers(audit, target) {
+function currentThreadResolutionPostMutationBlockers(audit, target, fresh) {
   const blockers = [];
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Post-resolution thread-aware audit is incomplete");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests after resolution: ${audit.pendingReviewRequestCount}`);
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads after resolution: ${audit.unresolvedNonOutdatedCount}`);
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
+  if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
   return blockers;
 }
 
@@ -3844,6 +3849,12 @@ function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) 
   if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("PR is no longer open and non-draft immediately before the thread mutation");
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
+  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, fresh.nonRequiredCheckPolicy);
+  if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
+  if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
+  if (checks.failing.length) blockers.push(`Failed or ambiguous checks immediately before the thread mutation: ${checks.failing.map((check) => check.name).join(", ")}`);
+  blockers.push(...(fresh.nonRequiredCheckPolicy?.blockers || []));
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Thread-aware audit is incomplete immediately before the thread mutation");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests immediately before the thread mutation: ${audit.pendingReviewRequestCount}`);
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads immediately before the thread mutation: ${audit.unresolvedNonOutdatedCount}`);
@@ -4684,7 +4695,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
   });
   const target = reviewThreadState.threadRefs.find((thread) => thread.id === threadId) || null;
   const blockers = currentThreadAdjudicationBlockers(manifest, pr, {
-    headState, checks, nonRequiredCheckPolicy, reviewThreadState, target, mapping,
+    repository, headState, checks, nonRequiredCheckPolicy, reviewThreadState, target, mapping,
   });
   const requiredGates = [
     "target review thread is unresolved and current with a complete canonical all-comment fingerprint",
@@ -4737,6 +4748,7 @@ function shapeCurrentThreadMappingEvidence(options = {}, context = {}) {
 
 function currentThreadAdjudicationBlockers(manifest, pr, context) {
   const blockers = [];
+  if (context.repository?.owner !== "slawdawg" || context.repository?.name !== "Kendall-vnxt") blockers.push("Current-thread adjudication only accepts the canonical Kendall_Nxt repository");
   if (pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("PR must be open and non-draft for current-thread adjudication");
   if (!pr.baseRefName || pr.baseRefName !== manifest.base_branch) blockers.push(`PR base is ${pr.baseRefName || "missing"}, expected ${manifest.base_branch}`);
   if (!pr.headRefOid || pr.headRefOid !== context.headState.expectedHeadSha) blockers.push("PR head does not match the exact current-thread adjudication head");
@@ -4759,7 +4771,7 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   else if (!context.target.requestFingerprint) blockers.push("Target review thread has no request fingerprint");
   else if (context.mapping?.requestFingerprint !== context.target.requestFingerprint) blockers.push("Current-thread request fingerprint does not match the target review thread");
   else if (context.target.path && !context.mapping?.files?.includes(context.target.path)) blockers.push(`Current-thread mapping omits target review path: ${context.target.path}`);
-  if (context.mapping?.highRiskPaths?.length && !context.mapping?.riskAuthority) blockers.push(`High-risk current-thread resolution requires recorded operator authority: ${context.mapping.highRiskPaths.join(", ")}`);
+  if (context.mapping?.highRiskPaths?.length) blockers.push(`High-risk current-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
   blockers.push(...(context.mapping?.blockers || []));
   return blockers;
 }
@@ -4852,6 +4864,7 @@ function outdatedThreadAdjudicationBlockers(manifest, pr, context) {
   else if (!context.target.requestFingerprint) blockers.push("Target review thread has no request fingerprint");
   else if (context.mapping?.requestFingerprint !== context.target.requestFingerprint) blockers.push("Outdated-thread request fingerprint does not match the target review thread");
   else if (context.target.path && !context.mapping?.files?.includes(context.target.path)) blockers.push(`Outdated-thread mapping omits target review path: ${context.target.path}`);
+  if (context.mapping?.highRiskPaths?.length) blockers.push(`High-risk outdated-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
   blockers.push(...(context.mapping?.blockers || []));
   return blockers;
 }
@@ -5144,7 +5157,9 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     && typeof connection?.pageInfo?.hasNextPage === "boolean"
     && Array.isArray(reviewRequests?.nodes)
     && typeof reviewRequests?.pageInfo?.hasNextPage === "boolean";
-  const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
+  const nodes = Array.isArray(connection?.nodes)
+    ? connection.nodes.map((thread) => hydrateReviewThreadComments(manifest, thread))
+    : [];
   const threadRefs = nodes.map((thread) => {
     const comments = reviewThreadCommentAudit(thread.comments);
     return {
@@ -5179,6 +5194,28 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     auditFingerprint: reviewThreadAuditFingerprint(threadRefs, reviewRequests),
     threadRefs,
   };
+}
+
+function hydrateReviewThreadComments(manifest, thread) {
+  const initial = thread?.comments;
+  if (!initial?.pageInfo?.hasNextPage) return thread;
+  const comments = Array.isArray(initial.nodes) ? [...initial.nodes] : [];
+  let cursor = initial.pageInfo.endCursor;
+  if (!cursor) throw new Error("Review-thread comment pagination omitted an initial cursor");
+  let pages = 0;
+  while (cursor) {
+    if (pages++ >= 100) throw new Error("Review-thread comment pagination exceeded the bounded page limit");
+    const query = "query($id:ID!,$after:String!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$after){nodes{id,url,body}pageInfo{hasNextPage,endCursor}}}}}";
+    const result = runChecked("gh", ["api", "graphql", "-f", `query=${query}`, "-F", `id=${thread.id}`, "-F", `after=${cursor}`], { cwd: manifest.worktree_path });
+    const parsed = parseGhJson(result.stdout, "review-thread comment page");
+    const page = parsed?.data?.node?.comments;
+    if (Array.isArray(parsed?.errors) && parsed.errors.length) throw new Error("Review-thread comment pagination returned GraphQL errors");
+    if (!Array.isArray(page?.nodes) || typeof page?.pageInfo?.hasNextPage !== "boolean") throw new Error("Review-thread comment pagination returned incomplete evidence");
+    comments.push(...page.nodes);
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    if (page.pageInfo.hasNextPage && !cursor) throw new Error("Review-thread comment pagination omitted a next-page cursor");
+  }
+  return { ...thread, comments: { nodes: comments, pageInfo: { hasNextPage: false } } };
 }
 
 function reviewThreadCommentAudit(comments) {
@@ -5221,6 +5258,23 @@ function reviewThreadAuditFingerprint(threadRefs, reviewRequests) {
 
 function commaSeparatedMetadata(value, maxEntries = 80) {
   return [...new Set(String(value || "").split(",").map((entry) => safeMetadataText(entry, 180)).filter(Boolean))].slice(0, maxEntries);
+}
+
+function diffRiskPathSet(value) {
+  const raw = String(value || "");
+  if (!raw) return { paths: [], error: "" };
+  if (!raw.trimStart().startsWith("[")) {
+    return { paths: commaSeparatedMetadata(raw, Number.MAX_SAFE_INTEGER), error: "" };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((path) => typeof path !== "string" || !path || path.includes("\0"))) {
+      return { paths: [], error: "Diff-risk JSON path evidence must be an array of non-empty paths" };
+    }
+    return { paths: [...new Set(parsed)], error: "" };
+  } catch {
+    return { paths: [], error: "Diff-risk JSON path evidence is invalid" };
+  }
 }
 
 function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
@@ -5273,7 +5327,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   // Diff-risk evidence is an exact-head coverage set, not a display list.  Do
   // not apply the general CLI metadata cap here or a PR with more than 80 files
   // becomes impossible to prove even when every path was supplied.
-  const files = commaSeparatedMetadata(options.diffRiskFiles, Number.MAX_SAFE_INTEGER);
+  const fileSet = diffRiskPathSet(options.diffRiskFiles);
+  const files = fileSet.paths;
   const verification = safeMetadataText(options.diffRiskVerification, 500);
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
@@ -5284,6 +5339,7 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   if (files.length === 0) blockers.push("Diff-risk changed-file evidence missing");
   if (!verification) blockers.push("Diff-risk focused verification evidence missing");
   if (!expectedHeadSha) blockers.push("Diff-risk exact head missing");
+  if (fileSet.error) blockers.push(fileSet.error);
   if (changedPathError) blockers.push(`Diff-risk changed-path inspection failed: ${changedPathError}`);
   if (!changedPathError && changedPaths.length === 0) blockers.push("Diff-risk changed-path inspection returned no paths");
   if (uncoveredPaths.length > 0) blockers.push(`Diff-risk evidence omits changed paths: ${uncoveredPaths.join(", ")}`);

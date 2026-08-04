@@ -10237,7 +10237,7 @@ try {
       const localHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       assert(manifest.pr_delivery_head_sha === localHead, "refresh did not rebind the delivery head");
       assert(manifest.pr_head_rebinds?.length === 1, "refresh did not retain a rebind record");
-      assert(manifest.pr_head_rebinds[0].priorHeadSha === "a".repeat(40), "refresh lost the prior head");
+      assert(manifest.pr_head_rebinds[0].priorHeadSha === runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout, "refresh lost the prior head");
       assert(manifest.pr_head_rebinds[0].reason.includes("later source repair"), "refresh lost the bounded reason");
       assert(manifest.pr_head_rebinds[0].checks.failing.length === 0, "canonical skipped check was not accepted");
       assert(manifest.pr_gate_evidence?.status === "stale" && manifest.pr_gate_evidence.lowRiskReady === false, "refresh did not invalidate stale PR-gate evidence");
@@ -10294,7 +10294,7 @@ try {
       );
       assert(arbitraryPolicy.code !== 0, "arbitrary policy reference unexpectedly allowed refresh");
       assert(arbitraryPolicy.stderr.includes("Non-required skipped checks do not match the source-owned policy"), arbitraryPolicy.stderr || arbitraryPolicy.stdout);
-      assert(readJson(manifestPath).pr_delivery_head_sha === "a".repeat(40), "blocked refresh rewrote the stale delivery head");
+      assert(readJson(manifestPath).pr_delivery_head_sha === runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout, "blocked refresh rewrote the stale delivery head");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10467,6 +10467,7 @@ try {
     ]) {
       const fixture = createFinishPrExistingCommitFixture({
         existingPr: true,
+        repository: { owner: "slawdawg", name: "Kendall-vnxt" },
         ...scenario.options,
         reviewThreads: [
           { id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } },
@@ -10483,7 +10484,7 @@ try {
         const adjudication = runFixtureScript(fixture, adjudicationArgs, { cwd: fixture.worktree, env: fixture.env });
         assert(adjudication.code === 0, `${scenario.name}: ${adjudication.stderr || adjudication.stdout}`);
         const before = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
-        assert(before.current_thread_adjudications[0].repository.fullName === "slaw-dawg/fixture", `${scenario.name}: repository evidence missing`);
+        assert(before.current_thread_adjudications[0].repository.fullName === "slawdawg/Kendall-vnxt", `${scenario.name}: repository evidence missing`);
         assert(before.current_thread_adjudications[0].targetRequestFingerprint === "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", `${scenario.name}: fingerprint missing`);
         const resolution = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
         assert(resolution.code === scenario.expectedCode, `${scenario.name}: ${resolution.stderr || resolution.stdout}`);
@@ -10629,6 +10630,22 @@ try {
         name: "thread-pagination",
         options: { existingPr: true, reviewThreadsHasNextPage: true },
         expected: "Review-thread query returned additional pages",
+      },
+      {
+        name: "comment-pagination-missing-cursor",
+        options: {
+          existingPr: true,
+          reviewThreads: [{
+            id: "PRRT_comment_page",
+            isResolved: true,
+            isOutdated: false,
+            comments: {
+              nodes: [{ url: "https://example.test/pull/456#discussion_comment_page", body: "First page." }],
+              pageInfo: { hasNextPage: true, endCursor: null },
+            },
+          }],
+        },
+        expected: "Review-thread comment pagination omitted an initial cursor",
       },
       {
         name: "missing-review-requests",
@@ -14385,6 +14402,9 @@ function createFinishPrExistingCommitFixture(options = {}) {
       })),
       pageInfo: {
         hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage),
+        endCursor: Object.hasOwn(thread.comments?.pageInfo || {}, "endCursor")
+          ? thread.comments.pageInfo.endCursor
+          : thread.comments?.pageInfo?.hasNextPage ? "comment-cursor-1" : null,
       },
     },
   }));
@@ -14532,7 +14552,7 @@ function prepareFixtureForPrHeadRefresh(fixture) {
   manifest.status = "pr_open";
   manifest.pr_number = 456;
   manifest.pr_url = "https://example.test/pull/456";
-  manifest.pr_delivery_head_sha = "a".repeat(40);
+  manifest.pr_delivery_head_sha = runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout;
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifestPath;
 }
