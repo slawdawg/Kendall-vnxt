@@ -1425,6 +1425,7 @@ try {
       "Unresolved outdated review threads require adjudication",
       "Pending review requests",
       "Review-request query returned additional pages",
+      "Managed merge gate requires a clean worktree",
       "context.nonRequiredCheckPolicy?.blockers",
       "context.diffRiskEvidence?.blockers",
     ]) {
@@ -1452,7 +1453,7 @@ try {
 
     const adjudicationEvidence = source.match(/function buildOutdatedThreadAdjudicationEvidence[\s\S]*?function shapeDeliverySubagentAuditEvidence/);
     assert(adjudicationEvidence, "outdated-thread adjudication evidence builder not found");
-    for (const expected of ["Target review thread is not outdated", "Pending review requests", "Unresolved current review threads", "Outdated-thread current-head diff mapping missing"]) {
+    for (const expected of ["Outdated-thread adjudication only accepts the canonical Kendall_Nxt repository", "Target review thread is not outdated", "Pending review requests", "Unresolved current review threads", "Outdated-thread current-head diff mapping missing"]) {
       assert(adjudicationEvidence[0].includes(expected), `outdated-thread adjudication must fail closed on ${expected}`);
     }
 
@@ -1465,10 +1466,13 @@ try {
     assert(resolver[0].includes("outdated_review_thread_resolution_attempted"), "resolver must persist a mutation attempt before GitHub mutation");
     assert(resolver[0].includes("ambiguous-or-failed"), "resolver must retain ambiguous mutation outcomes");
     assert(resolver[0].includes("Do not retry blindly"), "resolver must retain a mutation recovery stop line");
+    assert(resolver[0].includes("supersedesAttemptId"), "resolver must retain evidence when a fresh adjudication supersedes recovery");
+    assert(resolver[0].includes("JSON.stringify(mapping.files || [])"), "resolver must retain mapped file paths losslessly");
+    assert(resolver[0].includes("fresh.repository?.fullName !== retained.repository?.fullName"), "outdated resolver must revalidate retained repository identity");
 
     const threadAudit = source.match(/function fetchReviewThreadState[\s\S]*?function commaSeparatedMetadata/);
     assert(threadAudit, "thread-aware audit helper not found");
-    assert(threadAudit[0].includes("comments(first:100){nodes{id,url,body}pageInfo{hasNextPage}}"), "thread audit must detect partial comment pages");
+    assert(threadAudit[0].includes("comments(first:100){nodes{id,url,body}pageInfo{hasNextPage,endCursor}}"), "thread audit must request the cursor needed for partial comment pages");
     assert(threadAudit[0].includes("reviewThreadCommentAudit"), "thread audit must use canonical full-comment evidence");
     assert(threadAudit[0].includes("auditFingerprint"), "thread audit must retain a canonical audit fingerprint");
 
