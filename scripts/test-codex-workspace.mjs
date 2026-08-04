@@ -10204,6 +10204,102 @@ try {
     }
   });
 
+  test("verify-pr-gates reads skipped-check policy from the exact managed PR head", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "## Documented Non-Required Checks\n\n- `javascript`\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "remove full skipped-check policy"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates",
+        "resumed-task",
+        "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener",
+        "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full",
+        "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.",
+        "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.root, env: fixture.env });
+      assert.notEqual(result.code, 0, result.stdout || result.stderr);
+      assert.match(result.stderr, /Non-required skipped checks do not match the source-owned policy/);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates ignores an uncommitted skipped-check policy edit", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "## Documented Non-Required Checks\n\n- `javascript`\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "remove full skipped-check policy"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n",
+      );
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates",
+        "resumed-task",
+        "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener",
+        "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full",
+        "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.",
+        "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.root, env: fixture.env });
+      assert.notEqual(result.code, 0, result.stdout || result.stderr);
+      assert.match(result.stderr, /Non-required skipped checks do not match the source-owned policy/);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("refresh-pr-head explicitly rebinds a stale managed delivery head and accepts the canonical AGENTS skipped-check policy", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
