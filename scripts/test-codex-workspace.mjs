@@ -1472,6 +1472,9 @@ try {
 
     const threadAudit = source.match(/function fetchReviewThreadState[\s\S]*?function commaSeparatedMetadata/);
     assert(threadAudit, "thread-aware audit helper not found");
+    assert(threadAudit[0].includes("reviewThreads(first:100,after:$after)"), "thread audit must request top-level review-thread pages");
+    assert(threadAudit[0].includes("if (cursor) args.push(\"-F\", `after=${cursor}`)"), "thread audit must request each top-level review-thread page");
+    assert(threadAudit[0].includes("Review-thread pagination omitted a next-page cursor"), "thread audit must fail closed when a top-level page cursor is missing");
     assert(threadAudit[0].includes("comments(first:100){nodes{id,url,body}pageInfo{hasNextPage,endCursor}}"), "thread audit must request the cursor needed for partial comment pages");
     assert(threadAudit[0].includes("reviewThreadCommentAudit"), "thread audit must use canonical full-comment evidence");
     assert(threadAudit[0].includes("auditFingerprint"), "thread audit must retain a canonical audit fingerprint");
@@ -10450,6 +10453,12 @@ try {
         args: ["--mapped-files", "other.txt"],
         expected: "Outdated-thread mapping names paths absent from the current PR diff: other.txt",
       },
+      {
+        name: "lane-owner-reviewer",
+        options: { existingPr: true, reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }] },
+        args: ["--reviewer-id", "runner-a"],
+        expected: "Outdated-thread reviewer identity must not match the lane owner",
+      },
     ]) {
       const fixture = createFinishPrExistingCommitFixture(scenario.options);
       try {
@@ -10470,6 +10479,27 @@ try {
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+  });
+
+  test("managed PR mutation commands require a bare --apply flag", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      for (const args of [
+        ["verify-pr-gates", "resumed-task", "--apply=false"],
+        ["refresh-pr-head", "resumed-task", "--apply", "false"],
+        ["adjudicate-outdated-thread", "resumed-task", "--apply=false"],
+        ["adjudicate-current-thread", "resumed-task", "--apply", "false"],
+      ]) {
+        const result = runFixtureScript(fixture, [...args, "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+        assert.notEqual(result.code, 0, `${args[0]} unexpectedly accepted a valued --apply flag`);
+        assert.match(result.stderr, /requires a bare --apply flag without a value/);
+        assert.equal(readFileSync(manifestPath, "utf8"), before, `${args[0]} mutated the manifest`);
+      }
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
@@ -10791,6 +10821,31 @@ try {
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+  });
+
+  test("verify-pr-gates aggregates finite top-level review-thread pages", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      reviewThreadPages: [
+        [{ id: "PRRT_page_one", isResolved: true, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_page_one", body: "Resolved." }] } }],
+        [{ id: "PRRT_page_two", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_page_two", body: "Current request." }] } }],
+      ],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--owner", "runner-a", "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert.equal(result.code, 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert.equal(packet.reviewThreads.querySucceeded, true, result.stdout);
+      assert.equal(packet.reviewThreads.hasNextPage, false, result.stdout);
+      assert.equal(packet.reviewThreads.totalCount, 2, result.stdout);
+      assert.equal(packet.reviewThreads.unresolvedNonOutdatedCount, 1, result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
@@ -14479,7 +14534,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       },
     ],
   };
-  const normalizedReviewThreads = (options.reviewThreads || [
+  const normalizeReviewThreads = (threads) => (threads || [
     {
       id: "RT_resolved",
       isResolved: true,
@@ -14508,15 +14563,19 @@ function createFinishPrExistingCommitFixture(options = {}) {
       },
     },
   }));
+  const normalizedReviewThreads = normalizeReviewThreads(options.reviewThreads);
+  const reviewThreadPages = Array.isArray(options.reviewThreadPages) && options.reviewThreadPages.length > 0
+    ? options.reviewThreadPages.map((page) => normalizeReviewThreads(page))
+    : [normalizedReviewThreads];
   const reviewThreadsPayload = {
     data: {
       repository: {
         pullRequest: {
           reviewThreads: {
-            nodes: normalizedReviewThreads,
+            nodes: reviewThreadPages[0],
             pageInfo: {
-              hasNextPage: Boolean(options.reviewThreadsHasNextPage),
-              endCursor: options.reviewThreadsHasNextPage ? "cursor-1" : null,
+              hasNextPage: reviewThreadPages.length > 1 || Boolean(options.reviewThreadsHasNextPage),
+              endCursor: reviewThreadPages.length > 1 || options.reviewThreadsHasNextPage ? "cursor-1" : null,
             },
           },
           reviewRequests: {
@@ -14561,8 +14620,15 @@ function createFinishPrExistingCommitFixture(options = {}) {
       "if (args[0] === 'api' && args[1] === 'graphql') {",
       `  const statePath = ${JSON.stringify(reviewThreadsStatePath)};`,
       `  const countPath = ${JSON.stringify(graphqlQueryCountPath)};`,
+      `  const reviewThreadPages = ${JSON.stringify(reviewThreadPages)};`,
       "  const payload = JSON.parse(fs.readFileSync(statePath, 'utf8'));",
       "  const query = args.find((arg) => arg.startsWith('query=')) || '';",
+      "  if (reviewThreadPages.length > 1 && query.includes('reviewThreads(first:100,after:$after)')) {",
+      "    const after = args.find((arg) => arg.startsWith('after='));",
+      "    const pageIndex = after ? Number(after.slice('after='.length).replace('cursor-', '')) : 0;",
+      "    const page = reviewThreadPages[pageIndex] || [];",
+      "    payload.data.repository.pullRequest.reviewThreads = { nodes: page, pageInfo: { hasNextPage: pageIndex < reviewThreadPages.length - 1, endCursor: pageIndex < reviewThreadPages.length - 1 ? `cursor-${pageIndex + 1}` : null } };",
+      "  }",
       "  if (query.includes('resolveReviewThread')) {",
       "    const threadArg = args.find((arg) => arg.startsWith('threadId=')) || ''; const threadId = threadArg.slice('threadId='.length);",
       options.resolveMutationFailure
