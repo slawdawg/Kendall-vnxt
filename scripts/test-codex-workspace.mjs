@@ -1416,6 +1416,8 @@ try {
     assert(evidence[0].includes('"all reported checks completed successfully or are exact-head documented non-required skips"'), "gate evidence must require explicit skipped-check policy proof");
     assert(evidence[0].includes('"delivery subagent audit recommends merge-ready for exact head"'), "gate evidence must require delivery subagent audit proof");
     assert(evidence[0].includes('"exact-head diff-risk assessment and focused verification evidence are recorded"'), "gate evidence must require exact-head diff-risk proof");
+    assert(evidence[0].includes('"planned exact-head merge command and bounded rollback path are recorded without cleanup flags"'), "gate evidence must require planned merge and rollback proof");
+    assert(evidence[0].includes("shapeExactHeadMergePlanEvidence"), "gate evidence must validate planned merge metadata");
     assert(evidence[0].includes("shapeDeliverySubagentAuditEvidence"), "gate evidence must shape delivery subagent audit metadata");
     assert(evidence[0].includes("metadataOnly: true"), "gate evidence must be metadata-only");
 
@@ -9199,6 +9201,10 @@ try {
           "merge-ready",
           "--delivery-audit-summary",
           "Exact-head delivery audit passed.",
+          "--merge-method",
+          `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+          "--rollback-path",
+          "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
           "--diff-risk-summary",
           "Policy-only authority update with fail-closed gate coverage.",
           "--diff-risk-files",
@@ -9224,6 +9230,11 @@ try {
       assert(manifest.pr_gate_evidence.reviewThreads.pendingReviewRequestCount === 0, "gate evidence did not prove pending-review clearance");
       assert(manifest.pr_gate_evidence.deliverySubagentAudit.status === "merge-ready", "gate evidence missing delivery audit status");
       assert(manifest.pr_gate_evidence.diffRiskEvidence.status === "recorded", "gate evidence missing diff-risk evidence");
+      assert(
+        manifest.pr_gate_evidence.mergePlan?.plannedMergeMethod === `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+        "gate evidence missing the exact-head merge command",
+      );
+      assert(manifest.pr_gate_evidence.mergePlan?.rollbackPath.includes("gh pr revert 456"), "gate evidence missing rollback path");
       assert(manifest.delivery_subagent_audit?.agent === "Wegener", "manifest missing delivery subagent audit agent");
       assert(manifest.delivery_subagent_audit?.headSha === manifest.pr_gate_evidence.expectedHeadSha, "delivery audit must bind to exact head");
       assert(manifest.delivery_subagent_audit_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing delivery audit freshness timestamp");
@@ -9283,6 +9294,34 @@ try {
       );
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       assert(!manifest.pr_gate_evidence, "noncanonical repository gate must not record passed evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates fails closed for a non-exact or cleanup merge plan", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--merge-method", "gh pr merge 456 --merge --match-head-commit wrong-head --delete-branch=true",
+          "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+          "--diff-risk-summary", "Policy-only authority update with fail-closed gate coverage.",
+          "--diff-risk-files", "feature.txt", "--diff-risk-verification", "pnpm run check:runbooks",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "verify-pr-gates unexpectedly accepted a non-exact cleanup merge plan");
+      assert(result.stderr.includes("--match-head-commit <expected-head>"), result.stderr || result.stdout);
+      assert(result.stderr.includes("must not include cleanup flags"), result.stderr || result.stdout);
+      assert(manifest.pr_delivery_head_sha, "fixture must retain its exact delivery head");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -9511,12 +9550,15 @@ try {
       ],
     });
     try {
+      const seeded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       const result = runFixtureScript(
         fixture,
         [
           "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
           "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
           "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+          "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
           "--non-required-checks", "full", "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
           "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
           "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
