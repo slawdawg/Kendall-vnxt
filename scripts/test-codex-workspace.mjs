@@ -10042,7 +10042,10 @@ try {
       { name: "cross-thread-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, threadId: "PRRT_other" }], expectedCode: 1 },
       { name: "cross-head-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, expectedHeadSha: "other-head" }], expectedCode: 1 },
     ]) {
-      const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+      const fixture = createFinishPrExistingCommitFixture({
+        existingPr: true,
+        ...(scenario.expectedCode === 0 ? { repository: { owner: "slawdawg", name: "Kendall-vnxt" } } : {}),
+      });
       try {
         const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
         const manifest = readJson(manifestPath);
