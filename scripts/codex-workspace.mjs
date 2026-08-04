@@ -531,7 +531,6 @@ adjudicate-current-thread options:
   --verification-exit-code <0> Required successful verification result.
   --review-summary <text>   Required independent code-review evidence.
   --reviewer-id <id>        Required reviewer or audit identity.
-  --risk-authority <text>   Required recorded operator authority when the exact PR diff has a high-risk surface.
   --apply                   Record adjudication evidence in the manifest. Never resolves GitHub threads.
   --summary-json            Without --apply, print the adjudication packet.
   Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
@@ -3584,7 +3583,6 @@ function resolveAdjudicatedThread(argv) {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: JSON.stringify(mapping.files || []), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
       verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
-      riskAuthority: mapping.riskAuthority,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
@@ -3608,6 +3606,7 @@ function resolveAdjudicatedThread(argv) {
       attemptId: randomUUID(),
       threadId,
       expectedHeadSha: fresh.expectedHeadSha,
+      repository: fresh.repository,
       supersedesAttemptId: supersededAttempt?.attemptId || null,
       attemptedAt: new Date().toISOString(),
       mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
@@ -3637,13 +3636,14 @@ function resolveAdjudicatedThread(argv) {
       }
     }
 
-    let postResolutionAudit = null;
+    let postResolutionState = null;
     let postAuditError = "";
     try {
-      postResolutionAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
+      postResolutionState = loadPostResolutionExactState(locked, fresh);
     } catch (error) {
       postAuditError = safeMetadataText(error.message, 500);
     }
+    const postResolutionAudit = postResolutionState?.reviewThreads || null;
     const outcome = locked.outdated_thread_resolution_outcomes.find((entry) => entry?.attemptId === attempt.attemptId);
     outcome.completedAt = new Date().toISOString();
     outcome.mutation = {
@@ -3654,13 +3654,17 @@ function resolveAdjudicatedThread(argv) {
       metadataOnly: true,
     };
     outcome.postResolutionAudit = postResolutionAudit ? compactReviewThreadAudit(postResolutionAudit) : null;
+    outcome.postResolutionState = postResolutionState ? compactPostResolutionExactState(postResolutionState) : null;
     outcome.recoveryPath = mutationBlocker || postAuditError
       ? "The mutation outcome is not fully proven. Do not retry blindly; inspect this retained attempt, re-audit GitHub, and resume only with a fresh exact-head adjudication."
       : "Re-run verify-pr-gates before an exact-head merge. Any remaining current or outdated thread is a merge hold.";
     if (postAuditError) outcome.postAuditError = postAuditError;
 
     const target = postResolutionAudit?.threadRefs.find((thread) => thread.id === threadId);
-    const postBlockers = reviewThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh);
+    const postBlockers = [
+      ...postResolutionExactStateBlockers(postResolutionState, fresh),
+      ...reviewThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh),
+    ];
     if (mutationBlocker) postBlockers.unshift(mutationBlocker);
     if (postAuditError) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditError}`);
     outcome.status = postBlockers.length ? "needs-recovery" : "resolved";
@@ -3739,7 +3743,7 @@ function resolveAdjudicatedCurrentThread(argv) {
     const fresh = buildCurrentThreadAdjudicationEvidence(locked, { threadId, options: {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: JSON.stringify(mapping.files || []), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
-      verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId, riskAuthority: mapping.riskAuthority,
+      verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
@@ -3772,16 +3776,21 @@ function resolveAdjudicatedCurrentThread(argv) {
         if (!resolved || resolved.id !== threadId || resolved.isResolved !== true || (Array.isArray(parsed?.errors) && parsed.errors.length)) mutationBlocker = "GitHub resolution mutation returned an incomplete or mismatched target result";
       } catch (error) { mutationBlocker = safeMetadataText(error.message, 500); }
     }
-    let postResolutionAudit = null;
+    let postResolutionState = null;
     let postAuditError = "";
-    try { postResolutionAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number); } catch (error) { postAuditError = safeMetadataText(error.message, 500); }
+    try { postResolutionState = loadPostResolutionExactState(locked, fresh); } catch (error) { postAuditError = safeMetadataText(error.message, 500); }
+    const postResolutionAudit = postResolutionState?.reviewThreads || null;
     const outcome = locked.current_thread_resolution_outcomes.find((entry) => entry?.attemptId === attempt.attemptId);
     outcome.completedAt = new Date().toISOString();
     outcome.mutation = { status: mutationBlocker ? "ambiguous-or-failed" : "confirmed-by-mutation-response", exitCode: mutation.code, result: mutationBlocker || "target returned resolved", replyPosted: false, metadataOnly: true };
     outcome.postResolutionAudit = postResolutionAudit ? compactReviewThreadAudit(postResolutionAudit) : null;
+    outcome.postResolutionState = postResolutionState ? compactPostResolutionExactState(postResolutionState) : null;
     if (postAuditError) outcome.postAuditError = postAuditError;
     const target = postResolutionAudit?.threadRefs.find((thread) => thread.id === threadId);
-    const postBlockers = currentThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh);
+    const postBlockers = [
+      ...postResolutionExactStateBlockers(postResolutionState, fresh),
+      ...currentThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh),
+    ];
     if (mutationBlocker) postBlockers.unshift(mutationBlocker);
     if (postAuditError) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditError}`);
     outcome.status = postBlockers.length ? "needs-recovery" : "resolved";
@@ -3822,8 +3831,52 @@ function currentThreadResolutionPostMutationBlockers(audit, target, fresh) {
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests after resolution: ${audit.pendingReviewRequestCount}`);
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads after resolution: ${audit.unresolvedNonOutdatedCount}`);
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
+  if (target?.isOutdated) blockers.push("Target review thread became outdated during resolution and requires recovery");
   if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
   return blockers;
+}
+
+function loadPostResolutionExactState(manifest, fresh) {
+  const repositoryRef = githubRepository(manifest);
+  const repository = { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` };
+  const pr = prViewForGates(manifest);
+  if (!pr) throw new Error("Could not reload PR state after review-thread resolution mutation.");
+  const headState = prGateHeadState(manifest);
+  const reviewThreads = fetchReviewThreadState(manifest, repositoryRef, fresh.pr.number);
+  const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, fresh.nonRequiredCheckPolicy);
+  return { repository, pr, headState, reviewThreads, checks };
+}
+
+function postResolutionExactStateBlockers(post, fresh = {}) {
+  const blockers = [];
+  if (!post) return ["Post-resolution exact PR state re-audit is unavailable"];
+  if (post.repository?.fullName !== fresh.repository?.fullName) blockers.push("Repository changed during review-thread resolution and requires recovery");
+  if (!post.pr || post.pr.number !== fresh.pr?.number || post.pr.state !== "OPEN" || post.pr.isDraft || post.pr.mergedAt) blockers.push("PR is no longer the exact open non-draft PR after review-thread resolution");
+  if (!post.pr?.headRefOid || post.pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head changed during review-thread resolution and requires recovery");
+  if (!post.headState?.localMatchesExpected || post.headState?.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head changed during review-thread resolution and requires recovery");
+  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(post.pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${post.pr.reviewDecision} after review-thread resolution`);
+  if (post.checks?.total === 0) blockers.push("No status checks reported for exact head after review-thread resolution");
+  if (post.checks?.pending?.length) blockers.push(`Pending checks after review-thread resolution: ${post.checks.pending.map((check) => check.name).join(", ")}`);
+  if (post.checks?.failing?.length) blockers.push(`Failed or ambiguous checks after review-thread resolution: ${post.checks.failing.map((check) => check.name).join(", ")}`);
+  blockers.push(...(fresh.nonRequiredCheckPolicy?.blockers || []));
+  return blockers;
+}
+
+function compactPostResolutionExactState(post = {}) {
+  return {
+    repository: post.repository?.fullName || null,
+    pr: {
+      number: post.pr?.number || null,
+      state: post.pr?.state || null,
+      headRefOid: post.pr?.headRefOid || null,
+      reviewDecision: post.pr?.reviewDecision || null,
+    },
+    localHeadSha: post.headState?.localHeadSha || null,
+    expectedHeadSha: post.headState?.expectedHeadSha || null,
+    checks: compactStatusCheckEvidence(post.checks),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function reviewThreadResolutionHolds(audit) {
@@ -3855,8 +3908,8 @@ function retainedResolutionOutcomes(outcomes) {
 }
 
 function isHighRiskReviewThreadPath(path) {
-  const value = String(path || "");
-  return value === "AGENTS.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
+  const value = String(path || "").toLowerCase();
+  return value === "agents.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
 }
 
 function assertNoUnrecoveredResolutionAttempt(outcomes, threadId, kind, freshAdjudication = null) {
@@ -4521,6 +4574,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     expectedHeadSha: headState.expectedHeadSha,
   });
   const blockers = prGateBlockers(manifest, pr, {
+    repository,
     headState,
     worktreeStatus,
     checks,
@@ -4528,6 +4582,8 @@ function buildPrGateEvidence(manifest, context = {}) {
     reviewThreadState,
     deliverySubagentAudit,
     diffRiskEvidence,
+    currentResolutionOutcomes: manifest.current_thread_resolution_outcomes,
+    outdatedResolutionOutcomes: manifest.outdated_thread_resolution_outcomes,
   });
   const requiredGates = [
     "PR open and non-draft",
@@ -4842,7 +4898,6 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     .map((owner) => safeMetadataText(owner, 120))
     .filter(Boolean);
   const requestFingerprint = safeMetadataText(options.requestFingerprint, 80).toLowerCase();
-  const riskAuthority = safeMetadataText(options.riskAuthority, 500);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
   const highRiskPaths = changedPaths.filter(isHighRiskReviewThreadPath);
   const changedPathError = safeMetadataText(context.changedPathError, 500);
@@ -4877,7 +4932,6 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     reviewSummary: reviewSummary || null,
     reviewerId: reviewerId || null,
     requestFingerprint: requestFingerprint || null,
-    riskAuthority: riskAuthority || null,
     highRiskPaths,
     expectedHeadSha: safeMetadataText(context.expectedHeadSha, 80) || null,
     inspectedHeadSha: safeMetadataText(context.inspectedHeadSha, 80) || null,
@@ -5019,6 +5073,7 @@ function prGateHeadState(manifest) {
 
 function prGateBlockers(manifest, pr, context) {
   const blockers = [];
+  if (context.repository?.owner !== "slawdawg" || context.repository?.name !== "Kendall-vnxt") blockers.push("Managed PR gate only accepts the canonical Kendall_Nxt repository");
   if (!pr.number) {
     blockers.push("PR number missing");
   }
@@ -5088,7 +5143,33 @@ function prGateBlockers(manifest, pr, context) {
   }
   blockers.push(...(context.deliverySubagentAudit?.blockers || []));
   blockers.push(...(context.diffRiskEvidence?.blockers || []));
+  const resolutionOutcomes = [
+    ...(context.currentResolutionOutcomes || []).map((outcome) => ({ kind: "current", outcome })),
+    ...(context.outdatedResolutionOutcomes || []).map((outcome) => ({ kind: "outdated", outcome })),
+  ];
+  const unrecovered = resolutionOutcomes.filter(({ kind, outcome }) =>
+    (outcome?.status === "needs-recovery" || outcome?.mutation?.status === "attempt-recorded")
+    && !resolutionOutcomes.some(({ kind: supersederKind, outcome: superseder }) => supersedesResolutionAttempt(superseder, supersederKind, outcome, kind)),
+  );
+  if (unrecovered.length) blockers.push(`Unrecovered review-thread mutation outcomes: ${unrecovered.map(({ outcome }) => outcome.threadId || "unknown").join(", ")}`);
   return blockers;
+}
+
+function supersedesResolutionAttempt(superseder, supersederKind, attempt, attemptKind) {
+  const supersederCompletedAt = Date.parse(superseder?.completedAt || superseder?.attemptedAt || "");
+  const attemptCompletedAt = Date.parse(attempt?.completedAt || attempt?.attemptedAt || "");
+  return supersederKind === attemptKind
+    && superseder?.status === "resolved"
+    && superseder?.mutation?.status === "confirmed-by-mutation-response"
+    && superseder?.attemptId
+    && superseder.attemptId !== attempt?.attemptId
+    && superseder?.supersedesAttemptId === attempt?.attemptId
+    && superseder?.threadId === attempt?.threadId
+    && superseder?.repository?.fullName === attempt?.repository?.fullName
+    && superseder?.expectedHeadSha === attempt?.expectedHeadSha
+    && Number.isFinite(supersederCompletedAt)
+    && Number.isFinite(attemptCompletedAt)
+    && supersederCompletedAt > attemptCompletedAt;
 }
 
 function renderPrGateEvidence(packet = {}) {
