@@ -14987,6 +14987,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
       `if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: ${JSON.stringify(repository.owner)} }, name: ${JSON.stringify(repository.name)} })); process.exit(0); }`,
+      `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === '--slurp' && args[3] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { console.log(JSON.stringify([[]])); process.exit(0); }`,
       "if (args[0] === 'api' && args[1] === 'graphql') {",
       `  const statePath = ${JSON.stringify(reviewThreadsStatePath)};`,
       `  const countPath = ${JSON.stringify(graphqlQueryCountPath)};`,
