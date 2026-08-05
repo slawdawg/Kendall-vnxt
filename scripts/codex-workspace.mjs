@@ -499,7 +499,9 @@ verify-pr-gates options:
   --non-required-check-policy <ref> Required source-owned policy reference for --non-required-checks.
   --diff-risk-summary <text> Exact-head diff-risk assessment summary.
   --diff-risk-files <list> Changed paths covered by the assessment; use a JSON string array when paths contain commas or exceed normal metadata lengths.
-  --diff-risk-verification <text> Focused verification evidence for the assessment.
+  --diff-risk-verification <text> Bounded focused verification result for the assessment.
+  --diff-risk-verification-command <text> Executed focused verification command for the assessment.
+  --diff-risk-verification-exit-code <0> Required successful focused verification exit status.
 
 refresh-pr-head options:
   --reason <text>           Required bounded reason for the explicit stale-head rebind.
@@ -3285,6 +3287,7 @@ function refreshPrHead(argv) {
   assertSafeBranch(manifest.branch);
   assertWorktreeExists(manifest);
   assertCurrentBranch(manifest);
+  assertRegisteredManagedWorktree(manifest, state);
 
   const lockInspection = inspectTaskLock(state, manifest.task_id);
   const packet = buildPrHeadRefreshEvidence(manifest, { options, reason, lockInspection });
@@ -3308,6 +3311,7 @@ function refreshPrHead(argv) {
     assertLaneOwner(locked, options);
     claimLaneOwner(locked, options);
     assertCurrentBranch(locked);
+    assertRegisteredManagedWorktree(locked, state);
     lock.heartbeat();
     const lockedPacket = buildPrHeadRefreshEvidence(locked, {
       options,
@@ -3350,7 +3354,10 @@ function refreshPrHead(argv) {
     Object.assign(manifest, locked);
   });
 
-  printApplied("refresh-pr-head", renderPrHeadRefreshEvidence(manifest.pr_head_rebinds.at(-1)));
+  printApplied("refresh-pr-head", renderPrHeadRefreshEvidence({
+    ...manifest.pr_head_rebinds.at(-1),
+    lock: { status: "owned", owner: currentLaneOwner(options) },
+  }));
 }
 
 function buildPrHeadRefreshEvidence(manifest, context = {}) {
@@ -3460,13 +3467,14 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
 }
 
 function renderPrHeadRefreshEvidence(packet = {}) {
+  const reviewThreads = packet.reviewThreads || {};
   return [
     `prior head ${packet.priorHeadSha || "missing"}`,
     `new head ${packet.newHeadSha || "missing"}`,
     `repository ${packet.repository?.fullName || "unknown"} pr=${packet.pr?.number || "unknown"}`,
     `lock ${packet.lock?.status || "unknown"}`,
     `checks total=${packet.checks?.total ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0}`,
-    `reviewThreads current=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} outdated=${packet.reviewThreads?.unresolvedOutdatedCount ?? "unknown"} pendingRequests=${packet.reviewThreads?.pendingReviewRequestCount ?? "unknown"}`,
+    `reviewThreads current=${reviewThreads.unresolvedNonOutdatedCount ?? reviewThreads.unresolvedCurrent ?? "unknown"} outdated=${reviewThreads.unresolvedOutdatedCount ?? reviewThreads.unresolvedOutdated ?? "unknown"} pendingRequests=${reviewThreads.pendingReviewRequestCount ?? reviewThreads.pendingRequests ?? "unknown"}`,
   ];
 }
 
@@ -3831,7 +3839,16 @@ function currentThreadResolutionPostMutationBlockers(audit, target, fresh) {
   const blockers = [];
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Post-resolution thread-aware audit is incomplete");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests after resolution: ${audit.pendingReviewRequestCount}`);
-  if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads after resolution: ${audit.unresolvedNonOutdatedCount}`);
+  const preExistingCurrentIds = new Set((fresh.reviewThreads?.threadRefs || [])
+    .filter((thread) => !thread?.isResolved && !thread?.isOutdated)
+    .map((thread) => thread.id)
+    .filter(Boolean));
+  const unexpectedCurrent = (audit?.threadRefs || []).filter((thread) =>
+    !thread?.isResolved && !thread?.isOutdated && !preExistingCurrentIds.has(thread.id),
+  );
+  if (unexpectedCurrent.length) {
+    blockers.push(`New unresolved current review threads after resolution: ${unexpectedCurrent.map((thread) => thread.url || thread.id).join(", ")}`);
+  }
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   if (target?.isOutdated) blockers.push("Target review thread became outdated during resolution and requires recovery");
   if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
@@ -3952,7 +3969,16 @@ function reviewThreadResolutionPostMutationBlockers(audit, target, fresh = {}) {
   const blockers = [];
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Post-resolution thread-aware audit is incomplete");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests after resolution: ${audit.pendingReviewRequestCount}`);
-  if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads after resolution: ${audit.unresolvedNonOutdatedCount}`);
+  const preExistingCurrentIds = new Set((fresh.reviewThreads?.threadRefs || [])
+    .filter((thread) => !thread?.isResolved && !thread?.isOutdated)
+    .map((thread) => thread.id)
+    .filter(Boolean));
+  const unexpectedCurrent = (audit?.threadRefs || []).filter((thread) =>
+    !thread?.isResolved && !thread?.isOutdated && !preExistingCurrentIds.has(thread.id),
+  );
+  if (unexpectedCurrent.length) {
+    blockers.push(`New unresolved current review threads after resolution: ${unexpectedCurrent.map((thread) => thread.url || thread.id).join(", ")}`);
+  }
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
   return blockers;
@@ -4302,7 +4328,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
   }
 
   const expectedHeadSha = pr?.headRefOid || "";
-  const preMergeGate = shapeRetainedPreMergeGateEvidence(manifest, expectedHeadSha);
+  const preMergeGate = shapeRetainedPreMergeGateEvidence(manifest, pr);
   blockers.push(...preMergeGate.blockers);
   const deliverySubagentAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr || {}, context.options || {}, {
     expectedHeadSha,
@@ -4400,7 +4426,8 @@ function renderMergedPrReconciliationEvidence(packet = {}) {
   ];
 }
 
-function shapeRetainedPreMergeGateEvidence(manifest, expectedHeadSha) {
+function shapeRetainedPreMergeGateEvidence(manifest, pr) {
+  const expectedHeadSha = pr?.headRefOid || "";
   const gate = manifest.pr_gate_evidence && typeof manifest.pr_gate_evidence === "object" ? manifest.pr_gate_evidence : null;
   const blockers = [];
   if (!gate) {
@@ -4424,6 +4451,12 @@ function shapeRetainedPreMergeGateEvidence(manifest, expectedHeadSha) {
     }
     if (!gate.expectedHeadSha || gate.expectedHeadSha !== expectedHeadSha) {
       blockers.push("Retained pre-merge gate evidence does not match the merged PR head");
+    }
+    if (gate.taskId !== manifest.task_id || gate.branch !== manifest.branch || gate.baseBranch !== manifest.base_branch) {
+      blockers.push("Retained pre-merge gate evidence does not match the managed task, branch, or base");
+    }
+    if (gate.pr?.number !== pr?.number || gate.pr?.url !== pr?.url || gate.pr?.baseRefName !== pr?.baseRefName || gate.pr?.headRefOid !== pr?.headRefOid) {
+      blockers.push("Retained pre-merge gate evidence does not match the merged PR identity");
     }
   }
   return {
@@ -5192,18 +5225,16 @@ function prGateBlockers(manifest, pr, context) {
   ];
   const unrecovered = resolutionOutcomes.filter(({ kind, outcome }) =>
     (outcome?.status === "needs-recovery" || outcome?.mutation?.status === "attempt-recorded")
-    && !resolutionOutcomes.some(({ kind: supersederKind, outcome: superseder }) => supersedesResolutionAttempt(superseder, supersederKind, outcome, kind)),
+    && !resolutionAttemptRecovered(resolutionOutcomes, kind, outcome),
   );
   if (unrecovered.length) blockers.push(`Unrecovered review-thread mutation outcomes: ${unrecovered.map(({ outcome }) => outcome.threadId || "unknown").join(", ")}`);
   return blockers;
 }
 
-function supersedesResolutionAttempt(superseder, supersederKind, attempt, attemptKind) {
+function resolutionAttemptSupersedes(superseder, supersederKind, attempt, attemptKind) {
   const supersederCompletedAt = Date.parse(superseder?.completedAt || superseder?.attemptedAt || "");
   const attemptCompletedAt = Date.parse(attempt?.completedAt || attempt?.attemptedAt || "");
   return supersederKind === attemptKind
-    && superseder?.status === "resolved"
-    && superseder?.mutation?.status === "confirmed-by-mutation-response"
     && superseder?.attemptId
     && superseder.attemptId !== attempt?.attemptId
     && superseder?.supersedesAttemptId === attempt?.attemptId
@@ -5213,6 +5244,23 @@ function supersedesResolutionAttempt(superseder, supersederKind, attempt, attemp
     && Number.isFinite(supersederCompletedAt)
     && Number.isFinite(attemptCompletedAt)
     && supersederCompletedAt > attemptCompletedAt;
+}
+
+function resolutionAttemptRecovered(outcomes, attemptKind, attempt) {
+  const visited = new Set([attempt?.attemptId]);
+  const queue = [attempt];
+  while (queue.length) {
+    const prior = queue.shift();
+    for (const candidate of outcomes || []) {
+      if (!resolutionAttemptSupersedes(candidate.outcome, candidate.kind, prior, attemptKind)) continue;
+      if (candidate.outcome?.status === "resolved" && candidate.outcome?.mutation?.status === "confirmed-by-mutation-response") return true;
+      if (!visited.has(candidate.outcome?.attemptId)) {
+        visited.add(candidate.outcome?.attemptId);
+        queue.push(candidate.outcome);
+      }
+    }
+  }
+  return false;
 }
 
 function renderPrGateEvidence(packet = {}) {
@@ -5514,6 +5562,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   const fileSet = diffRiskPathSet(options.diffRiskFiles);
   const files = fileSet.paths;
   const verification = safeMetadataText(options.diffRiskVerification, 500);
+  const verificationCommand = safeMetadataText(options.diffRiskVerificationCommand, 500);
+  const verificationExitCode = String(options.diffRiskVerificationExitCode ?? "").trim();
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
   const changedPathError = safeMetadataText(context.changedPathError || "", 500);
@@ -5522,6 +5572,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   if (!summary) blockers.push("Diff-risk summary missing");
   if (files.length === 0) blockers.push("Diff-risk changed-file evidence missing");
   if (!verification) blockers.push("Diff-risk focused verification evidence missing");
+  if (!verificationCommand) blockers.push("Diff-risk focused verification command missing");
+  if (verificationExitCode !== "0") blockers.push("Diff-risk focused verification exit code must be 0");
   if (!expectedHeadSha) blockers.push("Diff-risk exact head missing");
   if (fileSet.error) blockers.push(fileSet.error);
   if (changedPathError) blockers.push(`Diff-risk changed-path inspection failed: ${changedPathError}`);
@@ -5533,6 +5585,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
     summary: summary || null,
     files,
     verification: verification || null,
+    verificationCommand: verificationCommand || null,
+    verificationExitCode: verificationExitCode === "0" ? 0 : null,
     expectedHeadSha: expectedHeadSha || null,
     changedPaths,
     uncoveredPaths,
