@@ -520,6 +520,7 @@ adjudicate-outdated-thread options:
   --verification-exit-code <0> Required successful verification result.
   --review-summary <text>   Required bounded code-review evidence.
   --reviewer-id <id>        Required reviewer or audit identity.
+  --high-risk-authorization <text> Required exact evidence: operator-authorized thread=<id> head=<sha> for one named high-risk thread.
   --apply                   Record adjudication evidence in the manifest. Never resolves GitHub threads.
   --summary-json            Without --apply, print the adjudication packet.
   Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
@@ -535,6 +536,7 @@ adjudicate-current-thread options:
   --verification-exit-code <0> Required successful verification result.
   --review-summary <text>   Required independent code-review evidence.
   --reviewer-id <id>        Required reviewer or audit identity.
+  --high-risk-authorization <text> Required exact evidence: operator-authorized thread=<id> head=<sha> for one named high-risk thread.
   --apply                   Record adjudication evidence in the manifest. Never resolves GitHub threads.
   --summary-json            Without --apply, print the adjudication packet.
   Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
@@ -3593,9 +3595,10 @@ function resolveAdjudicatedThread(argv) {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: JSON.stringify(mapping.files || []), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
       verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
+      highRiskAuthorization: mapping.highRiskAuthorization?.evidence,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
-    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
+    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
     const supersededAttempt = assertNoUnrecoveredResolutionAttempt(locked.outdated_thread_resolution_outcomes, threadId, "outdated", fresh);
@@ -3754,9 +3757,10 @@ function resolveAdjudicatedCurrentThread(argv) {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: JSON.stringify(mapping.files || []), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
       verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
+      highRiskAuthorization: mapping.highRiskAuthorization?.evidence,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
-    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
+    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh current-thread adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
     const supersededAttempt = assertNoUnrecoveredResolutionAttempt(locked.current_thread_resolution_outcomes, threadId, "current", fresh);
@@ -4729,6 +4733,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
     laneOwner: manifest.owner,
     currentOwner: currentLaneOwner(options),
     expectedHeadSha: headState.expectedHeadSha,
+    threadId,
     changedPaths: changedPathInspection.paths,
     changedPathError: changedPathInspection.error,
     inspectedHeadSha: changedPathInspection.inspectedHeadSha,
@@ -4749,6 +4754,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
     "all reported checks are terminal-successful or exact-head documented non-required skips",
     "no pending review request, requested change, or unresolved current review thread",
     "bounded request, current-head diff, local verification, and code-review mapping is recorded",
+    "every high-risk mapping has explicit operator authorization evidence bound to this named thread and exact head",
     "GitHub resolution remains a separate no-reply action followed by a fresh thread-aware re-audit",
   ];
   const status = blockers.length === 0 ? "ready" : "blocked";
@@ -4831,6 +4837,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
     laneOwner: manifest.owner,
     currentOwner: currentLaneOwner(options),
     expectedHeadSha: headState.expectedHeadSha,
+    threadId,
     changedPaths: changedPathInspection.paths,
     changedPathError: changedPathInspection.error,
     inspectedHeadSha: changedPathInspection.inspectedHeadSha,
@@ -4846,6 +4853,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
     "all reported checks are terminal-successful or exact-head documented non-required skips",
     "no pending review request or requested change; other unresolved threads are retained as explicit merge holds",
     "bounded request, current-head diff, local verification, and independent code-review mapping is recorded",
+    "every high-risk mapping has explicit operator authorization evidence bound to this named thread and exact head",
     "GitHub resolution remains a separate named no-reply action followed by a fresh thread-aware re-audit",
   ];
   const status = blockers.length === 0 ? "ready" : "blocked";
@@ -4914,7 +4922,7 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   else if (!context.target.requestFingerprint) blockers.push("Target review thread has no request fingerprint");
   else if (context.mapping?.requestFingerprint !== context.target.requestFingerprint) blockers.push("Current-thread request fingerprint does not match the target review thread");
   else if (context.target.path && !context.mapping?.files?.includes(context.target.path)) blockers.push(`Current-thread mapping omits target review path: ${context.target.path}`);
-  if (context.mapping?.highRiskPaths?.length) blockers.push(`High-risk current-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
+  if (context.mapping?.highRiskPaths?.length && context.mapping?.highRiskAuthorization?.status !== "authorized") blockers.push(`High-risk current-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
   blockers.push(...(context.mapping?.blockers || []));
   return blockers;
 }
@@ -4945,6 +4953,11 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   const requestFingerprint = safeMetadataText(options.requestFingerprint, 80).toLowerCase();
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
   const highRiskPaths = changedPaths.filter(isHighRiskReviewThreadPath);
+  const highRiskAuthorization = shapeHighRiskThreadAuthorizationEvidence(options, {
+    threadId: context.threadId,
+    expectedHeadSha: context.expectedHeadSha,
+    highRiskPaths,
+  });
   const changedPathError = safeMetadataText(context.changedPathError, 500);
   const uncoveredFiles = files.filter((path) => !changedPaths.includes(path));
   const blockers = [];
@@ -4965,6 +4978,7 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   if (changedPathError) blockers.push(`Outdated-thread changed-path inspection failed: ${changedPathError}`);
   if (!changedPathError && changedPaths.length === 0) blockers.push("Outdated-thread changed-path inspection returned no paths");
   if (uncoveredFiles.length) blockers.push(`Outdated-thread mapping names paths absent from the current PR diff: ${uncoveredFiles.join(", ")}`);
+  blockers.push(...highRiskAuthorization.blockers);
   return {
     schemaVersion: 1,
     status: blockers.length ? "missing" : "recorded",
@@ -4978,10 +4992,42 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     reviewerId: reviewerId || null,
     requestFingerprint: requestFingerprint || null,
     highRiskPaths,
+    highRiskAuthorization,
     expectedHeadSha: safeMetadataText(context.expectedHeadSha, 80) || null,
     inspectedHeadSha: safeMetadataText(context.inspectedHeadSha, 80) || null,
     postInspectionHeadSha: safeMetadataText(context.postInspectionHeadSha, 80) || null,
     changedPaths,
+    blockers,
+    metadataOnly: true,
+  };
+}
+
+function shapeHighRiskThreadAuthorizationEvidence(options = {}, context = {}) {
+  const evidence = safeMetadataText(options.highRiskAuthorization, 500);
+  const highRiskPaths = Array.isArray(context.highRiskPaths) ? context.highRiskPaths : [];
+  const threadId = safeMetadataText(context.threadId, 160);
+  const expectedHeadSha = exactGitObjectIdOrNull(context.expectedHeadSha) || null;
+  const blockers = [];
+  const canonicalEvidence = threadId && expectedHeadSha
+    ? `operator-authorized thread=${threadId} head=${expectedHeadSha}`
+    : "";
+  const hasExactBinding = evidence === canonicalEvidence;
+  if (highRiskPaths.length && (!validTakeoverReason(evidence) || !hasExactBinding)) {
+    blockers.push("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>");
+  }
+  if (!highRiskPaths.length && evidence) {
+    blockers.push("High-risk review-thread authorization is only valid when the exact audited PR diff contains a high-risk path");
+  }
+  if (evidence && (!threadId || !expectedHeadSha)) {
+    blockers.push("High-risk review-thread authorization could not bind to one exact thread and PR head");
+  }
+  return {
+    schemaVersion: 1,
+    status: blockers.length ? "blocked" : highRiskPaths.length ? "authorized" : "not-required",
+    evidence: evidence || null,
+    threadId: threadId || null,
+    expectedHeadSha,
+    highRiskPaths,
     blockers,
     metadataOnly: true,
   };
@@ -5012,7 +5058,7 @@ function outdatedThreadAdjudicationBlockers(manifest, pr, context) {
   else if (!context.target.requestFingerprint) blockers.push("Target review thread has no request fingerprint");
   else if (context.mapping?.requestFingerprint !== context.target.requestFingerprint) blockers.push("Outdated-thread request fingerprint does not match the target review thread");
   else if (context.target.path && !context.mapping?.files?.includes(context.target.path)) blockers.push(`Outdated-thread mapping omits target review path: ${context.target.path}`);
-  if (context.mapping?.highRiskPaths?.length) blockers.push(`High-risk outdated-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
+  if (context.mapping?.highRiskPaths?.length && context.mapping?.highRiskAuthorization?.status !== "authorized") blockers.push(`High-risk outdated-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
   blockers.push(...(context.mapping?.blockers || []));
   return blockers;
 }
