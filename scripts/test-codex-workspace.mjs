@@ -1428,6 +1428,7 @@ try {
       "Pending review requests",
       "Review-request query returned additional pages",
       "Managed merge gate requires a clean worktree",
+      "Managed PR gate requires recorded standard-delivery pr_open evidence",
       "Unrecovered review-thread mutation outcomes",
       "REVIEW_REQUIRED",
       "context.nonRequiredCheckPolicy?.blockers",
@@ -1509,6 +1510,27 @@ try {
     assert(currentResolver, "current-thread resolver not found");
     assert(currentResolver[0].includes("recoverAlreadyResolvedCurrentThreadAttempt"), "current-thread resolver must recover a confirmed already-resolved interrupted attempt without retrying GitHub mutation");
     assert(currentResolver[0].includes("confirmed-by-post-audit-recovery"), "current-thread recovery must retain its distinct exact-audit outcome");
+    const currentRecovery = source.match(/function recoverAlreadyResolvedCurrentThreadAttempt[\s\S]*?function currentThreadResolutionPreMutationBlockers/);
+    assert(currentRecovery, "current-thread recovery helper not found");
+    assert(currentRecovery[0].includes("if (!target?.isResolved) return null"), "an unresolved failed attempt must proceed to fresh adjudication rather than recovery");
+    assert(currentRecovery[0].includes("lacks retained exact-head adjudication provenance"), "current-thread recovery must require retained exact-head provenance");
+    assert(currentRecovery[0].includes("!prior.targetRequestFingerprint"), "current-thread recovery must require a retained attempt fingerprint");
+    assert(currentRecovery[0].includes("PR base changed before recovery"), "current-thread recovery must reject an interrupted attempt after PR base drift");
+    assert(currentRecovery[0].includes("malformed adjudication provenance"), "current-thread recovery must reject malformed retained fingerprints");
+
+    const currentMutationGuards = source.match(/function currentThreadResolutionPreMutationBlockers[\s\S]*?function currentThreadResolutionPostMutationBlockers/);
+    assert(currentMutationGuards, "current-thread pre-mutation guards not found");
+    assert(currentMutationGuards[0].includes("PR base drifted immediately before the thread mutation"), "current-thread pre-mutation guards must reject base drift");
+    const postMutationGuards = source.match(/function postResolutionExactStateBlockers[\s\S]*?function compactPostResolutionExactState/);
+    assert(postMutationGuards, "post-resolution exact-state guards not found");
+    assert(postMutationGuards[0].includes("PR base changed during review-thread resolution"), "post-resolution guards must reject base drift");
+    const compactPostMutationState = source.match(/function compactPostResolutionExactState[\s\S]*?function reviewThreadResolutionHolds/);
+    assert(compactPostMutationState?.[0].includes("baseRefName"), "post-resolution exact-state evidence must retain the revalidated base");
+
+    const highRiskAuthorization = source.match(/function shapeHighRiskThreadAuthorizationEvidence[\s\S]*?function outdatedThreadAdjudicationBlockers/);
+    assert(highRiskAuthorization, "high-risk authorization helper not found");
+    assert(highRiskAuthorization[0].includes("rawEvidence"), "high-risk authorization must retain raw evidence for exact comparison");
+    assert(!highRiskAuthorization[0].includes("safeMetadataText(options.highRiskAuthorization"), "high-risk authorization must not normalize exact operator evidence");
 
     const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
     assert(packetBlock, "lane evidence packet source not found");
@@ -10173,6 +10195,7 @@ try {
       );
 
       assert(result.code !== 0, "verify-pr-gates unexpectedly passed without delivery audit evidence");
+      assert(result.stderr.includes("Managed PR gate requires recorded standard-delivery pr_open evidence"), result.stderr || result.stdout);
       assert(result.stderr.includes("Delivery subagent audit agent missing"), result.stderr || result.stdout);
       assert(result.stderr.includes("Delivery subagent audit status missing"), result.stderr || result.stdout);
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
@@ -10995,6 +11018,38 @@ try {
     }
   });
 
+  test("current-thread resolution supersedes a failed unresolved attempt only after fresh adjudication", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+    });
+    try {
+      const adjudication = runFixtureScript(fixture, [
+        "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
+        "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.",
+        "--diff-summary", "Current diff implements the request.", "--mapped-files", "feature.txt", "--verification", "Focused fixture passed.",
+        "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Independent review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      manifest.current_thread_resolution_outcomes = [{
+        schemaVersion: 1, attemptId: "failed-unresolved", threadId: "PRRT_current", expectedHeadSha: head,
+        repository: { fullName: "slawdawg/Kendall-vnxt" }, targetRequestFingerprint: manifest.current_thread_adjudications[0].targetRequestFingerprint,
+        attemptedAt: "2000-01-01T00:00:00.000Z", status: "needs-recovery", mutation: { status: "ambiguous-or-failed", replyPosted: false },
+      }];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code === 0, resolution.stderr || resolution.stdout);
+      const outcomes = readJson(manifestPath).current_thread_resolution_outcomes;
+      assert(outcomes.at(-1).status === "resolved", JSON.stringify(outcomes));
+      assert(outcomes.at(-1).supersedesAttemptId === "failed-unresolved", JSON.stringify(outcomes));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("high-risk named thread resolution requires and retains explicit operator authorization bound to the exact head", () => {
     const buildArgs = (fixture, authorization = null) => [
       "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
@@ -11043,6 +11098,24 @@ try {
       assert(JSON.parse(multipleBindingAuthorization.stdout).blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), multipleBindingAuthorization.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(multipleBindingFixture);
+    }
+
+    for (const variant of ["leading", "trailing", "newline"]) {
+      const fixture = createFinishPrExistingCommitFixture(options);
+      try {
+        const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+        const canonical = `operator-authorized thread=PRRT_current head=${head}`;
+        const authorization = variant === "leading" ? ` ${canonical}` : variant === "trailing" ? `${canonical} ` : `${canonical}\n`;
+        const result = runFixtureScript(
+          fixture,
+          [...buildArgs(fixture, authorization).filter((value) => value !== "--apply"), "--summary-json"],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code === 0, result.stderr || result.stdout);
+        assert(JSON.parse(result.stdout).blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), `${variant}: ${result.stdout}`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
 
     const nonHighRiskFixture = createFinishPrExistingCommitFixture({ ...options, changedPaths: ["feature.txt"] });
