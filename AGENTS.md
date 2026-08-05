@@ -424,7 +424,15 @@ durable, milestone-driven workflow rather than a single unbounded task.
   documented named-lane grant is the required lane-specific explicit
   authorization for that resolution only. Stop rather than resolve when feedback is
   disputed, unclear, unfixed, outdated-only, new after the audit, a requested
-  change, or paired with failing/ambiguous checks or a high-risk lane. Any
+  change, or paired with failing/ambiguous checks or a high-risk lane. The
+  high-risk stop line has one narrow, non-standing exception: exact operator
+  evidence in the literal form `operator-authorized thread=<id> head=<sha>`
+  may permit only that named thread at that exact head after a registered
+  managed worktree, owned task lock, canonical open-PR identity, terminal
+  checks, complete mapping and independent-review/verification evidence, a
+  second pre-mutation audit, no reply, and a recorded post-mutation audit. It
+  never authorizes another thread or head, merge, cleanup, or a bypass of any
+  other stop line. Any
   thread discovered by the post-resolution re-audit blocks merge and requires
   a fresh full evaluation before it can be resolved. An outdated-only thread is
   a hold for the current-thread grant. It may be closed only through the
@@ -689,7 +697,11 @@ surface is `node ./scripts/codex-workspace.mjs`.
   after relevant local verification, required review, and exact-head checks
   pass; record its ID/evidence, do not reply by default, and re-audit. Hold
   disputed, unclear, unfixed, newly arrived, requested-change,
-  failed/ambiguous-check, or high-risk cases for the normal stop line. An
+  failed/ambiguous-check, or high-risk cases for the normal stop line. The
+  sole exception is the exact named-thread/head operator authorization above;
+  it still requires the registered managed worktree, owned lock, canonical
+  identity, complete evidence, a second pre-mutation audit, no reply, and a
+  post-mutation audit. An
   outdated-only thread requires the separately recorded exact-head adjudication
   packet (request, diff mapping, local verification, code review, green checks,
   no pending review, and no unresolved current feedback) before no-reply

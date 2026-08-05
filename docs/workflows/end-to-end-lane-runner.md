@@ -272,7 +272,15 @@ publisher.
 
    Stop rather than resolve a disputed, unclear, unfixed, or
    newly arrived-after-audit thread; any requested change; any thread paired
-   with failing or ambiguous checks; or any high-risk lane. Any thread found by
+   with failing or ambiguous checks; or any high-risk lane. The default
+   high-risk stop line has one source-governed exception only: exact operator
+   evidence in the literal form `operator-authorized thread=<id> head=<sha>`
+   can authorize only that thread at that head after the registered managed
+   worktree and owned lock, canonical open-PR identity, complete fresh mapping,
+   independent review and verification, terminal checks, a second pre-mutation
+   audit, no reply, and a recorded post-mutation audit. It never authorizes
+   another thread or head, merge, cleanup, or any failed/ambiguous condition.
+   Any thread found by
    the post-resolution re-audit blocks merge. A new/current thread also blocks
    a later named resolution until it receives a fresh full evaluation; retained
    outdated-only threads are instead processed after current threads clear.

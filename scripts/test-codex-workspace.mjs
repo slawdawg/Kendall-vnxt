@@ -9743,6 +9743,9 @@ try {
       const manifest = readJson(manifestPath);
       const localHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       assert(manifest.pr_delivery_head_sha === localHead, "refresh did not rebind the delivery head");
+      assert(manifest.pr_delivery_evidence?.headRevision === localHead, "refresh did not synchronize standard-delivery evidence");
+      assert(manifest.pr_delivery_evidence?.authorityDecision?.evidenceRefs?.includes(`head:${localHead}`), "refresh did not synchronize standard-delivery authority evidence");
+      assert(manifest.pr_delivery_evidence?.deliveryHeadRefresh?.priorHeadSha === runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout, "refresh lost the standard-delivery prior-head audit");
       assert(manifest.pr_head_rebinds?.length === 1, "refresh did not retain a rebind record");
       assert(manifest.pr_head_rebinds[0].priorHeadSha === runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout, "refresh lost the prior head");
       assert(manifest.pr_head_rebinds[0].reason.includes("later source repair"), "refresh lost the bounded reason");
@@ -10035,6 +10038,71 @@ try {
       assert(outcome.postResolutionAudit, "ambiguous mutation did not retain a post-resolution audit");
       assert(outcome.recoveryPath.includes("Do not retry blindly"), outcome.recoveryPath);
       assert(manifest.events.some((event) => event.type === "outdated_review_thread_resolution_needs_recovery"), "recovery event missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("resolve-adjudicated-thread recovers an already-resolved outdated target without retrying GitHub mutation", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const args = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      manifest.outdated_thread_resolution_outcomes = [{
+        schemaVersion: 1, attemptId: "interrupted-outdated", threadId: "PRRT_outdated", expectedHeadSha: head,
+        repository: { fullName: "slawdawg/Kendall-vnxt" }, targetRequestFingerprint: manifest.outdated_thread_adjudications[0].targetRequestFingerprint,
+        status: "needs-recovery", mutation: { status: "attempt-recorded", replyPosted: false },
+      }];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const statePath = join(fixture.root, "review-threads-state.json");
+      const state = readJson(statePath);
+      state.data.repository.pullRequest.reviewThreads.nodes[0].isResolved = true;
+      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      const recovery = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(recovery.code === 0, recovery.stderr || recovery.stdout);
+      const recovered = readJson(manifestPath).outdated_thread_resolution_outcomes;
+      assert(recovered.at(-1).mutation.status === "confirmed-by-post-audit-recovery", JSON.stringify(recovered));
+      assert(recovered.at(-1).supersedesAttemptId === "interrupted-outdated", JSON.stringify(recovered));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-unmanaged-pr-gates rejects bare --pr and emits only unmanaged authority evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+    });
+    try {
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const bare = runFixtureScript(fixture, [
+        "verify-unmanaged-pr-gates", "--pr", "--base", "main", "--expected-head", head,
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${head}`,
+        "--rollback-path", `git revert ${head}`,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(bare.code !== 0, "bare --pr unexpectedly built unmanaged evidence");
+      assert(bare.stderr.includes("requires --pr <positive integer>"), bare.stderr || bare.stdout);
+
+      runGit(fixture.worktree, ["checkout", "--detach", head]);
+      const packet = runFixtureScript(fixture, [
+        "verify-unmanaged-pr-gates", "--pr", "456", "--base", "main", "--expected-head", head,
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${head}`,
+        "--rollback-path", `git revert ${head}`, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(packet.code === 0, packet.stderr || packet.stdout);
+      const parsed = JSON.parse(packet.stdout);
+      assert(parsed.authorityDecision.authorityProfile === "unmanaged-pr-evidence", JSON.stringify(parsed.authorityDecision));
+      assert(parsed.authorityDecision.authorityFamily === "unmanaged-pr-evidence", JSON.stringify(parsed.authorityDecision));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -13540,6 +13608,24 @@ function prepareFixtureForPrHeadRefresh(fixture) {
   manifest.pr_number = 456;
   manifest.pr_url = "https://example.test/pull/456";
   manifest.pr_delivery_head_sha = runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout;
+  manifest.pr_delivery_evidence = {
+    status: "recorded",
+    authorityProfile: "standard-delivery",
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch,
+    headRevision: manifest.pr_delivery_head_sha,
+    pullRequestNumber: manifest.pr_number,
+    pullRequestUrl: manifest.pr_url,
+    authorityDecision: {
+      operation: "finish-pr",
+      authorityFamily: "delivery",
+      authorityProfile: "standard-delivery",
+      decision: "recorded",
+      allowed: true,
+      evidenceRefs: [`head:${manifest.pr_delivery_head_sha}`],
+    },
+  };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifestPath;
 }
