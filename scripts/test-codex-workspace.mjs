@@ -10837,7 +10837,7 @@ try {
       { name: "post-resolution-target-outdated", options: { postResolutionTargetOutdated: true }, expectedCode: 1, status: "needs-recovery" },
       { name: "post-resolution-pr-unavailable", options: { postResolutionPrUnavailable: true }, expectedCode: 1, status: "needs-recovery" },
     ]) {
-      const fixture = createFinishPrExistingCommitFixture({
+      const fixture = createCanonicalManagedPrFixture({
         existingPr: true,
         repository: { owner: "slawdawg", name: "Kendall-vnxt" },
         ...scenario.options,
