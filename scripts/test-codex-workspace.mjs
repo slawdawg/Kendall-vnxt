@@ -1429,6 +1429,7 @@ try {
       "Review-request query returned additional pages",
       "Managed merge gate requires a clean worktree",
       "Unrecovered review-thread mutation outcomes",
+      "REVIEW_REQUIRED",
       "context.nonRequiredCheckPolicy?.blockers",
       "context.diffRiskEvidence?.blockers",
     ]) {
@@ -1492,6 +1493,22 @@ try {
     assert(changedPathAudit, "changed-path audit helper not found");
     assert(changedPathAudit[0].includes("expectedHeadSha"), "changed-path inspection must bind to an exact head");
     assert(changedPathAudit[0].includes("PR head changed during changed-path inspection"), "changed-path inspection must reject PR-head drift");
+    assert(changedPathAudit[0].includes("path !== \"\""), "changed-path inspection must preserve literal whitespace in path identities");
+
+    const diffRiskEvidence = source.match(/function shapeDiffRiskEvidence[\s\S]*?function fetchPrChangedPaths/);
+    assert(diffRiskEvidence, "diff-risk evidence helper not found");
+    for (const expected of ["verificationCommand", "verificationExitCode", "inspectedHeadSha", "postInspectionHeadSha", "Diff-risk PR head changed after changed-path inspection"]) {
+      assert(diffRiskEvidence[0].includes(expected), `diff-risk evidence must retain and validate ${expected}`);
+    }
+
+    const reconciliation = source.match(/function shapeRetainedPreMergeGateEvidence[\s\S]*?function addReconciliationBlocker/);
+    assert(reconciliation, "merged-PR reconciliation evidence helper not found");
+    assert(reconciliation[0].includes("Retained pre-merge gate evidence is missing"), "new reconciliation must fail closed without pre-merge gate evidence");
+
+    const currentResolver = source.match(/function resolveAdjudicatedCurrentThread[\s\S]*?function currentThreadResolutionPreMutationBlockers/);
+    assert(currentResolver, "current-thread resolver not found");
+    assert(currentResolver[0].includes("recoverAlreadyResolvedCurrentThreadAttempt"), "current-thread resolver must recover a confirmed already-resolved interrupted attempt without retrying GitHub mutation");
+    assert(currentResolver[0].includes("confirmed-by-post-audit-recovery"), "current-thread recovery must retain its distinct exact-audit outcome");
 
     const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
     assert(packetBlock, "lane evidence packet source not found");
@@ -10254,6 +10271,11 @@ try {
         name: "requested-changes",
         options: { existingPr: true, reviewDecision: "CHANGES_REQUESTED" },
         expected: "PR reviewDecision is CHANGES_REQUESTED",
+      },
+      {
+        name: "review-required",
+        options: { existingPr: true, reviewDecision: "REVIEW_REQUIRED" },
+        expected: "PR reviewDecision is REVIEW_REQUIRED",
       },
       {
         name: "completed-without-conclusion",
