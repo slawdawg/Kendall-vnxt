@@ -9231,6 +9231,8 @@ try {
       assert(manifest.pr_gate_evidence.reviewThreads.pendingReviewRequestCount === 0, "gate evidence did not prove pending-review clearance");
       assert(manifest.pr_gate_evidence.deliverySubagentAudit.status === "merge-ready", "gate evidence missing delivery audit status");
       assert(manifest.pr_gate_evidence.diffRiskEvidence.status === "recorded", "gate evidence missing diff-risk evidence");
+      assert(manifest.pr_gate_evidence.diffRiskEvidence.verificationCommand === "node ./scripts/test-codex-workspace.mjs", "gate evidence missing executed diff-risk verification command");
+      assert(manifest.pr_gate_evidence.diffRiskEvidence.verificationExitCode === 0, "gate evidence missing successful diff-risk verification exit code");
       assert(
         manifest.pr_gate_evidence.mergePlan?.plannedMergeMethod === `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
         "gate evidence missing the exact-head merge command",
@@ -9353,6 +9355,15 @@ try {
       {
         name: "superseded",
         outcomes: [recoveryAttempt, successfulSuperseder],
+        expectedCode: 0,
+      },
+      {
+        name: "transitively-superseded",
+        outcomes: [
+          recoveryAttempt,
+          { ...successfulSuperseder, attemptId: "attempt-2", status: "needs-recovery", mutation: { status: "ambiguous-or-failed" } },
+          { ...successfulSuperseder, attemptId: "attempt-3", supersedesAttemptId: "attempt-2", attemptedAt: "2026-08-04T10:04:00.000Z", completedAt: "2026-08-04T10:05:00.000Z" },
+        ],
         expectedCode: 0,
       },
       { name: "failed-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, status: "needs-recovery", mutation: { status: "ambiguous-or-failed" } }], expectedCode: 1 },
@@ -9710,6 +9721,8 @@ try {
       );
       assert(refreshed.code === 0, refreshed.stderr || refreshed.stdout);
       assert(refreshed.stdout.includes("APPLY: refresh-pr-head"), refreshed.stdout || refreshed.stderr);
+      assert(refreshed.stdout.includes("lock owned"), refreshed.stdout || refreshed.stderr);
+      assert(refreshed.stdout.includes("reviewThreads current=0 outdated=0 pendingRequests=0"), refreshed.stdout || refreshed.stderr);
       const manifest = readJson(manifestPath);
       const localHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       assert(manifest.pr_delivery_head_sha === localHead, "refresh did not rebind the delivery head");
@@ -9959,8 +9972,8 @@ try {
     for (const scenario of [
       { name: "success", options: {}, expectedCode: 0, status: "resolved" },
       { name: "stable-outdated-hold", options: {}, expectedCode: 0, status: "resolved", extraThreads: [{ id: "PRRT_known_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_outdated", body: "Older separate request." }] } }] },
-      { name: "known-current-hold", options: {}, expectedCode: 1, status: "needs-recovery", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }] },
-      { name: "known-current-and-outdated-holds", options: {}, expectedCode: 1, status: "needs-recovery", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }, { id: "PRRT_known_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_outdated", body: "Older separate request." }] } }] },
+      { name: "known-current-hold", options: {}, expectedCode: 0, status: "resolved", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }] },
+      { name: "known-current-and-outdated-holds", options: {}, expectedCode: 0, status: "resolved", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }, { id: "PRRT_known_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_outdated", body: "Older separate request." }] } }] },
       { name: "ambiguous", options: { resolveMutationFailure: "ambiguous-resolved" }, expectedCode: 1, status: "needs-recovery" },
       { name: "race", options: { preMutationCurrentThreadDrift: true }, expectedCode: 1, status: null },
       { name: "mutation-time-check-drift", options: { preMutationCheckDrift: true }, expectedCode: 1, status: null },
@@ -10029,10 +10042,13 @@ try {
         }
         if (scenario.name === "known-current-hold") {
           const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(outcome.status === "resolved", JSON.stringify(outcome));
           assert(JSON.stringify(outcome.postResolutionHolds.unresolvedCurrentThreadIds) === JSON.stringify(["PRRT_known_current"]), JSON.stringify(outcome));
+          assert(outcome.postResolutionHolds.mergeReady === false, JSON.stringify(outcome));
         }
         if (scenario.name === "known-current-and-outdated-holds") {
           const [outcome] = manifest.current_thread_resolution_outcomes;
+          assert(outcome.status === "resolved", JSON.stringify(outcome));
           assert(JSON.stringify(outcome.postResolutionHolds.unresolvedCurrentThreadIds) === JSON.stringify(["PRRT_known_current"]), JSON.stringify(outcome));
           assert(JSON.stringify(outcome.postResolutionHolds.unresolvedOutdatedThreadIds) === JSON.stringify(["PRRT_known_outdated"]), JSON.stringify(outcome));
           const gate = runFixtureScript(fixture, [
@@ -10253,6 +10269,28 @@ try {
       );
       assert(result.code !== 0, "verify-pr-gates unexpectedly accepted incomplete diff-risk coverage");
       assert(result.stderr.includes("Diff-risk evidence omits changed paths: sensitive-policy.txt"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects unstructured diff-risk verification claims", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--diff-risk-summary", "Focused fixture.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "passed", "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env, keepDiffRiskVerificationUnstructured: true },
+      );
+      assert(result.code !== 0, "verify-pr-gates unexpectedly accepted an unstructured verification claim");
+      assert(result.stderr.includes("Diff-risk focused verification command missing"), result.stderr || result.stdout);
+      assert(result.stderr.includes("Diff-risk focused verification exit code must be 0"), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -13801,6 +13839,15 @@ function createMergedCleanupFixture() {
         lowRiskReady: true,
         checkedAt: "2026-06-20T00:00:00.000Z",
         expectedHeadSha: branchHead,
+        taskId: "cleanup-task",
+        branch,
+        baseBranch: "main",
+        pr: {
+          number: 123,
+          url: "https://example.test/pull/123",
+          baseRefName: "main",
+          headRefOid: branchHead,
+        },
         metadataOnly: true,
       },
       source_assignment_id: "cleanup-assignment",
@@ -14669,13 +14716,20 @@ function cleanupBranchCleanupFixture(fixture) {
 }
 
 function runFixtureScript(fixture, args, options = {}) {
-  const result = spawnSync(process.execPath, [fixture.script, ...args], {
+  const fixtureArgs = [...args];
+  if (!options.keepDiffRiskVerificationUnstructured
+    && fixtureArgs.includes("--diff-risk-verification")
+    && !fixtureArgs.includes("--diff-risk-verification-command")) {
+    fixtureArgs.push("--diff-risk-verification-command", "node ./scripts/test-codex-workspace.mjs");
+    fixtureArgs.push("--diff-risk-verification-exit-code", "0");
+  }
+  const result = spawnSync(process.execPath, [fixture.script, ...fixtureArgs], {
     cwd: options.cwd || fixture.root,
     encoding: "utf8",
     env: options.env || fixture.env || process.env,
     stdio: "pipe",
   });
-  return guardExpectedJsonResult(args, {
+  return guardExpectedJsonResult(fixtureArgs, {
     code: result.status ?? 1,
     stdout: result.stdout || "",
     stderr: result.stderr || result.error?.message || "",
