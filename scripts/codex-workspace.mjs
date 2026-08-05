@@ -3911,7 +3911,8 @@ function retainedResolutionOutcomes(outcomes) {
 
 function isHighRiskReviewThreadPath(path) {
   const value = String(path || "").toLowerCase();
-  return value === "agents.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
+  if (value === "agents.md" || value.endsWith("/agents.md")) return true;
+  return value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
 }
 
 function assertNoUnrecoveredResolutionAttempt(outcomes, threadId, kind, freshAdjudication = null) {
@@ -5076,14 +5077,12 @@ function shapeExactHeadMergePlanEvidence(options = {}, context = {}) {
   if (!plannedMergeMethod) {
     blockers.push("Planned exact-head merge method is missing; provide --merge-method");
   } else {
-    const escapedHeadSha = expectedHeadSha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const expectedMatchHead = new RegExp(`(?:^|\\s)--match-head-commit(?:=|\\s+)${escapedHeadSha}(?:\\s|$)`);
-    const expectedPr = new RegExp(`(?:^|\\s)gh\\s+pr\\s+merge\\s+${prNumber}(?:\\s|$)`);
-    if (!expectedPr.test(plannedMergeMethod) || !/(?:^|\s)--merge(?:\s|$)/.test(plannedMergeMethod) || !expectedMatchHead.test(plannedMergeMethod)) {
+    const exactMergeCommand = `gh pr merge ${prNumber} --merge --match-head-commit ${expectedHeadSha}`;
+    if (plannedMergeMethod !== exactMergeCommand) {
       blockers.push("Planned merge method must use gh pr merge <PR> --merge --match-head-commit <expected-head>");
     }
-    if (/(?:^|\s)--(?:delete-branch|cleanup)(?:\s|=|$)/.test(plannedMergeMethod)) {
-      blockers.push("Planned merge method must not include cleanup flags");
+    if (/(?:^|\s)(?:--admin|--delete-branch|--cleanup|--repo)(?:\s|=|$)|(?:^|\s)-(?!-)[^\s]+/.test(plannedMergeMethod)) {
+      blockers.push("Planned merge method must not include admin, cleanup, repository-target, or short flags");
     }
   }
   if (!rollbackPath) {

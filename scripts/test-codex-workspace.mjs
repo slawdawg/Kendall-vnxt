@@ -1439,6 +1439,7 @@ try {
     const highRiskPath = source.match(/function isHighRiskReviewThreadPath[\s\S]*?function assertNoUnrecoveredResolutionAttempt/);
     assert(highRiskPath, "high-risk review-thread path classifier not found");
     assert(highRiskPath[0].includes('value === "agents.md"'), "case-normalized AGENTS.md paths must remain high-risk");
+    assert(highRiskPath[0].includes('value.endsWith("/agents.md")'), "nested AGENTS.md paths must remain high-risk");
 
     const checkNormalizer = source.match(/function normalizeStatusCheckRollup[\s\S]*?function statusContextConclusion/);
     assert(checkNormalizer, "status check normalizer source not found");
@@ -10054,31 +10055,31 @@ try {
     }
   });
 
-  test("verify-pr-gates fails closed for a non-exact or cleanup merge plan", () => {
-    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
-    try {
-      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
-      const result = runFixtureScript(
-        fixture,
-        [
-          "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
-          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
-          "--delivery-audit-summary", "Exact-head delivery audit passed.",
-          "--merge-method", "gh pr merge 456 --merge --match-head-commit wrong-head --delete-branch=true",
-          "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
-          "--diff-risk-summary", "Policy-only authority update with fail-closed gate coverage.",
-          "--diff-risk-files", "feature.txt", "--diff-risk-verification", "pnpm run check:runbooks",
-          "--state-root", fixture.stateRoot,
-        ],
-        { cwd: fixture.worktree, env: fixture.env },
-      );
+  test("verify-pr-gates fails closed for a non-exact or unsafe merge plan", () => {
+    for (const unsafeFlag of ["--admin", "--delete-branch", "--cleanup", "-d", "--repo other/repository", "-Rother/repository", "-dRother/repository"]) {
+      const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+      try {
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        const result = runFixtureScript(
+          fixture,
+          [
+            "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+            "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+            "--delivery-audit-summary", "Exact-head delivery audit passed.",
+            "--merge-method", `gh pr merge 456 --merge --match-head-commit ${manifest.pr_delivery_head_sha} ${unsafeFlag}`,
+            "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+            "--diff-risk-summary", "Policy-only authority update with fail-closed gate coverage.",
+            "--diff-risk-files", "feature.txt", "--diff-risk-verification", "pnpm run check:runbooks",
+            "--state-root", fixture.stateRoot,
+          ],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
 
-      assert(result.code !== 0, "verify-pr-gates unexpectedly accepted a non-exact cleanup merge plan");
-      assert(result.stderr.includes("--match-head-commit <expected-head>"), result.stderr || result.stdout);
-      assert(result.stderr.includes("must not include cleanup flags"), result.stderr || result.stdout);
-      assert(manifest.pr_delivery_head_sha, "fixture must retain its exact delivery head");
-    } finally {
-      cleanupFinishPrExistingCommitFixture(fixture);
+        assert(result.code !== 0, `verify-pr-gates unexpectedly accepted unsafe merge flag ${unsafeFlag}`);
+        assert(result.stderr.includes("must not include admin, cleanup, repository-target, or short flags"), result.stderr || result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
   });
 
