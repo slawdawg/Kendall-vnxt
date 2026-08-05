@@ -3358,6 +3358,10 @@ function refreshPrHead(argv) {
       rawPayloadRetained: false,
     };
     locked.pr_delivery_head_sha = lockedPacket.newHeadSha;
+    locked.pr_delivery_evidence = synchronizeStandardDeliveryEvidenceAfterHeadRebind(
+      locked.pr_delivery_evidence,
+      lockedPacket,
+    );
     locked.pr_url = lockedPacket.pr.url || locked.pr_url;
     locked.pr_number = lockedPacket.pr.number || locked.pr_number;
     locked.pr_head_rebinds = [...copyJsonArray(locked.pr_head_rebinds), rebind];
@@ -3703,10 +3707,20 @@ function resolveAdjudicatedThread(argv) {
   assertCurrentBranch(manifest);
   assertRegisteredManagedWorktree(manifest, state);
   assertCleanManagedResolutionWorktree(manifest);
+  let recoveredResolvedAttempt = false;
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
     validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertRegisteredManagedWorktree(locked, state); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
+    const recovery = recoverAlreadyResolvedOutdatedThreadAttempt(locked, threadId);
+    if (recovery) {
+      locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(locked.outdated_thread_resolution_outcomes, recovery);
+      locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
+      appendTaskEvent(locked, "outdated_review_thread_resolution_recovered", `${threadId} ${recovery.expectedHeadSha}`);
+      writeManifest(manifestPath, locked);
+      recoveredResolvedAttempt = true;
+      return;
+    }
     const retained = (locked.outdated_thread_adjudications || []).find((entry) => entry?.threadId === threadId && entry?.ready === true);
     if (!retained) throw new Error("No ready retained adjudication exists for the target thread.");
     const mapping = retained.mapping || {};
@@ -3742,6 +3756,7 @@ function resolveAdjudicatedThread(argv) {
       repository: fresh.repository,
       supersedesAttemptId: supersededAttempt?.attemptId || null,
       attemptedAt: new Date().toISOString(),
+      targetRequestFingerprint: fresh.targetRequestFingerprint,
       mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
       preMutationAudit: compactReviewThreadAudit(preMutationAudit),
       recoveryPath: "Do not retry blindly. Re-audit the exact PR head and thread state, then resume only through resolve-adjudicated-thread.",
@@ -3812,7 +3827,61 @@ function resolveAdjudicatedThread(argv) {
     writeManifest(manifestPath, locked);
     if (postBlockers.length) throw new Error(`Post-resolution thread-aware re-audit is incomplete or unsafe; no merge is permitted: ${postBlockers.join("; ")}`);
   });
+  if (recoveredResolvedAttempt) {
+    printApplied("resolve-adjudicated-thread", [`thread ${threadId} was already resolved; exact post-interruption recovery evidence recorded without a GitHub mutation`]);
+    return;
+  }
   printApplied("resolve-adjudicated-thread", [`thread ${threadId} resolved without reply; post-resolution re-audit recorded`]);
+}
+
+function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
+  const prior = (Array.isArray(manifest.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : [])
+    .filter((entry) => entry?.threadId === threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"))
+    .at(-1);
+  if (!prior) return null;
+  const pr = prViewForGates(manifest);
+  const headState = prGateHeadState(manifest);
+  const audit = pr?.number ? fetchReviewThreadState(manifest, githubRepository(manifest), pr.number) : null;
+  const retained = (Array.isArray(manifest.outdated_thread_adjudications) ? manifest.outdated_thread_adjudications : [])
+    .find((entry) => entry?.threadId === threadId && entry?.ready === true && entry?.expectedHeadSha === prior.expectedHeadSha);
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
+    nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
+    nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
+  }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
+  const expectedFingerprint = retained?.targetRequestFingerprint;
+  const blockers = [];
+  if (!prior.expectedHeadSha || prior.expectedHeadSha !== headState.expectedHeadSha || prior.expectedHeadSha !== pr?.headRefOid || !headState.localMatchesExpected) blockers.push("Interrupted outdated-thread attempt no longer matches the exact PR head");
+  if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted outdated-thread attempt no longer matches the canonical repository");
+  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || ["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push("Interrupted outdated-thread attempt PR state is no longer safe");
+  if (!retained || !retained.targetRequestFingerprint || !prior.attemptId) blockers.push("Interrupted outdated-thread attempt lacks retained exact-head adjudication provenance");
+  if (prior.targetRequestFingerprint && prior.targetRequestFingerprint !== retained?.targetRequestFingerprint) blockers.push("Interrupted outdated-thread attempt fingerprint does not match retained adjudication provenance");
+  if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted outdated-thread attempt lacks a complete post-interruption thread audit");
+  if (!target || !target.isResolved || !target.isOutdated || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted outdated-thread target is not proven resolved by the live thread audit");
+  if (expectedFingerprint && target?.requestFingerprint !== expectedFingerprint) blockers.push("Interrupted outdated-thread target fingerprint changed before recovery");
+  if (checks.total === 0 || checks.pending.length || checks.failing.length) blockers.push("Interrupted outdated-thread attempt checks are not terminal-successful");
+  blockers.push(...nonRequiredCheckPolicy.blockers);
+  if (blockers.length) throw new Error(`A prior outdated review-thread resolution attempt is unrecovered; do not retry blindly: ${blockers.join("; ")}`);
+  const completedAt = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    attemptId: randomUUID(),
+    supersedesAttemptId: prior.attemptId,
+    threadId,
+    expectedHeadSha: prior.expectedHeadSha,
+    repository: prior.repository,
+    targetRequestFingerprint: target.requestFingerprint,
+    attemptedAt: completedAt,
+    completedAt,
+    status: "resolved",
+    mutation: { status: "confirmed-by-post-audit-recovery", exitCode: null, result: "live target already resolved after interrupted attempt", replyPosted: false, metadataOnly: true },
+    postResolutionAudit: compactReviewThreadAudit(audit),
+    postResolutionHolds: reviewThreadResolutionHolds(audit),
+    recoveryPath: "Recovered from exact live thread evidence without retrying a GitHub mutation. Re-run verify-pr-gates before merge.",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function adjudicateCurrentThread(argv) {
@@ -4217,6 +4286,9 @@ function verifyUnmanagedPrGates(argv) {
   if (options.apply) {
     throw new Error("verify-unmanaged-pr-gates is metadata-only and does not support --apply.");
   }
+  if (typeof options.pr !== "string" || !/^[1-9][0-9]*$/.test(options.pr)) {
+    throw new Error("verify-unmanaged-pr-gates requires --pr <positive integer>.");
+  }
   const prNumber = Number(options.pr);
   const baseBranch = safeMetadataText(options.base, 250);
   const expectedHeadSha = safeMetadataText(options.expectedHead, 80);
@@ -4273,6 +4345,31 @@ function verifyUnmanagedPrGates(argv) {
     metadataOnly: true,
     recoveryPath: "No merge or cleanup was attempted. Fix any exact-head gate blocker, rebuild this detached-worktree evidence packet, then re-audit before merge.",
   };
+  externalPacket.authorityDecision = shapeAuthorityDecisionEvidence({
+    operation: "verify-unmanaged-pr-gates",
+    authorityFamily: "unmanaged-pr-evidence",
+    authorityProfile: "unmanaged-pr-evidence",
+    decision: externalPacket.lowRiskReady ? "ready" : "blocked",
+    allowed: externalPacket.lowRiskReady,
+    requiredGates: packet.authorityDecision?.requiredGates || [],
+    satisfiedGates: externalPacket.lowRiskReady ? (packet.authorityDecision?.requiredGates || []) : [],
+    blockedReasons: externalPacket.blockers || [],
+    stopLines: [
+      "metadata-only evidence; never mutates a managed manifest",
+      "no merge or cleanup",
+      "requires a clean detached Kendall_Nxt checkout and an exact PR/head binding",
+    ],
+    evidenceRefs: [
+      `repository:${repository.owner}/${repository.name}`,
+      `pr:${prNumber}`,
+      `expected-head:${expectedHeadSha}`,
+    ],
+    nextSafeAction: externalPacket.lowRiskReady
+      ? "Retain this unmanaged exact-head evidence packet and re-audit immediately before any separately authorized merge."
+      : "Fix the named unmanaged PR evidence blocker and rebuild the detached-worktree packet.",
+    recoveryPath: externalPacket.recoveryPath,
+    generatedAt: packet.checkedAt,
+  });
   if (options.summaryJson) {
     console.log(JSON.stringify(externalPacket, null, 2));
     return;
@@ -5210,6 +5307,37 @@ function hasRecordedStandardDeliveryPrState(manifest, pr, expectedHeadSha) {
     && delivery?.headRevision === expectedHeadSha
     && delivery?.pullRequestNumber === pr?.number
     && delivery?.pullRequestUrl === pr?.url;
+}
+
+function synchronizeStandardDeliveryEvidenceAfterHeadRebind(existing, packet) {
+  if (!existing || existing.status !== "recorded" || existing.authorityProfile !== "standard-delivery") return existing || null;
+  if (existing.headRevision !== packet.priorHeadSha) return existing;
+  return {
+    ...existing,
+    headRevision: packet.newHeadSha,
+    authorityDecision: synchronizeStandardDeliveryAuthorityDecision(existing.authorityDecision, packet),
+    deliveryHeadRefresh: {
+      schemaVersion: 1,
+      priorHeadSha: packet.priorHeadSha,
+      newHeadSha: packet.newHeadSha,
+      checkedAt: packet.checkedAt,
+      reason: packet.reason,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+  };
+}
+
+function synchronizeStandardDeliveryAuthorityDecision(existing, packet) {
+  if (!existing || typeof existing !== "object" || Array.isArray(existing)) return existing || null;
+  const evidenceRefs = Array.isArray(existing.evidenceRefs) ? existing.evidenceRefs : [];
+  return shapeAuthorityDecisionEvidence({
+    ...existing,
+    evidenceRefs: [
+      ...evidenceRefs.filter((entry) => entry !== `head:${packet.priorHeadSha}`),
+      `head:${packet.newHeadSha}`,
+    ],
+  });
 }
 
 function shapeRenamedPathMappings(value, context = {}) {
