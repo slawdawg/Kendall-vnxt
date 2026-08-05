@@ -13734,10 +13734,10 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.statusCheckRollup.push({ name: 'raced-check', status: 'IN_PROGRESS', conclusion: null }); fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
     options.preMutationBaseDrift
-        ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefName = 'raced-base'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
+        ? "  if (count === 4) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefName = 'raced-base'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
       options.preMutationBaseOidDrift
-        ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
+        ? "  if (count === 4) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
       options.preMutationReviewDecisionDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.reviewDecision = 'CHANGES_REQUESTED'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
