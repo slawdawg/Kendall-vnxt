@@ -10077,6 +10077,89 @@ try {
     }
   });
 
+  test("high-risk named thread resolution requires and retains explicit operator authorization bound to the exact head", () => {
+    const buildArgs = (fixture, authorization = null) => [
+      "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
+      "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.",
+      "--diff-summary", "Current diff implements the request.", "--mapped-files", "feature.txt", "--verification", "Focused fixture passed.",
+      "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Independent review passed.", "--reviewer-id", "reviewer-a",
+      ...(authorization ? ["--high-risk-authorization", authorization] : []), "--state-root", fixture.stateRoot,
+    ];
+    const options = {
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      changedPaths: ["feature.txt", "scripts/codex-workspace.mjs"],
+      reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+    };
+    const blockedFixture = createFinishPrExistingCommitFixture(options);
+    try {
+      const blocked = runFixtureScript(blockedFixture, [...buildArgs(blockedFixture).filter((value) => value !== "--apply"), "--summary-json"], { cwd: blockedFixture.worktree, env: blockedFixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      assert(JSON.parse(blocked.stdout).blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), blocked.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(blockedFixture);
+    }
+
+    const genericAuthorizationFixture = createFinishPrExistingCommitFixture(options);
+    try {
+      const genericAuthorization = runFixtureScript(
+        genericAuthorizationFixture,
+        [...buildArgs(genericAuthorizationFixture, "Operator authorized high-risk resolution.").filter((value) => value !== "--apply"), "--summary-json"],
+        { cwd: genericAuthorizationFixture.worktree, env: genericAuthorizationFixture.env },
+      );
+      assert(genericAuthorization.code === 0, genericAuthorization.stderr || genericAuthorization.stdout);
+      assert(JSON.parse(genericAuthorization.stdout).blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), genericAuthorization.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(genericAuthorizationFixture);
+    }
+
+    const multipleBindingFixture = createFinishPrExistingCommitFixture(options);
+    try {
+      const head = runGit(multipleBindingFixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const multipleBindingAuthorization = runFixtureScript(
+        multipleBindingFixture,
+        [...buildArgs(multipleBindingFixture, `operator-authorized thread=PRRT_current thread=PRRT_other head=${head}`).filter((value) => value !== "--apply"), "--summary-json"],
+        { cwd: multipleBindingFixture.worktree, env: multipleBindingFixture.env },
+      );
+      assert(multipleBindingAuthorization.code === 0, multipleBindingAuthorization.stderr || multipleBindingAuthorization.stdout);
+      assert(JSON.parse(multipleBindingAuthorization.stdout).blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), multipleBindingAuthorization.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(multipleBindingFixture);
+    }
+
+    const nonHighRiskFixture = createFinishPrExistingCommitFixture({ ...options, changedPaths: ["feature.txt"] });
+    try {
+      const misplacedAuthorization = runFixtureScript(
+        nonHighRiskFixture,
+        [...buildArgs(nonHighRiskFixture, "operator-authorized thread=PRRT_current head=fixture-head").filter((value) => value !== "--apply"), "--summary-json"],
+        { cwd: nonHighRiskFixture.worktree, env: nonHighRiskFixture.env },
+      );
+      assert(misplacedAuthorization.code === 0, misplacedAuthorization.stderr || misplacedAuthorization.stdout);
+      assert(JSON.parse(misplacedAuthorization.stdout).blockers.includes("High-risk review-thread authorization is only valid when the exact audited PR diff contains a high-risk path"), misplacedAuthorization.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(nonHighRiskFixture);
+    }
+
+    const authorizedFixture = createFinishPrExistingCommitFixture(options);
+    const authorization = `operator-authorized thread=PRRT_current head=${runGit(authorizedFixture.worktree, ["rev-parse", "HEAD"]).stdout}`;
+    try {
+      const adjudication = runFixtureScript(authorizedFixture, buildArgs(authorizedFixture, authorization), { cwd: authorizedFixture.worktree, env: authorizedFixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const beforeResolution = readJson(join(authorizedFixture.stateRoot, "tasks", "resumed-task.json"));
+      const mapping = beforeResolution.current_thread_adjudications[0].mapping;
+      assert(mapping.highRiskAuthorization.status === "authorized", JSON.stringify(mapping));
+      assert(mapping.highRiskAuthorization.evidence === authorization, JSON.stringify(mapping));
+      assert(mapping.highRiskAuthorization.threadId === "PRRT_current", JSON.stringify(mapping));
+      assert(mapping.highRiskAuthorization.expectedHeadSha === beforeResolution.pr_delivery_head_sha, JSON.stringify(mapping));
+      const resolution = runFixtureScript(authorizedFixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", authorizedFixture.stateRoot], { cwd: authorizedFixture.worktree, env: authorizedFixture.env });
+      assert(resolution.code === 0, resolution.stderr || resolution.stdout);
+      const manifest = readJson(join(authorizedFixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.current_thread_resolution_outcomes[0].mutation.replyPosted === false, JSON.stringify(manifest.current_thread_resolution_outcomes));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(authorizedFixture);
+    }
+  });
+
   test("verify-pr-gates fails closed without positive base merge review and check evidence", () => {
     for (const scenario of [
       {
