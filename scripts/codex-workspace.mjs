@@ -3445,7 +3445,7 @@ function resolveAdjudicatedThread(argv) {
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
-    const supersededAttempt = assertNoUnrecoveredResolutionAttempt(locked.outdated_thread_resolution_outcomes, threadId, "outdated", fresh);
+    assertNoUnrecoveredResolutionAttempt(locked, "outdated", fresh);
 
     // A second audit immediately before the write is deliberate.  The persisted
     // adjudication is useful provenance, but it must never be treated as a
@@ -3464,7 +3464,7 @@ function resolveAdjudicatedThread(argv) {
       threadId,
       expectedHeadSha: fresh.expectedHeadSha,
       repository: fresh.repository,
-      supersedesAttemptId: supersededAttempt?.attemptId || null,
+      supersedesAttemptId: null,
       attemptedAt: new Date().toISOString(),
       targetRequestFingerprint: fresh.targetRequestFingerprint,
       mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
@@ -3675,14 +3675,14 @@ function resolveAdjudicatedCurrentThread(argv) {
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh current-thread adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
-    const supersededAttempt = assertNoUnrecoveredResolutionAttempt(locked.current_thread_resolution_outcomes, threadId, "current", fresh);
+    assertNoUnrecoveredResolutionAttempt(locked, "current", fresh);
     const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationPr = prViewForGates(locked);
     const preMutationHead = prGateHeadState(locked);
     const preMutationBlockers = currentThreadResolutionPreMutationBlockers(preMutationPr, preMutationHead, preMutationAudit, fresh);
     if (preMutationBlockers.length) throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
     const attempt = {
-      schemaVersion: 1, attemptId: randomUUID(), threadId, expectedHeadSha: fresh.expectedHeadSha, repository: fresh.repository, supersedesAttemptId: supersededAttempt?.attemptId || null,
+      schemaVersion: 1, attemptId: randomUUID(), threadId, expectedHeadSha: fresh.expectedHeadSha, repository: fresh.repository, supersedesAttemptId: null,
       attemptedAt: new Date().toISOString(), targetRequestFingerprint: fresh.targetRequestFingerprint, mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
       preMutationAudit: compactReviewThreadAudit(preMutationAudit),
       recoveryPath: "Do not retry blindly. Re-audit the exact PR head and thread state, then resume only through resolve-adjudicated-current-thread.",
@@ -3761,6 +3761,7 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || ["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push("Interrupted current-thread attempt PR state is no longer safe");
   if (!pr?.baseRefName || pr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted current-thread attempt PR base changed before recovery");
   if (!retained || !retained.targetRequestFingerprint || !prior.attemptId) blockers.push("Interrupted current-thread attempt lacks retained exact-head adjudication provenance");
+  if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted current-thread attempt PR base commit changed before recovery");
   if (!prior.targetRequestFingerprint || prior.targetRequestFingerprint !== retained?.targetRequestFingerprint) blockers.push("Interrupted current-thread attempt fingerprint does not match retained adjudication provenance");
   if (!/^[a-f0-9]{64}$/.test(prior.targetRequestFingerprint || "") || !/^[a-f0-9]{64}$/.test(retained?.targetRequestFingerprint || "")) blockers.push("Interrupted current-thread attempt has malformed adjudication provenance");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted current-thread attempt lacks a complete post-interruption thread audit");
@@ -3913,15 +3914,18 @@ function isHighRiskReviewThreadPath(path) {
   return value === "docs/workflows/end-to-end-lane-runner.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
 }
 
-function assertNoUnrecoveredResolutionAttempt(outcomes, threadId, kind, freshAdjudication = null) {
-  const prior = (Array.isArray(outcomes) ? outcomes : []).filter((entry) => entry?.threadId === threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded")).at(-1);
-  if (!prior) return null;
-  const priorAttemptedAt = Date.parse(prior.completedAt || prior.attemptedAt || "");
-  const freshCheckedAt = Date.parse(freshAdjudication?.checkedAt || "");
-  if (!Number.isFinite(priorAttemptedAt) || !Number.isFinite(freshCheckedAt) || freshCheckedAt <= priorAttemptedAt || freshAdjudication?.expectedHeadSha !== prior.expectedHeadSha) {
-    throw new Error(`A prior ${kind} review-thread resolution attempt is unrecovered; do not retry blindly.`);
-  }
-  return prior;
+function assertNoUnrecoveredResolutionAttempt(manifest, kind, freshAdjudication = null) {
+  const outcomes = [
+    ...(Array.isArray(manifest?.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : []).map((outcome) => ({ kind: "current", outcome })),
+    ...(Array.isArray(manifest?.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : []).map((outcome) => ({ kind: "outdated", outcome })),
+  ];
+  const unrecovered = outcomes.filter(({ kind: attemptKind, outcome }) =>
+    (outcome?.status === "needs-recovery" || outcome?.mutation?.status === "attempt-recorded")
+    && !resolutionAttemptRecovered(outcomes, attemptKind, outcome),
+  );
+  if (!unrecovered.length) return;
+  const details = unrecovered.map(({ kind: attemptKind, outcome }) => `${attemptKind}:${outcome?.threadId || "unknown"}`).join(", ");
+  throw new Error(`An outstanding ${kind} review-thread resolution attempt is unrecovered; do not mutate another thread until recovery is recorded: ${details}.`);
 }
 
 function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) {

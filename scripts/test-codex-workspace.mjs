@@ -1490,7 +1490,7 @@ try {
     assert(resolver[0].includes("outdated_review_thread_resolution_attempted"), "resolver must persist a mutation attempt before GitHub mutation");
     assert(resolver[0].includes("ambiguous-or-failed"), "resolver must retain ambiguous mutation outcomes");
     assert(resolver[0].includes("Do not retry blindly"), "resolver must retain a mutation recovery stop line");
-    assert(resolver[0].includes("supersedesAttemptId"), "resolver must retain evidence when a fresh adjudication supersedes recovery");
+    assert(resolver[0].includes("assertNoUnrecoveredResolutionAttempt(locked"), "resolver must block every unrecovered resolution attempt before a new mutation");
     assert(resolver[0].includes("JSON.stringify(mapping.files || [])"), "resolver must retain mapped file paths losslessly");
     assert(resolver[0].includes("fresh.repository?.fullName !== retained.repository?.fullName"), "outdated resolver must revalidate retained repository identity");
 
@@ -1533,6 +1533,7 @@ try {
     assert(currentRecovery[0].includes("lacks retained exact-head adjudication provenance"), "current-thread recovery must require retained exact-head provenance");
     assert(currentRecovery[0].includes("!prior.targetRequestFingerprint"), "current-thread recovery must require a retained attempt fingerprint");
     assert(currentRecovery[0].includes("PR base changed before recovery"), "current-thread recovery must reject an interrupted attempt after PR base drift");
+    assert(currentRecovery[0].includes("PR base commit changed before recovery"), "current-thread recovery must reject an interrupted attempt after immutable base drift");
     assert(currentRecovery[0].includes("malformed adjudication provenance"), "current-thread recovery must reject malformed retained fingerprints");
 
     const currentMutationGuards = source.match(/function currentThreadResolutionPreMutationBlockers[\s\S]*?function currentThreadResolutionPostMutationBlockers/);
@@ -10373,7 +10374,7 @@ try {
     }
   });
 
-  test("current-thread resolution supersedes a failed unresolved attempt only after fresh adjudication", () => {
+  test("current-thread resolution blocks a new target while another ambiguous attempt remains unrecovered", () => {
     const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
@@ -10390,16 +10391,56 @@ try {
       const manifest = readJson(manifestPath);
       const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       manifest.current_thread_resolution_outcomes = [{
-        schemaVersion: 1, attemptId: "failed-unresolved", threadId: "PRRT_current", expectedHeadSha: head,
+        schemaVersion: 1, attemptId: "failed-unresolved", threadId: "PRRT_other", expectedHeadSha: head,
         repository: { fullName: "slawdawg/Kendall-vnxt" }, targetRequestFingerprint: manifest.current_thread_adjudications[0].targetRequestFingerprint,
         attemptedAt: "2000-01-01T00:00:00.000Z", status: "needs-recovery", mutation: { status: "ambiguous-or-failed", replyPosted: false },
       }];
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const resolution = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-      assert(resolution.code === 0, resolution.stderr || resolution.stdout);
-      const outcomes = readJson(manifestPath).current_thread_resolution_outcomes;
-      assert(outcomes.at(-1).status === "resolved", JSON.stringify(outcomes));
-      assert(outcomes.at(-1).supersedesAttemptId === "failed-unresolved", JSON.stringify(outcomes));
+      assert(resolution.code !== 0, "cross-thread ambiguous attempt unexpectedly allowed a new mutation");
+      assert(resolution.stderr.includes("current:PRRT_other"), resolution.stderr || resolution.stdout);
+      const state = readJson(join(fixture.root, "review-threads-state.json"));
+      assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_current").isResolved === false, "cross-thread ambiguity mutated the new target");
+      assert(readJson(manifestPath).current_thread_resolution_outcomes.length === 1, "cross-thread ambiguity recorded a new mutation attempt");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("current-thread recovery refuses a retained base commit mismatch", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+    });
+    try {
+      const adjudication = runFixtureScript(fixture, [
+        "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
+        "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.",
+        "--diff-summary", "Current diff implements the request.", "--mapped-files", "feature.txt", "--verification", "Focused fixture passed.",
+        "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Independent review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      manifest.current_thread_resolution_outcomes = [{
+        schemaVersion: 1, attemptId: "interrupted-current", threadId: "PRRT_current", expectedHeadSha: head,
+        repository: { fullName: "slawdawg/Kendall-vnxt" }, targetRequestFingerprint: manifest.current_thread_adjudications[0].targetRequestFingerprint,
+        status: "needs-recovery", mutation: { status: "attempt-recorded", replyPosted: false },
+      }];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const statePath = join(fixture.root, "review-threads-state.json");
+      const state = readJson(statePath);
+      state.data.repository.pullRequest.reviewThreads.nodes[0].isResolved = true;
+      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.baseRefOid = "cccccccccccccccccccccccccccccccccccccccc";
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const recovery = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(recovery.code !== 0, "base-commit-drifted current recovery unexpectedly succeeded");
+      assert(recovery.stderr.includes("PR base commit changed before recovery"), recovery.stderr || recovery.stdout);
+      assert(readJson(manifestPath).current_thread_resolution_outcomes.length === 1, "base-commit-drifted current recovery appended or retried a mutation");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
