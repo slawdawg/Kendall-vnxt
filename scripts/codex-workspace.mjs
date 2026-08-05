@@ -4211,6 +4211,7 @@ function assertNoUnrecoveredResolutionAttempt(outcomes, threadId, kind, freshAdj
 function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) {
   const blockers = [];
   if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("PR is no longer open and non-draft immediately before the thread mutation");
+  if (!pr?.baseRefName || pr.baseRefName !== fresh.pr?.baseRefName) blockers.push("PR base drifted immediately before the thread mutation");
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
@@ -4303,7 +4304,7 @@ function verifyUnmanagedPrGates(argv) {
   const baseBranch = safeMetadataText(options.base, 250);
   const expectedHeadSha = safeMetadataText(options.expectedHead, 80);
   const plannedMergeMethod = safeMetadataText(options.mergeMethod, 500);
-  const rollbackPath = safeMetadataText(options.rollbackPath, 500);
+  const rollbackPath = typeof options.rollbackPath === "string" ? safeMetadataText(options.rollbackPath, 500) : "";
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     throw new Error("verify-unmanaged-pr-gates requires --pr <number>.");
   }
@@ -4345,7 +4346,7 @@ function verifyUnmanagedPrGates(argv) {
     pr_delivery_head_sha: expectedHeadSha,
     worktree_path: worktreePath,
   };
-  const packet = buildPrGateEvidence(manifest, { options });
+  const packet = buildPrGateEvidence(manifest, { options, managedGate: false });
   const externalPacket = {
     ...packet,
     plannedMergeMethod,
@@ -4873,6 +4874,7 @@ function validMergedAtTimestamp(value) {
 }
 
 function buildPrGateEvidence(manifest, context = {}) {
+  const managedGate = context.managedGate !== false;
   const checkedAt = new Date().toISOString();
   const pr = prViewForGates(manifest);
   if (!pr) {
@@ -4917,6 +4919,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     mergePlan,
     currentResolutionOutcomes: manifest.current_thread_resolution_outcomes,
     outdatedResolutionOutcomes: manifest.outdated_thread_resolution_outcomes,
+    managedGate,
   });
   const requiredGates = [
     "PR open and non-draft",
@@ -4943,7 +4946,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     status,
     lowRiskReady: blockers.length === 0,
     checkedAt,
-    authorityProfile: "standard-delivery",
+    authorityProfile: managedGate ? "standard-delivery" : "unmanaged-pr-evidence",
     taskId: manifest.task_id,
     branch: manifest.branch,
     baseBranch: manifest.base_branch || null,
@@ -5537,7 +5540,7 @@ function safeMetadataText(value, maxLength) {
 
 function shapeExactHeadMergePlanEvidence(options = {}, context = {}) {
   const plannedMergeMethod = safeMetadataText(options.mergeMethod, 500);
-  const rollbackPath = safeMetadataText(options.rollbackPath, 500);
+  const rollbackPath = typeof options.rollbackPath === "string" ? safeMetadataText(options.rollbackPath, 500) : "";
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha, 80);
   const prNumber = Number(context.prNumber);
   const blockers = [];
@@ -5608,7 +5611,7 @@ function prGateBlockers(manifest, pr, context) {
   if (!context.headState.localMatchesExpected) {
     blockers.push(`Local HEAD ${context.headState.localHeadSha} does not match recorded delivery head ${context.headState.expectedHeadSha}`);
   }
-  if (!hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) {
+  if (context.managedGate !== false && !hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) {
     blockers.push("Managed PR gate requires recorded standard-delivery pr_open evidence");
   }
   if (context.worktreeStatus?.any) {
