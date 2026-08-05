@@ -10990,7 +10990,7 @@ try {
       cleanupFinishPrExistingCommitFixture(nonHighRiskFixture);
     }
 
-    const authorizedFixture = createFinishPrExistingCommitFixture(options);
+    const authorizedFixture = createCanonicalManagedPrFixture(options);
     const authorization = `operator-authorized thread=PRRT_current head=${runGit(authorizedFixture.worktree, ["rev-parse", "HEAD"]).stdout}`;
     try {
       const adjudication = runFixtureScript(authorizedFixture, buildArgs(authorizedFixture, authorization), { cwd: authorizedFixture.worktree, env: authorizedFixture.env });
