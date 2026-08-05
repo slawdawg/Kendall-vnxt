@@ -1456,6 +1456,11 @@ try {
     for (const expected of ["only produces Kendall_Nxt evidence", "requires a detached checkout", "requires a clean detached checkout", "requires --merge-method", "requires --rollback-path"]) {
       assert(unmanagedGate[0].includes(expected), `unmanaged PR evidence must fail closed on ${expected}`);
     }
+    assert(unmanagedGate[0].includes("managedGate: false"), "unmanaged PR evidence must bypass only the managed recorded-delivery requirement");
+
+    const outdatedMutationGuards = source.match(/function reviewThreadResolutionPreMutationBlockers[\s\S]*?function reviewThreadResolutionPostMutationBlockers/);
+    assert(outdatedMutationGuards, "outdated-thread pre-mutation guards not found");
+    assert(outdatedMutationGuards[0].includes("PR base drifted immediately before the thread mutation"), "outdated-thread pre-mutation guards must reject base drift");
 
     const outdatedAdjudication = source.match(/function adjudicateOutdatedThread[\s\S]*?function verifyUnmanagedPrGates/);
     assert(outdatedAdjudication, "outdated-thread adjudication command not found");
@@ -10116,6 +10121,14 @@ try {
       assert(bare.code !== 0, "bare --pr unexpectedly built unmanaged evidence");
       assert(bare.stderr.includes("requires --pr <positive integer>"), bare.stderr || bare.stdout);
 
+      const bareRollback = runFixtureScript(fixture, [
+        "verify-unmanaged-pr-gates", "--pr", "456", "--base", "main", "--expected-head", head,
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${head}`,
+        "--rollback-path",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(bareRollback.code !== 0, "bare --rollback-path unexpectedly built unmanaged evidence");
+      assert(bareRollback.stderr.includes("requires --rollback-path <revert or recovery path>"), bareRollback.stderr || bareRollback.stdout);
+
       runGit(fixture.worktree, ["checkout", "--detach", head]);
       const packet = runFixtureScript(fixture, [
         "verify-unmanaged-pr-gates", "--pr", "456", "--base", "main", "--expected-head", head,
@@ -10126,6 +10139,7 @@ try {
       const parsed = JSON.parse(packet.stdout);
       assert(parsed.authorityDecision.authorityProfile === "unmanaged-pr-evidence", JSON.stringify(parsed.authorityDecision));
       assert(parsed.authorityDecision.authorityFamily === "unmanaged-pr-evidence", JSON.stringify(parsed.authorityDecision));
+      assert(!parsed.blockers.includes("Managed PR gate requires recorded standard-delivery pr_open evidence"), JSON.stringify(parsed.blockers));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10149,6 +10163,29 @@ try {
       assert(resolution.stderr.includes("Pre-mutation review-thread audit drifted or is unsafe"), resolution.stderr || resolution.stdout);
       const state = readJson(join(fixture.root, "review-threads-state.json"));
       assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_outdated").isResolved === false, "resolver mutated GitHub after pre-mutation drift");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("resolve-adjudicated-thread rejects PR base drift immediately before an outdated-thread mutation", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      preMutationBaseDrift: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const args = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code !== 0, "pre-mutation base drift unexpectedly resolved the thread");
+      assert(resolution.stderr.includes("PR base drifted immediately before the thread mutation"), resolution.stderr || resolution.stdout);
+      const state = readJson(join(fixture.root, "review-threads-state.json"));
+      assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_outdated").isResolved === false, "resolver mutated GitHub after pre-mutation base drift");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -13577,6 +13614,9 @@ function createFinishPrExistingCommitFixture(options = {}) {
       "  let count = 0; try { count = Number(fs.readFileSync(countPath, 'utf8')) || 0; } catch {} count += 1; fs.writeFileSync(countPath, String(count));",
       options.preMutationCheckDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.statusCheckRollup.push({ name: 'raced-check', status: 'IN_PROGRESS', conclusion: null }); fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
+        : "",
+      options.preMutationBaseDrift
+        ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefName = 'raced-base'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
       options.preMutationReviewDecisionDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.reviewDecision = 'CHANGES_REQUESTED'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
