@@ -365,6 +365,36 @@ and delivery-audit evidence stale, so a fresh exact-head gate packet is still
 required before merge. Resume normal adjudication only after a successful
 refresh packet; never rewrite manifest JSON by hand.
 
+#### PR #723 historical-rewrite recovery exception
+
+The normal refresh rule requires the recorded delivery head to be an ancestor
+of the live PR head. There is one persistent, source-governed exception for
+the documented PR #723 historical rewrite only. It is not a generic recovery
+flag and must not be copied to another lane. In addition to every normal
+refresh gate, it requires the literal managed task, canonical repository and
+PR URL/number, branch `codex/standing-review-thread-resolution-authority`, base
+`dev`, recorded prior head `df0200175510c8346ef98b10f45c19a5e195219a`, and the
+documented merge base `b8df8d162195993c7d37f5162b46783a388963d1`. The live
+local, origin, and GitHub PR head must be one exact SHA that descends from the
+authorized anchor `85a74486f65328f76986834a61859b8f2e191042`. Descendant
+matching is intentional: the recovery implementation itself advances the PR
+after that authorized anchor.
+
+The one metadata-only rebind also requires this exact operator-evidence value:
+
+```text
+operator-authorized recovery=pr-723 prior=df0200175510c8346ef98b10f45c19a5e195219a anchor=85a74486f65328f76986834a61859b8f2e191042 merge-base=b8df8d162195993c7d37f5162b46783a388963d1
+```
+
+Pass it only to the governed `refresh-pr-head` command via
+`--non-ancestral-recovery-authorization`. The recorded rebind retains the
+literal recovery contract, observed merge base, live head, check summary,
+thread audit, and the normal lock-backed authority decision. It neither
+resolves a thread nor authorizes merge or cleanup. Any field mismatch, absent
+operator evidence, non-terminal check, incomplete review audit, non-owned
+lock, or a live head outside the authorized anchor's ancestry remains a hard
+stop.
+
 9. **Cleanup.** The delegated delivery/cleanup worker should prefer
    `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry

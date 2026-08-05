@@ -100,6 +100,21 @@ const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const rebuildIndexBaseBranch = "main";
 const protectedBranches = new Set(branchFoundationProtectedBranches);
+// This is deliberately not a general non-ancestral recovery mechanism. It is
+// the one operator-authorized historical rewrite recorded for PR #723. A
+// later implementation commit necessarily advances the PR beyond the
+// authorized anchor, so the live head must descend from that anchor exactly.
+const pr723NonAncestralRefreshException = Object.freeze({
+  taskId: "20260727-standing-review-thread-resolution-authority",
+  repository: "slawdawg/Kendall-vnxt",
+  prNumber: 723,
+  prUrl: "https://github.com/slawdawg/Kendall-vnxt/pull/723",
+  baseBranch: "dev",
+  branch: "codex/standing-review-thread-resolution-authority",
+  priorHeadSha: "df0200175510c8346ef98b10f45c19a5e195219a",
+  authorizedAnchorHeadSha: "85a74486f65328f76986834a61859b8f2e191042",
+  documentedMergeBaseSha: "b8df8d162195993c7d37f5162b46783a388963d1",
+});
 const args = process.argv.slice(2);
 const command = args[0];
 const commandArgs = args.slice(1);
@@ -396,6 +411,8 @@ verify-pr-gates options:
 
 refresh-pr-head options:
   --reason <text>           Required bounded reason for the explicit stale-head rebind.
+  --non-ancestral-recovery-authorization <text>
+                             Required only for the one literal, audited PR #723 historical-rewrite recovery.
   --apply                   Record the rebind under the task lock. Without this, print a dry-run plan.
   --summary-json            Without --apply, print the bounded rebind evidence packet.
   Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
@@ -3042,8 +3059,10 @@ function refreshPrHead(argv) {
       checkedAt: lockedPacket.checkedAt,
       repository: lockedPacket.repository,
       pr: lockedPacket.pr,
+      lock: lockedPacket.lock,
       checks: compactStatusCheckEvidence(lockedPacket.checks),
       reviewThreads: compactReviewThreadAudit(lockedPacket.reviewThreads),
+      nonAncestralRecovery: lockedPacket.nonAncestralRecovery,
       metadataOnly: true,
       rawPayloadRetained: false,
     };
@@ -3109,7 +3128,19 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   const fastForward = priorHeadSha && pr?.headRefOid
     ? git(["merge-base", "--is-ancestor", priorHeadSha, pr.headRefOid], { cwd: manifest.worktree_path }).code === 0
     : false;
-  if (!fastForward) blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
+  const nonAncestralRecovery = shapePr723NonAncestralRefreshRecoveryEvidence(manifest, {
+    options,
+    priorHeadSha,
+    localHeadSha,
+    remoteHeadSha,
+    repository,
+    pr,
+    fastForward,
+  });
+  if (!fastForward && nonAncestralRecovery.status !== "authorized") {
+    blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
+  }
+  blockers.push(...nonAncestralRecovery.blockers);
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (checks.total === 0) blockers.push("No status checks reported for live PR head");
   if (checks.pending.length) blockers.push(`Pending checks: ${checks.pending.map((check) => check.name).join(", ")}`);
@@ -3127,6 +3158,9 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     "complete thread-aware review audit with no pending review request",
     "explicit prior/new head and reason retained as metadata only",
   ];
+  if (!fastForward) {
+    requiredGates.push("PR #723-only non-ancestral recovery contract with exact prior head, authorized anchor ancestry, documented merge base, and operator evidence");
+  }
   const ready = blockers.length === 0;
   return {
     schemaVersion: 1,
@@ -3146,6 +3180,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
       state: pr?.state || null,
       isDraft: Boolean(pr?.isDraft),
       baseRefName: pr?.baseRefName || null,
+      headRefName: pr?.headRefName || null,
       headRefOid: pr?.headRefOid || null,
       reviewDecision: pr?.reviewDecision || null,
     },
@@ -3153,11 +3188,12 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     checks,
     nonRequiredCheckPolicy,
     reviewThreads,
+    nonAncestralRecovery,
     blockers,
     requiredGates,
     authorityDecision: shapeAuthorityDecisionEvidence({
       operation: "refresh-pr-head",
-      authorityFamily: "delivery-evidence-rebind",
+      authorityFamily: nonAncestralRecovery.status === "authorized" ? "delivery-evidence-rebind-recovery" : "delivery-evidence-rebind",
       decision: ready ? "ready" : "blocked",
       allowed: ready,
       requiredGates,
@@ -3167,12 +3203,93 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
         "explicit metadata-only manifest rebind; no source, review-thread, merge, or cleanup mutation",
         "active, stale, or ambiguous task locks block refresh",
         "remote/local/PR identity mismatch, pending or failing checks, or incomplete review evidence block refresh",
+        "non-ancestral history is blocked unless every literal PR #723 recovery binding and the exact operator authorization match",
       ],
-      evidenceRefs: [`task:${manifest.task_id}`, `repository:${repository.fullName}`, pr?.number ? `pr:${pr.number}` : "", priorHeadSha ? `prior-head:${priorHeadSha}` : "", pr?.headRefOid ? `new-head:${pr.headRefOid}` : ""],
+      evidenceRefs: [`task:${manifest.task_id}`, `repository:${repository.fullName}`, pr?.number ? `pr:${pr.number}` : "", priorHeadSha ? `prior-head:${priorHeadSha}` : "", pr?.headRefOid ? `new-head:${pr.headRefOid}` : "", nonAncestralRecovery.status === "authorized" ? `recovery-anchor:${nonAncestralRecovery.authorizedAnchorHeadSha}` : "", nonAncestralRecovery.status === "authorized" ? `recovery-merge-base:${nonAncestralRecovery.observedMergeBaseSha}` : ""],
       nextSafeAction: ready ? "Apply the one explicit delivery-head rebind under lock, then rerun the normal thread adjudication workflow." : "Do not alter the manifest manually; fix the named evidence mismatch and rerun refresh-pr-head.",
       recoveryPath: "Keep the prior delivery-head binding unchanged. Re-run the read-only refresh packet after the ambiguous state is resolved.",
       generatedAt: checkedAt,
     }),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
+  const specification = pr723NonAncestralRefreshException;
+  const rawAuthorization = context.options?.nonAncestralRecoveryAuthorization;
+  // This is deliberately an exact byte-for-byte token, not normal metadata:
+  // whitespace normalization would make the operator evidence ambiguous.
+  const authorization = typeof rawAuthorization === "string" && rawAuthorization.length <= 500
+    ? rawAuthorization
+    : "";
+  const expectedAuthorization = `operator-authorized recovery=pr-723 prior=${specification.priorHeadSha} anchor=${specification.authorizedAnchorHeadSha} merge-base=${specification.documentedMergeBaseSha}`;
+  const liveHeadSha = exactGitObjectIdOrNull(context.pr?.headRefOid) || null;
+  const observedMergeBase = git(["merge-base", specification.priorHeadSha, specification.authorizedAnchorHeadSha], { cwd: manifest.worktree_path });
+  const observedMergeBaseSha = observedMergeBase.code === 0 ? exactGitObjectIdOrNull(observedMergeBase.stdout.trim()) : null;
+  const anchorIsAncestorOfLiveHead = liveHeadSha
+    ? gitCommitIsAncestor(specification.authorizedAnchorHeadSha, liveHeadSha, manifest.worktree_path)
+    : false;
+  const literalBindingMatches = (
+    manifest.task_id === specification.taskId
+    && manifest.branch === specification.branch
+    && manifest.base_branch === specification.baseBranch
+    && context.repository?.fullName === specification.repository
+    && context.pr?.number === specification.prNumber
+    && context.pr?.url === specification.prUrl
+    && context.pr?.baseRefName === specification.baseBranch
+    && context.pr?.headRefName === specification.branch
+    && context.priorHeadSha === specification.priorHeadSha
+  );
+  const blockers = [];
+
+  if (context.fastForward) {
+    if (authorization) blockers.push("Non-ancestral recovery authorization is only valid when the recorded delivery head is not an ancestor of the live PR head");
+    return {
+      schemaVersion: 1,
+      status: authorization ? "blocked" : "not-required",
+      expectedAuthorization: expectedAuthorization || null,
+      authorization: authorization || null,
+      priorHeadSha: context.priorHeadSha || null,
+      authorizedAnchorHeadSha: specification.authorizedAnchorHeadSha,
+      liveHeadSha,
+      observedMergeBaseSha,
+      anchorIsAncestorOfLiveHead,
+      literalBindingMatches,
+      blockers,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+
+  if (!literalBindingMatches) blockers.push("Non-ancestral recovery is restricted to the literal recorded PR #723 task, repository, URL, branch, base, and prior delivery head");
+  if (authorization !== expectedAuthorization) blockers.push("Non-ancestral recovery requires exact operator evidence bound to the PR #723 prior head, authorized anchor, and documented merge base");
+  if (!observedMergeBaseSha || observedMergeBaseSha !== specification.documentedMergeBaseSha) blockers.push("Non-ancestral recovery did not reproduce the documented merge base");
+  if (!anchorIsAncestorOfLiveHead) blockers.push("Non-ancestral recovery requires the live PR head to descend from the exact authorized anchor head");
+  if (!context.localHeadSha || context.localHeadSha !== liveHeadSha) blockers.push("Non-ancestral recovery requires exact local-head evidence for the live PR head");
+  if (!context.remoteHeadSha || context.remoteHeadSha !== liveHeadSha) blockers.push("Non-ancestral recovery requires exact origin-head evidence for the live PR head");
+
+  return {
+    schemaVersion: 1,
+    status: blockers.length ? "blocked" : "authorized",
+    expectedAuthorization,
+    authorization: authorization || null,
+    taskId: specification.taskId,
+    repository: specification.repository,
+    prNumber: specification.prNumber,
+    prUrl: specification.prUrl,
+    baseBranch: specification.baseBranch,
+    branch: specification.branch,
+    priorHeadSha: context.priorHeadSha || null,
+    authorizedAnchorHeadSha: specification.authorizedAnchorHeadSha,
+    liveHeadSha,
+    documentedMergeBaseSha: specification.documentedMergeBaseSha,
+    observedMergeBaseSha,
+    anchorIsAncestorOfLiveHead,
+    localHeadSha: context.localHeadSha || null,
+    remoteHeadSha: context.remoteHeadSha || null,
+    literalBindingMatches,
+    blockers,
     metadataOnly: true,
     rawPayloadRetained: false,
   };
@@ -3187,6 +3304,7 @@ function renderPrHeadRefreshEvidence(packet = {}) {
     `lock ${packet.lock?.status || "unknown"}`,
     `checks total=${packet.checks?.total ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0}`,
     `reviewThreads current=${reviewThreads.unresolvedNonOutdatedCount ?? reviewThreads.unresolvedCurrent ?? "unknown"} outdated=${reviewThreads.unresolvedOutdatedCount ?? reviewThreads.unresolvedOutdated ?? "unknown"} pendingRequests=${reviewThreads.pendingReviewRequestCount ?? reviewThreads.pendingRequests ?? "unknown"}`,
+    `nonAncestralRecovery ${packet.nonAncestralRecovery?.status || "unknown"} anchor=${packet.nonAncestralRecovery?.authorizedAnchorHeadSha || "none"} mergeBase=${packet.nonAncestralRecovery?.observedMergeBaseSha || "none"}`,
   ];
 }
 
@@ -14119,7 +14237,7 @@ function prViewForGates(manifest) {
     "view",
     selector,
     "--json",
-    "number,url,mergedAt,state,baseRefName,headRefOid,mergeStateStatus,isDraft,statusCheckRollup,reviewDecision",
+    "number,url,mergedAt,state,baseRefName,headRefName,headRefOid,mergeStateStatus,isDraft,statusCheckRollup,reviewDecision",
   ], {
     cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
   });

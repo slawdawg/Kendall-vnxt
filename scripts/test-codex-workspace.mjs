@@ -9790,6 +9790,84 @@ try {
     }
   });
 
+  test("refresh-pr-head admits only the literal PR #723 non-ancestral recovery contract and records its audit", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "legacy-recovery", "main"]);
+      commitFile(fixture.root, "legacy-recovery.txt", "historical delivery lineage\n", "legacy recovery lineage");
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      const authorizedAnchorHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const documentedMergeBaseSha = runGit(fixture.worktree, ["merge-base", priorHeadSha, authorizedAnchorHeadSha]).stdout;
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefName = fixture.branch;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      installFixturePr723NonAncestralRecoveryContract(fixture, {
+        priorHeadSha,
+        authorizedAnchorHeadSha,
+        documentedMergeBaseSha,
+      });
+
+      const denied = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+          "--reason", "Recorded rewrite requires the explicit bounded recovery contract.",
+          "--non-ancestral-recovery-authorization", "operator-authorized recovery=pr-723 prior=wrong anchor=wrong merge-base=wrong",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(denied.code !== 0, "wrong recovery evidence unexpectedly allowed a rebind");
+      assert(denied.stderr.includes("requires exact operator evidence"), denied.stderr || denied.stdout);
+
+      const wrongBranch = { ...readJson(prStatePath), headRefName: "codex/other-branch" };
+      writeFileSync(prStatePath, `${JSON.stringify(wrongBranch)}\n`);
+      const branchDenied = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+          "--reason", "A head branch outside the literal recovery contract must stop.",
+          "--non-ancestral-recovery-authorization", `operator-authorized recovery=pr-723 prior=${priorHeadSha} anchor=${authorizedAnchorHeadSha} merge-base=${documentedMergeBaseSha}`,
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(branchDenied.code !== 0, "wrong PR head branch unexpectedly allowed a rebind");
+      assert(branchDenied.stderr.includes("restricted to the literal recorded PR #723"), branchDenied.stderr || branchDenied.stdout);
+      prState.headRefName = fixture.branch;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const authorization = `operator-authorized recovery=pr-723 prior=${priorHeadSha} anchor=${authorizedAnchorHeadSha} merge-base=${documentedMergeBaseSha}`;
+      const recovered = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+          "--reason", "Recorded PR #723 historical rewrite now has exact recovery proof.",
+          "--non-ancestral-recovery-authorization", authorization,
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(recovered.stdout.includes("nonAncestralRecovery authorized"), recovered.stdout || recovered.stderr);
+      const refreshed = readJson(manifestPath);
+      const rebind = refreshed.pr_head_rebinds?.at(-1);
+      assert(rebind?.priorHeadSha === priorHeadSha, "recovery lost its exact legacy head");
+      assert(rebind?.nonAncestralRecovery?.status === "authorized", "recovery audit did not retain authorization");
+      assert(rebind.lock?.status === "owned", "recovery audit did not retain owned-lock evidence");
+      assert(rebind.nonAncestralRecovery.observedMergeBaseSha === documentedMergeBaseSha, "recovery audit did not retain the documented merge base");
+      assert(rebind.nonAncestralRecovery.liveHeadSha === authorizedAnchorHeadSha, "recovery audit did not retain the exact live head");
+      assert(refreshed.authority_decisions?.at(-1)?.authorityFamily === "delivery-evidence-rebind-recovery", "recovery authority decision missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("adjudicate-outdated-thread records bounded exact-head evidence without resolving GitHub state", () => {
     const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
@@ -13422,6 +13500,38 @@ function prepareFixtureForPrHeadRefresh(fixture) {
   manifest.pr_delivery_head_sha = runGit(fixture.worktree, ["rev-parse", "HEAD^"]).stdout;
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifestPath;
+}
+
+function installFixturePr723NonAncestralRecoveryContract(fixture, contract) {
+  const source = readFileSync(fixture.script, "utf8");
+  for (const literal of [
+    'taskId: "20260727-standing-review-thread-resolution-authority"',
+    'repository: "slawdawg/Kendall-vnxt"',
+    "prNumber: 723",
+    'prUrl: "https://github.com/slawdawg/Kendall-vnxt/pull/723"',
+    'baseBranch: "dev"',
+    'branch: "codex/standing-review-thread-resolution-authority"',
+    'priorHeadSha: "df0200175510c8346ef98b10f45c19a5e195219a"',
+    'authorizedAnchorHeadSha: "85a74486f65328f76986834a61859b8f2e191042"',
+    'documentedMergeBaseSha: "b8df8d162195993c7d37f5162b46783a388963d1"',
+  ]) {
+    assert(source.includes(literal), `fixture lost the production PR #723 recovery binding: ${literal}`);
+  }
+  const start = source.indexOf("const pr723NonAncestralRefreshException = Object.freeze({");
+  const end = source.indexOf("\n});", start);
+  assert(start >= 0 && end > start, "fixture did not contain the PR #723 non-ancestral recovery contract");
+  const replacement = `const pr723NonAncestralRefreshException = Object.freeze({
+  taskId: "resumed-task",
+  repository: "slawdawg/Kendall-vnxt",
+  prNumber: 456,
+  prUrl: "https://example.test/pull/456",
+  baseBranch: "main",
+  branch: "${fixture.branch}",
+  priorHeadSha: "${contract.priorHeadSha}",
+  authorizedAnchorHeadSha: "${contract.authorizedAnchorHeadSha}",
+  documentedMergeBaseSha: "${contract.documentedMergeBaseSha}",
+});`;
+  writeFileSync(fixture.script, `${source.slice(0, start)}${replacement}${source.slice(end + 4)}`);
 }
 
 function activeFixtureTaskLock(taskId) {
