@@ -1442,6 +1442,7 @@ try {
     assert(highRiskPath, "high-risk review-thread path classifier not found");
     assert(highRiskPath[0].includes('value === "agents.md"'), "case-normalized AGENTS.md paths must remain high-risk");
     assert(highRiskPath[0].includes('value.endsWith("/agents.md")'), "nested AGENTS.md paths must remain high-risk");
+    assert(highRiskPath[0].includes('value === "docs/workflows/end-to-end-lane-runner.md"'), "the source-owned delivery authority runbook must remain high-risk");
 
     const checkNormalizer = source.match(/function normalizeStatusCheckRollup[\s\S]*?function statusContextConclusion/);
     assert(checkNormalizer, "status check normalizer source not found");
@@ -1461,6 +1462,13 @@ try {
     const outdatedMutationGuards = source.match(/function reviewThreadResolutionPreMutationBlockers[\s\S]*?function reviewThreadResolutionPostMutationBlockers/);
     assert(outdatedMutationGuards, "outdated-thread pre-mutation guards not found");
     assert(outdatedMutationGuards[0].includes("PR base drifted immediately before the thread mutation"), "outdated-thread pre-mutation guards must reject base drift");
+
+    const outdatedRecovery = source.match(/function recoverAlreadyResolvedOutdatedThreadAttempt[\s\S]*?function adjudicateCurrentThread/);
+    assert(outdatedRecovery, "outdated-thread recovery helper not found");
+    assert(outdatedRecovery[0].includes("PR base changed before recovery"), "outdated-thread recovery must reject retained/live base drift");
+    assert(outdatedRecovery[0].includes("PR base commit changed before recovery"), "outdated-thread recovery must reject retained/live base commit drift");
+    assert(outdatedRecovery[0].includes("!prior.targetRequestFingerprint"), "outdated-thread recovery must require a prior attempt fingerprint");
+    assert(outdatedRecovery[0].includes("malformed adjudication provenance"), "outdated-thread recovery must reject malformed retained fingerprints");
 
     const outdatedAdjudication = source.match(/function adjudicateOutdatedThread[\s\S]*?function verifyUnmanagedPrGates/);
     assert(outdatedAdjudication, "outdated-thread adjudication command not found");
@@ -1499,6 +1507,10 @@ try {
     assert(changedPathAudit, "changed-path audit helper not found");
     assert(changedPathAudit[0].includes("expectedHeadSha"), "changed-path inspection must bind to an exact head");
     assert(changedPathAudit[0].includes("PR head changed during changed-path inspection"), "changed-path inspection must reject PR-head drift");
+    assert(changedPathAudit[0].includes("PR identity changed during changed-path inspection"), "changed-path inspection must reject PR identity drift");
+    assert(changedPathAudit[0].includes("PR base changed during changed-path inspection"), "changed-path inspection must reject PR base drift");
+    assert(changedPathAudit[0].includes("PR base commit changed during changed-path inspection"), "changed-path inspection must reject PR base commit drift");
+    assert(changedPathAudit[0].includes("GitHub rename inspection metadata is incomplete"), "rename inspection must reject incomplete pull-file metadata");
     assert(changedPathAudit[0].includes("path !== \"\""), "changed-path inspection must preserve literal whitespace in path identities");
 
     const diffRiskEvidence = source.match(/function shapeDiffRiskEvidence[\s\S]*?function fetchPrChangedPaths/);
@@ -10861,6 +10873,44 @@ try {
     }
   });
 
+  test("resolve-adjudicated-thread refuses outdated recovery when the retained base commit no longer matches", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const args = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      manifest.outdated_thread_resolution_outcomes = [{
+        schemaVersion: 1, attemptId: "interrupted-outdated", threadId: "PRRT_outdated", expectedHeadSha: head,
+        repository: { fullName: "slawdawg/Kendall-vnxt" }, targetRequestFingerprint: manifest.outdated_thread_adjudications[0].targetRequestFingerprint,
+        status: "needs-recovery", mutation: { status: "attempt-recorded", replyPosted: false },
+      }];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const statePath = join(fixture.root, "review-threads-state.json");
+      const state = readJson(statePath);
+      state.data.repository.pullRequest.reviewThreads.nodes[0].isResolved = true;
+      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.baseRefOid = "cccccccccccccccccccccccccccccccccccccccc";
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const recovery = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(recovery.code !== 0, "base-commit-drifted outdated recovery unexpectedly succeeded");
+      assert(recovery.stderr.includes("PR base commit changed before recovery"), recovery.stderr || recovery.stdout);
+      assert(readJson(manifestPath).outdated_thread_resolution_outcomes.length === 1, "base-commit-drifted recovery must not append or retry a GitHub mutation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-unmanaged-pr-gates rejects bare --pr and emits only unmanaged authority evidence", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
@@ -10941,6 +10991,29 @@ try {
       assert(resolution.stderr.includes("PR base drifted immediately before the thread mutation"), resolution.stderr || resolution.stdout);
       const state = readJson(join(fixture.root, "review-threads-state.json"));
       assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_outdated").isResolved === false, "resolver mutated GitHub after pre-mutation base drift");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("resolve-adjudicated-thread rejects PR base commit drift immediately before an outdated-thread mutation", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      preMutationBaseOidDrift: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const args = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code !== 0, "pre-mutation base commit drift unexpectedly resolved the thread");
+      assert(resolution.stderr.includes("PR base commit drifted immediately before the thread mutation"), resolution.stderr || resolution.stdout);
+      const state = readJson(join(fixture.root, "review-threads-state.json"));
+      assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_outdated").isResolved === false, "resolver mutated GitHub after pre-mutation base commit drift");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -11168,6 +11241,25 @@ try {
       cleanupFinishPrExistingCommitFixture(nonHighRiskFixture);
     }
 
+    const renamedHighRiskFixture = createFinishPrExistingCommitFixture({
+      ...options,
+      changedPaths: ["feature.txt"],
+      renamedPaths: [{ from: "scripts/codex-workspace.mjs", to: "feature.txt" }],
+    });
+    try {
+      const renamed = runFixtureScript(
+        renamedHighRiskFixture,
+        [...buildArgs(renamedHighRiskFixture).filter((value) => value !== "--apply"), "--summary-json"],
+        { cwd: renamedHighRiskFixture.worktree, env: renamedHighRiskFixture.env },
+      );
+      assert(renamed.code === 0, renamed.stderr || renamed.stdout);
+      const mapping = JSON.parse(renamed.stdout).mapping;
+      assert(mapping.highRiskPaths.includes("scripts/codex-workspace.mjs"), renamed.stdout);
+      assert(mapping.blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), renamed.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(renamedHighRiskFixture);
+    }
+
     const authorizedFixture = createCanonicalManagedPrFixture(options);
     const authorization = `operator-authorized thread=PRRT_current head=${runGit(authorizedFixture.worktree, ["rev-parse", "HEAD"]).stdout}`;
     try {
@@ -11194,6 +11286,16 @@ try {
         name: "missing-base",
         options: { existingPr: true, baseRefName: null },
         expected: "PR baseRefName missing",
+      },
+      {
+        name: "missing-base-commit",
+        options: { existingPr: true, baseRefOid: null },
+        expected: "Diff-risk PR base commit changed during changed-path inspection",
+      },
+      {
+        name: "changed-path-base-commit-drift",
+        options: { existingPr: true, changedPathBaseOidDrift: true },
+        expected: "Diff-risk changed-path inspection failed: GitHub PR base commit changed during changed-path inspection",
       },
       {
         name: "missing-merge-state",
@@ -15044,6 +15146,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(remoteRoot, ["init", "--bare", "-q"]);
   runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
   runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
+  const baseHead = runGit(fixtureRoot, ["rev-parse", "main"]).stdout;
   runGit(fixtureRoot, ["branch", branch, "main"]);
   mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
   runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
@@ -15052,6 +15155,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   commitFile(worktree, options.featurePath || "feature.txt", options.featureContent || "feature\n", "feature");
   runGit(worktree, ["push", "-q", "-u", "origin", branch]);
   const branchHead = runGit(worktree, ["rev-parse", "HEAD"]).stdout;
+  const changedPaths = options.changedPaths || [options.featurePath || "feature.txt"];
 
   const prViewPayload = {
     number: 456,
@@ -15059,6 +15163,8 @@ function createFinishPrExistingCommitFixture(options = {}) {
     mergedAt: null,
     state: "OPEN",
     baseRefName: Object.hasOwn(options, "baseRefName") ? options.baseRefName : "main",
+    baseRefOid: Object.hasOwn(options, "baseRefOid") ? options.baseRefOid : baseHead,
+    changedFiles: Object.hasOwn(options, "changedFiles") ? options.changedFiles : changedPaths.length,
     headRefOid: branchHead,
     mergeStateStatus: Object.hasOwn(options, "mergeStateStatus") ? options.mergeStateStatus : "CLEAN",
     isDraft: Boolean(options.isDraft),
@@ -15132,7 +15238,16 @@ function createFinishPrExistingCommitFixture(options = {}) {
   if (options.omitReviewRequests) {
     delete reviewThreadsPayload.data.repository.pullRequest.reviewRequests;
   }
-  const changedPaths = options.changedPaths || [options.featurePath || "feature.txt"];
+  const renamedFiles = (options.renamedPaths || []).map((entry) => ({
+    status: "renamed",
+    previous_filename: entry.from,
+    filename: entry.to,
+  }));
+  const renamedTargets = new Set(renamedFiles.map((file) => file.filename));
+  const pullFiles = [
+    ...renamedFiles,
+    ...changedPaths.filter((path) => !renamedTargets.has(path)).map((filename) => ({ status: "modified", filename })),
+  ];
   const fakeGh = join(fakeBin, "gh");
   const reviewThreadsStatePath = join(fixtureRoot, "review-threads-state.json");
   const graphqlQueryCountPath = join(fixtureRoot, "review-threads-query-count");
@@ -15160,12 +15275,14 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.existingPr
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
-      `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`,
+      options.changedPathBaseOidDrift
+        ? `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`
+        : `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`,
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
       `if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: ${JSON.stringify(repository.owner)} }, name: ${JSON.stringify(repository.name)} })); process.exit(0); }`,
-      `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === '--slurp' && args[3] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { console.log(JSON.stringify([[]])); process.exit(0); }`,
+      `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === '--slurp' && args[3] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { console.log(JSON.stringify([${JSON.stringify(pullFiles)}])); process.exit(0); }`,
       "if (args[0] === 'api' && args[1] === 'graphql') {",
       `  const statePath = ${JSON.stringify(reviewThreadsStatePath)};`,
       `  const countPath = ${JSON.stringify(graphqlQueryCountPath)};`,
@@ -15187,12 +15304,16 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? `    console.error(${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved" ? "simulated ambiguous resolver failure after mutation" : "simulated resolver mutation failure")}); process.exit(1);`
         : "    console.log(JSON.stringify({ data: { resolveReviewThread: { thread: target ? { id: target.id, isResolved: target.isResolved } : null } } })); process.exit(0);",
       "  }",
+      "  if (query.includes('pullRequest(number:$number){number baseRefOid}')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(JSON.stringify({ data: { repository: { pullRequest: { number: pr.number, baseRefOid: pr.baseRefOid } } } })); process.exit(0); }",
       "  let count = 0; try { count = Number(fs.readFileSync(countPath, 'utf8')) || 0; } catch {} count += 1; fs.writeFileSync(countPath, String(count));",
       options.preMutationCheckDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.statusCheckRollup.push({ name: 'raced-check', status: 'IN_PROGRESS', conclusion: null }); fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
-      options.preMutationBaseDrift
+    options.preMutationBaseDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefName = 'raced-base'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
+        : "",
+      options.preMutationBaseOidDrift
+        ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
       options.preMutationReviewDecisionDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.reviewDecision = 'CHANGES_REQUESTED'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
