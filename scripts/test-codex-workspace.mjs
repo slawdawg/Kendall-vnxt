@@ -15069,10 +15069,29 @@ function createFinishPrExistingCommitFixture(options = {}) {
 }
 
 function createCanonicalManagedPrFixture(options = {}) {
-  return createFinishPrExistingCommitFixture({
+  const fixture = createFinishPrExistingCommitFixture({
     ...options,
     repository: { owner: "slawdawg", name: "Kendall-vnxt" },
   });
+  const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+  const manifest = readJson(manifestPath);
+  manifest.status = "pr_open";
+  manifest.pr_number = 456;
+  manifest.pr_url = "https://example.test/pull/456";
+  manifest.pr_delivery_evidence = {
+    schemaVersion: 1,
+    status: "recorded",
+    authorityProfile: "standard-delivery",
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch,
+    headRevision: manifest.pr_delivery_head_sha,
+    pullRequestNumber: manifest.pr_number,
+    pullRequestUrl: manifest.pr_url,
+    metadataOnly: true,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return fixture;
 }
 
 function cleanupFinishPrExistingCommitFixture(fixture) {
