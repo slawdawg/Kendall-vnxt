@@ -532,6 +532,7 @@ adjudicate-outdated-thread options:
   --request-summary <text>  Required bounded summary of the original request.
   --diff-summary <text>     Required current-head mapping from request to change.
   --mapped-files <list>     Required changed PR paths implementing the request.
+  --renamed-paths <json>    Optional exact [{"from":"old/path","to":"new/path"}] mapping when an outdated thread anchors a renamed path.
   --verification <text>     Required focused local verification evidence.
   --verification-command <text> Required executed verification command.
   --verification-exit-code <0> Required successful verification result.
@@ -3713,6 +3714,7 @@ function resolveAdjudicatedThread(argv) {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: JSON.stringify(mapping.files || []), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
       verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
+      renamedPaths: JSON.stringify(mapping.renamedPaths || []),
       highRiskAuthorization: mapping.highRiskAuthorization?.evidence,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
@@ -3864,10 +3866,20 @@ function resolveAdjudicatedCurrentThread(argv) {
   const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
   assertLaneOwner(manifest, options); requireGh("resolve-adjudicated-current-thread"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest); assertRegisteredManagedWorktree(manifest, state);
   assertCleanManagedResolutionWorktree(manifest);
+  let recoveredResolvedAttempt = false;
   withManifestLock(state, manifest.task_id, () => {
     const locked = readManifest(manifestPath);
     validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked); assertRegisteredManagedWorktree(locked, state); assertCleanManagedResolutionWorktree(locked);
     reconcileManifest(locked, { refreshPr: true });
+    const recovery = recoverAlreadyResolvedCurrentThreadAttempt(locked, threadId);
+    if (recovery) {
+      locked.current_thread_resolution_outcomes = appendResolutionOutcome(locked.current_thread_resolution_outcomes, recovery);
+      locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
+      appendTaskEvent(locked, "current_review_thread_resolution_recovered", `${threadId} ${recovery.expectedHeadSha}`);
+      writeManifest(manifestPath, locked);
+      recoveredResolvedAttempt = true;
+      return;
+    }
     const retained = (locked.current_thread_adjudications || []).find((entry) => entry?.threadId === threadId && entry?.ready === true);
     if (!retained) throw new Error("No ready retained current-thread adjudication exists for the target thread.");
     const mapping = retained.mapping || {};
@@ -3889,7 +3901,7 @@ function resolveAdjudicatedCurrentThread(argv) {
     if (preMutationBlockers.length) throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
     const attempt = {
       schemaVersion: 1, attemptId: randomUUID(), threadId, expectedHeadSha: fresh.expectedHeadSha, repository: fresh.repository, supersedesAttemptId: supersededAttempt?.attemptId || null,
-      attemptedAt: new Date().toISOString(), mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
+      attemptedAt: new Date().toISOString(), targetRequestFingerprint: fresh.targetRequestFingerprint, mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
       preMutationAudit: compactReviewThreadAudit(preMutationAudit),
       recoveryPath: "Do not retry blindly. Re-audit the exact PR head and thread state, then resume only through resolve-adjudicated-current-thread.",
       metadataOnly: true, rawPayloadRetained: false,
@@ -3935,7 +3947,59 @@ function resolveAdjudicatedCurrentThread(argv) {
     writeManifest(manifestPath, locked);
     if (postBlockers.length) throw new Error(`Post-resolution thread-aware re-audit is incomplete or unsafe; no merge is permitted: ${postBlockers.join("; ")}`);
   });
+  if (recoveredResolvedAttempt) {
+    printApplied("resolve-adjudicated-current-thread", [`thread ${threadId} was already resolved; exact post-interruption recovery evidence recorded without a GitHub mutation`]);
+    return;
+  }
   printApplied("resolve-adjudicated-current-thread", [`thread ${threadId} resolved without reply; post-resolution re-audit recorded`]);
+}
+
+function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
+  const prior = (Array.isArray(manifest.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : [])
+    .filter((entry) => entry?.threadId === threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"))
+    .at(-1);
+  if (!prior) return null;
+  const pr = prViewForGates(manifest);
+  const headState = prGateHeadState(manifest);
+  const audit = pr?.number ? fetchReviewThreadState(manifest, githubRepository(manifest), pr.number) : null;
+  const retained = (Array.isArray(manifest.current_thread_adjudications) ? manifest.current_thread_adjudications : [])
+    .find((entry) => entry?.threadId === threadId && entry?.ready === true && entry?.expectedHeadSha === prior.expectedHeadSha);
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
+    nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
+    nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
+  }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
+  const blockers = [];
+  if (!prior.expectedHeadSha || prior.expectedHeadSha !== headState.expectedHeadSha || prior.expectedHeadSha !== pr?.headRefOid || !headState.localMatchesExpected) blockers.push("Interrupted current-thread attempt no longer matches the exact PR head");
+  if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted current-thread attempt no longer matches the canonical repository");
+  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || ["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push("Interrupted current-thread attempt PR state is no longer safe");
+  if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted current-thread attempt lacks a complete post-interruption thread audit");
+  if (!target || !target.isResolved || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted current-thread target is not proven resolved by the live thread audit");
+  if (target?.isOutdated) blockers.push("Interrupted current-thread target became outdated before recovery");
+  if (prior.targetRequestFingerprint && target?.requestFingerprint !== prior.targetRequestFingerprint) blockers.push("Interrupted current-thread target fingerprint changed before recovery");
+  if (checks.total === 0 || checks.pending.length || checks.failing.length) blockers.push("Interrupted current-thread attempt checks are not terminal-successful");
+  blockers.push(...nonRequiredCheckPolicy.blockers);
+  if (blockers.length) throw new Error(`A prior current review-thread resolution attempt is unrecovered; do not retry blindly: ${blockers.join("; ")}`);
+  const completedAt = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    attemptId: randomUUID(),
+    supersedesAttemptId: prior.attemptId,
+    threadId,
+    expectedHeadSha: prior.expectedHeadSha,
+    repository: prior.repository,
+    targetRequestFingerprint: target.requestFingerprint,
+    attemptedAt: completedAt,
+    completedAt,
+    status: "resolved",
+    mutation: { status: "confirmed-by-post-audit-recovery", exitCode: null, result: "live target already resolved after interrupted attempt", replyPosted: false, metadataOnly: true },
+    postResolutionAudit: compactReviewThreadAudit(audit),
+    postResolutionHolds: reviewThreadResolutionHolds(audit),
+    recoveryPath: "Recovered from exact live thread evidence without retrying a GitHub mutation. Re-run verify-pr-gates before merge.",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
 }
 
 function currentThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) {
@@ -4156,7 +4220,7 @@ function verifyUnmanagedPrGates(argv) {
   const prNumber = Number(options.pr);
   const baseBranch = safeMetadataText(options.base, 250);
   const expectedHeadSha = safeMetadataText(options.expectedHead, 80);
-  const plannedMergeMethod = safeMetadataText(options.mergeMethod, 80);
+  const plannedMergeMethod = safeMetadataText(options.mergeMethod, 500);
   const rollbackPath = safeMetadataText(options.rollbackPath, 500);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     throw new Error("verify-unmanaged-pr-gates requires --pr <number>.");
@@ -4553,11 +4617,9 @@ function shapeRetainedPreMergeGateEvidence(manifest, pr) {
   const gate = manifest.pr_gate_evidence && typeof manifest.pr_gate_evidence === "object" ? manifest.pr_gate_evidence : null;
   const blockers = [];
   if (!gate) {
-    // Older merged lanes predate gate packets.  Reconciliation is post-merge
-    // metadata recovery, not a merge authorization; its caller independently
-    // proves the live merged PR, exact branch heads, and cleanup audit.
+    blockers.push("Retained pre-merge gate evidence is missing");
     return {
-      status: "legacy-reconciled",
+      status: "blocked",
       checkedAt: null,
       expectedHeadSha: expectedHeadSha || null,
       legacy: true,
@@ -4725,7 +4787,8 @@ function buildPrGateEvidence(manifest, context = {}) {
     expectedHeadSha: headState.expectedHeadSha,
     changedPaths: changedPathInspection.paths,
     changedPathError: changedPathInspection.error,
-    inspectedHeadSha: postInspectionPr?.headRefOid || null,
+    inspectedHeadSha: changedPathInspection.inspectedHeadSha,
+    postInspectionHeadSha: postInspectionPr?.headRefOid || null,
   });
   const deliverySubagentAudit = shapeDeliverySubagentAuditEvidence(manifest, context.options || {}, {
     checkedAt,
@@ -4846,7 +4909,11 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha);
+  const renamedPathInspection = options.renamedPaths
+    ? fetchPrRenamedPaths(manifest, pr.number, headState.expectedHeadSha)
+    : { paths: [], inspectedHeadSha: headState.expectedHeadSha, error: "" };
   const postInspectionPr = prViewForGates(manifest);
+  const target = reviewThreadState.threadRefs.find((thread) => thread.id === threadId) || null;
   const mapping = shapeOutdatedThreadMappingEvidence(options, {
     laneOwner: manifest.owner,
     currentOwner: currentLaneOwner(options),
@@ -4856,8 +4923,10 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
     changedPathError: changedPathInspection.error,
     inspectedHeadSha: changedPathInspection.inspectedHeadSha,
     postInspectionHeadSha: postInspectionPr?.headRefOid || null,
+    targetPath: target?.path || null,
+    renamedPaths: renamedPathInspection.paths,
+    renamedPathError: renamedPathInspection.error,
   });
-  const target = reviewThreadState.threadRefs.find((thread) => thread.id === threadId) || null;
   const blockers = outdatedThreadAdjudicationBlockers(manifest, pr, {
     repository, headState,
     checks,
@@ -5022,6 +5091,7 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   if (!pr.baseRefName || pr.baseRefName !== manifest.base_branch) blockers.push(`PR base is ${pr.baseRefName || "missing"}, expected ${manifest.base_branch}`);
   if (!pr.headRefOid || pr.headRefOid !== context.headState.expectedHeadSha) blockers.push("PR head does not match the exact current-thread adjudication head");
   if (!context.headState.localMatchesExpected) blockers.push("Local HEAD does not match the recorded current-thread adjudication head");
+  if (!hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) blockers.push("Current-thread adjudication requires recorded standard-delivery pr_open evidence");
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (context.checks.total === 0) blockers.push("No status checks reported for exact head");
   if (context.checks.pending.length) blockers.push(`Pending checks: ${context.checks.pending.map((check) => check.name).join(", ")}`);
@@ -5070,6 +5140,11 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     .filter(Boolean);
   const requestFingerprint = safeMetadataText(options.requestFingerprint, 80).toLowerCase();
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
+  const renamedPaths = shapeRenamedPathMappings(options.renamedPaths, {
+    targetPath: typeof context.targetPath === "string" ? context.targetPath : "",
+    changedPaths,
+    observedPaths: Array.isArray(context.renamedPaths) ? context.renamedPaths : [],
+  });
   const highRiskPaths = changedPaths.filter(isHighRiskReviewThreadPath);
   const highRiskAuthorization = shapeHighRiskThreadAuthorizationEvidence(options, {
     threadId: context.threadId,
@@ -5077,6 +5152,7 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     highRiskPaths,
   });
   const changedPathError = safeMetadataText(context.changedPathError, 500);
+  const renamedPathError = safeMetadataText(context.renamedPathError, 500);
   const uncoveredFiles = files.filter((path) => !changedPaths.includes(path));
   const blockers = [];
   if (!requestSummary) blockers.push("Outdated-thread request summary missing");
@@ -5094,8 +5170,10 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   if (context.inspectedHeadSha && context.expectedHeadSha && context.inspectedHeadSha !== context.expectedHeadSha) blockers.push("Outdated-thread changed-path inspection no longer matches the exact PR head");
   if (!context.postInspectionHeadSha || context.postInspectionHeadSha !== context.expectedHeadSha) blockers.push("Outdated-thread PR head changed during changed-path inspection");
   if (changedPathError) blockers.push(`Outdated-thread changed-path inspection failed: ${changedPathError}`);
+  if (renamedPathError) blockers.push(`Outdated-thread rename inspection failed: ${renamedPathError}`);
   if (!changedPathError && changedPaths.length === 0) blockers.push("Outdated-thread changed-path inspection returned no paths");
   if (uncoveredFiles.length) blockers.push(`Outdated-thread mapping names paths absent from the current PR diff: ${uncoveredFiles.join(", ")}`);
+  blockers.push(...renamedPaths.blockers);
   blockers.push(...highRiskAuthorization.blockers);
   return {
     schemaVersion: 1,
@@ -5115,9 +5193,58 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     inspectedHeadSha: safeMetadataText(context.inspectedHeadSha, 80) || null,
     postInspectionHeadSha: safeMetadataText(context.postInspectionHeadSha, 80) || null,
     changedPaths,
+    renamedPaths: renamedPaths.entries,
     blockers,
     metadataOnly: true,
   };
+}
+
+function hasRecordedStandardDeliveryPrState(manifest, pr, expectedHeadSha) {
+  const delivery = manifest.pr_delivery_evidence;
+  return manifest.status === "pr_open"
+    && delivery?.status === "recorded"
+    && delivery?.authorityProfile === "standard-delivery"
+    && delivery?.taskId === manifest.task_id
+    && delivery?.branch === manifest.branch
+    && delivery?.baseBranch === manifest.base_branch
+    && delivery?.headRevision === expectedHeadSha
+    && delivery?.pullRequestNumber === pr?.number
+    && delivery?.pullRequestUrl === pr?.url;
+}
+
+function shapeRenamedPathMappings(value, context = {}) {
+  const raw = String(value || "");
+  if (!raw) return { entries: [], blockers: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { entries: [], blockers: ["Outdated-thread renamed-path evidence is invalid JSON"] };
+  }
+  if (!Array.isArray(parsed)) return { entries: [], blockers: ["Outdated-thread renamed-path evidence must be a JSON array"] };
+  const entries = [];
+  const blockers = [];
+  const seenFrom = new Set();
+  for (const entry of parsed) {
+    const from = entry?.from;
+    const to = entry?.to;
+    if (typeof from !== "string" || typeof to !== "string" || !from || !to || from.includes("\0") || to.includes("\0") || from === to || seenFrom.has(from)) {
+      blockers.push("Outdated-thread renamed-path evidence contains an invalid or ambiguous mapping");
+      continue;
+    }
+    seenFrom.add(from);
+    entries.push({ from, to });
+  }
+  if (entries.some((entry) => !context.changedPaths.includes(entry.to))) blockers.push("Outdated-thread renamed-path target is absent from the current PR diff");
+  if (context.targetPath && entries.length && !entries.some((entry) => entry.from === context.targetPath)) blockers.push("Outdated-thread renamed-path evidence does not bind the target review path");
+  const observed = context.observedPaths || [];
+  if (entries.some((entry) => !observed.some((candidate) => candidate?.from === entry.from && candidate?.to === entry.to))) blockers.push("Outdated-thread renamed-path evidence is not proven by the exact PR rename metadata");
+  return { entries, blockers };
+}
+
+function outdatedThreadMappingCoversTargetPath(mapping, targetPath) {
+  if (mapping?.files?.includes(targetPath)) return true;
+  return (mapping?.renamedPaths || []).some((entry) => entry?.from === targetPath && mapping?.files?.includes(entry.to));
 }
 
 function shapeHighRiskThreadAuthorizationEvidence(options = {}, context = {}) {
@@ -5158,6 +5285,7 @@ function outdatedThreadAdjudicationBlockers(manifest, pr, context) {
   if (!pr.baseRefName || pr.baseRefName !== manifest.base_branch) blockers.push(`PR base is ${pr.baseRefName || "missing"}, expected ${manifest.base_branch}`);
   if (!pr.headRefOid || pr.headRefOid !== context.headState.expectedHeadSha) blockers.push("PR head does not match the exact adjudication head");
   if (!context.headState.localMatchesExpected) blockers.push("Local HEAD does not match the recorded adjudication head");
+  if (!hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) blockers.push("Outdated-thread adjudication requires recorded standard-delivery pr_open evidence");
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (context.checks.total === 0) blockers.push("No status checks reported for exact head");
   if (context.checks.pending.length) blockers.push(`Pending checks: ${context.checks.pending.map((check) => check.name).join(", ")}`);
@@ -5175,7 +5303,7 @@ function outdatedThreadAdjudicationBlockers(manifest, pr, context) {
   else if (!context.target.commentsComplete) blockers.push("Target review thread comment evidence is incomplete; full canonical fingerprint is required");
   else if (!context.target.requestFingerprint) blockers.push("Target review thread has no request fingerprint");
   else if (context.mapping?.requestFingerprint !== context.target.requestFingerprint) blockers.push("Outdated-thread request fingerprint does not match the target review thread");
-  else if (context.target.path && !context.mapping?.files?.includes(context.target.path)) blockers.push(`Outdated-thread mapping omits target review path: ${context.target.path}`);
+  else if (context.target.path && !outdatedThreadMappingCoversTargetPath(context.mapping, context.target.path)) blockers.push(`Outdated-thread mapping omits target review path: ${context.target.path}`);
   if (context.mapping?.highRiskPaths?.length && context.mapping?.highRiskAuthorization?.status !== "authorized") blockers.push(`High-risk outdated-thread resolution is a stop line: ${context.mapping.highRiskPaths.join(", ")}`);
   blockers.push(...(context.mapping?.blockers || []));
   return blockers;
@@ -5346,8 +5474,8 @@ function prGateBlockers(manifest, pr, context) {
   } else if (pr.mergeStateStatus !== "CLEAN") {
     blockers.push(`PR mergeStateStatus is ${pr.mergeStateStatus}`);
   }
-  if (pr.reviewDecision === "CHANGES_REQUESTED") {
-    blockers.push("PR reviewDecision is CHANGES_REQUESTED");
+  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) {
+    blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   }
   if (context.checks.total === 0) {
     blockers.push("No status checks reported for exact head");
@@ -5417,7 +5545,7 @@ function resolutionAttemptRecovered(outcomes, attemptKind, attempt) {
     const prior = queue.shift();
     for (const candidate of outcomes || []) {
       if (!resolutionAttemptSupersedes(candidate.outcome, candidate.kind, prior, attemptKind)) continue;
-      if (candidate.outcome?.status === "resolved" && candidate.outcome?.mutation?.status === "confirmed-by-mutation-response") return true;
+      if (candidate.outcome?.status === "resolved" && ["confirmed-by-mutation-response", "confirmed-by-post-audit-recovery"].includes(candidate.outcome?.mutation?.status)) return true;
       if (!visited.has(candidate.outcome?.attemptId)) {
         visited.add(candidate.outcome?.attemptId);
         queue.push(candidate.outcome);
@@ -5657,7 +5785,9 @@ function diffRiskPathSet(value) {
   const raw = String(value || "");
   if (!raw) return { paths: [], error: "" };
   if (!raw.trimStart().startsWith("[")) {
-    return { paths: commaSeparatedMetadata(raw, Number.MAX_SAFE_INTEGER), error: "" };
+    const paths = raw.split(",");
+    if (paths.some((path) => !path || path.includes("\0"))) return { paths: [], error: "Diff-risk path evidence contains an empty or invalid path" };
+    return { paths: [...new Set(paths)], error: "" };
   }
   try {
     const parsed = JSON.parse(raw);
@@ -5731,6 +5861,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
   const changedPaths = Array.isArray(context.changedPaths) ? context.changedPaths : [];
   const changedPathError = safeMetadataText(context.changedPathError || "", 500);
+  const inspectedHeadSha = safeMetadataText(context.inspectedHeadSha || "", 80);
+  const postInspectionHeadSha = safeMetadataText(context.postInspectionHeadSha || "", 80);
   const uncoveredPaths = changedPaths.filter((path) => !files.includes(path));
   const blockers = [];
   if (!summary) blockers.push("Diff-risk summary missing");
@@ -5739,6 +5871,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   if (!verificationCommand) blockers.push("Diff-risk focused verification command missing");
   if (verificationExitCode !== "0") blockers.push("Diff-risk focused verification exit code must be 0");
   if (!expectedHeadSha) blockers.push("Diff-risk exact head missing");
+  if (!inspectedHeadSha || inspectedHeadSha !== expectedHeadSha) blockers.push("Diff-risk changed-path inspection does not match the exact PR head");
+  if (!postInspectionHeadSha || postInspectionHeadSha !== expectedHeadSha) blockers.push("Diff-risk PR head changed after changed-path inspection");
   if (fileSet.error) blockers.push(fileSet.error);
   if (changedPathError) blockers.push(`Diff-risk changed-path inspection failed: ${changedPathError}`);
   if (!changedPathError && changedPaths.length === 0) blockers.push("Diff-risk changed-path inspection returned no paths");
@@ -5752,6 +5886,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
     verificationCommand: verificationCommand || null,
     verificationExitCode: verificationExitCode === "0" ? 0 : null,
     expectedHeadSha: expectedHeadSha || null,
+    inspectedHeadSha: inspectedHeadSha || null,
+    postInspectionHeadSha: postInspectionHeadSha || null,
     changedPaths,
     uncoveredPaths,
     blockers,
@@ -5772,8 +5908,39 @@ function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "") {
   if (!after?.headRefOid || after.headRefOid !== expectedHeadSha || after.headRefOid !== before.headRefOid) {
     return { paths: [], inspectedHeadSha: before.headRefOid, error: "GitHub PR head changed during changed-path inspection" };
   }
-  const paths = [...new Set(result.stdout.split(/\r?\n/).map((path) => path.trim()).filter(Boolean))];
+  // Paths are identifiers, not display text: preserve leading/trailing
+  // whitespace so coverage cannot collapse two distinct changed files.
+  const paths = [...new Set(result.stdout.split(/\r?\n/).filter((path) => path !== ""))];
   return { paths, inspectedHeadSha: before.headRefOid, error: "" };
+}
+
+function fetchPrRenamedPaths(manifest, prNumber, expectedHeadSha = "") {
+  const before = prViewForGates(manifest);
+  if (!expectedHeadSha || !before?.headRefOid || before.headRefOid !== expectedHeadSha) {
+    return { paths: [], inspectedHeadSha: before?.headRefOid || null, error: "GitHub rename inspection is not bound to the expected exact PR head" };
+  }
+  const repository = githubRepository(manifest);
+  const result = run("gh", ["api", "--paginate", "--slurp", `repos/${repository.owner}/${repository.name}/pulls/${prNumber}/files?per_page=100`], { cwd: manifest.worktree_path });
+  if (result.code !== 0) {
+    return { paths: [], inspectedHeadSha: before.headRefOid, error: safeMetadataText(result.stderr || result.stdout || "GitHub CLI rename inspection failed", 500) };
+  }
+  const after = prViewForGates(manifest);
+  if (!after?.headRefOid || after.headRefOid !== expectedHeadSha || after.headRefOid !== before.headRefOid) {
+    return { paths: [], inspectedHeadSha: before.headRefOid, error: "GitHub PR head changed during rename inspection" };
+  }
+  try {
+    const pages = JSON.parse(result.stdout);
+    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw new Error("unexpected paginated payload");
+    const paths = pages.flat().flatMap((file) => (
+      file?.status === "renamed" && typeof file.previous_filename === "string" && file.previous_filename
+        && typeof file.filename === "string" && file.filename
+        ? [{ from: file.previous_filename, to: file.filename }]
+        : []
+    ));
+    return { paths: paths.filter((entry, index) => paths.findIndex((candidate) => candidate.from === entry.from && candidate.to === entry.to) === index), inspectedHeadSha: before.headRefOid, error: "" };
+  } catch {
+    return { paths: [], inspectedHeadSha: before.headRefOid, error: "GitHub rename inspection returned incomplete metadata" };
+  }
 }
 
 function parseGhJson(stdout, label) {

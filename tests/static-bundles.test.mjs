@@ -13,6 +13,7 @@ import {
 } from "../scripts/run-static-bundle.mjs";
 import { summarizeStaticBundleReports } from "../scripts/summarize-static-bundle-reports.mjs";
 import "./resolve-pr-review-threads-workflow.test.mjs";
+import "./runbook-review-thread-policy.test.mjs";
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
