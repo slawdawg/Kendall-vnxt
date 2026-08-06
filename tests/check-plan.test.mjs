@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { buildCheckPlan, buildCiOutputs, classifyFile, collectChangedFiles } from "../scripts/check-plan.mjs";
+import { validateCiWorkflowConcurrency } from "../scripts/check-github-workflow-policy-report.mjs";
 
 test("check plan maps manager changes to focused manager checks", () => {
   const plan = buildCheckPlan([
@@ -31,6 +32,33 @@ test("check plan escalates package and workflow changes to full static", () => {
   assert.ok(plan.surfaces.includes("package"));
   assert.ok(plan.surfaces.includes("workflow"));
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:static"));
+});
+
+test("check plan preserves full static confidence for the CI workflow alone", () => {
+  const plan = buildCheckPlan([".github/workflows/ci.yml"]);
+  const outputs = buildCiOutputs(plan);
+
+  assert.equal(plan.requiresFullStatic, true);
+  assert.ok(plan.surfaces.includes("workflow"));
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:static"));
+  assert.equal(outputs.static, true);
+  assert.equal(outputs.javascript, true);
+  assert.equal(outputs.supervisor, true);
+});
+
+test("GitHub workflow policy rejects concurrency literals outside the active mapping", () => {
+  const workflow = [
+    "concurrency:",
+    "  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}",
+    "  cancel-in-progress: false",
+    "  # cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}",
+    "",
+    "jobs:",
+  ].join("\n");
+
+  assert.deepEqual(validateCiWorkflowConcurrency(workflow), [
+    ".github/workflows/ci.yml concurrency.cancel-in-progress must equal ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}",
+  ]);
 });
 
 test("check plan maps CI acceleration planner files to focused planner tests", () => {

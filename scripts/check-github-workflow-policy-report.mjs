@@ -42,6 +42,33 @@ function ciMatrixBundleNames(jobName) {
   return [...ciJobBlock(jobName).matchAll(/^\s+- ([a-z][a-z-]*)$/gm)].map((match) => match[1]);
 }
 
+export function validateCiWorkflowConcurrency(workflowSource) {
+  const failures = [];
+  const concurrencyBlock = workflowSource.match(
+    /^concurrency:\n(?<body>(?:^ {2}.*\n|^\n)*)^jobs:/m,
+  )?.groups?.body;
+  const expectedGroup = "${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}";
+  const expectedCancellation = "${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}";
+
+  if (typeof concurrencyBlock !== "string") {
+    return [".github/workflows/ci.yml must define a top-level concurrency mapping before jobs"];
+  }
+
+  const exactValue = (key) => {
+    const matches = [...concurrencyBlock.matchAll(new RegExp(`^  ${key}: (?<value>.+)$`, "gm"))];
+    return matches.length === 1 ? matches[0].groups.value : null;
+  };
+
+  if (exactValue("group") !== expectedGroup) {
+    failures.push(`.github/workflows/ci.yml concurrency.group must equal ${expectedGroup}`);
+  }
+  if (exactValue("cancel-in-progress") !== expectedCancellation) {
+    failures.push(`.github/workflows/ci.yml concurrency.cancel-in-progress must equal ${expectedCancellation}`);
+  }
+
+  return failures;
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const readme = readWorkspaceFile("README.md");
 const connectorWorkflow = readWorkspaceFile("docs/github-connector-workflow.md");
@@ -62,6 +89,8 @@ const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-impleme
 const githubDoctor = readWorkspaceFile("scripts/github-sync-doctor.mjs");
 
 const failures = [];
+
+failures.push(...validateCiWorkflowConcurrency(ciWorkflow));
 
 assertCondition(
   packageJson.scripts?.["check:github-workflow-policy"] === "node ./scripts/check-github-workflow-policy-report.mjs",

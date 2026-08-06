@@ -30,6 +30,22 @@ The final `check` job accepts skipped component jobs as intentional when the
 planner does not require that component. Failed or cancelled required component
 jobs fail `check`.
 
+### Concurrency and reruns
+
+CI retains its existing per-workflow/per-head-ref concurrency group. It keys on
+the pull request's head ref, not fork identity. A new pull request commit starts
+its initial attempt with cancellation enabled, so it may cancel obsolete
+initial-attempt work in that group. A re-run has
+`github.run_attempt` greater than `1`, so it does not itself request
+`cancel-in-progress`.
+
+This setting does not control GitHub's queue: GitHub may still retain only one
+pending run in a concurrency group or replace that pending run. If an action
+download fails, a hosted runner never starts, or a job stays queued, the final
+`check` remains unproven. Preserve bounded run evidence, use one explicitly
+approved re-run or GitHub support, and do not merge, bypass checks, or infer a
+pass.
+
 ## Main
 
 Pushes to `main` run the full serial gate through `pnpm run check`. This keeps
