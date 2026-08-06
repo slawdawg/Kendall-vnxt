@@ -10740,6 +10740,12 @@ try {
         args: ["--reviewer-id", "runner-a"],
         expected: "Outdated-thread reviewer identity must not match the lane owner",
       },
+      {
+        name: "bare-reviewer-id",
+        options: { existingPr: true, reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }] },
+        args: ["--reviewer-id"],
+        expected: "Outdated-thread reviewer identity must be a non-empty string value",
+      },
     ]) {
       const fixture = createFinishPrExistingCommitFixture(scenario.options);
       try {
@@ -10778,6 +10784,53 @@ try {
         assert(result.code !== 0, `${args[0]} unexpectedly accepted a valued --apply flag`);
         assert(/requires a bare --apply flag without a value/.test(result.stderr), result.stderr || result.stdout);
         assert(readFileSync(manifestPath, "utf8") === before, `${args[0]} mutated the manifest`);
+      }
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("current-thread adjudication preserves whitespace-distinct review paths", () => {
+    for (const path of ["  exact  thread path  ", "line\nbreak"]) {
+      const fixture = createCanonicalManagedPrFixture({
+        existingPr: true,
+        featurePath: path,
+        changedPaths: [path],
+        reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path, comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+      });
+      try {
+        const result = runFixtureScript(fixture, [
+          "adjudicate-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current",
+          "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a",
+          "--request-summary", "Request.", "--diff-summary", "Current diff implements the request.",
+          "--mapped-files", path, "--verification", "Focused fixture passed.",
+          "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0",
+          "--review-summary", "Independent review passed.", "--reviewer-id", "reviewer-a",
+          "--summary-json", "--state-root", fixture.stateRoot,
+        ], { cwd: fixture.worktree, env: fixture.env });
+        assert(result.code === 0, result.stderr || result.stdout);
+        const packet = JSON.parse(result.stdout);
+        assert(packet.ready === true, result.stdout);
+        assert(packet.mapping.files.includes(path), result.stdout);
+        assert(packet.reviewThreads.threadRefs[0].path === path, result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("thread resolvers reject read-only control flags before any GitHub mutation", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      for (const command of ["resolve-adjudicated-thread", "resolve-adjudicated-current-thread"]) {
+        for (const flag of ["--dry-run", "--summary-json"]) {
+          const result = runFixtureScript(fixture, [
+            command, "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", flag,
+            "--state-root", fixture.stateRoot,
+          ], { cwd: fixture.worktree, env: fixture.env });
+          assert(result.code !== 0, `${command} unexpectedly accepted ${flag}`);
+          assert(result.stderr.includes("does not accept --dry-run or --summary-json"), result.stderr || result.stdout);
+        }
       }
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
@@ -15174,7 +15227,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   mkdirSync(join(fixtureRoot, "docs", "workflows"), { recursive: true });
   writeFileSync(
     join(fixtureRoot, "docs", "workflows", "end-to-end-lane-runner.md"),
-    "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
+    "### Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
   );
   writeFileSync(
     join(fixtureRoot, "AGENTS.md"),
@@ -15317,8 +15370,8 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
       options.changedPathBaseOidDrift
-        ? `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`
-        : `if (args[0] === 'pr' && args[1] === 'diff' && args.includes('--name-only')) { console.log(${JSON.stringify(changedPaths.join("\n"))}); process.exit(0); }`,
+        ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === '--slurp' && args[3] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify([${JSON.stringify(pullFiles)}])); process.exit(0); }`
+        : "",
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
