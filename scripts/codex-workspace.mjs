@@ -575,6 +575,12 @@ function assertBareApplyOption(options, command) {
   }
 }
 
+function assertReviewThreadResolutionMutationOptions(options, command) {
+  if (options.dryRun !== undefined || options.summaryJson !== undefined) {
+    throw new Error(`${command} does not accept --dry-run or --summary-json because it mutates GitHub review-thread state.`);
+  }
+}
+
 function startWorkspace(argv) {
   const { positional, options } = parseOptions(argv);
   const description = positional.join(" ").trim();
@@ -3406,6 +3412,7 @@ function adjudicateOutdatedThread(argv) {
 
 function resolveAdjudicatedThread(argv) {
   const { positional, options } = parseOptions(argv);
+  assertReviewThreadResolutionMutationOptions(options, "resolve-adjudicated-thread");
   const threadId = safeMetadataText(options.threadId, 160);
   if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) throw new Error("resolve-adjudicated-thread requires --thread-id <GitHub review-thread id>.");
   const state = workspaceState(options);
@@ -3642,6 +3649,7 @@ function adjudicateCurrentThread(argv) {
 
 function resolveAdjudicatedCurrentThread(argv) {
   const { positional, options } = parseOptions(argv);
+  assertReviewThreadResolutionMutationOptions(options, "resolve-adjudicated-current-thread");
   const threadId = safeMetadataText(options.threadId, 160);
   if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) throw new Error("resolve-adjudicated-current-thread requires --thread-id <GitHub review-thread id>.");
   const state = workspaceState(options);
@@ -4572,7 +4580,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     worktreePath: manifest.worktree_path,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
-  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid);
+  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const diffRiskEvidence = shapeDiffRiskEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
     expectedPrNumber: pr.number,
@@ -4708,7 +4716,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
     worktreePath: manifest.worktree_path,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
-  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid);
+  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const renamedPathInspection = fetchPrRenamedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const target = reviewThreadState.threadRefs.find((thread) => thread.id === threadId) || null;
   const mapping = shapeOutdatedThreadMappingEvidence(options, {
@@ -4825,7 +4833,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
     worktreePath: manifest.worktree_path,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
-  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid);
+  const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const renamedPathInspection = fetchPrRenamedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const mapping = shapeCurrentThreadMappingEvidence(options, {
     laneOwner: manifest.owner,
@@ -4952,7 +4960,8 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   const verificationCommand = safeMetadataText(options.verificationCommand, 300);
   const verificationExitCode = safeMetadataText(options.verificationExitCode, 12);
   const reviewSummary = safeMetadataText(options.reviewSummary, 500);
-  const reviewerId = safeMetadataText(options.reviewerId, 120);
+  const reviewerId = typeof options.reviewerId === "string" ? safeMetadataText(options.reviewerId, 120) : "";
+  const reviewerIdIsString = typeof options.reviewerId === "string";
   const laneOwners = [context.laneOwner, context.currentOwner]
     .map((owner) => safeMetadataText(owner, 120))
     .filter(Boolean);
@@ -4989,7 +4998,8 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   if (!verificationCommand) blockers.push("Outdated-thread verification command missing");
   if (verificationExitCode !== "0") blockers.push("Outdated-thread verification result must be exit code 0");
   if (!reviewSummary) blockers.push("Outdated-thread code-review evidence missing");
-  if (!reviewerId) blockers.push("Outdated-thread reviewer identity missing");
+  if (!reviewerIdIsString && options.reviewerId !== undefined) blockers.push("Outdated-thread reviewer identity must be a non-empty string value");
+  else if (!reviewerId) blockers.push("Outdated-thread reviewer identity missing");
   if (reviewerId && laneOwners.includes(reviewerId)) blockers.push("Outdated-thread reviewer identity must not match the lane owner");
   if (!/^[a-f0-9]{64}$/.test(requestFingerprint)) blockers.push("Outdated-thread request fingerprint missing or invalid");
   if (fileSet.error) blockers.push(`Outdated-thread mapped-file evidence is invalid: ${fileSet.error}`);
@@ -5564,7 +5574,9 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
       id: thread.id || null,
       isResolved: Boolean(thread.isResolved),
       isOutdated: Boolean(thread.isOutdated),
-      path: safeMetadataText(thread.path, 500) || null,
+      // A review-thread path is identity-bearing evidence. Preserve legal
+      // whitespace byte-for-byte rather than applying display-text cleanup.
+      path: typeof thread.path === "string" && thread.path && !thread.path.includes("\0") ? thread.path : null,
       url: comments.firstUrl || null,
       requestFingerprint: comments.requestFingerprint,
       commentsComplete: comments.complete,
@@ -5720,9 +5732,47 @@ function validateSourceOwnedSkipPolicy(policyRef, names, worktreePath, expectedH
     return false;
   }
   const policyText = policyResult.stdout;
-  const heading = "## Documented Non-Required Checks";
-  const section = policyText.slice(policyText.indexOf(heading), policyText.indexOf("\n## ", policyText.indexOf(heading) + heading.length) || policyText.length);
-  return policyText.includes(heading) && names.every((name) => ["full", "javascript", "supervisor"].includes(name) && section.includes(`- \`${name}\``));
+  const section = sourceOwnedSkipPolicySection(policyText);
+  if (section === null) return false;
+  return names.every((name) => ["full", "javascript", "supervisor"].includes(name) && section.includes(`- \`${name}\``));
+}
+
+function sourceOwnedSkipPolicySection(policyText) {
+  // Both source-owned policy documents deliberately use this heading: AGENTS
+  // at H2 and the lane runner at H3. Keep the accepted depths bounded. Parse
+  // line-by-line so examples inside fenced code cannot become policy and a
+  // later same-or-higher ATX or Setext heading cannot extend the section.
+  const lines = policyText.split(/\r?\n/);
+  const policyHeading = /^[ ]{0,3}(#{2,3})[ \t]+Documented Non-Required Checks(?:[ \t]+#+)?[ \t]*$/;
+  const atxHeading = /^[ ]{0,3}(#{1,6})[ \t]+/;
+  const setextUnderline = /^[ ]{0,3}(?:=+|-+)[ \t]*$/;
+  let fence = "";
+  let headingDepth = 0;
+  const section = [];
+  for (const line of lines) {
+    const fenceMatch = /^[ ]{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      if (!fence) fence = fenceMatch[1][0];
+      else if (fenceMatch[1][0] === fence) fence = "";
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
+    if (!headingDepth) {
+      const match = policyHeading.exec(line);
+      if (match) headingDepth = match[1].length;
+      continue;
+    }
+    const atx = atxHeading.exec(line);
+    if (atx && atx[1].length <= headingDepth) break;
+    if (setextUnderline.test(line) && section.length > 0 && section.at(-1).trim()) {
+      section.pop();
+      break;
+    }
+    section.push(line);
+  }
+  return headingDepth ? section.join("\n") : null;
 }
 
 function shapeDiffRiskEvidence(options = {}, context = {}) {
@@ -5793,7 +5843,7 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   };
 }
 
-function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "", expectedBaseRefName = "", expectedBaseRefOid = "") {
+function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "", expectedBaseRefName = "", expectedBaseRefOid = "", expectedChangedFileCount = null) {
   const before = prViewForGates(manifest);
   const snapshot = (pr) => ({
     inspectedHeadSha: pr?.headRefOid || null,
@@ -5813,7 +5863,8 @@ function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "", expectedB
   if (!exactGitObjectIdOrNull(expectedBaseRefOid) || before.baseRefOid !== expectedBaseRefOid) {
     return { paths: [], ...snapshot(before), error: "GitHub changed-path inspection is not bound to the expected exact PR base commit" };
   }
-  const result = run("gh", ["pr", "diff", String(prNumber), "--name-only"], { cwd: manifest.worktree_path });
+  const repository = githubRepository(manifest);
+  const result = run("gh", ["api", "--paginate", "--slurp", `repos/${repository.owner}/${repository.name}/pulls/${prNumber}/files?per_page=100`], { cwd: manifest.worktree_path });
   if (result.code !== 0) {
     return { paths: [], ...snapshot(before), error: safeMetadataText(result.stderr || result.stdout || "GitHub CLI changed-path inspection failed", 500) };
   }
@@ -5830,10 +5881,23 @@ function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "", expectedB
   if (!exactGitObjectIdOrNull(after.baseRefOid) || after.baseRefOid !== expectedBaseRefOid || after.baseRefOid !== before.baseRefOid) {
     return { paths: [], ...snapshot(before), postInspectionHeadSha: after.headRefOid, postInspectionPrNumber: Number.isSafeInteger(after.number) ? after.number : null, postInspectionBaseRefName: after.baseRefName || null, postInspectionBaseRefOid: exactGitObjectIdOrNull(after.baseRefOid), error: "GitHub PR base commit changed during changed-path inspection" };
   }
-  // Paths are identifiers, not display text: preserve leading/trailing
-  // whitespace so coverage cannot collapse two distinct changed files.
-  const paths = [...new Set(result.stdout.split(/\r?\n/).filter((path) => path !== ""))];
-  return { paths, ...snapshot(before), postInspectionHeadSha: after.headRefOid, postInspectionPrNumber: after.number, postInspectionBaseRefName: after.baseRefName, postInspectionBaseRefOid: exactGitObjectIdOrNull(after.baseRefOid), error: "" };
+  try {
+    const pages = JSON.parse(result.stdout);
+    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw new Error("unexpected paginated payload");
+    const files = pages.flat();
+    if (!Number.isSafeInteger(expectedChangedFileCount) || expectedChangedFileCount < 0 || files.length !== expectedChangedFileCount) {
+      throw new Error("changed-path metadata is incomplete");
+    }
+    if (files.some((file) => typeof file?.filename !== "string" || !file.filename || file.filename.includes("\0"))) {
+      throw new Error("changed-path metadata contains an invalid filename");
+    }
+    // REST JSON retains legal filenames (including whitespace and newlines)
+    // without the delimiter ambiguity of `gh pr diff --name-only`.
+    const paths = [...new Set(files.map((file) => file.filename).filter((path) => path !== ""))];
+    return { paths, ...snapshot(before), postInspectionHeadSha: after.headRefOid, postInspectionPrNumber: after.number, postInspectionBaseRefName: after.baseRefName, postInspectionBaseRefOid: exactGitObjectIdOrNull(after.baseRefOid), error: "" };
+  } catch (error) {
+    return { paths: [], ...snapshot(before), postInspectionHeadSha: after.headRefOid, postInspectionPrNumber: after.number, postInspectionBaseRefName: after.baseRefName, postInspectionBaseRefOid: exactGitObjectIdOrNull(after.baseRefOid), error: `GitHub changed-path inspection returned invalid metadata: ${safeMetadataText(error.message, 300)}` };
+  }
 }
 
 function fetchPrRenamedPaths(manifest, prNumber, expectedHeadSha = "", expectedBaseRefName = "", expectedBaseRefOid = "", expectedChangedFileCount = null) {
