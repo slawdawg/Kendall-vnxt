@@ -45,6 +45,23 @@ Forbidden in `backend_proof`:
 - dashboard write controls
 - raw prompt, completion, reasoning trace, provider payload, secret, or unbounded log retention
 
+## Codex allowance telemetry
+
+The manager reads the existing local `fetch_codex_usage.py` helper first for
+metadata-only current account allowance and provider-reported reset metadata.
+It does not treat the provider field as a public five-hour or weekly promise.
+When the direct reading succeeds, its bounded percent and reset fields are the
+governor source. A non-zero status-bar result can remain a lower-confidence
+compatibility fallback only if the direct reading fails.
+
+The status-bar helper emits `0% 00:00` when its own fetch fails. If that
+sentinel follows a direct-read failure, the manager reports `unknown` and keeps
+the conservative worker policy; it must not enter manager-only mode. Recover by
+restoring the read-only direct helper or waiting for its next provider-reported
+sample. Summaries retain source, confidence, bounded allowance/reset metadata,
+and policies only—never provider responses, headers, or credentials. Reliable
+weekly policy remains a separate optional input.
+
 Verification:
 
 - `pnpm run test:manager-control-plane-forbidden-boundary`

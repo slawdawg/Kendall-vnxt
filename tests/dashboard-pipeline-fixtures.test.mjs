@@ -3067,6 +3067,12 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(cockpitSource, /globalUsageItems/);
   assert.match(cockpitSource, /providerKey:\s*"codex"/);
   assert.match(cockpitSource, /providerKey:\s*"claude"/);
+  const globalUsageItemsSource = cockpitSource.match(/function globalUsageItems\(\)[\s\S]*?\n}\n\nfunction statusClassForPacket/);
+  assert.ok(globalUsageItemsSource, "global usage items should remain a local fixture helper");
+  assert.match(globalUsageItemsSource[0], /meters:\s*\[\s*\{ label: "Current allowance", percent: 0 \},\s*\],\s*provider: "Codex"/);
+  assert.match(globalUsageItemsSource[0], /meters:\s*\[\s*\{ label: "5h", percent: 0 \},\s*\{ label: "Weekly", percent: 0 \},\s*\],\s*provider: "Claude"/);
+  assert.doesNotMatch(globalUsageItemsSource[0], /\{ label: "5h", percent: 0 \},\s*\{ label: "Weekly", percent: 0 \},\s*\],\s*provider: "Codex"/);
+  assert.match(settingsUsageVisibilitySource, /current Codex account-allowance meter/);
   assert.match(cockpitSource, /pipeline-usage-warning-icon/);
   assert.doesNotMatch(cockpitSource, /Codex 5h remaining|Codex weekly|Claude 5h remaining|Claude weekly|Connect read-only usage source/);
   assert.doesNotMatch(cockpitSource, /codexActiveCount|claudePendingCount|codexFiveHourRemaining|claudeFiveHourRemaining/);
