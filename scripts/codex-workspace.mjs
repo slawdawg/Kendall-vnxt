@@ -98,6 +98,11 @@ const taskLockSchemaVersion = 1;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
+const missingWorktreeCloseoutTargets = Object.freeze({
+  "20260724-synchronize-dev-recovery": { prNumber: null },
+  "dashboard-delivery-profile": { prNumber: 751 },
+  "dashboard-lan-navigation": { prNumber: 753 },
+});
 const rebuildIndexBaseBranch = "main";
 const protectedBranches = new Set(branchFoundationProtectedBranches);
 const args = process.argv.slice(2);
@@ -176,6 +181,9 @@ try {
     case "cleanup-integrated":
       cleanupIntegrated(commandArgs);
       break;
+    case "close-missing-worktree":
+      closeMissingWorktree(commandArgs);
+      break;
     case "cleanup-superseded":
       cleanupSuperseded(commandArgs);
       break;
@@ -225,6 +233,7 @@ Commands:
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-integrated [query] Remove clean no-PR worktrees already integrated into a base ref.
+  close-missing-worktree <task-id> Close one allowlisted stale manifest whose managed worktree and branch refs are proven absent.
   cleanup-superseded <task> Remove one clean no-PR worktree carried forward by a named merged PR.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
@@ -404,6 +413,7 @@ cleanup-superseded options:
   --supersession-provenance <text> Explicit migration/supersession provenance (metadata only).
   --source-remote <state>   Source remote state: present (normal) or absent (first-use repair only).
   --legacy-unassigned       Permit only a manifest with no source assignment in first-use repair.
+
   --successor-hardening-commits <shas> Comma-separated commits in the named PR lineage.
   --successor-hardening-scope <paths> Exact scoped paths changed by those successor commits.
   --successor-hardening-evidence <text> Explicit bounded hardening rationale (metadata only).
@@ -411,6 +421,12 @@ cleanup-superseded options:
   --approval <text>         Required with --apply; records operator approval evidence.
   --reason <text>           Required with --apply; records the reviewed cleanup reason.
   --summary-json            Without --apply, print a compact metadata-only proof packet.
+
+close-missing-worktree options:
+  --apply                   Record verified metadata-only closeout. Without this, preview only.
+  --summary-json            Without --apply, print a compact JSON recovery packet.
+  --approval <text>         Required with --apply; at least 10 non-whitespace characters.
+  --stale-after-seconds <n> Owner-heartbeat age required for stale-owner proof. Defaults to 86400.
 
 cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -4206,6 +4222,416 @@ function antiChurnRecoveryPath(record = {}) {
     return "request verification approval before restoring or including any hook source edit";
   }
   return "not-required";
+}
+
+function closeMissingWorktree(argv) {
+  assertMissingWorktreeCloseoutMainCheckout();
+  assertMissingWorktreeCloseoutOptionSyntax(argv);
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) {
+    throw new Error("close-missing-worktree requires exactly one explicit allowlisted task id.");
+  }
+  const taskId = positional[0];
+  assertSafeTaskId(taskId);
+  if (!Object.hasOwn(missingWorktreeCloseoutTargets, taskId)) {
+    throw new Error(`close-missing-worktree only permits the approved exact task ids; refused ${taskId}.`);
+  }
+  if (options.apply && options.dryRun) {
+    throw new Error("close-missing-worktree accepts either --dry-run or --apply, not both.");
+  }
+  if (options.summaryJson && options.apply) {
+    throw new Error("close-missing-worktree --summary-json is only supported without --apply.");
+  }
+  const approval = normalizedMissingWorktreeApproval(options.approval);
+  if (options.apply && !approval) {
+    throw new Error("close-missing-worktree --apply requires --approval with at least 10 non-whitespace characters.");
+  }
+
+  const state = workspaceState(options);
+  const record = findMissingWorktreeManifestByExactTaskId(state, taskId);
+  requireGh("close-missing-worktree");
+  const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  const packet = buildMissingWorktreeCloseoutPacket(record, state, {
+    staleAfterSeconds,
+    approval,
+    currentOwner: currentLaneOwner(options),
+  });
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  if (!packet.ready) {
+    printBlocked("close-missing-worktree", packet.blockers);
+    throw new Error(`Missing-worktree closeout is blocked: ${packet.blockers.join("; ")}`);
+  }
+  if (!options.apply) {
+    printPlan("close-missing-worktree", [
+      `exact task ${taskId}`,
+      "all absence and live GitHub evidence matched",
+      "no worktree, local branch, remote branch, assignment, or PR mutation is planned",
+      "pass --apply with explicit --approval to close only the manifest",
+    ]);
+    return;
+  }
+
+  let appliedPacket = null;
+  withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token }) => {
+    const lockedRecord = findMissingWorktreeManifestByExactTaskId(state, taskId);
+    const lockedPacket = buildMissingWorktreeCloseoutPacket(lockedRecord, state, {
+      staleAfterSeconds,
+      approval,
+      currentOwner: currentLaneOwner(options),
+      preLockEvidence: packet.proof.taskLock,
+      heldLockToken: token,
+    });
+    if (!lockedPacket.ready) {
+      throw new Error(`Missing-worktree closeout changed under lock: ${lockedPacket.blockers.join("; ")}`);
+    }
+
+    const manifest = lockedRecord.manifest;
+    const closedAt = new Date().toISOString();
+    manifest.missing_worktree_closeout = {
+      schemaVersion: 1,
+      appliedAt: closedAt,
+      taskId: manifest.task_id,
+      approval,
+      proof: lockedPacket.proof,
+      authorityDecision: lockedPacket.authorityDecision,
+      mutation: "manifest metadata and status only; no worktree or branch deletion",
+      remoteBranchPolicy: "verified absent; never deleted",
+      recoveryPath: `Restore manifest status if needed; no worktree or branch resource was removed by this command.`,
+    };
+    appendAuthorityDecision(manifest, lockedPacket.authorityDecision);
+    manifest.status = "closed";
+    manifest.closed_at = closedAt;
+    manifest.updated_at = closedAt;
+    manifest.closed_reason = "approved missing managed worktree recovery";
+    appendTaskEvent(manifest, "missing_worktree_closeout_verified", "all required absent-resource and GitHub evidence matched under manifest and assignment-index locks");
+    appendTaskEvent(manifest, "closed", "approved missing-worktree metadata-only closeout");
+    writeManifest(lockedRecord.path, manifest);
+    appliedPacket = lockedPacket;
+  }, { recoverStale: false }));
+
+  printApplied("close-missing-worktree", [
+    `closed manifest ${taskId}`,
+    "recorded bounded recovery and authority evidence",
+    "no worktree, local branch, remote branch, assignment, or PR was mutated",
+    `recovery: ${appliedPacket?.authorityDecision?.recoveryPath || "restore manifest status from recorded evidence"}`,
+  ]);
+}
+
+function assertMissingWorktreeCloseoutMainCheckout() {
+  const expected = canonicalExistingPath(mainWorktreePath());
+  const current = canonicalExistingPath(currentGitRoot());
+  if (!expected || !current || expected !== current) {
+    throw new Error("close-missing-worktree must be invoked from the repository main checkout.");
+  }
+}
+
+function assertMissingWorktreeCloseoutOptionSyntax(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = ["--apply", "--dry-run", "--summary-json"].find((name) => arg === name || arg.startsWith(`${name}=`));
+    if (!option) continue;
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
+      throw new Error(`close-missing-worktree ${option} must be a bare flag without a value.`);
+    }
+  }
+}
+
+function normalizedMissingWorktreeApproval(value) {
+  if (value === undefined) return null;
+  if (value === true || typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.replace(/\s/g, "").length >= 10 ? normalized.slice(0, 256) : null;
+}
+
+function findMissingWorktreeManifestByExactTaskId(state, taskId) {
+  assertSafeTaskId(taskId);
+  const path = manifestPath(state, taskId);
+  if (!existsSync(path)) {
+    throw new Error(`close-missing-worktree requires the exact manifest ${taskId}.`);
+  }
+  const manifest = readManifest(path);
+  validateManifest(manifest, path);
+  if (manifest.task_id !== taskId) {
+    throw new Error(`close-missing-worktree manifest identity mismatch for ${taskId}.`);
+  }
+  return { path, manifest };
+}
+
+function manifestPath(state, taskId) {
+  assertSafeTaskId(taskId);
+  return join(state.tasksDir, `${taskId}.json`);
+}
+
+function buildMissingWorktreeCloseoutPacket(record, state, context) {
+  const { manifest } = record;
+  const target = missingWorktreeCloseoutTargets[manifest.task_id];
+  const checkedAt = new Date().toISOString();
+  const blockers = [];
+  if (!target) blockers.push("manifest task id is not an approved missing-worktree closeout target");
+  if (manifest.status === "closed") blockers.push("manifest is already closed");
+  if (manifest.status === "cleanup_partial") blockers.push("manifest has partial-cleanup state and requires its existing recovery path");
+  if (manifest.source_assignment_id) blockers.push("manifest retains a linked assignment id");
+  if (typeof manifest.owner !== "string" || !manifest.owner.trim()) blockers.push("manifest has no owner to prove stale");
+
+  const repository = missingWorktreeRepositoryEvidence(manifest);
+  if (repository.status !== "matched") blockers.push(repository.reason);
+
+  const owner = missingWorktreeOwnerEvidence(manifest, context.staleAfterSeconds, checkedAt);
+  if (owner.status !== "stale") blockers.push(owner.reason);
+  const taskLock = missingWorktreeLockEvidence(state, manifest.task_id, context);
+  if (taskLock.status !== "absent" && taskLock.status !== "self_held_after_absent_precheck") blockers.push(taskLock.reason);
+  const worktree = missingWorktreeRegistrationEvidence(manifest, state);
+  if (worktree.status !== "absent_unregistered") blockers.push(worktree.reason);
+  const localBranch = missingWorktreeLocalBranchEvidence(manifest);
+  if (localBranch.status !== "absent") blockers.push(localBranch.reason);
+  const remoteBranch = missingWorktreeRemoteBranchEvidence(manifest);
+  if (remoteBranch.status !== "absent") blockers.push(remoteBranch.reason);
+  const assignments = missingWorktreeAssignmentEvidence(state, manifest);
+  if (assignments.status !== "absent") blockers.push(assignments.reason);
+
+  const github = target?.prNumber === null
+    ? missingWorktreeNoPrEvidence(manifest)
+    : missingWorktreeMergedPrEvidence(manifest, target?.prNumber);
+  if (github.status !== "matched") blockers.push(github.reason);
+
+  const requiredGates = [
+    "exact allowlisted task manifest",
+    "stale manifest owner evidence",
+    "no retained task lock before closeout lock acquisition",
+    "managed worktree path is absent and unregistered",
+    "local and remote branch refs are absent",
+    "no linked assignment metadata exists",
+    target?.prNumber === null ? "live GitHub exact branch query contains no PR" : `live GitHub PR #${target?.prNumber} is merged to dev with an exact head`,
+    "explicit approval is required for apply",
+  ];
+  const ready = blockers.length === 0;
+  const authorityDecision = shapeAuthorityDecisionEvidence({
+    operation: "close-missing-worktree",
+    authorityFamily: "metadata-only-recovery-closeout",
+    decision: ready ? "ready_for_apply" : "blocked",
+    allowed: ready,
+    requiredGates,
+    satisfiedGates: ready ? requiredGates.slice(0, -1) : [],
+    blockedReasons: blockers,
+    stopLines: [
+      "exact three-task allowlist only",
+      "no closeout on ambiguous lock, worktree, branch, assignment, or GitHub evidence",
+      "never delete a worktree, local branch, remote branch, assignment, or PR",
+      "apply writes only the selected manifest after a fresh locked re-proof",
+    ],
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      target?.prNumber ? `pr:${target.prNumber}` : "github:no-pr",
+      `owner:${safeMetadataText(manifest.owner || "unknown", 160)}`,
+    ],
+    nextSafeAction: ready
+      ? "Run close-missing-worktree --apply with an explicit approval to close only this manifest."
+      : "Preserve the manifest and resolve the listed evidence blockers before retrying.",
+    recoveryPath: "No resource is deleted. Restore manifest status from the bounded closeout record if a later recovery decision requires it.",
+    generatedAt: checkedAt,
+  });
+  return {
+    schemaVersion: 1,
+    operation: "close-missing-worktree",
+    checkedAt,
+    taskId: manifest.task_id,
+    ready,
+    status: ready ? "ready" : "blocked",
+    blockers,
+    proof: {
+      owner,
+      repository,
+      taskLock,
+      worktree,
+      localBranch,
+      remoteBranch,
+      assignments,
+      github,
+    },
+    authorityDecision,
+    mutation: "none; preview only",
+  };
+}
+
+function missingWorktreeOwnerEvidence(manifest, staleAfterSeconds, checkedAt) {
+  const timestamp = manifest.last_heartbeat_at || manifest.owner_updated_at || manifest.owner_acquired_at || manifest.updated_at || null;
+  const recordedAt = timestamp && Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
+  if (typeof manifest.owner !== "string" || !manifest.owner.trim()) return { status: "blocked", owner: null, recordedAt, ageSeconds: null, reason: "manifest owner is missing" };
+  if (!recordedAt) return { status: "blocked", owner: safeMetadataText(manifest.owner, 160), recordedAt: null, ageSeconds: null, reason: "manifest owner heartbeat timestamp is missing or invalid" };
+  const ageSeconds = Math.max(0, Math.floor((Date.parse(checkedAt) - Date.parse(recordedAt)) / 1000));
+  if (ageSeconds < staleAfterSeconds) {
+    return { status: "blocked", owner: safeMetadataText(manifest.owner, 160), recordedAt, ageSeconds, staleAfterSeconds, reason: `manifest owner heartbeat is not stale (age ${ageSeconds}s, threshold ${staleAfterSeconds}s)` };
+  }
+  return { status: "stale", owner: safeMetadataText(manifest.owner, 160), recordedAt, ageSeconds, staleAfterSeconds, reason: "manifest owner heartbeat is stale" };
+}
+
+function missingWorktreeRepositoryEvidence(manifest) {
+  const expected = canonicalExistingPath(mainWorktreePath());
+  const recorded = canonicalExistingPath(manifest.repo_root);
+  if (!expected || !recorded || recorded !== expected) {
+    return {
+      status: "blocked",
+      recordedRepoRoot: typeof manifest.repo_root === "string" ? manifest.repo_root : null,
+      currentRepoRoot: mainWorktreePath(),
+      reason: "manifest repo_root does not match the current repository root",
+    };
+  }
+  return { status: "matched", recordedRepoRoot: recorded, currentRepoRoot: expected, reason: "manifest repo_root matches the current repository root" };
+}
+
+function missingWorktreeLockEvidence(state, taskId, context) {
+  const rawObserved = inspectTaskLock(state, taskId);
+  const observed = redactTaskLockInspection(rawObserved);
+  if (!context.heldLockToken) return observed;
+  const preLock = context.preLockEvidence;
+  if (preLock?.status !== "absent") {
+    return { ...observed, status: "blocked", reason: "task lock was not absent before manifest lock acquisition" };
+  }
+  if (rawObserved.status !== "active" || rawObserved.metadata?.token !== context.heldLockToken) {
+    return { ...observed, status: "blocked", reason: "manifest lock is not actively held for locked re-proof" };
+  }
+  return {
+    ...observed,
+    status: "self_held_after_absent_precheck",
+    reason: "task lock was absent before this command acquired its manifest lock",
+    preLockStatus: preLock.status,
+  };
+}
+
+function missingWorktreeRegistrationEvidence(manifest, state) {
+  const path = manifest.worktree_path;
+  try {
+    const absentTarget = assertManagedAbsentWorktreePath(path, state);
+    const registered = managedWorktreeRegistry(manifest, state)
+      .some((entry) => resolve(entry.path) === absentTarget.target);
+    return registered
+      ? { status: "blocked", path: absentTarget.target, exists: false, listed: true, reason: "managed worktree path is still registered" }
+      : { status: "absent_unregistered", path: absentTarget.target, exists: false, listed: false, reason: "managed worktree path is absent and unregistered" };
+  } catch (error) {
+    const message = safeMetadataText(error.message || error, 500);
+    return { status: "blocked", path, exists: null, listed: null, reason: message.includes("is present") ? "managed worktree path still exists" : `managed worktree absence or registration evidence is unavailable: ${message}` };
+  }
+}
+
+function missingWorktreeLocalBranchEvidence(manifest) {
+  const result = git(["rev-parse", "--verify", "--quiet", manifest.branch], { cwd: mainWorktreePath() });
+  if (result.code === 1 && !result.stdout && !result.stderr) {
+    return { status: "absent", branch: manifest.branch, headSha: null, reason: "local branch is absent" };
+  }
+  if (result.code === 0 && exactGitObjectIdOrNull(result.stdout)) {
+    return { status: "blocked", branch: manifest.branch, headSha: result.stdout, reason: "local branch is still present" };
+  }
+  return { status: "blocked", branch: manifest.branch, headSha: null, reason: `local branch absence is ambiguous: ${safeMetadataText(result.stderr || result.stdout || `git exited ${result.code}`, 500)}` };
+}
+
+function missingWorktreeRemoteBranchEvidence(manifest) {
+  try {
+    const headSha = originBranchSha(manifest.branch, mainWorktreePath()) || null;
+    return headSha
+      ? { status: "blocked", branch: manifest.branch, headSha, reason: "remote branch is still present" }
+      : { status: "absent", branch: manifest.branch, headSha: null, reason: "remote branch is absent" };
+  } catch (error) {
+    return { status: "blocked", branch: manifest.branch, headSha: null, reason: `remote branch absence is ambiguous: ${safeMetadataText(error.message || error, 500)}` };
+  }
+}
+
+function missingWorktreeAssignmentEvidence(state, manifest) {
+  if (!existsSync(state.assignmentsDir)) return { status: "absent", ids: [], reason: "no assignment metadata directory exists" };
+  try {
+    const linked = [];
+    for (const name of readdirSync(state.assignmentsDir).filter((entry) => entry.endsWith(".json")).sort()) {
+      const path = join(state.assignmentsDir, name);
+      const assignment = readAssignment(path);
+      validateAssignment(assignment, path);
+      const values = [
+        assignment.task_id,
+        assignment.lane_slug,
+        assignment.branch,
+        assignment.source_backlog_item?.item_id,
+        assignment.source_backlog_item?.branch_name,
+      ].filter(Boolean).map(String);
+      const matchingWorktreePath = typeof assignment.worktree_path === "string" &&
+        typeof manifest.worktree_path === "string" &&
+        assignment.worktree_path === manifest.worktree_path;
+      if (values.includes(manifest.task_id) || values.includes(manifest.branch) || matchingWorktreePath) linked.push(assignment.assignment_id);
+    }
+    return linked.length
+      ? { status: "blocked", ids: linked.slice(0, 10), reason: `linked assignment metadata exists: ${linked.join(", ")}` }
+      : { status: "absent", ids: [], reason: "no linked assignment metadata exists" };
+  } catch (error) {
+    return { status: "blocked", ids: [], reason: `assignment absence is ambiguous: ${safeMetadataText(error.message || error, 500)}` };
+  }
+}
+
+function missingWorktreeNoPrEvidence(manifest) {
+  if (manifest.pr_number !== undefined && manifest.pr_number !== null) {
+    return { status: "blocked", kind: "no-pr", reason: "no-PR manifest retains PR number metadata" };
+  }
+  if (typeof manifest.pr_url === "string" && manifest.pr_url.trim()) {
+    return { status: "blocked", kind: "no-pr", reason: "no-PR manifest retains PR URL metadata" };
+  }
+  const historicalHead = exactGitObjectIdOrNull(manifest.historical_source_head_sha);
+  if (!historicalHead) {
+    return { status: "blocked", kind: "no-pr", reason: "no-PR manifest historical source head is missing or invalid" };
+  }
+  const result = run("gh", ["pr", "list", "--head", manifest.branch, "--state", "all", "--json", "number,url,state,mergedAt,baseRefName,headRefName,headRefOid"], { cwd: mainWorktreePath() });
+  if (result.code !== 0) return { status: "blocked", kind: "no-pr", reason: "live GitHub no-PR proof is unavailable" };
+  try {
+    const entries = JSON.parse(result.stdout);
+    if (!Array.isArray(entries)) throw new Error("GitHub response is not an array");
+    for (const entry of entries) {
+      const liveHead = exactGitObjectIdOrNull(entry?.headRefOid);
+      if (liveHead !== historicalHead) {
+        return { status: "blocked", kind: "no-pr", count: entries.length, historicalHead, reason: "live GitHub no-PR proof found PR evidence with a head that does not match the immutable historical source head" };
+      }
+    }
+    if (entries.length > 0) return { status: "blocked", kind: "no-pr", count: entries.length, historicalHead, reason: "live GitHub no-PR proof found PR evidence matching the immutable historical source head" };
+    return { status: "matched", kind: "no-pr", count: 0, historicalHead, reason: "live GitHub no-PR proof matched" };
+  } catch {
+    return { status: "blocked", kind: "no-pr", reason: "live GitHub no-PR proof is unavailable" };
+  }
+}
+
+function missingWorktreeMergedPrEvidence(manifest, expectedNumber) {
+  if (manifest.pr_number !== expectedNumber) {
+    return { status: "blocked", kind: "merged-pr", expectedNumber, reason: `manifest PR number must exactly equal ${expectedNumber}` };
+  }
+  if (manifest.pr_url && prNumberFromUrl(manifest.pr_url) !== expectedNumber) {
+    return { status: "blocked", kind: "merged-pr", expectedNumber, reason: "manifest PR URL does not match the approved PR number" };
+  }
+  const result = run("gh", ["pr", "view", String(expectedNumber), "--json", "number,url,mergedAt,state,baseRefName,headRefName,headRefOid"], { cwd: mainWorktreePath() });
+  if (result.code !== 0) return { status: "blocked", kind: "merged-pr", expectedNumber, reason: "live GitHub merged-PR proof is unavailable" };
+  try {
+    const pr = JSON.parse(result.stdout);
+    if (!pr || typeof pr !== "object" || Array.isArray(pr)) throw new Error("malformed PR response");
+    if (pr.number !== expectedNumber) throw new Error("PR number mismatch");
+    if (pr.state !== "MERGED" || !isIsoTimestamp(pr.mergedAt)) throw new Error("PR is not merged with mergedAt evidence");
+    if (pr.baseRefName !== "dev") throw new Error("PR base is not dev");
+    if (pr.headRefName !== manifest.branch) throw new Error("PR head branch does not match manifest branch");
+    const recordedHead = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha) || exactGitObjectIdOrNull(manifest.historical_pr_head_sha);
+    if (!recordedHead) throw new Error("immutable recorded PR head is missing or invalid");
+    const headSha = exactGitObjectIdOrNull(pr.headRefOid);
+    if (!headSha) throw new Error("PR head is not an exact Git object id");
+    if (recordedHead !== headSha) throw new Error("recorded delivery head does not match live PR head");
+    return {
+      status: "matched",
+      kind: "merged-pr",
+      number: pr.number,
+      url: safeMetadataText(pr.url || "", 500) || null,
+      mergedAt: pr.mergedAt,
+      baseRefName: pr.baseRefName,
+      headRefName: pr.headRefName,
+      headRefOid: headSha,
+      recordedHead,
+      reason: "live merged PR proof matched",
+    };
+  } catch (error) {
+    return { status: "blocked", kind: "merged-pr", expectedNumber, reason: `live GitHub merged-PR proof is unavailable or mismatched: ${safeMetadataText(error.message || error, 500)}` };
+  }
 }
 
 function cleanupMerged(argv, mode = {}) {
