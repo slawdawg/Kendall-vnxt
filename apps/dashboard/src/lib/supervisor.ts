@@ -137,6 +137,16 @@ export async function captureMemoryInboxText(text: string, acknowledgedNonSensit
   return envelope.data;
 }
 
+export async function saveMemoryInboxDraft(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<void> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/lifecycle`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision, idempotencyKey, targetState: "Draft" }),
+  });
+  if (!response.ok) throw new Error("This source cannot be saved as a draft in its current state.");
+  const envelope = (await response.json()) as ApiEnvelope<unknown>;
+  if (!envelope?.data) throw new Error("Draft transition returned an invalid result.");
+}
+
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {
   return requestJson<RunStatusView>("/supervisor/status", options);
 }
