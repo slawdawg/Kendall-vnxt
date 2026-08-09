@@ -166,13 +166,21 @@ export async function approveMemoryInboxProposal(proposalId: string, expectedRev
   return envelope.data;
 }
 
-export type MemoryInboxSourceDeletion = { sourceId: string; sourceRevision: number; deletionOperations: number; initiator: "operator" | "retention_expiry"; replayed: boolean; lifecycleState: "DeletePending"; deletionState: "Pending" | "RetryNeeded"; nextSafeAction: "await_deletion_proof" | "retry_deletion"; };
+export type MemoryInboxSourceDeletion = { sourceId: string; sourceRevision: number; deletionOperations: number; initiator: "operator" | "retention_expiry" | "retry"; replayed: boolean; lifecycleState: "DeletePending"; deletionState: "Pending" | "RetryNeeded"; nextSafeAction: "await_deletion_proof" | "retry_deletion"; };
 
 export async function deleteMemoryInboxSource(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxSourceDeletion> {
   const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
   if (!response.ok) throw new Error("Memory Inbox source deletion was not accepted.");
   const envelope = (await response.json()) as ApiEnvelope<MemoryInboxSourceDeletion>;
   if (!envelope?.data || envelope.data.lifecycleState !== "DeletePending") throw new Error("Memory Inbox source deletion returned an invalid result.");
+  return envelope.data;
+}
+
+export async function retryMemoryInboxSourceDeletion(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxSourceDeletion> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/retry-deletion`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
+  if (!response.ok) throw new Error("Memory Inbox deletion retry was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxSourceDeletion>;
+  if (!envelope?.data || envelope.data.initiator !== "retry") throw new Error("Memory Inbox deletion retry returned an invalid result.");
   return envelope.data;
 }
 

@@ -199,7 +199,7 @@ from supervisor.application.memory_inbox_processing_disclosure import accept_pro
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
-from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator
+from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator, retry_source_deletion
 from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
 from supervisor.application.memory_inbox_retention import extend_source_retention
 from supervisor.worker.memory_inbox_deletion_poller import MemoryInboxDeletionPoller
@@ -1038,6 +1038,30 @@ async def delete_memory_inbox_source(
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Memory Inbox source deletion is unavailable.") from exc
+    source = await session.get(MemoryInboxSource, source_id)
+    deletion_state = source.deletion_state if source else "RetryNeeded"
+    return MemoryInboxSourceDeletionApiEnvelope(data=MemoryInboxSourceDeletionResultV1(
+        sourceId=result.source_id, sourceRevision=result.source_revision,
+        deletionOperations=result.deletion_operations, initiator=result.initiator,
+        replayed=result.replayed, deletionState=deletion_state,
+        nextSafeAction="retry_deletion" if deletion_state == "RetryNeeded" else "await_deletion_proof",
+    ))
+
+
+@app.post("/memory-inbox/sources/{source_id}/retry-deletion", response_model=MemoryInboxSourceDeletionApiEnvelope)
+async def retry_memory_inbox_source_deletion(
+    source_id: str, payload: MemoryInboxSourceDeletionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await retry_source_deletion(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox deletion retry is unavailable.") from exc
     source = await session.get(MemoryInboxSource, source_id)
     deletion_state = source.deletion_state if source else "RetryNeeded"
     return MemoryInboxSourceDeletionApiEnvelope(data=MemoryInboxSourceDeletionResultV1(

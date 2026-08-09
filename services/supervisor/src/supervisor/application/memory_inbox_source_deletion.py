@@ -9,10 +9,10 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier
+from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier, plan_pending_deletion_operations
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest, MemoryInboxSource, MemoryInboxSourceRevision
 
-DeletionInitiator = Literal["operator", "retention_expiry"]
+DeletionInitiator = Literal["operator", "retention_expiry", "retry"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,53 @@ async def expire_source_for_retention(
         idempotency_key=f"retention-expiry:{source_id}:{expected_revision}", actor_ref=actor_ref,
         initiator="retention_expiry", require_expired=True,
     )
+
+
+async def retry_source_deletion(
+    session: AsyncSession, *, source_id: str, expected_revision: int, idempotency_key: str, actor_ref: str,
+) -> SourceDeletionResult:
+    """Requeue only existing deletion work; Source use remains irrevocably closed."""
+    if expected_revision < 1 or not idempotency_key:
+        raise ValueError("source_deletion_retry_invalid")
+    digest = _digest(source_id, expected_revision, "retry")
+    recorded = (await session.execute(select(MemoryInboxCommandResult).where(
+        MemoryInboxCommandResult.aggregate_id == source_id,
+        MemoryInboxCommandResult.idempotency_key == idempotency_key,
+    ))).scalar_one_or_none()
+    if recorded is not None:
+        if recorded.command_kind != "source_deletion_retry" or recorded.request_digest != digest:
+            raise ValueError("source_deletion_retry_idempotency_conflict")
+        source = await session.get(MemoryInboxSource, source_id)
+        if source is None:
+            raise ValueError("source_deletion_retry_unavailable")
+        return SourceDeletionResult(source.id, source.current_revision, await _operation_count(session, source.id), "retry", True)
+    source = (await session.execute(select(MemoryInboxSource).where(
+        MemoryInboxSource.id == source_id,
+    ).with_for_update())).scalar_one_or_none()
+    if source is None or source.current_revision != expected_revision or source.lifecycle_state != "DeletePending" or source.deletion_state != "RetryNeeded":
+        raise ValueError("source_deletion_retry_unavailable")
+    now = datetime.now(timezone.utc)
+    revision_ids = select(MemoryInboxSourceRevision.id).where(MemoryInboxSourceRevision.source_id == source.id)
+    operations = list((await session.scalars(select(MemoryInboxDeletionOperation).join(
+        MemoryInboxManifest, MemoryInboxManifest.id == MemoryInboxDeletionOperation.manifest_id,
+    ).where(
+        MemoryInboxManifest.owner_revision_id.in_(revision_ids),
+        MemoryInboxDeletionOperation.lifecycle_state == "RetryNeeded",
+    ).with_for_update())).all())
+    for operation in operations:
+        operation.lifecycle_state = "Planned"
+        operation.requested_at = now
+    source.deletion_state = "Pending"
+    await plan_pending_deletion_operations(session, source=source, now=now)
+    session.add(MemoryInboxCommandResult(
+        id=f"inbox-command:{uuid.uuid4().hex}", aggregate_id=source.id,
+        expected_revision=expected_revision, idempotency_key=idempotency_key,
+        command_kind="source_deletion_retry", request_digest=digest, outcome="accepted",
+        reason_code="deletion_retry_requested", resulting_revision=source.current_revision,
+        actor_ref=actor_ref,
+    ))
+    await session.commit()
+    return SourceDeletionResult(source.id, source.current_revision, len(operations), "retry", False)
 
 
 async def _start_source_deletion(

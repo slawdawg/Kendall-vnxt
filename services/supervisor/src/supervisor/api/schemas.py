@@ -1359,7 +1359,7 @@ class MemoryInboxSourceDeletionResultV1(BaseModel):
     sourceId: str
     sourceRevision: PositiveInt
     deletionOperations: int
-    initiator: Literal["operator", "retention_expiry"]
+    initiator: Literal["operator", "retention_expiry", "retry"]
     replayed: bool
     lifecycleState: Literal["DeletePending"] = "DeletePending"
     deletionState: Literal["Pending", "RetryNeeded"]

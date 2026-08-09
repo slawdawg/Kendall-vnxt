@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator, expire_source_for_retention
+from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator, expire_source_for_retention, retry_source_deletion
 from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
 from supervisor.application.memory_inbox_retention import extend_source_retention
 from supervisor.infrastructure.db.database import Base
@@ -58,6 +58,25 @@ async def test_retention_extension_is_version_locked_and_invalidates_old_disclos
         assert extended.source_revision == 3 and replay.replayed
         assert extended.retention_deadline_at == deadline + timedelta(hours=3)
         assert (await session.get(MemoryInboxProcessingDisclosure, disclosure.id)).lifecycle_state == "Invalidated"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_deletion_retry_requeues_only_existing_retry_needed_operations(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'retry-delete.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        source = MemoryInboxSource(id="source:retry", current_revision=3, lifecycle_state="DeletePending", retention_deadline_at=datetime.now(timezone.utc), deletion_state="RetryNeeded", policy_ref="policy:test")
+        revision = MemoryInboxSourceRevision(id="revision:retry", source_id=source.id, revision=3, lifecycle_state="DeletePending", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
+        manifest = MemoryInboxManifest(id="manifest:retry", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:retry", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        operation = MemoryInboxDeletionOperation(id="operation:retry", manifest_id=manifest.id, lifecycle_state="RetryNeeded")
+        session.add_all((source, revision, manifest, operation)); await session.commit()
+        accepted = await retry_source_deletion(session, source_id=source.id, expected_revision=3, idempotency_key="deletion-retry-key-0001", actor_ref="operator:test")
+        replay = await retry_source_deletion(session, source_id=source.id, expected_revision=3, idempotency_key="deletion-retry-key-0001", actor_ref="operator:test")
+        assert accepted.initiator == "retry" and accepted.deletion_operations == 1
+        assert replay.replayed
+        assert (await session.get(MemoryInboxSource, source.id)).deletion_state == "Pending"
+        assert (await session.get(MemoryInboxDeletionOperation, operation.id)).lifecycle_state == "Planned"
     await engine.dispose()
 
 

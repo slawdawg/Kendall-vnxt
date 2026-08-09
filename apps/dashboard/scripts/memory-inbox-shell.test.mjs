@@ -60,6 +60,8 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /deleteMemoryInboxSource/);
   assert.match(source, /extendMemoryInboxRetention/);
   assert.match(source, /Confirm delete upload/);
+  assert.match(source, /Retry deletion/);
+  assert.match(source, /retryMemoryInboxSourceDeletion/);
   assert.match(transport, /requestJson<unknown>\("\/memory-inbox\/projection"/);
   assert.match(transport, /isMemoryInboxProjectionV1/);
   assert.match(transport, /requestSupervisorMutation\("\/memory-inbox\/text-capture"/);
