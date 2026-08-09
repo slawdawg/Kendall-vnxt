@@ -65,6 +65,19 @@ class PrivateContentStore:
         except FileNotFoundError:
             return
 
+    def delete_and_prove_absent(self, object_ref: str) -> None:
+        """Remove one opaque object and prove the owner-private path is absent."""
+        target = self._object_path(object_ref)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            return
+        raise PrivateContentStoreError("Private Memory Inbox object deletion is unproved.")
+
     async def write_stream(self, object_ref: str, chunks, *, maximum_bytes: int) -> int:
         """Atomically promote a bounded ingress stream without retaining it in memory."""
         target = self._object_path(object_ref)
