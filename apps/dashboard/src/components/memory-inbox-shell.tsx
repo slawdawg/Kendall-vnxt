@@ -23,6 +23,7 @@ export function MemoryInboxShell() {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const announcementRef = useRef<HTMLParagraphElement>(null);
   const { state, retry } = useAuthenticatedPageRead((signal) => getMemoryInboxProjection({ signal, timeoutMs: 6_000 }), [], () => false, true, { timeoutMessage: "Memory Inbox is unavailable." });
+  const reviewReadyCount = state.kind === "ready" ? state.data.reviewReadyCount : 0;
 
   useEffect(() => {
     if (state.kind !== "ready") return;
@@ -31,10 +32,11 @@ export function MemoryInboxShell() {
   }, [heading, state.kind]);
 
   const destinationLinks = useMemo(() => destinations.map((destination) => (
-    <Link key={destination.id} href={`/memory-inbox?destination=${destination.id}`} aria-current={destination.id === selected ? "page" : undefined} className="inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
-      {destination.label}
+    <Link key={destination.id} href={`/memory-inbox?destination=${destination.id}`} aria-current={destination.id === selected ? "page" : undefined} aria-label={destination.label} aria-describedby={destination.id === "review" ? "memory-inbox-review-ready-count" : undefined} className="inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
+      <span aria-hidden="true">{destination.label}</span>
+      {destination.id === "review" ? <span id="memory-inbox-review-ready-count" className="ml-2 rounded-full border px-2 py-0.5 text-xs" aria-live="polite">{reviewReadyCount} ready</span> : null}
     </Link>
-  )), [selected]);
+  )), [selected, reviewReadyCount]);
 
   if (state.kind === "expired") return <SessionExpired />;
   if (state.kind === "loading") return <StateSurface title="Loading Memory Inbox" body="Reading the authenticated Memory Inbox status." role="status" />;

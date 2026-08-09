@@ -17,8 +17,8 @@ from supervisor.domain.memory_inbox import (
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db import models  # noqa: F401
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult
-from supervisor.infrastructure.db.models import MemoryInboxProposalAggregate
-from supervisor.application.memory_inbox_projection import read_review_ready_count
+from supervisor.infrastructure.db.models import MemoryInboxProposalAggregate, MemoryInboxSource
+from supervisor.application.memory_inbox_projection import read_memory_inbox_projection, read_review_ready_count
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
@@ -120,4 +120,25 @@ async def test_review_badge_count_uses_only_ready_proposal_aggregates(tmp_path) 
         ))
         await session.commit()
         assert await read_review_ready_count(session) == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_inventory_excludes_review_sources_without_a_ready_proposal(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-inventory.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        from datetime import UTC, datetime, timedelta
+
+        deadline = datetime.now(UTC) + timedelta(days=1)
+        session.add_all((
+            MemoryInboxSource(id="source:ready", current_revision=1, lifecycle_state="Review", retention_deadline_at=deadline, deletion_state="None", policy_ref="policy:test"),
+            MemoryInboxSource(id="source:denied", current_revision=1, lifecycle_state="Review", retention_deadline_at=deadline, deletion_state="None", policy_ref="policy:test"),
+            MemoryInboxProposalAggregate(id="proposal:ready", source_id="source:ready", current_revision=1, lifecycle_state="Ready"),
+            MemoryInboxProposalAggregate(id="proposal:denied", source_id="source:denied", current_revision=1, lifecycle_state="Denied"),
+        ))
+        await session.commit()
+        assert [row.source_id for row in await read_memory_inbox_projection(session)] == ["source:ready"]
     await engine.dispose()

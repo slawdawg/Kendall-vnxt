@@ -13,6 +13,9 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /aria-current=/);
   assert.match(source, /href=\{`\/memory-inbox\?destination=\$\{destination\.id\}`\}/);
   assert.match(source, /Supervisor-owned lifecycle projection is current/);
+  assert.match(source, /memory-inbox-review-ready-count/);
+  assert.match(source, /reviewReadyCount/);
+  assert.match(source, /aria-label=\{destination\.label\}/);
   assert.match(source, /Refresh Memory Inbox/);
   assert.match(source, /useAuthenticatedPageRead/);
   assert.match(source, /headingRef\.current\?\.focus/);

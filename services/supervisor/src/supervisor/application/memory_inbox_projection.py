@@ -37,9 +37,17 @@ def next_action_for(state: str) -> str:
 
 
 async def read_memory_inbox_projection(session: AsyncSession) -> list[MemoryInboxProjectionRow]:
-    """Read lifecycle facts only; content stores and legacy tables are excluded."""
+    """Read lifecycle facts only; content stores and legacy tables are excluded.
+
+    A source's legacy ``Review`` state is not enough to place it in the Review
+    inventory.  That inventory is only truthful while its current proposal is
+    durably ``Ready``.
+    """
 
     sources = (await session.execute(select(MemoryInboxSource).order_by(MemoryInboxSource.updated_at.desc(), MemoryInboxSource.id.asc()))).scalars()
+    ready_source_ids = set((await session.scalars(select(MemoryInboxProposalAggregate.source_id).where(
+        MemoryInboxProposalAggregate.lifecycle_state == "Ready"
+    ))).all())
     return [
         MemoryInboxProjectionRow(
             source_id=source.id,
@@ -50,6 +58,7 @@ async def read_memory_inbox_projection(session: AsyncSession) -> list[MemoryInbo
             next_action_code=next_action_for(source.lifecycle_state),
         )
         for source in sources
+        if source.lifecycle_state != "Review" or source.id in ready_source_ids
     ]
 
 
