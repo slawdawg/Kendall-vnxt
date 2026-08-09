@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { captureMemoryInboxText, getMemoryInboxProjection, getMemoryInboxProposalReader, saveMemoryInboxDraft } from "../lib/supervisor";
+import { captureMemoryInboxText, denyMemoryInboxProposal, getMemoryInboxProjection, getMemoryInboxProposalReader, returnMemoryInboxProposal, saveMemoryInboxDraft } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -136,13 +136,45 @@ function MemoryInboxProposalReader({ proposalId, revision }: { proposalId: strin
     <section id="memory-inbox-review-decision" className="mt-8 border-t pt-5" aria-labelledby="memory-inbox-review-decision-heading">
       <h3 id="memory-inbox-review-decision-heading" className="text-base font-semibold">Review Decision Region</h3>
       <p className="mt-2 text-sm text-[var(--muted)]">These controls apply only to Proposal revision {state.data.revision}.</p>
-      <div className="mt-3 flex flex-wrap gap-3">
-        <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Approve proposal</button>
-        <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Deny and retain upload</button>
-        <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Send back for another proposal</button>
-      </div>
+      <MemoryInboxReviewDecisionControls proposalId={state.data.proposalId} revision={state.data.revision} />
     </section>
   </article>;
+}
+
+function MemoryInboxReviewDecisionControls({ proposalId, revision }: { proposalId: string; revision: number }) {
+  const [returnContext, setReturnContext] = useState("");
+  const [status, setStatus] = useState("");
+  const returnKeyRef = useRef<string | null>(null);
+  const denyKeyRef = useRef<string | null>(null);
+  async function sendBack() {
+    if (!returnContext.trim()) { setStatus("Add revision context before sending this Proposal back."); return; }
+    setStatus("Recording return decision…");
+    try {
+      returnKeyRef.current ??= crypto.randomUUID();
+      const result = await returnMemoryInboxProposal(proposalId, revision, returnKeyRef.current, returnContext);
+      setStatus(result.replayed ? "Return decision was already recorded." : "Proposal returned. Create a new draft before any fresh disclosure.");
+    } catch { setStatus("Return was not accepted. Your revision context is retained; retry the same revision."); }
+  }
+  async function deny() {
+    setStatus("Recording denial…");
+    try {
+      denyKeyRef.current ??= crypto.randomUUID();
+      const result = await denyMemoryInboxProposal(proposalId, revision, denyKeyRef.current);
+      setStatus(result.replayed ? "Denial was already recorded." : "Proposal denied and source retained until its deadline.");
+    } catch { setStatus("Denial was not accepted. Refresh Review for current lifecycle truth."); }
+  }
+  return <div className="mt-3 grid gap-3">
+    <label className="grid gap-1 text-sm font-medium" htmlFor="memory-inbox-return-context">Revision context for this Proposal revision
+      <textarea id="memory-inbox-return-context" value={returnContext} onChange={(event) => setReturnContext(event.target.value)} maxLength={2000} rows={3} className="rounded border p-2 font-normal" aria-describedby="memory-inbox-return-context-help" />
+    </label>
+    <p id="memory-inbox-return-context-help" className="text-sm text-[var(--muted)]">Context is sent only with this decision request and is not retained in lifecycle evidence.</p>
+    <div className="flex flex-wrap gap-3">
+      <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Approve proposal</button>
+      <button type="button" onClick={deny} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Deny and retain upload</button>
+      <button type="button" onClick={sendBack} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Send back for another proposal</button>
+    </div>
+    {status ? <p role="status" aria-live="polite" className="text-sm">{status}</p> : null}
+  </div>;
 }
 
 function destinationFor(state: MemoryInboxProjectionRowV1["lifecycleState"]): MemoryInboxDestinationV1 {

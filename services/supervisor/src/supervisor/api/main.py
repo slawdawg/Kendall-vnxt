@@ -113,6 +113,9 @@ from supervisor.api.schemas import (
     MemoryInboxProjectionV1,
     MemoryInboxProposalReaderApiEnvelope,
     MemoryInboxProposalReaderV1,
+    MemoryInboxReviewDecisionApiEnvelope,
+    MemoryInboxReviewDecisionRequest,
+    MemoryInboxReviewDecisionResultV1,
     MemoryInboxTextCaptureApiEnvelope,
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
@@ -183,6 +186,7 @@ from supervisor.application.memory_inbox_inspection_lease import plan_inspection
 from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
 from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
+from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
@@ -932,6 +936,50 @@ async def get_memory_inbox_proposal_reader(
         raise HTTPException(status_code=409, detail="Authenticated Proposal Reader is unavailable.") from exc
     return MemoryInboxProposalReaderApiEnvelope(data=MemoryInboxProposalReaderV1(
         proposalId=reader.proposal_id, revision=reader.revision, body=reader.body,
+    ))
+
+
+@app.post("/memory-inbox/proposals/{proposal_id}/return", response_model=MemoryInboxReviewDecisionApiEnvelope)
+async def return_memory_inbox_proposal(
+    proposal_id: str, payload: MemoryInboxReviewDecisionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    if payload.returnContext is None:
+        raise HTTPException(status_code=422, detail="Revision context is required to return a Proposal.")
+    try:
+        result = await return_proposal_for_revision(
+            session, proposal_id=proposal_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The Proposal return is unavailable.") from exc
+    return MemoryInboxReviewDecisionApiEnvelope(data=MemoryInboxReviewDecisionResultV1(
+        proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
+        sourceRevision=result.source_revision, lifecycleState=result.lifecycle_state,
+        replayed=result.replayed, nextSafeAction=result.next_safe_action,
+    ))
+
+
+@app.post("/memory-inbox/proposals/{proposal_id}/deny", response_model=MemoryInboxReviewDecisionApiEnvelope)
+async def deny_memory_inbox_proposal(
+    proposal_id: str, payload: MemoryInboxReviewDecisionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await deny_proposal_retaining_source(
+            session, proposal_id=proposal_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The Proposal denial is unavailable.") from exc
+    return MemoryInboxReviewDecisionApiEnvelope(data=MemoryInboxReviewDecisionResultV1(
+        proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
+        sourceRevision=result.source_revision, lifecycleState=result.lifecycle_state,
+        replayed=result.replayed, nextSafeAction=result.next_safe_action,
     ))
 
 

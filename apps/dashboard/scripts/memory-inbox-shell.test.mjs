@@ -22,6 +22,10 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /Review Decision Region/);
   for (const control of ["Approve proposal", "Deny and retain upload", "Send back for another proposal"]) assert.match(source, new RegExp(control));
   assert.match(source, /getMemoryInboxProposalReader/);
+  assert.match(source, /returnMemoryInboxProposal/);
+  assert.match(source, /denyMemoryInboxProposal/);
+  assert.match(source, /retry the same revision/);
+  assert.match(source, /not retained in lifecycle evidence/);
   assert.match(source, /Refresh Memory Inbox/);
   assert.match(source, /useAuthenticatedPageRead/);
   assert.match(source, /headingRef\.current\?\.focus/);

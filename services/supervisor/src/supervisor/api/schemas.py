@@ -1288,6 +1288,35 @@ class MemoryInboxProposalReaderApiEnvelope(BaseModel):
     data: MemoryInboxProposalReaderV1
 
 
+class MemoryInboxReviewDecisionRequest(BaseModel):
+    """The optional return context is transient and intentionally not persisted."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+    returnContext: Annotated[str, Field(min_length=1, max_length=2_000)] | None = None
+
+
+class MemoryInboxReviewDecisionResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-review-decision/v1"] = "kendall-memory-inbox-review-decision/v1"
+    proposalId: str
+    proposalRevision: PositiveInt
+    sourceId: str
+    sourceRevision: PositiveInt
+    lifecycleState: Literal["Returned", "Denied"]
+    replayed: bool
+    nextSafeAction: Literal["create_draft", "review_retention"]
+
+
+class MemoryInboxReviewDecisionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxReviewDecisionResultV1
+
+
 class MemoryInboxTextCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

@@ -132,6 +132,30 @@ export async function getMemoryInboxProposalReader(proposalId: string, revision:
   return reader;
 }
 
+export type MemoryInboxReviewDecision = {
+  proposalId: string; proposalRevision: number; sourceId: string; sourceRevision: number;
+  lifecycleState: "Returned" | "Denied"; replayed: boolean; nextSafeAction: "create_draft" | "review_retention";
+};
+
+async function decideMemoryInboxProposal(proposalId: string, action: "return" | "deny", expectedRevision: number, idempotencyKey: string, returnContext?: string): Promise<MemoryInboxReviewDecision> {
+  const response = await requestSupervisorMutation(`/memory-inbox/proposals/${encodeURIComponent(proposalId)}/${action}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision, idempotencyKey, ...(returnContext === undefined ? {} : { returnContext }) }),
+  });
+  if (!response.ok) throw new Error("The Proposal decision was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxReviewDecision>;
+  if (!envelope?.data || typeof envelope.data.proposalId !== "string") throw new Error("The Proposal decision returned an invalid result.");
+  return envelope.data;
+}
+
+export function returnMemoryInboxProposal(proposalId: string, expectedRevision: number, idempotencyKey: string, returnContext: string): Promise<MemoryInboxReviewDecision> {
+  return decideMemoryInboxProposal(proposalId, "return", expectedRevision, idempotencyKey, returnContext);
+}
+
+export function denyMemoryInboxProposal(proposalId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxReviewDecision> {
+  return decideMemoryInboxProposal(proposalId, "deny", expectedRevision, idempotencyKey);
+}
+
 export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {
   const response = await requestSupervisorMutation("/memory-inbox/text-capture", {
     method: "POST",
