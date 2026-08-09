@@ -1,0 +1,98 @@
+"""Database-backed claim and completion fence for quarantine inspection jobs."""
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import uuid
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from supervisor.application.memory_inbox_inspection_result import fence_inspection_result
+from supervisor.application.memory_inbox_scanner import ScannerOutcome
+from supervisor.domain.memory_inbox import MemoryInboxSourceState
+from supervisor.infrastructure.db.models import MemoryInboxJob, MemoryInboxManifest, MemoryInboxSource, MemoryInboxSourceRevision
+
+
+@dataclass(frozen=True)
+class InspectionClaim:
+    job_id: str
+    source_id: str
+    source_revision_id: str
+    source_revision: int
+    store_ref: str
+    declared_media_type: str
+
+
+async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> InspectionClaim:
+    """Claim a planned inspection job and return only private opaque references."""
+    now = datetime.now(timezone.utc)
+    job = (await session.execute(select(MemoryInboxJob).where(MemoryInboxJob.id == job_id).with_for_update())).scalar_one_or_none()
+    if job is None or job.lifecycle_state != "Planned":
+        raise ValueError("inspection_job_unavailable")
+    if job.lease_expires_at is None or job.timeout_at is None or now >= job.lease_expires_at or now >= job.timeout_at:
+        job.lifecycle_state = "Closed"
+        job.result_ref = f"inspection:expired:{uuid.uuid4().hex}"
+        await session.commit()
+        raise ValueError("inspection_job_expired")
+    revision = await session.get(MemoryInboxSourceRevision, job.source_revision_id)
+    if revision is None:
+        raise ValueError("inspection_revision_unavailable")
+    manifest = (await session.execute(select(MemoryInboxManifest).where(
+        MemoryInboxManifest.owner_revision_id == revision.id,
+        MemoryInboxManifest.copy_class == "quarantine",
+        MemoryInboxManifest.creation_state == "Created",
+        MemoryInboxManifest.deletion_state == "None",
+    ))).scalar_one_or_none()
+    if manifest is None or not manifest.declared_media_type:
+        raise ValueError("inspection_manifest_unavailable")
+    job.lifecycle_state = "Claimed"
+    job.heartbeat_at = now
+    await session.commit()
+    return InspectionClaim(job.id, revision.source_id, revision.id, revision.revision, manifest.store_ref, manifest.declared_media_type)
+
+
+async def complete_inspection_job(
+    session: AsyncSession,
+    *,
+    claim: InspectionClaim,
+    actor_ref: str,
+    format_valid: bool,
+    inspected_media_type: str | None,
+    scanner_outcome: ScannerOutcome,
+) -> str:
+    """Apply one result only if the original job and revision remain current."""
+    now = datetime.now(timezone.utc)
+    job = (await session.execute(select(MemoryInboxJob).where(MemoryInboxJob.id == claim.job_id).with_for_update())).scalar_one_or_none()
+    source = (await session.execute(select(MemoryInboxSource).where(MemoryInboxSource.id == claim.source_id).with_for_update())).scalar_one_or_none()
+    if job is None or source is None:
+        raise ValueError("inspection_result_unavailable")
+    decision = fence_inspection_result(
+        source_state=source.lifecycle_state, source_current_revision=source.current_revision,
+        job_source_revision=claim.source_revision, job_state=job.lifecycle_state,
+        lease_expires_at=job.lease_expires_at, timeout_at=job.timeout_at, now=now,
+        format_valid=format_valid, scanner_outcome=scanner_outcome,
+    )
+    job.lifecycle_state = "Closed"
+    job.result_ref = f"inspection:{decision.reason_code}:{uuid.uuid4().hex}"
+    if not decision.accepted:
+        await session.commit()
+        raise ValueError(decision.reason_code)
+    manifest = (await session.execute(select(MemoryInboxManifest).where(
+        MemoryInboxManifest.owner_revision_id == claim.source_revision_id,
+        MemoryInboxManifest.copy_class == "quarantine",
+    ).with_for_update())).scalar_one_or_none()
+    if manifest is None or manifest.store_ref != claim.store_ref or manifest.declared_media_type != claim.declared_media_type:
+        await session.commit()
+        raise ValueError("inspection_manifest_mismatch")
+    if format_valid and inspected_media_type:
+        manifest.inspected_media_type = inspected_media_type
+    if decision.target_state is not None:
+        source.current_revision += 1
+        source.lifecycle_state = decision.target_state.value
+        session.add(MemoryInboxSourceRevision(
+            id=f"inbox-source-revision:{uuid.uuid4().hex}", source_id=source.id,
+            revision=source.current_revision, lifecycle_state=source.lifecycle_state,
+            actor_ref=actor_ref, audit_ref=f"audit:{uuid.uuid4().hex}", policy_ref=source.policy_ref,
+        ))
+    await session.commit()
+    return decision.reason_code
