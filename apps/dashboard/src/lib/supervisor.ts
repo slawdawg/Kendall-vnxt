@@ -90,7 +90,11 @@ import type {
   WorkflowEventView,
   WorkItemView,
   WorkerRegistryEntryView,
+  MemoryInboxShellStatusV1,
+  MemoryInboxProjectionV1,
+  MemoryInboxTextCaptureResultV1,
 } from "@kendall/contracts";
+import { isMemoryInboxProjectionV1, isMemoryInboxShellStatusV1, isMemoryInboxTextCaptureResultV1 } from "@kendall/contracts";
 
 export function getSupervisorBaseUrl(): string {
   return canonicalGetSupervisorBaseUrl();
@@ -105,6 +109,42 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
     // supervisor reader; pipeline runtime opts into the same policy explicitly.
     rejectServerLanAuth: options.rejectServerLanAuth ?? true,
   });
+}
+
+export async function getMemoryInboxShellStatus(options?: RequestOptions): Promise<MemoryInboxShellStatusV1> {
+  const status = await requestJson<unknown>("/memory-inbox/shell", options);
+  if (!isMemoryInboxShellStatusV1(status)) {
+    throw new Error("Invalid Memory Inbox shell status.");
+  }
+  return status;
+}
+
+export async function getMemoryInboxProjection(options?: RequestOptions): Promise<MemoryInboxProjectionV1> {
+  const projection = await requestJson<unknown>("/memory-inbox/projection", options);
+  if (!isMemoryInboxProjectionV1(projection)) throw new Error("Invalid Memory Inbox projection.");
+  return projection;
+}
+
+export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {
+  const response = await requestSupervisorMutation("/memory-inbox/text-capture", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, acknowledgedNonSensitive, idempotencyKey }),
+  });
+  if (!response.ok) throw new Error("Text capture was not accepted. Check the acknowledgement and try again.");
+  const envelope = (await response.json()) as ApiEnvelope<unknown>;
+  if (!isMemoryInboxTextCaptureResultV1(envelope?.data)) throw new Error("Text capture returned an invalid result.");
+  return envelope.data;
+}
+
+export async function saveMemoryInboxDraft(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<void> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/lifecycle`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision, idempotencyKey, targetState: "Draft" }),
+  });
+  if (!response.ok) throw new Error("This source cannot be saved as a draft in its current state.");
+  const envelope = (await response.json()) as ApiEnvelope<unknown>;
+  if (!envelope?.data) throw new Error("Draft transition returned an invalid result.");
 }
 
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {

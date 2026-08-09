@@ -4,6 +4,8 @@ export * from "./api";
 export * from "./work-packet";
 export * from "./events";
 export * from "./errors";
+export * from "./memory-inbox";
+export * from "./memory-inbox-lifecycle";
 export * as ManagerControlPlane from "./manager-control-plane";
 export * from "./pipeline-control-plane";
 export * as PipelineControlPlane from "./pipeline-control-plane";

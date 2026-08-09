@@ -6,6 +6,8 @@ const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const READ_ONLY_SUPERVISOR_PATHS = [
+  /^\/memory-inbox\/shell$/,
+  /^\/memory-inbox\/projection$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?)$/,
 ];
@@ -19,6 +21,8 @@ const TEST_VIEWER_READ_PATHS = [
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:-]+)?)$/,
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
+  /^\/memory-inbox\/shell$/,
+  /^\/memory-inbox\/projection$/,
   /^\/supervisor\/status$/,
   /^\/supervisor\/runtime-evidence-review-report$/,
   /^\/events$/,
@@ -29,6 +33,10 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
+export const MEMORY_INBOX_MUTATION_PATHS = new Set([
+  "/memory-inbox/text-capture",
+]);
+const MEMORY_INBOX_LIFECYCLE_PATH = /^\/memory-inbox\/sources\/inbox-source:[A-Za-z0-9_-]+\/lifecycle$/;
 // Controls has a separate exact browser capability. These paths deliberately
 // have no parameters and no query contract.
 export const CONTROLS_READ_PATHS = new Set([
@@ -107,38 +115,41 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     let url;
     try { url = new URL(request.url || "/", "https://dashboard.invalid"); } catch { return false; }
     if (!url.pathname.startsWith(PREFIX) || !allowedReadQuery(url, request.method)) return false;
+    let targetPath;
+    try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
+    if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+    if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
+    const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
+    const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
+    const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath);
+    if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
+      sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
+      return true;
+    }
+    if (controlsMutation && (request.method !== "POST" || url.search)) {
+      sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
+      return true;
+    }
+    if (memoryInboxMutation && (request.method !== "POST" || url.search)) {
+      sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
+      return true;
+    }
     if (!request.headers.cookie) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
     if (["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port"].some((name) => request.headers[name])) {
       sendJson(response, 400, { state: "unavailable" });
       return true;
     }
-    const body = await readBody(request);
-    if (body === null) { sendJson(response, 413, { state: "unavailable" }); return true; }
     try {
       const session = await requestSupervisor(supervisorUdsPath, "/auth/session", "GET", { cookie: request.headers.cookie }, Buffer.alloc(0), timeoutMs);
       const role = session.statusCode === 200 ? sessionRole(session.body) : null;
       if (!role) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
-      let targetPath;
-      try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
-      if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
-      if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
-      const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
-      const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
-      if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
-        sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
-        return true;
-      }
-      if (controlsMutation && (request.method !== "POST" || url.search)) {
-        sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
-        return true;
-      }
       // Controls method denial is intentionally evaluated before the generic
       // mutation origin guard, so a non-POST never becomes an origin oracle.
       if (MUTATING_METHODS.has(request.method) && (!request.headers.origin || request.headers.origin !== expectedOrigin)) {
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }
-      if (role === "test_viewer" && (controlsRead || controlsMutation)) {
+      if (role === "test_viewer" && (controlsRead || controlsMutation || memoryInboxMutation)) {
         sendJson(response, 404, { state: "unavailable" });
         return true;
       }
@@ -150,10 +161,16 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }
+      if (memoryInboxMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
+        sendJson(response, 403, { state: "unavailable" });
+        return true;
+      }
       if (READ_ONLY_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !["GET", "HEAD"].includes(request.method)) {
         sendJson(response, 405, { state: "unavailable" });
         return true;
       }
+      const body = await readBody(request);
+      if (body === null) { sendJson(response, 413, { state: "unavailable" }); return true; }
       if (targetPath === "/events") {
         await streamSupervisor(supervisorUdsPath, targetPath, request.headers, response, timeoutMs);
         return true;

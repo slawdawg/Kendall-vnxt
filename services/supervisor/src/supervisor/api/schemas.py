@@ -3,6 +3,7 @@ import json
 import re
 import types
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
@@ -1189,6 +1190,123 @@ MemoryProposalContradictionStatusV0 = Literal["none", "possible", "confirmed"]
 MemoryProposalConfidenceV0 = Literal["low", "medium", "high"]
 MemoryProposalOperatorActionV0 = Literal["approve", "edit", "reject", "defer", "blocked"]
 MemoryProposalWriteBackStatusV0 = Literal["not_started", "blocked", "review_gated", "approved_for_future", "deferred"]
+
+
+class MemoryInboxShellStatusV1(BaseModel):
+    """Content-free shell status; lifecycle projection is introduced later."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-shell/v1"]
+    state: Literal["unavailable"]
+    freshness: Literal["current", "stale", "unavailable"]
+    nextSafeAction: Literal["refresh_memory_inbox"]
+
+
+class MemoryInboxShellApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxShellStatusV1
+    meta: dict[str, Any] | None = None
+
+
+class MemoryInboxLifecycleCommandRequest(BaseModel):
+    """A narrow, content-free mutation capability; identity comes from session."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(pattern=r"^[A-Za-z0-9:_-]{1,160}$")]
+    targetState: Literal[
+        "Quarantined", "Unprocessed", "Draft", "AwaitingAuthorization", "Processing", "Review",
+        "Returned", "DeniedRetained", "DeletePending", "Deleted", "RejectedUnsafe",
+    ]
+
+
+class MemoryInboxLifecycleCommandResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-lifecycle/v1"] = "kendall-memory-inbox-lifecycle/v1"
+    sourceId: str
+    expectedRevision: PositiveInt
+    resultingRevision: PositiveInt
+    outcome: Literal["accepted", "replayed", "conflict", "rejected"]
+    reasonCode: str
+    lifecycleState: str | None = None
+
+
+class MemoryInboxLifecycleCommandApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxLifecycleCommandResultV1
+
+
+class MemoryInboxProjectionRowV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sourceId: str
+    lifecycleState: str
+    revision: PositiveInt
+    retentionDeadlineAt: datetime
+    deletionState: Literal["None", "Pending", "Proven", "RetryNeeded"]
+    nextSafeAction: str
+
+
+class MemoryInboxProjectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-projection/v1"] = "kendall-memory-inbox-projection/v1"
+    truth: Literal["supervisor_owned"] = "supervisor_owned"
+    freshness: Literal["current"] = "current"
+    rows: list[MemoryInboxProjectionRowV1]
+    reviewReadyCount: int
+    nextSafeAction: str
+
+
+class MemoryInboxProjectionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxProjectionV1
+
+
+class MemoryInboxTextCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    text: Annotated[str, Field(min_length=1, max_length=32_000)]
+    acknowledgedNonSensitive: Literal[True]
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxTextCaptureResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-capture/v1"] = "kendall-memory-inbox-capture/v1"
+    sourceId: str
+    lifecycleState: Literal["Unprocessed"] = "Unprocessed"
+    nextSafeAction: Literal["create_draft"] = "create_draft"
+
+
+class MemoryInboxTextCaptureApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxTextCaptureResultV1
+
+
+class MemoryInboxCostPolicyUpdateRequest(BaseModel):
+    """A content-free, explicitly acknowledged Inbox-only policy change."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    finiteLimit: Decimal | None
+    unlimitedAcknowledged: bool = False
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxProcessingDisclosureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
 
 
 class MemoryProposalCreateRequest(BaseModel):
