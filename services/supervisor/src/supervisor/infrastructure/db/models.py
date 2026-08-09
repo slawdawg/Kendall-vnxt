@@ -573,6 +573,8 @@ class MemoryInboxManifest(Base):
     owner_revision_id: Mapped[str] = mapped_column(String(80), index=True)
     copy_class: Mapped[str] = mapped_column(String(32))
     store_ref: Mapped[str] = mapped_column(String(200), unique=True)
+    declared_media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    inspected_media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     creation_state: Mapped[str] = mapped_column(String(16), default="Planned")
     retention_class: Mapped[str] = mapped_column(String(32))
     deletion_state: Mapped[str] = mapped_column(String(16), default="None")

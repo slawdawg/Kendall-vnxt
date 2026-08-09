@@ -854,7 +854,10 @@ async def receive_memory_inbox_upload(request: Request, response: Response, sess
     response.headers["Cache-Control"] = "no-store"
     operator = await require_memory_inbox_command_operator(request, session)
     try:
-        source_id = await receive_quarantined_upload(session, settings=settings, chunks=request.stream(), actor_ref=f"operator:{operator.id}")
+        source_id = await receive_quarantined_upload(
+            session, settings=settings, chunks=request.stream(), actor_ref=f"operator:{operator.id}",
+            declared_media_type=request.headers.get("content-type", "").split(";", 1)[0].lower(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Document upload was not accepted.") from exc
     return {"data": {"schemaVersion": "kendall-memory-inbox-upload/v1", "sourceId": source_id, "lifecycleState": "Scanning", "nextSafeAction": "await_inspection"}}

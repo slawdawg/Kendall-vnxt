@@ -130,6 +130,16 @@ SUPERVISOR_CONTROL_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("revision", "INTEGER NOT NULL DEFAULT 1"),
 )
 
+MEMORY_INBOX_MANIFEST_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("declared_media_type", "VARCHAR(128)"),
+    ("inspected_media_type", "VARCHAR(128)"),
+)
+
+MEMORY_INBOX_MANIFEST_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("declared_media_type", "VARCHAR(128)"),
+    ("inspected_media_type", "VARCHAR(128)"),
+)
+
 LOCAL_DOGFOOD_AUTHORIZATION_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
     ("issuer_id", "VARCHAR(120) DEFAULT 'legacy-untrusted'"),
     ("key_id", "VARCHAR(120) DEFAULT 'legacy-untrusted'"),
@@ -310,6 +320,13 @@ async def init_db() -> None:
         if dialect == "sqlite":
             await _begin_sqlite_schema_migration(connection)
         await connection.run_sync(Base.metadata.create_all)
+        if dialect == "sqlite":
+            await _sqlite_add_columns(connection, "memory_inbox_manifests", MEMORY_INBOX_MANIFEST_SQLITE_COLUMNS)
+        elif dialect == "postgresql":
+            for column_name, column_type in MEMORY_INBOX_MANIFEST_POSTGRES_COLUMNS:
+                await connection.execute(
+                    text(f"ALTER TABLE memory_inbox_manifests ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+                )
         await connection.execute(
             text(
                 "INSERT INTO admission_locks (scope, generation) VALUES ('execute', 0) "
