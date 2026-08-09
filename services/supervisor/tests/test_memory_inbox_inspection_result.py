@@ -11,7 +11,8 @@ def fence(**overrides):
         "job_source_revision": 2, "job_state": "Claimed",
         "lease_expires_at": now + timedelta(seconds=10),
         "timeout_at": now + timedelta(seconds=10), "now": now,
-        "format_valid": True, "scanner_outcome": ScannerOutcome.SAFE,
+        "inspection_available": True, "format_valid": True, "scanner_outcome": ScannerOutcome.SAFE,
+        "extraction_succeeded": True,
     }
     values.update(overrides)
     return fence_inspection_result(**values)
@@ -35,3 +36,5 @@ def test_failures_stay_quarantined_and_unsafe_results_are_explicitly_rejected() 
     assert fence(format_valid=False).target_state is None
     assert fence(scanner_outcome=ScannerOutcome.UNAVAILABLE).target_state is None
     assert fence(scanner_outcome=ScannerOutcome.UNSAFE).target_state.value == "RejectedUnsafe"
+    assert fence(extraction_succeeded=False).target_state is None
+    assert fence(inspection_available=False).reason_code == "inspection_unavailable"
