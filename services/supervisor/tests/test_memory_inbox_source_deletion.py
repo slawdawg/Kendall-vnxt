@@ -4,10 +4,12 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator, expire_source_for_retention
+from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.models import (
     MemoryInboxManifest, MemoryInboxProposalAggregate, MemoryInboxProposalReaderGrant,
     MemoryInboxProposalRevision, MemoryInboxSource, MemoryInboxSourceRevision,
+    MemoryInboxDeletionOperation, MemoryInboxDeletionProof,
 )
 
 
@@ -37,6 +39,24 @@ async def test_operator_source_delete_uses_the_shared_barrier_and_replays_once(t
         assert replay.replayed and replay.deletion_operations == 1
         assert updated_source.lifecycle_state == "DeletePending" and updated_source.deletion_state == "Pending"
         assert updated_grant.lifecycle_state == "Revoked" and updated_grant.revoked_at is not None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_deletion_receipt_exposes_only_proven_terminal_outcome_metadata(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'receipt.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        source = MemoryInboxSource(id="source:receipt", current_revision=3, lifecycle_state="Deleted", retention_deadline_at=datetime.now(timezone.utc), deletion_state="Proven", policy_ref="policy:test")
+        source_revision = MemoryInboxSourceRevision(id="revision:receipt", source_id=source.id, revision=3, lifecycle_state="Deleted", actor_ref="worker:test", audit_ref="audit:test", policy_ref=source.policy_ref)
+        proposal = MemoryInboxProposalAggregate(id="proposal:receipt", source_id=source.id, current_revision=2, lifecycle_state="Approved")
+        manifest = MemoryInboxManifest(id="manifest:receipt", owner_revision_id=source_revision.id, copy_class="quarantine", store_ref="inbox-store:receipt", creation_state="Created", retention_class="source_retention", deletion_state="Proven")
+        operation = MemoryInboxDeletionOperation(id="operation:receipt", manifest_id=manifest.id, lifecycle_state="Proven")
+        proof = MemoryInboxDeletionProof(id="proof:receipt", deletion_operation_id=operation.id, proof_ref="receipt:opaque", lifecycle_state="Proven")
+        session.add_all((source, source_revision, proposal, manifest, operation, proof)); await session.commit()
+        receipt = await read_deletion_receipt(session, source_id=source.id)
+        assert receipt.outcome == "deleted_after_approval"
+        assert receipt.summary == "Kendall copies deleted" and receipt.proof_count == 1
     await engine.dispose()
 
 

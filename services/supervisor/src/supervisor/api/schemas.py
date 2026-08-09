@@ -1372,6 +1372,23 @@ class MemoryInboxSourceDeletionApiEnvelope(BaseModel):
     data: MemoryInboxSourceDeletionResultV1
 
 
+class MemoryInboxDeletionReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-deletion-receipt/v1"] = "kendall-memory-inbox-deletion-receipt/v1"
+    sourceId: str
+    outcome: Literal["deletion_pending", "deletion_retry_needed", "deleted_after_approval", "deleted_by_operator", "deleted_on_retention_expiry"]
+    proofCount: int = Field(ge=0)
+    summary: Literal["Kendall copy deletion is pending proof.", "Kendall copy deletion needs a recorded proof.", "Kendall copies deleted"]
+    nextSafeAction: Literal["await_deletion_proof", "retry_deletion", "none"]
+
+
+class MemoryInboxDeletionReceiptApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxDeletionReceiptV1
+
+
 class MemoryInboxTextCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

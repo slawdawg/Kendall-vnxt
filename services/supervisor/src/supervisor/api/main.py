@@ -122,6 +122,8 @@ from supervisor.api.schemas import (
     MemoryInboxSourceDeletionApiEnvelope,
     MemoryInboxSourceDeletionRequest,
     MemoryInboxSourceDeletionResultV1,
+    MemoryInboxDeletionReceiptApiEnvelope,
+    MemoryInboxDeletionReceiptV1,
     MemoryInboxTextCaptureApiEnvelope,
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
@@ -195,6 +197,7 @@ from supervisor.application.memory_inbox_proposal_reader import read_authorized_
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
 from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator
+from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
 from supervisor.worker.memory_inbox_deletion_poller import MemoryInboxDeletionPoller
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
@@ -1038,6 +1041,22 @@ async def delete_memory_inbox_source(
         deletionOperations=result.deletion_operations, initiator=result.initiator,
         replayed=result.replayed, deletionState=deletion_state,
         nextSafeAction="retry_deletion" if deletion_state == "RetryNeeded" else "await_deletion_proof",
+    ))
+
+
+@app.get("/memory-inbox/sources/{source_id}/deletion-receipt", response_model=MemoryInboxDeletionReceiptApiEnvelope)
+async def get_memory_inbox_deletion_receipt(
+    source_id: str, request: Request, response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    try:
+        receipt = await read_deletion_receipt(session, source_id=source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox deletion receipt is unavailable.") from exc
+    return MemoryInboxDeletionReceiptApiEnvelope(data=MemoryInboxDeletionReceiptV1(
+        sourceId=receipt.source_id, outcome=receipt.outcome, proofCount=receipt.proof_count,
+        summary=receipt.summary, nextSafeAction=receipt.next_safe_action,
     ))
 
 
