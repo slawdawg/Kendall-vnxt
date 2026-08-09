@@ -115,6 +115,7 @@ from supervisor.api.schemas import (
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
     MemoryInboxCostPolicyUpdateRequest,
+    MemoryInboxProcessingDisclosureRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -178,6 +179,7 @@ from supervisor.application.memory_inbox_upload import receive_quarantined_uploa
 from supervisor.application.memory_inbox_inspection import require_inspection_activation
 from supervisor.application.memory_inbox_inspection_lease import plan_inspection_lease
 from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
+from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
@@ -809,6 +811,44 @@ async def update_memory_inbox_cost_policy(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Memory Inbox Cost Policy was not accepted.") from exc
     return {"data": policy}
+
+
+@app.post("/memory-inbox/sources/{source_id}/processing-disclosure")
+async def present_memory_inbox_processing_disclosure(
+    source_id: str,
+    payload: MemoryInboxProcessingDisclosureRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        disclosure = await present_processing_disclosure(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Processing Disclosure is unavailable for this Source.") from exc
+    return {"data": disclosure}
+
+
+@app.post("/memory-inbox/processing-disclosures/{disclosure_id}/accept")
+async def accept_memory_inbox_processing_disclosure(
+    disclosure_id: str,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        disclosure = await accept_processing_disclosure(
+            session, disclosure_id=disclosure_id, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Processing Disclosure acceptance is unavailable.") from exc
+    return {"data": disclosure}
 
 
 @app.post("/memory-inbox/sources/{source_id}/lifecycle", response_model=MemoryInboxLifecycleCommandApiEnvelope)

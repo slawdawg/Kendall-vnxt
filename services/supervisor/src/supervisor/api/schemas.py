@@ -1302,6 +1302,13 @@ class MemoryInboxCostPolicyUpdateRequest(BaseModel):
     idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
 
 
+class MemoryInboxProcessingDisclosureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
 class MemoryProposalCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
