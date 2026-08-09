@@ -116,6 +116,7 @@ from supervisor.api.schemas import (
     MemoryInboxTextCaptureResultV1,
     MemoryInboxCostPolicyUpdateRequest,
     MemoryInboxProcessingDisclosureRequest,
+    MemoryInboxProcessingDisclosureApiEnvelope,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -813,7 +814,7 @@ async def update_memory_inbox_cost_policy(
     return {"data": policy}
 
 
-@app.post("/memory-inbox/sources/{source_id}/processing-disclosure")
+@app.post("/memory-inbox/sources/{source_id}/processing-disclosure", response_model=MemoryInboxProcessingDisclosureApiEnvelope)
 async def present_memory_inbox_processing_disclosure(
     source_id: str,
     payload: MemoryInboxProcessingDisclosureRequest,
@@ -833,7 +834,7 @@ async def present_memory_inbox_processing_disclosure(
     return {"data": disclosure}
 
 
-@app.post("/memory-inbox/processing-disclosures/{disclosure_id}/accept")
+@app.post("/memory-inbox/processing-disclosures/{disclosure_id}/accept", response_model=MemoryInboxProcessingDisclosureApiEnvelope)
 async def accept_memory_inbox_processing_disclosure(
     disclosure_id: str,
     request: Request,
