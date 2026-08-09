@@ -9,6 +9,7 @@ def fence(**overrides):
     values = {
         "source_state": "Quarantined", "source_current_revision": 2,
         "job_source_revision": 2, "job_state": "Claimed",
+        "cancelled_at": None,
         "lease_expires_at": now + timedelta(seconds=10),
         "timeout_at": now + timedelta(seconds=10), "now": now,
         "inspection_available": True, "format_valid": True, "scanner_outcome": ScannerOutcome.SAFE,
@@ -29,6 +30,7 @@ def test_only_a_current_claimed_clean_result_can_make_a_source_actionable() -> N
 def test_late_or_mismatched_results_cannot_change_a_source() -> None:
     assert fence(job_state="Closed").reason_code == "job_not_claimed"
     assert fence(job_source_revision=1).reason_code == "source_revision_mismatch"
+    assert fence(cancelled_at=datetime.now(timezone.utc)).reason_code == "inspection_job_cancelled"
     assert fence(lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)).reason_code == "inspection_lease_expired"
 
 
