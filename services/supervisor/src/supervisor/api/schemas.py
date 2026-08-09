@@ -1372,6 +1372,31 @@ class MemoryInboxSourceDeletionApiEnvelope(BaseModel):
     data: MemoryInboxSourceDeletionResultV1
 
 
+class MemoryInboxRetentionExtensionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    extensionHours: int = Field(ge=1, le=8760)
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxRetentionExtensionResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-retention-extension/v1"] = "kendall-memory-inbox-retention-extension/v1"
+    sourceId: str
+    sourceRevision: PositiveInt
+    retentionDeadlineAt: datetime
+    replayed: bool
+    nextSafeAction: Literal["refresh_memory_inbox"] = "refresh_memory_inbox"
+
+
+class MemoryInboxRetentionExtensionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxRetentionExtensionResultV1
+
+
 class MemoryInboxDeletionReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

@@ -122,6 +122,9 @@ from supervisor.api.schemas import (
     MemoryInboxSourceDeletionApiEnvelope,
     MemoryInboxSourceDeletionRequest,
     MemoryInboxSourceDeletionResultV1,
+    MemoryInboxRetentionExtensionApiEnvelope,
+    MemoryInboxRetentionExtensionRequest,
+    MemoryInboxRetentionExtensionResultV1,
     MemoryInboxDeletionReceiptApiEnvelope,
     MemoryInboxDeletionReceiptV1,
     MemoryInboxTextCaptureApiEnvelope,
@@ -198,6 +201,7 @@ from supervisor.application.memory_inbox_review_decision import deny_proposal_re
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
 from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator
 from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
+from supervisor.application.memory_inbox_retention import extend_source_retention
 from supervisor.worker.memory_inbox_deletion_poller import MemoryInboxDeletionPoller
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
@@ -1057,6 +1061,27 @@ async def get_memory_inbox_deletion_receipt(
     return MemoryInboxDeletionReceiptApiEnvelope(data=MemoryInboxDeletionReceiptV1(
         sourceId=receipt.source_id, outcome=receipt.outcome, proofCount=receipt.proof_count,
         summary=receipt.summary, nextSafeAction=receipt.next_safe_action,
+    ))
+
+
+@app.post("/memory-inbox/sources/{source_id}/retention-extension", response_model=MemoryInboxRetentionExtensionApiEnvelope)
+async def extend_memory_inbox_source_retention(
+    source_id: str, payload: MemoryInboxRetentionExtensionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await extend_source_retention(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            extension_hours=payload.extensionHours, idempotency_key=payload.idempotencyKey,
+            actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox retention extension is unavailable.") from exc
+    return MemoryInboxRetentionExtensionApiEnvelope(data=MemoryInboxRetentionExtensionResultV1(
+        sourceId=result.source_id, sourceRevision=result.source_revision,
+        retentionDeadlineAt=result.retention_deadline_at, replayed=result.replayed,
     ))
 
 

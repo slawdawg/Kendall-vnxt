@@ -5,11 +5,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator, expire_source_for_retention
 from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
+from supervisor.application.memory_inbox_retention import extend_source_retention
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.models import (
     MemoryInboxManifest, MemoryInboxProposalAggregate, MemoryInboxProposalReaderGrant,
     MemoryInboxProposalRevision, MemoryInboxSource, MemoryInboxSourceRevision,
     MemoryInboxDeletionOperation, MemoryInboxDeletionProof,
+    MemoryInboxProcessingDisclosure,
 )
 
 
@@ -39,6 +41,23 @@ async def test_operator_source_delete_uses_the_shared_barrier_and_replays_once(t
         assert replay.replayed and replay.deletion_operations == 1
         assert updated_source.lifecycle_state == "DeletePending" and updated_source.deletion_state == "Pending"
         assert updated_grant.lifecycle_state == "Revoked" and updated_grant.revoked_at is not None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retention_extension_is_version_locked_and_invalidates_old_disclosures(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'retention-extension.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        deadline = datetime.now(timezone.utc) + timedelta(hours=2)
+        source, _ = await _seed_source(session, source_id="source:extension", deadline=deadline)
+        disclosure = MemoryInboxProcessingDisclosure(id="disclosure:extension", source_revision_id=f"revision:{source.id}", source_revision=2, policy_id="policy:extension", policy_revision=1, retention_deadline_at=deadline, lifecycle_state="Accepted", idempotency_key="disclosure-extension-0001", actor_ref="operator:seed", receipt_ref="receipt:extension")
+        session.add(disclosure); await session.commit()
+        extended = await extend_source_retention(session, source_id=source.id, expected_revision=2, extension_hours=3, idempotency_key="retention-extension-0001", actor_ref="operator:test")
+        replay = await extend_source_retention(session, source_id=source.id, expected_revision=2, extension_hours=3, idempotency_key="retention-extension-0001", actor_ref="operator:test")
+        assert extended.source_revision == 3 and replay.replayed
+        assert extended.retention_deadline_at == deadline + timedelta(hours=3)
+        assert (await session.get(MemoryInboxProcessingDisclosure, disclosure.id)).lifecycle_state == "Invalidated"
     await engine.dispose()
 
 
