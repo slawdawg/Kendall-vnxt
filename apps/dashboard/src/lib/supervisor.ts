@@ -90,7 +90,9 @@ import type {
   WorkflowEventView,
   WorkItemView,
   WorkerRegistryEntryView,
+  MemoryInboxShellStatusV1,
 } from "@kendall/contracts";
+import { isMemoryInboxShellStatusV1 } from "@kendall/contracts";
 
 export function getSupervisorBaseUrl(): string {
   return canonicalGetSupervisorBaseUrl();
@@ -105,6 +107,14 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
     // supervisor reader; pipeline runtime opts into the same policy explicitly.
     rejectServerLanAuth: options.rejectServerLanAuth ?? true,
   });
+}
+
+export async function getMemoryInboxShellStatus(options?: RequestOptions): Promise<MemoryInboxShellStatusV1> {
+  const status = await requestJson<unknown>("/memory-inbox/shell", options);
+  if (!isMemoryInboxShellStatusV1(status)) {
+    throw new Error("Invalid Memory Inbox shell status.");
+  }
+  return status;
 }
 
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {

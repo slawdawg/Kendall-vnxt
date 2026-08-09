@@ -6,6 +6,7 @@ const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const READ_ONLY_SUPERVISOR_PATHS = [
+  /^\/memory-inbox\/shell$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?)$/,
 ];
@@ -19,6 +20,7 @@ const TEST_VIEWER_READ_PATHS = [
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:-]+)?)$/,
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
+  /^\/memory-inbox\/shell$/,
   /^\/supervisor\/status$/,
   /^\/supervisor\/runtime-evidence-review-report$/,
   /^\/events$/,

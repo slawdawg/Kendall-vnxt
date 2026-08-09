@@ -1191,6 +1191,24 @@ MemoryProposalOperatorActionV0 = Literal["approve", "edit", "reject", "defer", "
 MemoryProposalWriteBackStatusV0 = Literal["not_started", "blocked", "review_gated", "approved_for_future", "deferred"]
 
 
+class MemoryInboxShellStatusV1(BaseModel):
+    """Content-free shell status; lifecycle projection is introduced later."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-shell/v1"]
+    state: Literal["unavailable"]
+    freshness: Literal["current", "stale", "unavailable"]
+    nextSafeAction: Literal["refresh_memory_inbox"]
+
+
+class MemoryInboxShellApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxShellStatusV1
+    meta: dict[str, Any] | None = None
+
+
 class MemoryProposalCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

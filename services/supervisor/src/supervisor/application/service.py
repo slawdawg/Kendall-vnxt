@@ -168,6 +168,7 @@ from supervisor.api.schemas import (
     LlmWikiRebuildDryRunPlanV0View,
     LlmWikiRebuildPreviewV0View,
     MemoryProposalAiDraftWriteRequest,
+    MemoryInboxShellStatusV1,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     MemoryProposalV0View,
@@ -735,6 +736,16 @@ class SupervisorService:
             raise ValueError("Local-proof capability requires a server-attested disposable database under the designated temp root.")
         self._local_proof_attestation = (resolved_path, uuid.uuid4().hex)
         self._local_proof_capability = capability
+
+    def get_memory_inbox_shell_status(self) -> MemoryInboxShellStatusV1:
+        """Return the only Story 1.1 Inbox truth without reading content tables."""
+
+        return MemoryInboxShellStatusV1(
+            schemaVersion="kendall-memory-inbox-shell/v1",
+            state="unavailable",
+            freshness="current",
+            nextSafeAction="refresh_memory_inbox",
+        )
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)

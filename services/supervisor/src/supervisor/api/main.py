@@ -104,6 +104,7 @@ from supervisor.api.schemas import (
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
+    MemoryInboxShellApiEnvelope,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -274,6 +275,17 @@ def require_local_operational_boundary(request: Request) -> None:
                 "local_operational_boundary_required",
             ).model_dump(),
         )
+
+
+async def require_memory_inbox_shell_operator(request: Request, session: AsyncSession) -> None:
+    """Keep the shell's content-free projection behind the verified LAN session."""
+
+    if not settings.lan_auth_enabled:
+        return
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator":
+        raise HTTPException(status_code=401, detail="Sign-in required.")
 
 
 def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiErrorEnvelope:
@@ -713,6 +725,19 @@ async def create_work_item(payload: WorkItemCreate, session: AsyncSession = Depe
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "work_item_intake_blocked").model_dump()) from exc
     return WorkItemApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.get("/memory-inbox/shell", response_model=MemoryInboxShellApiEnvelope)
+async def get_memory_inbox_shell(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """The initial shell reads no capture, proposal, or vault-backed state."""
+
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    return MemoryInboxShellApiEnvelope(data=service.get_memory_inbox_shell_status())
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)

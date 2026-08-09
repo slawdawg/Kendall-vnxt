@@ -31,6 +31,7 @@ const DASHBOARD_PAGE_PATHS = new Set([
   "/attention",
   "/audit",
   "/controls",
+  "/memory-inbox",
   "/pipeline",
   "/proposed-work",
   "/queue",
