@@ -140,6 +140,7 @@ async def complete_inspection_job(
     decision = fence_inspection_result(
         source_state=source.lifecycle_state, source_current_revision=source.current_revision,
         job_source_revision=claim.source_revision, job_state=job.lifecycle_state,
+        cancelled_at=job.cancelled_at,
         lease_expires_at=job.lease_expires_at, timeout_at=job.timeout_at, now=now,
         inspection_available=inspection_available, format_valid=format_valid,
         scanner_outcome=scanner_outcome,

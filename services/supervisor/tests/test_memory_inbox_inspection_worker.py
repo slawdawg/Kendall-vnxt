@@ -100,6 +100,30 @@ async def test_cancelled_job_is_closed_before_inspection_content_can_be_read(tmp
 
 
 @pytest.mark.asyncio
+async def test_cancellation_after_claim_fences_the_result_without_transitioning_source(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel-after-claim.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        source = MemoryInboxSource(id="inbox-source:cancel-after", current_revision=2, lifecycle_state="Quarantined", retention_deadline_at=now + timedelta(hours=24), deletion_state="None", policy_ref="memory-inbox-retention-v1")
+        revision = MemoryInboxSourceRevision(id="inbox-source-revision:cancel-after", source_id=source.id, revision=2, lifecycle_state="Quarantined", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
+        manifest = MemoryInboxManifest(id="inbox-manifest:cancel-after", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:cancel-after", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        job = MemoryInboxJob(id="inbox-job:cancel-after", source_revision_id=revision.id, capability_ref="inspection-v1", lifecycle_state="Planned", lease_expires_at=now + timedelta(seconds=60), timeout_at=now + timedelta(seconds=60))
+        session.add_all((source, revision, manifest, job))
+        await session.commit()
+        claim = await claim_inspection_job(session, job_id=job.id)
+        job.cancelled_at = datetime.now(timezone.utc)
+        await session.commit()
+        with pytest.raises(ValueError, match="inspection_job_cancelled"):
+            await complete_inspection_job(session, claim=claim, actor_ref="worker:test", inspection_available=True, format_valid=True, inspected_media_type="application/pdf", scanner_outcome=ScannerOutcome.SAFE, extraction_succeeded=True)
+        assert (await session.get(MemoryInboxSource, source.id)).lifecycle_state == "Quarantined"
+        assert (await session.get(MemoryInboxJob, job.id)).lifecycle_state == "Closed"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_execute_runs_private_scanner_and_extractor_before_safe_transition(tmp_path) -> None:
     private_store = tmp_path / "private-store"
     private_store.mkdir(mode=0o700)
