@@ -41,6 +41,11 @@ async def test_inbox_cost_policy_is_durable_versioned_and_keeps_adapters_disable
             session, finite_limit=None, unlimited_acknowledged=True,
             actor_ref="operator:verified", idempotency_key="policy-unlimited-key",
         )
+        with pytest.raises(ValueError, match="policy_idempotency_conflict"):
+            await set_inbox_cost_policy(
+                session, finite_limit=Decimal("26.00"), unlimited_acknowledged=False,
+                actor_ref="operator:verified", idempotency_key="policy-finite-key",
+            )
         receipts = list((await session.scalars(select(MemoryInboxCostPolicyReceipt).order_by(MemoryInboxCostPolicyReceipt.revision))).all())
         assert initial["finiteLimit"] == "0"
         assert (finite["policyRevision"], finite["remaining"], finite["mode"]) == (2, "25.00", "finite")

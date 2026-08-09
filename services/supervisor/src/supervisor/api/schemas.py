@@ -1330,6 +1330,35 @@ class MemoryInboxProcessingDisclosureApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxProcessingDisclosureV1
+class MemoryInboxCostPolicyProviderV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    provider: Literal["local", "openai", "anthropic"]
+    availability: Literal["disabled"]
+
+
+class MemoryInboxCostPolicyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-provider-policy/v1"]
+    policyRevision: PositiveInt
+    currency: Literal["USD"]
+    measuredSpend: str
+    reservedSpend: str
+    finiteLimit: str | None
+    remaining: str | None
+    resetTimezone: str
+    mode: Literal["finite", "unlimited"]
+    providerOrder: list[MemoryInboxCostPolicyProviderV1]
+    updatedAt: datetime
+    actorRef: str
+    providerActivation: Literal["disabled_by_default"]
+
+
+class MemoryInboxCostPolicyApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxCostPolicyV1
 
 
 class MemoryProposalCreateRequest(BaseModel):
