@@ -20,6 +20,7 @@ def fence_inspection_result(
     source_current_revision: int,
     job_source_revision: int,
     job_state: str,
+    cancelled_at: datetime | None,
     lease_expires_at: datetime | None,
     timeout_at: datetime | None,
     now: datetime,
@@ -41,6 +42,8 @@ def fence_inspection_result(
         return InspectionFenceDecision(False, None, "source_revision_mismatch")
     if job_state != "Claimed":
         return InspectionFenceDecision(False, None, "job_not_claimed")
+    if cancelled_at is not None:
+        return InspectionFenceDecision(False, None, "inspection_job_cancelled")
     if lease_expires_at is None or timeout_at is None or now >= lease_expires_at or now >= timeout_at:
         return InspectionFenceDecision(False, None, "inspection_lease_expired")
     if not inspection_available:
