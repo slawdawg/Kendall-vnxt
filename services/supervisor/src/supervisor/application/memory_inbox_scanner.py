@@ -3,7 +3,9 @@
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
+import os
 from pathlib import Path
+import signal
 
 
 class ScannerOutcome(StrEnum):
@@ -50,7 +52,13 @@ async def scan_private_quarantine(*, scanner_path: str, object_path: Path, timeo
     try:
         return_code = await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
     except TimeoutError:
-        process.kill()
+        # The scanner owns a new session.  Kill its entire process group rather
+        # than only the launcher: a forked child must never keep reading private
+        # quarantine bytes after the bounded lease has timed out.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await process.wait()
         return interpret_scanner_exit(return_code=None, timed_out=True)
     return interpret_scanner_exit(return_code=return_code)
