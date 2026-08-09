@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.infrastructure.db.models import MemoryInboxSource
+from supervisor.infrastructure.db.models import MemoryInboxProposalAggregate, MemoryInboxSource
 
 
 @dataclass(frozen=True)
@@ -51,3 +51,10 @@ async def read_memory_inbox_projection(session: AsyncSession) -> list[MemoryInbo
         )
         for source in sources
     ]
+
+
+async def read_review_ready_count(session: AsyncSession) -> int:
+    """Count only durable Ready proposals; source state never stands in for it."""
+    return int((await session.scalar(select(func.count()).select_from(MemoryInboxProposalAggregate).where(
+        MemoryInboxProposalAggregate.lifecycle_state == "Ready"
+    ))) or 0)

@@ -17,6 +17,9 @@ from supervisor.domain.memory_inbox import (
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db import models  # noqa: F401
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult
+from supervisor.infrastructure.db.models import MemoryInboxProposalAggregate
+from supervisor.application.memory_inbox_projection import read_review_ready_count
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 def test_lifecycle_vocabulary_is_closed_and_inert() -> None:
@@ -102,3 +105,19 @@ def test_command_replay_fence_rejects_duplicate_aggregate_idempotency_pair() -> 
         ))
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+@pytest.mark.asyncio
+async def test_review_badge_count_uses_only_ready_proposal_aggregates(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-ready.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add_all((
+            MemoryInboxProposalAggregate(id="proposal:ready", source_id="source:one", current_revision=1, lifecycle_state="Ready"),
+            MemoryInboxProposalAggregate(id="proposal:draft", source_id="source:two", current_revision=1, lifecycle_state="Draft"),
+        ))
+        await session.commit()
+        assert await read_review_ready_count(session) == 1
+    await engine.dispose()
