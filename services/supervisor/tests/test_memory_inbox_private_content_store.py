@@ -74,3 +74,14 @@ def test_private_store_reserves_upload_quota_conservatively(tmp_path) -> None:
     store.write_text("inbox-store:opaque-existing", "123456")
     assert store.can_reserve(4, 10)
     assert not store.can_reserve(5, 10)
+
+
+def test_private_store_inspection_reader_is_bounded_and_non_web_only(tmp_path) -> None:
+    root = tmp_path / "inbox-store"
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+    store = PrivateContentStore(str(root))
+    store.write_text("inbox-store:opaque-inspection", "non-sensitive test")
+    assert store.read_for_inspection("inbox-store:opaque-inspection", maximum_bytes=64) == b"non-sensitive test"
+    with pytest.raises(PrivateContentStoreError, match="unavailable"):
+        store.read_for_inspection("inbox-store:opaque-inspection", maximum_bytes=4)

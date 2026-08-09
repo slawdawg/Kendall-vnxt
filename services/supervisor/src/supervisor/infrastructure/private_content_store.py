@@ -97,3 +97,15 @@ class PrivateContentStore:
         root = self._validated_root()
         used = sum(entry.stat().st_size for entry in root.iterdir() if entry.is_file() and not entry.name.startswith(".pending-"))
         return used + required_bytes <= quota_bytes
+
+    def read_for_inspection(self, object_ref: str, *, maximum_bytes: int) -> bytes:
+        """A bounded, supervisor-only reader; never expose this through a web route."""
+        target = self._object_path(object_ref)
+        try:
+            details = target.lstat()
+        except OSError as exc:
+            raise PrivateContentStoreError("Private Memory Inbox object is unavailable.") from exc
+        if target.is_symlink() or not stat.S_ISREG(details.st_mode) or details.st_mode & 0o077 or details.st_size > maximum_bytes:
+            raise PrivateContentStoreError("Private Memory Inbox object is unavailable.")
+        with target.open("rb") as stream:
+            return stream.read(maximum_bytes + 1)
