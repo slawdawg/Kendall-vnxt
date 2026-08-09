@@ -29,10 +29,12 @@ async def execute_deletion_operation(session: AsyncSession, *, settings: Setting
     if manifest is None:
         raise ValueError("deletion_manifest_unavailable")
     source_revision = await session.get(MemoryInboxSourceRevision, manifest.owner_revision_id)
+    if source_revision is None:
+        raise ValueError("deletion_source_unavailable")
     source = (await session.execute(select(MemoryInboxSource).where(
-        MemoryInboxSource.id == source_revision.source_id if source_revision else False
+        MemoryInboxSource.id == source_revision.source_id
     ).with_for_update())).scalar_one_or_none()
-    if source is None or source_revision is None or source.lifecycle_state != "DeletePending" or source.deletion_state not in {"Pending", "RetryNeeded"}:
+    if source is None or source.lifecycle_state != "DeletePending" or source.deletion_state not in {"Pending", "RetryNeeded"}:
         raise ValueError("deletion_source_unavailable")
     try:
         PrivateContentStore(settings.memory_inbox_content_store_root or "").delete_and_prove_absent(manifest.store_ref)

@@ -104,14 +104,53 @@ async def approve_proposal_for_deletion(
     active_claims = any(job.lifecycle_state == "Claimed" and job.lease_expires_at and job.lease_expires_at > now for job in jobs)
     operation_count = 0
     if not active_claims:
-        manifests = (await session.scalars(select(MemoryInboxManifest).where(MemoryInboxManifest.owner_revision_id.in_(revision_ids), MemoryInboxManifest.deletion_state != "Proven").with_for_update())).all()
-        for manifest in manifests:
-            existing = await session.scalar(select(MemoryInboxDeletionOperation).where(MemoryInboxDeletionOperation.manifest_id == manifest.id))
-            if existing is None:
-                session.add(MemoryInboxDeletionOperation(id=f"inbox-deletion:{uuid.uuid4().hex}", manifest_id=manifest.id, lifecycle_state="Planned", requested_at=now))
-                operation_count += 1
+        operation_count = await plan_pending_deletion_operations(session, source=source, now=now)
     await session.commit()
     return ApprovalResult(proposal.id, proposal.current_revision, source.id, source.current_revision, operation_count, False)
+
+
+async def plan_pending_deletion_operations(
+    session: AsyncSession, *, source: MemoryInboxSource, now: datetime | None = None,
+) -> int:
+    """Plan each unproved registered copy after the approved-use barrier clears.
+
+    This reconciliation is intentionally safe to call after a cancelled worker
+    acknowledges or its bounded lease expires.  It only operates on a source
+    that has already entered ``DeletePending`` and never restores Review or
+    processing eligibility.
+    """
+    if source.lifecycle_state != "DeletePending" or source.deletion_state not in {"Pending", "RetryNeeded"}:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    revision_ids = list((await session.scalars(select(MemoryInboxSourceRevision.id).where(
+        MemoryInboxSourceRevision.source_id == source.id,
+    ))).all())
+    if not revision_ids:
+        return 0
+    active_claim = await session.scalar(select(MemoryInboxJob.id).where(
+        MemoryInboxJob.source_revision_id.in_(revision_ids),
+        MemoryInboxJob.lifecycle_state == "Claimed",
+        MemoryInboxJob.lease_expires_at.is_not(None),
+        MemoryInboxJob.lease_expires_at > now,
+    ))
+    if active_claim is not None:
+        return 0
+    manifests = list((await session.scalars(select(MemoryInboxManifest).where(
+        MemoryInboxManifest.owner_revision_id.in_(revision_ids),
+        MemoryInboxManifest.deletion_state != "Proven",
+    ).with_for_update())).all())
+    created = 0
+    for manifest in manifests:
+        existing = await session.scalar(select(MemoryInboxDeletionOperation).where(
+            MemoryInboxDeletionOperation.manifest_id == manifest.id,
+        ))
+        if existing is None:
+            session.add(MemoryInboxDeletionOperation(
+                id=f"inbox-deletion:{uuid.uuid4().hex}", manifest_id=manifest.id,
+                lifecycle_state="Planned", requested_at=now,
+            ))
+            created += 1
+    return created
 
 
 async def _operation_count(session: AsyncSession, source_id: str) -> int:

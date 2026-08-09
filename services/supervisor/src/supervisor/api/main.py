@@ -191,6 +191,7 @@ from supervisor.application.memory_inbox_processing_disclosure import accept_pro
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
+from supervisor.worker.memory_inbox_deletion_poller import MemoryInboxDeletionPoller
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
@@ -233,6 +234,7 @@ bus = EventBus()
 service = SupervisorService(settings, bus)
 poller = Poller(service, settings.poll_interval_seconds)
 inspection_poller = MemoryInboxInspectionPoller(settings)
+deletion_poller = MemoryInboxDeletionPoller(settings)
 
 
 @asynccontextmanager
@@ -259,12 +261,15 @@ async def lifespan(_: FastAPI):
         await poller.start()
         if settings.memory_inbox_inspection_configuration_error() is None:
             await inspection_poller.start()
+        if settings.memory_inbox_capture_configuration_error() is None:
+            await deletion_poller.start()
     try:
         yield
     finally:
         startup_gate_ready = False
         await poller.stop()
         await inspection_poller.stop()
+        await deletion_poller.stop()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
