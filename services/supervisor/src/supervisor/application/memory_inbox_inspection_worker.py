@@ -9,8 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.application.memory_inbox_inspection_result import fence_inspection_result
 from supervisor.application.memory_inbox_scanner import ScannerOutcome
+from supervisor.application.memory_inbox_scanner import scan_private_quarantine
+from supervisor.application.memory_inbox_format_inspection import validate_quarantined_format
+from supervisor.config.settings import Settings
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.infrastructure.db.models import MemoryInboxJob, MemoryInboxManifest, MemoryInboxSource, MemoryInboxSourceRevision
+from supervisor.infrastructure.private_content_store import PrivateContentStore
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,31 @@ class InspectionClaim:
     source_revision: int
     store_ref: str
     declared_media_type: str
+
+
+async def execute_inspection_job(session: AsyncSession, *, settings: Settings, job_id: str, actor_ref: str) -> str:
+    """Run one configured private inspection through the durable result fence."""
+    if error := settings.memory_inbox_inspection_configuration_error():
+        raise ValueError(error)
+    claim = await claim_inspection_job(session, job_id=job_id)
+    store = PrivateContentStore(settings.memory_inbox_content_store_root or "")
+    content = store.read_for_inspection(claim.store_ref, maximum_bytes=25 * 1024 * 1024)
+    format_result = validate_quarantined_format(
+        declared_media_type=claim.declared_media_type, content=content,
+    )
+    scanner_outcome = ScannerOutcome.UNAVAILABLE
+    if format_result.valid:
+        scanner_result = await scan_private_quarantine(
+            scanner_path=settings.memory_inbox_scanner_path or "",
+            object_path=store.inspection_path(claim.store_ref, maximum_bytes=25 * 1024 * 1024),
+            timeout_seconds=settings.memory_inbox_scanner_timeout_seconds,
+        )
+        scanner_outcome = scanner_result.outcome
+    return await complete_inspection_job(
+        session, claim=claim, actor_ref=actor_ref, format_valid=format_result.valid,
+        inspected_media_type=format_result.inspected_media_type,
+        scanner_outcome=scanner_outcome,
+    )
 
 
 async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> InspectionClaim:
