@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from supervisor.application.memory_inbox_approval import plan_pending_deletion_operations
+from supervisor.application.memory_inbox_deletion_barrier import plan_pending_deletion_operations
 from supervisor.application.memory_inbox_deletion import execute_deletion_operation
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.database import Base

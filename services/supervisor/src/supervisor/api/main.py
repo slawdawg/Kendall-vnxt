@@ -119,6 +119,9 @@ from supervisor.api.schemas import (
     MemoryInboxApprovalApiEnvelope,
     MemoryInboxApprovalRequest,
     MemoryInboxApprovalResultV1,
+    MemoryInboxSourceDeletionApiEnvelope,
+    MemoryInboxSourceDeletionRequest,
+    MemoryInboxSourceDeletionResultV1,
     MemoryInboxTextCaptureApiEnvelope,
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
@@ -191,6 +194,7 @@ from supervisor.application.memory_inbox_processing_disclosure import accept_pro
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
+from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator
 from supervisor.worker.memory_inbox_deletion_poller import MemoryInboxDeletionPoller
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
@@ -210,7 +214,7 @@ from supervisor.domain.bmad_import import BmadImportError
 from supervisor.domain.obsidian_metadata_import import ObsidianMetadataImportError
 from supervisor.domain.types import ErrorCategory, WorkItemFilterScope
 from supervisor.infrastructure.db.database import SessionLocal, get_session, init_db
-from supervisor.infrastructure.db.models import DashboardOperator, LocalDogfoodAuthorization, WorkItem
+from supervisor.infrastructure.db.models import DashboardOperator, LocalDogfoodAuthorization, MemoryInboxSource, WorkItem
 from supervisor.infrastructure.streaming.bus import EventBus
 from supervisor.worker.poller import Poller
 from pydantic import BaseModel
@@ -1009,6 +1013,31 @@ async def approve_memory_inbox_proposal(
     return MemoryInboxApprovalApiEnvelope(data=MemoryInboxApprovalResultV1(
         proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
         sourceRevision=result.source_revision, deletionOperations=result.deletion_operations, replayed=result.replayed,
+    ))
+
+
+@app.post("/memory-inbox/sources/{source_id}/delete", response_model=MemoryInboxSourceDeletionApiEnvelope)
+async def delete_memory_inbox_source(
+    source_id: str, payload: MemoryInboxSourceDeletionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    """Enter the same version-locked deletion barrier without reading a Source."""
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await delete_source_by_operator(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox source deletion is unavailable.") from exc
+    source = await session.get(MemoryInboxSource, source_id)
+    deletion_state = source.deletion_state if source else "RetryNeeded"
+    return MemoryInboxSourceDeletionApiEnvelope(data=MemoryInboxSourceDeletionResultV1(
+        sourceId=result.source_id, sourceRevision=result.source_revision,
+        deletionOperations=result.deletion_operations, initiator=result.initiator,
+        replayed=result.replayed, deletionState=deletion_state,
+        nextSafeAction="retry_deletion" if deletion_state == "RetryNeeded" else "await_deletion_proof",
     ))
 
 

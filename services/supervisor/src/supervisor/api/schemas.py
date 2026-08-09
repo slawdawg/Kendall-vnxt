@@ -1345,6 +1345,33 @@ class MemoryInboxApprovalApiEnvelope(BaseModel):
     data: MemoryInboxApprovalResultV1
 
 
+class MemoryInboxSourceDeletionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxSourceDeletionResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-source-deletion/v1"] = "kendall-memory-inbox-source-deletion/v1"
+    sourceId: str
+    sourceRevision: PositiveInt
+    deletionOperations: int
+    initiator: Literal["operator", "retention_expiry"]
+    replayed: bool
+    lifecycleState: Literal["DeletePending"] = "DeletePending"
+    deletionState: Literal["Pending", "RetryNeeded"]
+    nextSafeAction: Literal["await_deletion_proof", "retry_deletion"]
+
+
+class MemoryInboxSourceDeletionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxSourceDeletionResultV1
+
+
 class MemoryInboxTextCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

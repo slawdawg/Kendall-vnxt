@@ -8,11 +8,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier
 from supervisor.infrastructure.db.models import (
-    MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxJob,
-    MemoryInboxManifest, MemoryInboxProcessingAttempt, MemoryInboxProcessingDisclosure,
-    MemoryInboxProposalAggregate, MemoryInboxProposalReaderGrant, MemoryInboxProposalRevision,
-    MemoryInboxSource, MemoryInboxSourceRevision,
+    MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest,
+    MemoryInboxProposalAggregate, MemoryInboxProposalRevision, MemoryInboxSource,
+    MemoryInboxSourceRevision,
 )
 
 
@@ -62,95 +62,19 @@ async def approve_proposal_for_deletion(
     ).with_for_update())).scalar_one_or_none()
     if proposal_revision is None:
         raise ValueError("approval_revision_unavailable")
-    revisions = (await session.scalars(select(MemoryInboxSourceRevision).where(MemoryInboxSourceRevision.source_id == source.id))).all()
-    revision_ids = [revision.id for revision in revisions]
-    jobs = (await session.scalars(select(MemoryInboxJob).where(MemoryInboxJob.source_revision_id.in_(revision_ids)).with_for_update())).all()
-    attempts = (await session.scalars(select(MemoryInboxProcessingAttempt).where(MemoryInboxProcessingAttempt.source_revision_id.in_(revision_ids)).with_for_update())).all()
-    if any(attempt.lifecycle_state == "CompletionUnknown" for attempt in attempts):
-        raise ValueError("approval_attempt_completion_unknown")
     now = datetime.now(timezone.utc)
-    for job in jobs:
-        if job.lifecycle_state in {"Planned", "Claimed"}:
-            job.cancelled_at = now
-    for attempt in attempts:
-        if attempt.lifecycle_state in {"Planned", "Claimed", "Dispatched"}:
-            attempt.lifecycle_state = "Cancelled"
-    disclosures = (await session.scalars(select(MemoryInboxProcessingDisclosure).where(
-        MemoryInboxProcessingDisclosure.source_revision_id.in_(revision_ids),
-        MemoryInboxProcessingDisclosure.lifecycle_state == "Accepted",
-    ).with_for_update())).all()
-    for disclosure in disclosures:
-        disclosure.lifecycle_state = "Invalidated"
-    proposal_revisions = (await session.scalars(select(MemoryInboxProposalRevision).where(
-        MemoryInboxProposalRevision.proposal_id == proposal.id
-    ))).all()
-    proposal_revision_ids = [revision.id for revision in proposal_revisions]
-    for grant in (await session.scalars(select(MemoryInboxProposalReaderGrant).where(
-        MemoryInboxProposalReaderGrant.proposal_revision_id.in_(proposal_revision_ids),
-        MemoryInboxProposalReaderGrant.revoked_at.is_(None),
-    ).with_for_update())).all():
-        grant.lifecycle_state = "Revoked"
-        grant.revoked_at = now
     proposal.current_revision += 1
     proposal.lifecycle_state = "Approved"
-    source.current_revision += 1
-    source.lifecycle_state = "DeletePending"
-    source.deletion_state = "Pending"
     session.add_all((
         MemoryInboxProposalRevision(id=f"inbox-proposal-revision:{uuid.uuid4().hex}", proposal_id=proposal.id, revision=proposal.current_revision, lifecycle_state="Approved", actor_ref=actor_ref, audit_ref=f"audit:{uuid.uuid4().hex}"),
-        MemoryInboxSourceRevision(id=f"inbox-source-revision:{uuid.uuid4().hex}", source_id=source.id, revision=source.current_revision, lifecycle_state="DeletePending", actor_ref=actor_ref, audit_ref=f"audit:{uuid.uuid4().hex}", policy_ref=source.policy_ref),
-        MemoryInboxCommandResult(id=f"inbox-command:{uuid.uuid4().hex}", aggregate_id=proposal.id, expected_revision=expected_revision, idempotency_key=idempotency_key, command_kind="proposal_approval", request_digest=digest, outcome="accepted", reason_code="approved_deletion_pending", resulting_revision=proposal.current_revision, actor_ref=actor_ref),
     ))
-    active_claims = any(job.lifecycle_state == "Claimed" and job.lease_expires_at and job.lease_expires_at > now for job in jobs)
-    operation_count = 0
-    if not active_claims:
-        operation_count = await plan_pending_deletion_operations(session, source=source, now=now)
+    try:
+        operation_count = await establish_deletion_barrier(session, source=source, actor_ref=actor_ref, now=now)
+    except ValueError as exc:
+        raise ValueError("approval_attempt_completion_unknown") from exc
+    session.add(MemoryInboxCommandResult(id=f"inbox-command:{uuid.uuid4().hex}", aggregate_id=proposal.id, expected_revision=expected_revision, idempotency_key=idempotency_key, command_kind="proposal_approval", request_digest=digest, outcome="accepted", reason_code="approved_deletion_pending", resulting_revision=proposal.current_revision, actor_ref=actor_ref))
     await session.commit()
     return ApprovalResult(proposal.id, proposal.current_revision, source.id, source.current_revision, operation_count, False)
-
-
-async def plan_pending_deletion_operations(
-    session: AsyncSession, *, source: MemoryInboxSource, now: datetime | None = None,
-) -> int:
-    """Plan each unproved registered copy after the approved-use barrier clears.
-
-    This reconciliation is intentionally safe to call after a cancelled worker
-    acknowledges or its bounded lease expires.  It only operates on a source
-    that has already entered ``DeletePending`` and never restores Review or
-    processing eligibility.
-    """
-    if source.lifecycle_state != "DeletePending" or source.deletion_state not in {"Pending", "RetryNeeded"}:
-        return 0
-    now = now or datetime.now(timezone.utc)
-    revision_ids = list((await session.scalars(select(MemoryInboxSourceRevision.id).where(
-        MemoryInboxSourceRevision.source_id == source.id,
-    ))).all())
-    if not revision_ids:
-        return 0
-    active_claim = await session.scalar(select(MemoryInboxJob.id).where(
-        MemoryInboxJob.source_revision_id.in_(revision_ids),
-        MemoryInboxJob.lifecycle_state == "Claimed",
-        MemoryInboxJob.lease_expires_at.is_not(None),
-        MemoryInboxJob.lease_expires_at > now,
-    ))
-    if active_claim is not None:
-        return 0
-    manifests = list((await session.scalars(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id.in_(revision_ids),
-        MemoryInboxManifest.deletion_state != "Proven",
-    ).with_for_update())).all())
-    created = 0
-    for manifest in manifests:
-        existing = await session.scalar(select(MemoryInboxDeletionOperation).where(
-            MemoryInboxDeletionOperation.manifest_id == manifest.id,
-        ))
-        if existing is None:
-            session.add(MemoryInboxDeletionOperation(
-                id=f"inbox-deletion:{uuid.uuid4().hex}", manifest_id=manifest.id,
-                lifecycle_state="Planned", requested_at=now,
-            ))
-            created += 1
-    return created
 
 
 async def _operation_count(session: AsyncSession, source_id: str) -> int:

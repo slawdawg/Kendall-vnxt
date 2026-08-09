@@ -2,11 +2,13 @@
 
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from supervisor.application.memory_inbox_approval import plan_pending_deletion_operations
+from supervisor.application.memory_inbox_deletion_barrier import plan_pending_deletion_operations
 from supervisor.application.memory_inbox_deletion import execute_deletion_operation
+from supervisor.application.memory_inbox_source_deletion import expire_source_for_retention
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.database import SessionLocal
 from supervisor.infrastructure.db.models import MemoryInboxDeletionOperation, MemoryInboxSource
@@ -35,8 +37,21 @@ class MemoryInboxDeletionPoller:
             self._task = None
 
     async def run_once(self) -> None:
-        """Wait out live cancellation leases, then delete only planned copies."""
+        """Start expired retention through the barrier, then delete planned copies."""
         async with SessionLocal() as session:
+            now = datetime.now(timezone.utc)
+            expiring_sources = list((await session.scalars(select(MemoryInboxSource).where(
+                MemoryInboxSource.retention_deadline_at <= now,
+                MemoryInboxSource.lifecycle_state.not_in(("DeletePending", "Deleted")),
+            ).with_for_update())).all())
+            for source in expiring_sources:
+                try:
+                    await expire_source_for_retention(
+                        session, source_id=source.id, expected_revision=source.current_revision,
+                        actor_ref="worker:memory-inbox-retention",
+                    )
+                except ValueError:
+                    continue
             sources = list((await session.scalars(select(MemoryInboxSource).where(
                 MemoryInboxSource.lifecycle_state == "DeletePending",
                 MemoryInboxSource.deletion_state.in_(("Pending", "RetryNeeded")),
