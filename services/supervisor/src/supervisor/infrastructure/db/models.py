@@ -651,6 +651,19 @@ class MemoryInboxCostPolicyReceipt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class MemoryInboxCostReservation(Base):
+    __tablename__ = "memory_inbox_cost_reservations"
+    __table_args__ = (UniqueConstraint("attempt_id", name="uq_memory_inbox_cost_reservation_attempt"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_processing_attempts.id"), index=True)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"))
+    amount: Mapped[float] = mapped_column(Numeric(18, 2))
+    lifecycle_state: Mapped[str] = mapped_column(String(24), default="Reserved")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class MemoryInboxProcessingDisclosure(Base):
     """Immutable, metadata-only authorization disclosure for one source revision."""
 
