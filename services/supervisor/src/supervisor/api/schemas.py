@@ -1240,6 +1240,34 @@ class MemoryInboxLifecycleCommandApiEnvelope(BaseModel):
     data: MemoryInboxLifecycleCommandResultV1
 
 
+class MemoryInboxProjectionRowV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sourceId: str
+    lifecycleState: str
+    revision: PositiveInt
+    retentionDeadlineAt: datetime
+    deletionState: Literal["None", "Pending", "Proven", "RetryNeeded"]
+    nextSafeAction: str
+
+
+class MemoryInboxProjectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-projection/v1"] = "kendall-memory-inbox-projection/v1"
+    truth: Literal["supervisor_owned"] = "supervisor_owned"
+    freshness: Literal["current"] = "current"
+    rows: list[MemoryInboxProjectionRowV1]
+    reviewReadyCount: int
+    nextSafeAction: str
+
+
+class MemoryInboxProjectionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxProjectionV1
+
+
 class MemoryProposalCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

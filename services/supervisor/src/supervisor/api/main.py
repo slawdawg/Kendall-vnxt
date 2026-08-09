@@ -108,6 +108,9 @@ from supervisor.api.schemas import (
     MemoryInboxLifecycleCommandApiEnvelope,
     MemoryInboxLifecycleCommandRequest,
     MemoryInboxLifecycleCommandResultV1,
+    MemoryInboxProjectionApiEnvelope,
+    MemoryInboxProjectionRowV1,
+    MemoryInboxProjectionV1,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -165,6 +168,7 @@ from supervisor.application.operator_auth import (
 )
 from supervisor.application.service import SupervisorService
 from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
+from supervisor.application.memory_inbox_projection import read_memory_inbox_projection
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
@@ -793,6 +797,29 @@ async def command_memory_inbox_lifecycle(
         outcome=result.outcome,
         reasonCode=result.reason_code,
         lifecycleState=result.lifecycle_state.value if result.lifecycle_state else None,
+    ))
+
+
+@app.get("/memory-inbox/projection", response_model=MemoryInboxProjectionApiEnvelope)
+async def get_memory_inbox_projection(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    rows = await read_memory_inbox_projection(session)
+    return MemoryInboxProjectionApiEnvelope(data=MemoryInboxProjectionV1(
+        rows=[MemoryInboxProjectionRowV1(
+            sourceId=row.source_id,
+            lifecycleState=row.lifecycle_state,
+            revision=row.revision,
+            retentionDeadlineAt=row.retention_deadline_at,
+            deletionState=row.deletion_state,
+            nextSafeAction=row.next_action_code,
+        ) for row in rows],
+        reviewReadyCount=sum(row.lifecycle_state == "Review" for row in rows),
+        nextSafeAction="refresh_memory_inbox" if not rows else "review_memory_inbox",
     ))
 
 

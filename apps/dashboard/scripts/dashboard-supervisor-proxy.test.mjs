@@ -228,7 +228,7 @@ test("Controls has a finite operator-only no-query proxy contract with a capped 
   }
 });
 
-test("Memory Inbox shell is one operator-only, no-query, read-only proxy capability", async () => {
+test("Memory Inbox reads are exact operator-only, no-query proxy capabilities", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kendall-memory-inbox-shell-proxy-"));
   const socketPath = join(directory, "supervisor.sock");
   const forwarded = [];
@@ -249,12 +249,14 @@ test("Memory Inbox shell is one operator-only, no-query, read-only proxy capabil
     dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
     await listen(dashboard, 0);
     const port = dashboard.address().port;
-    const path = "/api/supervisor/memory-inbox/shell";
-    assert.equal((await request(port, path, { headers: { cookie: "operator=ok" } })).status, 200);
-    assert.equal((await request(port, path, { method: "POST", body: "{}", headers: { cookie: "operator=ok", origin: "https://dashboard.test", "content-type": "application/json" } })).status, 405);
-    assert.equal((await request(port, `${path}?state=inbox`, { headers: { cookie: "operator=ok" } })).status, 404);
-    assert.equal((await request(port, path, { headers: { cookie: "viewer=ok" } })).status, 404);
-    assert.deepEqual(forwarded, [{ method: "GET", url: "/memory-inbox/shell" }]);
+    for (const target of ["shell", "projection"]) {
+      const path = `/api/supervisor/memory-inbox/${target}`;
+      assert.equal((await request(port, path, { headers: { cookie: "operator=ok" } })).status, 200);
+      assert.equal((await request(port, path, { method: "POST", body: "{}", headers: { cookie: "operator=ok", origin: "https://dashboard.test", "content-type": "application/json" } })).status, 405);
+      assert.equal((await request(port, `${path}?state=inbox`, { headers: { cookie: "operator=ok" } })).status, 404);
+      assert.equal((await request(port, path, { headers: { cookie: "viewer=ok" } })).status, 404);
+    }
+    assert.deepEqual(forwarded, [{ method: "GET", url: "/memory-inbox/shell" }, { method: "GET", url: "/memory-inbox/projection" }]);
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);

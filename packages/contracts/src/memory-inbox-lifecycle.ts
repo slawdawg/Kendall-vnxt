@@ -39,6 +39,35 @@ export interface MemoryInboxRecordedCommandResultV1 {
   resultingRevision: number;
 }
 
+export interface MemoryInboxProjectionRowV1 {
+  sourceId: string;
+  lifecycleState: MemoryInboxSourceState;
+  revision: number;
+  retentionDeadlineAt: string;
+  deletionState: MemoryInboxDeletionState;
+  nextSafeAction: string;
+}
+
+export interface MemoryInboxProjectionV1 {
+  schemaVersion: "kendall-memory-inbox-projection/v1";
+  truth: "supervisor_owned";
+  freshness: "current";
+  rows: MemoryInboxProjectionRowV1[];
+  reviewReadyCount: number;
+  nextSafeAction: string;
+}
+
+export function isMemoryInboxProjectionV1(value: unknown): value is MemoryInboxProjectionV1 {
+  if (!value || typeof value !== "object") return false;
+  const projection = value as Record<string, unknown>;
+  return projection.schemaVersion === "kendall-memory-inbox-projection/v1"
+    && projection.truth === "supervisor_owned"
+    && projection.freshness === "current"
+    && Array.isArray(projection.rows)
+    && typeof projection.reviewReadyCount === "number"
+    && typeof projection.nextSafeAction === "string";
+}
+
 export function isPositiveMemoryInboxRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }

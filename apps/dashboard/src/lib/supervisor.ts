@@ -91,8 +91,9 @@ import type {
   WorkItemView,
   WorkerRegistryEntryView,
   MemoryInboxShellStatusV1,
+  MemoryInboxProjectionV1,
 } from "@kendall/contracts";
-import { isMemoryInboxShellStatusV1 } from "@kendall/contracts";
+import { isMemoryInboxProjectionV1, isMemoryInboxShellStatusV1 } from "@kendall/contracts";
 
 export function getSupervisorBaseUrl(): string {
   return canonicalGetSupervisorBaseUrl();
@@ -115,6 +116,12 @@ export async function getMemoryInboxShellStatus(options?: RequestOptions): Promi
     throw new Error("Invalid Memory Inbox shell status.");
   }
   return status;
+}
+
+export async function getMemoryInboxProjection(options?: RequestOptions): Promise<MemoryInboxProjectionV1> {
+  const projection = await requestJson<unknown>("/memory-inbox/projection", options);
+  if (!isMemoryInboxProjectionV1(projection)) throw new Error("Invalid Memory Inbox projection.");
+  return projection;
 }
 
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {

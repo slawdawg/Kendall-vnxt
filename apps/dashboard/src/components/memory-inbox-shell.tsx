@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
-import type { MemoryInboxDestinationV1 } from "@kendall/contracts";
+import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { getMemoryInboxShellStatus } from "../lib/supervisor";
+import { getMemoryInboxProjection } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -22,7 +22,7 @@ export function MemoryInboxShell() {
   const heading = destinations.find((destination) => destination.id === selected)?.label ?? "Inbox";
   const headingRef = useRef<HTMLHeadingElement>(null);
   const announcementRef = useRef<HTMLParagraphElement>(null);
-  const { state, retry } = useAuthenticatedPageRead((signal) => getMemoryInboxShellStatus({ signal, timeoutMs: 6_000 }), [], () => false, true, { timeoutMessage: "Memory Inbox is unavailable." });
+  const { state, retry } = useAuthenticatedPageRead((signal) => getMemoryInboxProjection({ signal, timeoutMs: 6_000 }), [], () => false, true, { timeoutMessage: "Memory Inbox is unavailable." });
 
   useEffect(() => {
     if (state.kind !== "ready") return;
@@ -44,11 +44,25 @@ export function MemoryInboxShell() {
     <nav aria-label="Memory Inbox destinations" className="flex flex-wrap gap-2">{destinationLinks}</nav>
     <section className="rounded-[0.5rem] border bg-[var(--panel)] p-6 shadow-sm" aria-describedby="memory-inbox-status">
       <h1 ref={headingRef} id="memory-inbox-heading" tabIndex={-1} className="text-xl font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">{heading}</h1>
-      <p id="memory-inbox-status" className="mt-2 text-sm leading-6 text-[var(--muted)]">Memory Inbox unavailable</p>
+      <p id="memory-inbox-status" className="mt-2 text-sm leading-6 text-[var(--muted)]">Supervisor-owned lifecycle projection is current.</p>
+      <MemoryInboxRows selected={selected} rows={state.data.rows} />
       <button type="button" onClick={retry} className="mt-4 inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">Refresh Memory Inbox</button>
       <p ref={announcementRef} className="sr-only" aria-live="polite" />
     </section>
   </main>;
+}
+
+function MemoryInboxRows({ selected, rows }: { selected: MemoryInboxDestinationV1; rows: MemoryInboxProjectionRowV1[] }) {
+  const visible = rows.filter((row) => destinationFor(row.lifecycleState) === selected);
+  if (!visible.length) return <p className="mt-4 text-sm text-[var(--muted)]">No {selected} Sources are currently recorded. Refresh Memory Inbox for current lifecycle truth.</p>;
+  return <ul className="mt-4 grid gap-2" aria-label={`${selected} Sources`}>{visible.map((row) => <li key={row.sourceId} className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p></li>)}</ul>;
+}
+
+function destinationFor(state: MemoryInboxProjectionRowV1["lifecycleState"]): MemoryInboxDestinationV1 {
+  if (["Draft", "Returned", "AwaitingAuthorization"].includes(state)) return "drafts";
+  if (["Review", "DeniedRetained"].includes(state)) return "review";
+  if (["DeletePending", "Deleted", "RejectedUnsafe"].includes(state)) return "processed";
+  return "inbox";
 }
 
 function StateSurface({ title, body, role = "alert", retry }: { title: string; body: string; role?: "alert" | "status"; retry?: () => void }) {
