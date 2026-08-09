@@ -66,6 +66,21 @@ async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> Inspect
     revision = await session.get(MemoryInboxSourceRevision, job.source_revision_id)
     if revision is None:
         raise ValueError("inspection_revision_unavailable")
+    source = (await session.execute(
+        select(MemoryInboxSource)
+        .where(MemoryInboxSource.id == revision.source_id)
+        .with_for_update()
+    )).scalar_one_or_none()
+    if (
+        source is None
+        or source.lifecycle_state != MemoryInboxSourceState.QUARANTINED.value
+        or source.deletion_state != "None"
+        or source.current_revision != revision.revision
+    ):
+        job.lifecycle_state = "Closed"
+        job.result_ref = f"inspection:source_state_mismatch:{uuid.uuid4().hex}"
+        await session.commit()
+        raise ValueError("inspection_source_unavailable")
     manifest = (await session.execute(select(MemoryInboxManifest).where(
         MemoryInboxManifest.owner_revision_id == revision.id,
         MemoryInboxManifest.copy_class == "quarantine",
