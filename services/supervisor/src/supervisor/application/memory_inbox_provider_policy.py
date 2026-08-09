@@ -2,6 +2,12 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
+import uuid
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from supervisor.infrastructure.db.models import MemoryInboxCostPolicy, MemoryInboxCostPolicyReceipt
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,7 @@ def disabled_provider_projection(policy: InboxCostPolicy) -> dict:
         "finiteLimit": str(policy.finite_limit) if policy.finite_limit is not None else None,
         "remaining": str(policy.remaining) if policy.remaining is not None else None,
         "resetTimezone": policy.reset_timezone,
+        "mode": "unlimited" if policy.finite_limit is None else "finite",
         "providerOrder": [
             {"provider": "local", "availability": "disabled"},
             {"provider": "openai", "availability": "disabled"},
@@ -43,3 +50,73 @@ def validate_policy_change(*, finite_limit: Decimal | None, unlimited_acknowledg
         raise ValueError("finite_limit_invalid")
     if finite_limit is None and not unlimited_acknowledged:
         raise ValueError("unlimited_acknowledgement_required")
+
+
+def _view(policy: MemoryInboxCostPolicy) -> dict:
+    projection = disabled_provider_projection(InboxCostPolicy(
+        revision=policy.revision, currency=policy.currency,
+        finite_limit=Decimal(str(policy.finite_limit)) if policy.finite_limit is not None else None,
+        measured_spend=Decimal(str(policy.measured_spend)), reserved_spend=Decimal(str(policy.reserved_spend)),
+        reset_timezone=policy.reset_timezone, high_cost_acknowledged=policy.high_cost_acknowledged,
+    ))
+    projection.update({
+        "updatedAt": policy.updated_at.isoformat(),
+        "actorRef": policy.actor_ref,
+        "providerActivation": "disabled_by_default",
+    })
+    return projection
+
+
+async def read_inbox_cost_policy(session: AsyncSession) -> dict:
+    """Read the only Inbox policy record; generic provider settings are excluded."""
+    policy = await session.get(MemoryInboxCostPolicy, "inbox-cost-policy:current")
+    if policy is None:
+        policy = MemoryInboxCostPolicy(
+            id="inbox-cost-policy:current", revision=1, currency="USD", finite_limit=Decimal("0"),
+            measured_spend=Decimal("0"), reserved_spend=Decimal("0"), reset_timezone="UTC",
+            high_cost_acknowledged=False, actor_ref="system:memory-inbox-policy-bootstrap",
+        )
+        session.add(policy)
+        session.add(MemoryInboxCostPolicyReceipt(
+            id=f"inbox-cost-policy-receipt:{uuid.uuid4().hex}", policy_id=policy.id,
+            revision=1, mode="finite", idempotency_key="system:policy-bootstrap", actor_ref=policy.actor_ref,
+        ))
+        await session.commit()
+    return _view(policy)
+
+
+async def set_inbox_cost_policy(
+    session: AsyncSession, *, finite_limit: Decimal | None, unlimited_acknowledged: bool,
+    actor_ref: str, idempotency_key: str,
+) -> dict:
+    """Version one finite/unlimited policy change with an immutable receipt."""
+    validate_policy_change(finite_limit=finite_limit, unlimited_acknowledged=unlimited_acknowledged)
+    policy = (await session.execute(
+        select(MemoryInboxCostPolicy)
+        .where(MemoryInboxCostPolicy.id == "inbox-cost-policy:current")
+        .with_for_update()
+    )).scalar_one_or_none()
+    if policy is None:
+        await read_inbox_cost_policy(session)
+        policy = (await session.execute(
+            select(MemoryInboxCostPolicy)
+            .where(MemoryInboxCostPolicy.id == "inbox-cost-policy:current")
+            .with_for_update()
+        )).scalar_one()
+    prior = (await session.execute(select(MemoryInboxCostPolicyReceipt).where(
+        MemoryInboxCostPolicyReceipt.policy_id == policy.id,
+        MemoryInboxCostPolicyReceipt.idempotency_key == idempotency_key,
+    ))).scalar_one_or_none()
+    if prior is not None:
+        return _view(policy)
+    policy.revision += 1
+    policy.finite_limit = finite_limit
+    policy.high_cost_acknowledged = finite_limit is None
+    policy.actor_ref = actor_ref
+    mode = "unlimited" if finite_limit is None else "finite"
+    session.add(MemoryInboxCostPolicyReceipt(
+        id=f"inbox-cost-policy-receipt:{uuid.uuid4().hex}", policy_id=policy.id,
+        revision=policy.revision, mode=mode, idempotency_key=idempotency_key, actor_ref=actor_ref,
+    ))
+    await session.commit()
+    return _view(policy)

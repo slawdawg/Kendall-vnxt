@@ -3,6 +3,7 @@ import json
 import re
 import types
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
@@ -1289,6 +1290,16 @@ class MemoryInboxTextCaptureApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxTextCaptureResultV1
+
+
+class MemoryInboxCostPolicyUpdateRequest(BaseModel):
+    """A content-free, explicitly acknowledged Inbox-only policy change."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    finiteLimit: Decimal | None
+    unlimitedAcknowledged: bool = False
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
 
 
 class MemoryProposalCreateRequest(BaseModel):

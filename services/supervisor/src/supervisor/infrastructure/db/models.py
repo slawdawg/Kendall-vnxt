@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
@@ -613,6 +613,41 @@ class MemoryInboxJob(Base):
     timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     result_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxCostPolicy(Base):
+    """One supervisor-owned Inbox policy; it never shares generic provider state."""
+
+    __tablename__ = "memory_inbox_cost_policies"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    finite_limit: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    measured_spend: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    reserved_spend: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    reset_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    high_cost_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MemoryInboxCostPolicyReceipt(Base):
+    """Immutable, content-free receipt for each Inbox policy revision."""
+
+    __tablename__ = "memory_inbox_cost_policy_receipts"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "revision", name="uq_memory_inbox_cost_policy_receipt_revision"),
+        UniqueConstraint("policy_id", "idempotency_key", name="uq_memory_inbox_cost_policy_receipt_replay"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String(16))
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    actor_ref: Mapped[str] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
