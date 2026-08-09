@@ -173,6 +173,7 @@ from supervisor.application.service import SupervisorService
 from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
 from supervisor.application.memory_inbox_projection import read_memory_inbox_projection
 from supervisor.application.memory_inbox_capture import capture_acknowledged_text
+from supervisor.application.memory_inbox_upload import receive_quarantined_upload
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
@@ -845,6 +846,17 @@ async def capture_memory_inbox_text(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Text capture was not accepted.") from exc
     return MemoryInboxTextCaptureApiEnvelope(data=MemoryInboxTextCaptureResultV1(sourceId=source_id))
+
+
+@app.post("/memory-inbox/upload")
+async def receive_memory_inbox_upload(request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        source_id = await receive_quarantined_upload(session, settings=settings, chunks=request.stream(), actor_ref=f"operator:{operator.id}")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Document upload was not accepted.") from exc
+    return {"data": {"schemaVersion": "kendall-memory-inbox-upload/v1", "sourceId": source_id, "lifecycleState": "Scanning", "nextSafeAction": "await_inspection"}}
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)

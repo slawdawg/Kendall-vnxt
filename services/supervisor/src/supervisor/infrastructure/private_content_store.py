@@ -64,3 +64,36 @@ class PrivateContentStore:
             target.unlink()
         except FileNotFoundError:
             return
+
+    async def write_stream(self, object_ref: str, chunks, *, maximum_bytes: int) -> int:
+        """Atomically promote a bounded ingress stream without retaining it in memory."""
+        target = self._object_path(object_ref)
+        if target.exists():
+            raise PrivateContentStoreError("Private Memory Inbox object already exists.")
+        descriptor, temporary = tempfile.mkstemp(prefix=".pending-", dir=target.parent)
+        total = 0
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                async for chunk in chunks:
+                    total += len(chunk)
+                    if total > maximum_bytes:
+                        raise PrivateContentStoreError("Private Memory Inbox upload exceeds its limit.")
+                    stream.write(chunk)
+                if total < 1:
+                    raise PrivateContentStoreError("Private Memory Inbox upload is empty.")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+            return total
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+    def can_reserve(self, required_bytes: int, quota_bytes: int) -> bool:
+        root = self._validated_root()
+        used = sum(entry.stat().st_size for entry in root.iterdir() if entry.is_file() and not entry.name.startswith(".pending-"))
+        return used + required_bytes <= quota_bytes

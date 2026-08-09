@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     memory_inbox_retention_hours: int | None = Field(
         default=None, ge=1, le=8760, alias="SUPERVISOR_MEMORY_INBOX_RETENTION_HOURS"
     )
+    memory_inbox_upload_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_ENABLED")
+    memory_inbox_upload_storage_quota_bytes: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_STORAGE_QUOTA_BYTES")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
     deliver_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_DELIVER_WIP_LIMIT")
@@ -200,6 +202,11 @@ class Settings(BaseSettings):
         ):
             return "private_store_not_owner_private"
         return None
+
+    def memory_inbox_upload_configuration_error(self) -> str | None:
+        if not self.memory_inbox_upload_enabled:
+            return "upload_ingress_unconfigured"
+        return self.memory_inbox_capture_configuration_error()
 
     @property
     def cors_origin_list(self) -> list[str]:

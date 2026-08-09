@@ -33,3 +33,44 @@ def test_private_store_removes_only_its_opaque_object(tmp_path) -> None:
     store.write_text("inbox-store:opaque-object-3", "non-sensitive test")
     store.delete_text("inbox-store:opaque-object-3")
     assert not (root / "opaque-object-3").exists()
+
+
+@pytest.mark.asyncio
+async def test_private_store_streams_a_bounded_upload_without_a_memory_copy(tmp_path) -> None:
+    root = tmp_path / "inbox-store"
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+
+    async def chunks():
+        yield b"first-"
+        yield b"second"
+
+    store = PrivateContentStore(str(root))
+    written = await store.write_stream("inbox-store:opaque-upload-1", chunks(), maximum_bytes=32)
+    assert written == 12
+    assert (root / "opaque-upload-1").read_bytes() == b"first-second"
+
+
+@pytest.mark.asyncio
+async def test_private_store_removes_partial_upload_when_its_byte_cap_is_exceeded(tmp_path) -> None:
+    root = tmp_path / "inbox-store"
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+
+    async def chunks():
+        yield b"first"
+        yield b"second"
+
+    with pytest.raises(PrivateContentStoreError, match="exceeds"):
+        await PrivateContentStore(str(root)).write_stream("inbox-store:opaque-upload-2", chunks(), maximum_bytes=8)
+    assert not list(root.iterdir())
+
+
+def test_private_store_reserves_upload_quota_conservatively(tmp_path) -> None:
+    root = tmp_path / "inbox-store"
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+    store = PrivateContentStore(str(root))
+    store.write_text("inbox-store:opaque-existing", "123456")
+    assert store.can_reserve(4, 10)
+    assert not store.can_reserve(5, 10)
