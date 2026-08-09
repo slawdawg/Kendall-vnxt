@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
 import { approveMemoryInboxProposal, captureMemoryInboxText, denyMemoryInboxProposal, getMemoryInboxProjection, getMemoryInboxProposalReader, returnMemoryInboxProposal, saveMemoryInboxDraft } from "../lib/supervisor";
@@ -25,14 +25,16 @@ export function MemoryInboxShell() {
   const heading = destinations.find((destination) => destination.id === selected)?.label ?? "Inbox";
   const headingRef = useRef<HTMLHeadingElement>(null);
   const announcementRef = useRef<HTMLParagraphElement>(null);
+  const restoreInboxFocusRef = useRef(false);
   const { state, retry } = useAuthenticatedPageRead((signal) => getMemoryInboxProjection({ signal, timeoutMs: 6_000 }), [], () => false, true, { timeoutMessage: "Memory Inbox is unavailable." });
   const reviewReadyCount = state.kind === "ready" ? state.data.reviewReadyCount : 0;
 
   useEffect(() => {
     if (state.kind !== "ready") return;
+    if (!proposalId && restoreInboxFocusRef.current) restoreInboxFocusRef.current = false;
     headingRef.current?.focus();
     if (announcementRef.current) announcementRef.current.textContent = `${heading} selected.`;
-  }, [heading, state.kind]);
+  }, [heading, proposalId, state.kind]);
 
   const destinationLinks = useMemo(() => destinations.map((destination) => (
     <Link key={destination.id} href={`/memory-inbox?destination=${destination.id}`} aria-current={destination.id === selected ? "page" : undefined} aria-label={destination.label} aria-describedby={destination.id === "review" ? "memory-inbox-review-ready-count" : undefined} className="inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
@@ -51,7 +53,7 @@ export function MemoryInboxShell() {
       <h1 ref={headingRef} id="memory-inbox-heading" tabIndex={-1} className="text-xl font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">{heading}</h1>
       <p id="memory-inbox-status" className="mt-2 text-sm leading-6 text-[var(--muted)]">Supervisor-owned lifecycle projection is current.</p>
       <MemoryInboxCaptureComposer onCaptured={retry} />
-      {proposalId && proposalRevision ? <MemoryInboxProposalReader proposalId={proposalId} revision={proposalRevision} /> : <MemoryInboxRows selected={selected} rows={state.data.rows} />}
+      {proposalId && proposalRevision ? <MemoryInboxProposalReader proposalId={proposalId} revision={proposalRevision} onClose={() => { restoreInboxFocusRef.current = true; }} /> : <MemoryInboxRows selected={selected} rows={state.data.rows} />}
       <button type="button" onClick={retry} className="mt-4 inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">Refresh Memory Inbox</button>
       <p ref={announcementRef} className="sr-only" aria-live="polite" />
     </section>
@@ -121,14 +123,50 @@ function MemoryInboxRow({ row }: { row: MemoryInboxProjectionRowV1 }) {
   return <li className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p>{row.lifecycleState === "Unprocessed" ? <button type="button" onClick={saveDraft} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Save as draft</button> : null}{readerHref ? <Link className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium" href={readerHref}>Open Proposal Reader</Link> : null}{status ? <p className="mt-2 text-sm" role="status" aria-live="polite">{status}</p> : null}</li>;
 }
 
-function MemoryInboxProposalReader({ proposalId, revision }: { proposalId: string; revision: number }) {
+function usePhoneReaderLayout() {
+  const [isPhone, setIsPhone] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsPhone(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return isPhone;
+}
+
+function MemoryInboxProposalReader({ proposalId, revision, onClose }: { proposalId: string; revision: number; onClose: () => void }) {
+  const isPhone = usePhoneReaderLayout();
+  const router = useRouter();
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLAnchorElement>(null);
   const { state, retry } = useAuthenticatedPageRead(
     (signal) => getMemoryInboxProposalReader(proposalId, revision, { signal, timeoutMs: 6_000 }),
     [proposalId, revision], () => false, true, { timeoutMessage: "Authenticated Proposal Reader is unavailable." },
   );
+  useEffect(() => {
+    if (isPhone && state.kind === "ready") closeRef.current?.focus();
+  }, [isPhone, state.kind]);
+  function closeReader() {
+    onClose();
+    router.push("/memory-inbox?destination=review");
+  }
   if (state.kind === "loading") return <section role="status" className="mt-4 rounded border p-4">Loading authenticated Proposal Reader.</section>;
   if (state.kind !== "ready") return <section role="alert" className="mt-4 rounded border p-4"><h2 className="text-base font-semibold">Authenticated Proposal Reader unavailable</h2><p className="mt-2 text-sm text-[var(--muted)]">The selected Proposal cannot be read right now. Refresh Review for current lifecycle truth.</p><button type="button" onClick={retry} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Retry Reader</button></section>;
-  return <article className="mt-4 rounded border p-4" aria-labelledby="memory-inbox-proposal-reader-heading">
+  function containPhoneFocus(event: KeyboardEvent<HTMLElement>) {
+    if (!isPhone) return;
+    if (event.key === "Escape") { event.preventDefault(); closeReader(); return; }
+    if (event.key !== "Tab" || !drawerRef.current) return;
+    const focusable = Array.from(drawerRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+    if (!focusable.length) return;
+    const current = document.activeElement;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && current === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && current === last) { event.preventDefault(); first.focus(); }
+  }
+  const reader = <article className="rounded border bg-[var(--panel)] p-4" aria-labelledby="memory-inbox-proposal-reader-heading">
+    <Link ref={closeRef} href="/memory-inbox?destination=review" onClick={onClose} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Close Proposal Reader</Link>
     <h2 id="memory-inbox-proposal-reader-heading" className="text-lg font-semibold">Proposal Reader</h2>
     <p className="mt-2 text-sm text-[var(--muted)]">Proposal revision {state.data.revision}</p>
     <a href="#memory-inbox-review-decision" className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Skip to review decision</a>
@@ -139,6 +177,12 @@ function MemoryInboxProposalReader({ proposalId, revision }: { proposalId: strin
       <MemoryInboxReviewDecisionControls proposalId={state.data.proposalId} revision={state.data.revision} />
     </section>
   </article>;
+  if (!isPhone) return <aside className="mt-4" aria-label="Proposal Reader detail region">{reader}</aside>;
+  return <div className="fixed inset-0 z-40 bg-black/40 p-0 sm:p-4" role="presentation">
+    <section ref={drawerRef} role="dialog" aria-modal="true" aria-label="Proposal Reader drawer" onKeyDown={containPhoneFocus} className="h-full w-full overflow-y-auto bg-[var(--panel)] p-4 shadow-xl sm:ml-auto sm:max-w-xl">
+      {reader}
+    </section>
+  </div>;
 }
 
 function MemoryInboxReviewDecisionControls({ proposalId, revision }: { proposalId: string; revision: number }) {

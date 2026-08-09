@@ -33,6 +33,14 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /event\.key === "Escape"/);
   assert.match(source, /cancelApprovalRef\.current\?\.focus/);
   assert.match(source, /approveTriggerRef\.current\?\.focus/);
+  assert.match(source, /usePhoneReaderLayout/);
+  assert.match(source, /Proposal Reader detail region/);
+  assert.match(source, /Proposal Reader drawer/);
+  assert.match(source, /Close Proposal Reader/);
+  assert.match(source, /containPhoneFocus/);
+  assert.match(source, /event\.key === "Escape"\) \{ event\.preventDefault\(\); closeReader\(\);/);
+  assert.match(source, /router\.push\("\/memory-inbox\?destination=review"\)/);
+  assert.match(source, /query\.addEventListener\("change", update\)/);
   assert.match(source, /Refresh Memory Inbox/);
   assert.match(source, /useAuthenticatedPageRead/);
   assert.match(source, /headingRef\.current\?\.focus/);
