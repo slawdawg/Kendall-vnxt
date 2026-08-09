@@ -1268,6 +1268,29 @@ class MemoryInboxProjectionApiEnvelope(BaseModel):
     data: MemoryInboxProjectionV1
 
 
+class MemoryInboxTextCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    text: Annotated[str, Field(min_length=1, max_length=32_000)]
+    acknowledgedNonSensitive: Literal[True]
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxTextCaptureResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-capture/v1"] = "kendall-memory-inbox-capture/v1"
+    sourceId: str
+    lifecycleState: Literal["Unprocessed"] = "Unprocessed"
+    nextSafeAction: Literal["create_draft"] = "create_draft"
+
+
+class MemoryInboxTextCaptureApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxTextCaptureResultV1
+
+
 class MemoryProposalCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

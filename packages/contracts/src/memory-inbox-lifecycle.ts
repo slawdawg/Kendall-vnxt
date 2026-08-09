@@ -57,6 +57,13 @@ export interface MemoryInboxProjectionV1 {
   nextSafeAction: string;
 }
 
+export interface MemoryInboxTextCaptureResultV1 {
+  schemaVersion: "kendall-memory-inbox-capture/v1";
+  sourceId: string;
+  lifecycleState: "Unprocessed";
+  nextSafeAction: "create_draft";
+}
+
 export function isMemoryInboxProjectionV1(value: unknown): value is MemoryInboxProjectionV1 {
   if (!value || typeof value !== "object") return false;
   const projection = value as Record<string, unknown>;
@@ -66,6 +73,15 @@ export function isMemoryInboxProjectionV1(value: unknown): value is MemoryInboxP
     && Array.isArray(projection.rows)
     && typeof projection.reviewReadyCount === "number"
     && typeof projection.nextSafeAction === "string";
+}
+
+export function isMemoryInboxTextCaptureResultV1(value: unknown): value is MemoryInboxTextCaptureResultV1 {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Record<string, unknown>;
+  return result.schemaVersion === "kendall-memory-inbox-capture/v1"
+    && typeof result.sourceId === "string"
+    && result.lifecycleState === "Unprocessed"
+    && result.nextSafeAction === "create_draft";
 }
 
 export function isPositiveMemoryInboxRevision(value: unknown): value is number {

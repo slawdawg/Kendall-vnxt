@@ -33,6 +33,9 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
+export const MEMORY_INBOX_MUTATION_PATHS = new Set([
+  "/memory-inbox/text-capture",
+]);
 // Controls has a separate exact browser capability. These paths deliberately
 // have no parameters and no query contract.
 export const CONTROLS_READ_PATHS = new Set([
@@ -125,14 +128,19 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       let targetPath;
       try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
       if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
-      if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
+      if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_MUTATION_PATHS.has(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
       const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
       const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
+      const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath);
       if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
         sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
         return true;
       }
       if (controlsMutation && (request.method !== "POST" || url.search)) {
+        sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
+        return true;
+      }
+      if (memoryInboxMutation && (request.method !== "POST" || url.search)) {
         sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
         return true;
       }
@@ -142,7 +150,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }
-      if (role === "test_viewer" && (controlsRead || controlsMutation)) {
+      if (role === "test_viewer" && (controlsRead || controlsMutation || memoryInboxMutation)) {
         sendJson(response, 404, { state: "unavailable" });
         return true;
       }
@@ -151,6 +159,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         return true;
       }
       if (controlsMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
+        sendJson(response, 403, { state: "unavailable" });
+        return true;
+      }
+      if (memoryInboxMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }

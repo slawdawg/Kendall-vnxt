@@ -18,6 +18,12 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /headingRef\.current\?\.focus/);
   assert.doesNotMatch(source, /localStorage|sessionStorage|fixture|sample|MemoryCapture|MemoryProposal/);
   assert.match(source, /sourceId|lifecycleState|retentionDeadlineAt|nextSafeAction/);
+  assert.match(source, /Capture non-sensitive text/);
+  assert.match(source, /I confirm this text is non-sensitive/);
+  assert.match(source, /Upload a document/);
+  assert.match(source, /Document upload is unavailable until its secure intake gate is configured/);
+  assert.match(source, /captureMemoryInboxText/);
   assert.match(transport, /requestJson<unknown>\("\/memory-inbox\/projection"/);
   assert.match(transport, /isMemoryInboxProjectionV1/);
+  assert.match(transport, /requestSupervisorMutation\("\/memory-inbox\/text-capture"/);
 });

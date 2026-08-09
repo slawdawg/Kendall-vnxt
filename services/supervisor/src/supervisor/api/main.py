@@ -111,6 +111,9 @@ from supervisor.api.schemas import (
     MemoryInboxProjectionApiEnvelope,
     MemoryInboxProjectionRowV1,
     MemoryInboxProjectionV1,
+    MemoryInboxTextCaptureApiEnvelope,
+    MemoryInboxTextCaptureRequest,
+    MemoryInboxTextCaptureResultV1,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -169,6 +172,7 @@ from supervisor.application.operator_auth import (
 from supervisor.application.service import SupervisorService
 from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
 from supervisor.application.memory_inbox_projection import read_memory_inbox_projection
+from supervisor.application.memory_inbox_capture import capture_acknowledged_text
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
@@ -821,6 +825,26 @@ async def get_memory_inbox_projection(
         reviewReadyCount=sum(row.lifecycle_state == "Review" for row in rows),
         nextSafeAction="refresh_memory_inbox" if not rows else "review_memory_inbox",
     ))
+
+
+@app.post("/memory-inbox/text-capture", response_model=MemoryInboxTextCaptureApiEnvelope)
+async def capture_memory_inbox_text(
+    payload: MemoryInboxTextCaptureRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        source_id = await capture_acknowledged_text(
+            session, settings=settings, text_value=payload.text,
+            acknowledged_non_sensitive=payload.acknowledgedNonSensitive, actor_ref=f"operator:{operator.id}",
+            idempotency_key=payload.idempotencyKey,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Text capture was not accepted.") from exc
+    return MemoryInboxTextCaptureApiEnvelope(data=MemoryInboxTextCaptureResultV1(sourceId=source_id))
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)

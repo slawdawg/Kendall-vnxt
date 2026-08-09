@@ -28,15 +28,21 @@ class PrivateContentStore:
             raise PrivateContentStoreError("Private Memory Inbox store is not owner-private.")
         return self._root
 
-    def write_text(self, object_ref: str, value: str) -> None:
-        """Atomically persist text under a server-owned opaque reference only."""
+    def _object_path(self, object_ref: str) -> Path:
         if not object_ref.startswith("inbox-store:") or any(token in object_ref for token in ("/", "\\", "..")):
             raise PrivateContentStoreError("Private Memory Inbox object reference is invalid.")
         root = self._validated_root()
-        target = root / object_ref.removeprefix("inbox-store:")
+        object_name = object_ref.removeprefix("inbox-store:")
+        if not object_name or not object_name.replace("-", "").isalnum():
+            raise PrivateContentStoreError("Private Memory Inbox object reference is invalid.")
+        return root / object_name
+
+    def write_text(self, object_ref: str, value: str) -> None:
+        """Atomically persist text under a server-owned opaque reference only."""
+        target = self._object_path(object_ref)
         if target.exists():
             raise PrivateContentStoreError("Private Memory Inbox object already exists.")
-        descriptor, temporary = tempfile.mkstemp(prefix=".pending-", dir=root)
+        descriptor, temporary = tempfile.mkstemp(prefix=".pending-", dir=target.parent)
         try:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
@@ -50,3 +56,11 @@ class PrivateContentStore:
             except OSError:
                 pass
             raise
+
+    def delete_text(self, object_ref: str) -> None:
+        """Remove a just-written object when its owning transaction cannot commit."""
+        target = self._object_path(object_ref)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            return

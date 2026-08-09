@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { getMemoryInboxProjection } from "../lib/supervisor";
+import { captureMemoryInboxText, getMemoryInboxProjection } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -45,11 +45,58 @@ export function MemoryInboxShell() {
     <section className="rounded-[0.5rem] border bg-[var(--panel)] p-6 shadow-sm" aria-describedby="memory-inbox-status">
       <h1 ref={headingRef} id="memory-inbox-heading" tabIndex={-1} className="text-xl font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">{heading}</h1>
       <p id="memory-inbox-status" className="mt-2 text-sm leading-6 text-[var(--muted)]">Supervisor-owned lifecycle projection is current.</p>
+      <MemoryInboxCaptureComposer onCaptured={retry} />
       <MemoryInboxRows selected={selected} rows={state.data.rows} />
       <button type="button" onClick={retry} className="mt-4 inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">Refresh Memory Inbox</button>
       <p ref={announcementRef} className="sr-only" aria-live="polite" />
     </section>
   </main>;
+}
+
+function MemoryInboxCaptureComposer({ onCaptured }: { onCaptured: () => void }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const idempotencyKeyRef = useRef<string | null>(null);
+  const [status, setStatus] = useState<{ kind: "idle" | "submitting" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const text = values.get("memory-inbox-text");
+    const acknowledged = values.get("memory-inbox-non-sensitive") === "on";
+    if (typeof text !== "string" || !text.trim() || !acknowledged) {
+      setStatus({ kind: "error", message: "Enter non-sensitive text and confirm the acknowledgement before capturing." });
+      return;
+    }
+    setStatus({ kind: "submitting", message: "Capturing text…" });
+    try {
+      const idempotencyKey = idempotencyKeyRef.current ?? crypto.randomUUID();
+      idempotencyKeyRef.current = idempotencyKey;
+      const result = await captureMemoryInboxText(text, acknowledged, idempotencyKey);
+      formRef.current?.reset();
+      idempotencyKeyRef.current = null;
+      setStatus({ kind: "success", message: `Text captured as ${result.sourceId}. Its next safe action is to create a draft.` });
+      onCaptured();
+    } catch {
+      setStatus({ kind: "error", message: "Text capture was not accepted. Check the acknowledgement and try again." });
+    }
+  }
+
+  return <section className="mt-5 rounded border p-4" aria-labelledby="memory-inbox-capture-heading">
+    <h2 id="memory-inbox-capture-heading" className="text-base font-semibold">Capture</h2>
+    <form ref={formRef} className="mt-3 grid gap-3" onSubmit={submit}>
+      <label className="grid gap-1 text-sm font-medium" htmlFor="memory-inbox-text">Capture non-sensitive text
+        <textarea id="memory-inbox-text" name="memory-inbox-text" required maxLength={32000} rows={5} className="rounded border p-2 font-normal" />
+      </label>
+      <label className="flex items-start gap-2 text-sm"><input id="memory-inbox-non-sensitive" name="memory-inbox-non-sensitive" type="checkbox" required className="mt-1" /> <span>I confirm this text is non-sensitive.</span></label>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="submit" disabled={status.kind === "submitting"} className="inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60">Capture text</button>
+        <button type="button" disabled aria-describedby="memory-inbox-upload-gate" className="inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60">Upload a document</button>
+      </div>
+      <p id="memory-inbox-upload-gate" className="text-sm text-[var(--muted)]">Document upload is unavailable until its secure intake gate is configured.</p>
+      {status.kind !== "idle" ? <p role={status.kind === "error" ? "alert" : "status"} aria-live="polite" className="text-sm">{status.message}</p> : null}
+    </form>
+  </section>;
 }
 
 function MemoryInboxRows({ selected, rows }: { selected: MemoryInboxDestinationV1; rows: MemoryInboxProjectionRowV1[] }) {

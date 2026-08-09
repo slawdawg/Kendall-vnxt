@@ -92,8 +92,9 @@ import type {
   WorkerRegistryEntryView,
   MemoryInboxShellStatusV1,
   MemoryInboxProjectionV1,
+  MemoryInboxTextCaptureResultV1,
 } from "@kendall/contracts";
-import { isMemoryInboxProjectionV1, isMemoryInboxShellStatusV1 } from "@kendall/contracts";
+import { isMemoryInboxProjectionV1, isMemoryInboxShellStatusV1, isMemoryInboxTextCaptureResultV1 } from "@kendall/contracts";
 
 export function getSupervisorBaseUrl(): string {
   return canonicalGetSupervisorBaseUrl();
@@ -122,6 +123,18 @@ export async function getMemoryInboxProjection(options?: RequestOptions): Promis
   const projection = await requestJson<unknown>("/memory-inbox/projection", options);
   if (!isMemoryInboxProjectionV1(projection)) throw new Error("Invalid Memory Inbox projection.");
   return projection;
+}
+
+export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {
+  const response = await requestSupervisorMutation("/memory-inbox/text-capture", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, acknowledgedNonSensitive, idempotencyKey }),
+  });
+  if (!response.ok) throw new Error("Text capture was not accepted. Check the acknowledgement and try again.");
+  const envelope = (await response.json()) as ApiEnvelope<unknown>;
+  if (!isMemoryInboxTextCaptureResultV1(envelope?.data)) throw new Error("Text capture returned an invalid result.");
+  return envelope.data;
 }
 
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {
