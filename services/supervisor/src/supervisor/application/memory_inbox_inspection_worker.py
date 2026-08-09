@@ -78,6 +78,11 @@ async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> Inspect
     job = (await session.execute(select(MemoryInboxJob).where(MemoryInboxJob.id == job_id).with_for_update())).scalar_one_or_none()
     if job is None or job.lifecycle_state != "Planned":
         raise ValueError("inspection_job_unavailable")
+    if job.cancelled_at is not None:
+        job.lifecycle_state = "Closed"
+        job.result_ref = f"inspection:cancelled:{uuid.uuid4().hex}"
+        await session.commit()
+        raise ValueError("inspection_job_cancelled")
     if job.lease_expires_at is None or job.timeout_at is None or now >= job.lease_expires_at or now >= job.timeout_at:
         job.lifecycle_state = "Closed"
         job.result_ref = f"inspection:expired:{uuid.uuid4().hex}"
