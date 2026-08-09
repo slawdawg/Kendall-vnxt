@@ -166,6 +166,26 @@ export async function approveMemoryInboxProposal(proposalId: string, expectedRev
   return envelope.data;
 }
 
+export type MemoryInboxSourceDeletion = { sourceId: string; sourceRevision: number; deletionOperations: number; initiator: "operator" | "retention_expiry"; replayed: boolean; lifecycleState: "DeletePending"; deletionState: "Pending" | "RetryNeeded"; nextSafeAction: "await_deletion_proof" | "retry_deletion"; };
+
+export async function deleteMemoryInboxSource(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxSourceDeletion> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
+  if (!response.ok) throw new Error("Memory Inbox source deletion was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxSourceDeletion>;
+  if (!envelope?.data || envelope.data.lifecycleState !== "DeletePending") throw new Error("Memory Inbox source deletion returned an invalid result.");
+  return envelope.data;
+}
+
+export type MemoryInboxRetentionExtension = { sourceId: string; sourceRevision: number; retentionDeadlineAt: string; replayed: boolean; nextSafeAction: "refresh_memory_inbox"; };
+
+export async function extendMemoryInboxRetention(sourceId: string, expectedRevision: number, extensionHours: number, idempotencyKey: string): Promise<MemoryInboxRetentionExtension> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/retention-extension`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, extensionHours, idempotencyKey }) });
+  if (!response.ok) throw new Error("Memory Inbox retention extension was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxRetentionExtension>;
+  if (!envelope?.data || typeof envelope.data.retentionDeadlineAt !== "string") throw new Error("Memory Inbox retention extension returned an invalid result.");
+  return envelope.data;
+}
+
 export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {
   const response = await requestSupervisorMutation("/memory-inbox/text-capture", {
     method: "POST",

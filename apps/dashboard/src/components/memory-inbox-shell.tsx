@@ -5,7 +5,7 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import { useRouter, useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { approveMemoryInboxProposal, captureMemoryInboxText, denyMemoryInboxProposal, getMemoryInboxProjection, getMemoryInboxProposalReader, returnMemoryInboxProposal, saveMemoryInboxDraft } from "../lib/supervisor";
+import { approveMemoryInboxProposal, captureMemoryInboxText, deleteMemoryInboxSource, denyMemoryInboxProposal, extendMemoryInboxRetention, getMemoryInboxProjection, getMemoryInboxProposalReader, returnMemoryInboxProposal, saveMemoryInboxDraft } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -114,13 +114,37 @@ function MemoryInboxRows({ selected, rows }: { selected: MemoryInboxDestinationV
 
 function MemoryInboxRow({ row }: { row: MemoryInboxProjectionRowV1 }) {
   const [status, setStatus] = useState("");
+  const [extensionHours, setExtensionHours] = useState("24");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteKeyRef = useRef<string | null>(null);
+  const extendKeyRef = useRef<string | null>(null);
   async function saveDraft() {
     setStatus("Saving draft…");
     try { await saveMemoryInboxDraft(row.sourceId, row.revision, crypto.randomUUID()); setStatus("Draft saved. Refresh Memory Inbox for current lifecycle truth."); }
     catch { setStatus("This source cannot be saved as a draft in its current state."); }
   }
+  async function extendRetention() {
+    const hours = Number(extensionHours);
+    if (!Number.isSafeInteger(hours) || hours < 1 || hours > 8760) { setStatus("Choose a retention extension between 1 and 8,760 hours."); return; }
+    setStatus("Recording retention extension…");
+    try {
+      extendKeyRef.current ??= crypto.randomUUID();
+      const result = await extendMemoryInboxRetention(row.sourceId, row.revision, hours, extendKeyRef.current);
+      setStatus(result.replayed ? "Retention extension was already recorded." : "Retention extension recorded. Refresh Memory Inbox for current lifecycle truth.");
+    } catch { setStatus("Retention extension was not accepted. Refresh Memory Inbox for current lifecycle truth."); }
+  }
+  async function deleteSource() {
+    setStatus("Recording source deletion barrier…");
+    try {
+      deleteKeyRef.current ??= crypto.randomUUID();
+      const result = await deleteMemoryInboxSource(row.sourceId, row.revision, deleteKeyRef.current);
+      setStatus(result.deletionState === "RetryNeeded" ? "Deletion retry needed. The source remains unavailable." : "Deletion recorded. Kendall copy deletion is pending proof.");
+    } catch { setStatus("Source deletion was not accepted. Refresh Memory Inbox for current lifecycle truth."); }
+    setDeleteOpen(false);
+  }
   const readerHref = row.proposalId && row.proposalRevision ? `/memory-inbox?destination=review&proposal=${encodeURIComponent(row.proposalId)}&revision=${row.proposalRevision}` : null;
-  return <li className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p>{row.lifecycleState === "Unprocessed" ? <button type="button" onClick={saveDraft} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Save as draft</button> : null}{readerHref ? <Link className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium" href={readerHref}>Open Proposal Reader</Link> : null}{status ? <p className="mt-2 text-sm" role="status" aria-live="polite">{status}</p> : null}</li>;
+  const canManageRetention = !["DeletePending", "Deleted"].includes(row.lifecycleState);
+  return <li className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p>{row.lifecycleState === "Unprocessed" ? <button type="button" onClick={saveDraft} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Save as draft</button> : null}{readerHref ? <Link className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium" href={readerHref}>Open Proposal Reader</Link> : null}{canManageRetention ? <div className="mt-3 flex flex-wrap items-end gap-3"><label className="grid gap-1 text-sm font-medium" htmlFor={`memory-inbox-retention-${row.sourceId}`}>Extend retention (hours)<input id={`memory-inbox-retention-${row.sourceId}`} type="number" min={1} max={8760} value={extensionHours} onChange={(event) => setExtensionHours(event.target.value)} className="min-h-11 rounded border px-2 font-normal" /></label><button type="button" onClick={extendRetention} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Extend retention</button><button type="button" onClick={() => setDeleteOpen(true)} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Delete upload</button></div> : null}{status ? <p className="mt-2 text-sm" role="status" aria-live="polite">{status}</p> : null}{deleteOpen ? <div role="presentation" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"><section role="dialog" aria-modal="true" aria-label="Confirm source deletion" className="w-full max-w-lg rounded border bg-[var(--panel)] p-5 shadow-lg"><p className="text-sm leading-6">Delete this upload and start proof-based deletion of Kendall-controlled copies?</p><div className="mt-5 flex flex-wrap justify-end gap-3"><button type="button" onClick={() => setDeleteOpen(false)} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Cancel</button><button type="button" onClick={deleteSource} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Confirm delete upload</button></div></section></div> : null}</li>;
 }
 
 function usePhoneReaderLayout() {
