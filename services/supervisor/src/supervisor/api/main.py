@@ -116,6 +116,9 @@ from supervisor.api.schemas import (
     MemoryInboxReviewDecisionApiEnvelope,
     MemoryInboxReviewDecisionRequest,
     MemoryInboxReviewDecisionResultV1,
+    MemoryInboxApprovalApiEnvelope,
+    MemoryInboxApprovalRequest,
+    MemoryInboxApprovalResultV1,
     MemoryInboxTextCaptureApiEnvelope,
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
@@ -187,6 +190,7 @@ from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_
 from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
+from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
@@ -980,6 +984,26 @@ async def deny_memory_inbox_proposal(
         proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
         sourceRevision=result.source_revision, lifecycleState=result.lifecycle_state,
         replayed=result.replayed, nextSafeAction=result.next_safe_action,
+    ))
+
+
+@app.post("/memory-inbox/proposals/{proposal_id}/approve", response_model=MemoryInboxApprovalApiEnvelope)
+async def approve_memory_inbox_proposal(
+    proposal_id: str, payload: MemoryInboxApprovalRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await approve_proposal_for_deletion(
+            session, proposal_id=proposal_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The Proposal approval is unavailable.") from exc
+    return MemoryInboxApprovalApiEnvelope(data=MemoryInboxApprovalResultV1(
+        proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
+        sourceRevision=result.source_revision, deletionOperations=result.deletion_operations, replayed=result.replayed,
     ))
 
 

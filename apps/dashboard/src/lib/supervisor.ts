@@ -156,6 +156,16 @@ export function denyMemoryInboxProposal(proposalId: string, expectedRevision: nu
   return decideMemoryInboxProposal(proposalId, "deny", expectedRevision, idempotencyKey);
 }
 
+export type MemoryInboxApproval = { proposalId: string; proposalRevision: number; sourceId: string; sourceRevision: number; deletionOperations: number; replayed: boolean; lifecycleState: "Approved"; deletionState: "Pending"; nextSafeAction: "await_deletion_proof"; };
+
+export async function approveMemoryInboxProposal(proposalId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxApproval> {
+  const response = await requestSupervisorMutation(`/memory-inbox/proposals/${encodeURIComponent(proposalId)}/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
+  if (!response.ok) throw new Error("The Proposal approval was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxApproval>;
+  if (!envelope?.data || envelope.data.lifecycleState !== "Approved" || envelope.data.deletionState !== "Pending") throw new Error("The Proposal approval returned an invalid result.");
+  return envelope.data;
+}
+
 export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {
   const response = await requestSupervisorMutation("/memory-inbox/text-capture", {
     method: "POST",

@@ -1317,6 +1317,34 @@ class MemoryInboxReviewDecisionApiEnvelope(BaseModel):
     data: MemoryInboxReviewDecisionResultV1
 
 
+class MemoryInboxApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxApprovalResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-approval/v1"] = "kendall-memory-inbox-approval/v1"
+    proposalId: str
+    proposalRevision: PositiveInt
+    sourceId: str
+    sourceRevision: PositiveInt
+    deletionOperations: int
+    replayed: bool
+    lifecycleState: Literal["Approved"] = "Approved"
+    deletionState: Literal["Pending"] = "Pending"
+    nextSafeAction: Literal["await_deletion_proof"] = "await_deletion_proof"
+
+
+class MemoryInboxApprovalApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxApprovalResultV1
+
+
 class MemoryInboxTextCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
