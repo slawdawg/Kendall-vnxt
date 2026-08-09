@@ -111,6 +111,12 @@ class Settings(BaseSettings):
         default=True, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_NO_PROXY"
     )
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
+    memory_inbox_content_store_root: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_CONTENT_STORE_ROOT"
+    )
+    memory_inbox_retention_hours: int | None = Field(
+        default=None, ge=1, le=8760, alias="SUPERVISOR_MEMORY_INBOX_RETENTION_HOURS"
+    )
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
     deliver_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_DELIVER_WIP_LIMIT")
@@ -176,6 +182,24 @@ class Settings(BaseSettings):
             raise ValueError("local dogfood attestation API socket parent must exist") from exc
         if parent.is_symlink() or parent_details.st_uid != os.geteuid() or parent_details.st_mode & 0o077:
             raise ValueError("local dogfood attestation API socket parent must be private and owner-controlled")
+
+    def memory_inbox_capture_configuration_error(self) -> str | None:
+        """Return a safe gate reason; text capture never falls back to another store."""
+        if not self.memory_inbox_content_store_root or not self.memory_inbox_retention_hours:
+            return "private_store_or_retention_unconfigured"
+        root = Path(self.memory_inbox_content_store_root)
+        try:
+            details = root.lstat()
+        except OSError:
+            return "private_store_unavailable"
+        if (
+            root.is_symlink()
+            or not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_mode & 0o077
+        ):
+            return "private_store_not_owner_private"
+        return None
 
     @property
     def cors_origin_list(self) -> list[str]:
