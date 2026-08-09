@@ -1209,6 +1209,37 @@ class MemoryInboxShellApiEnvelope(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+class MemoryInboxLifecycleCommandRequest(BaseModel):
+    """A narrow, content-free mutation capability; identity comes from session."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(pattern=r"^[A-Za-z0-9:_-]{1,160}$")]
+    targetState: Literal[
+        "Quarantined", "Unprocessed", "Draft", "AwaitingAuthorization", "Processing", "Review",
+        "Returned", "DeniedRetained", "DeletePending", "Deleted", "RejectedUnsafe",
+    ]
+
+
+class MemoryInboxLifecycleCommandResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-lifecycle/v1"] = "kendall-memory-inbox-lifecycle/v1"
+    sourceId: str
+    expectedRevision: PositiveInt
+    resultingRevision: PositiveInt
+    outcome: Literal["accepted", "replayed", "conflict", "rejected"]
+    reasonCode: str
+    lifecycleState: str | None = None
+
+
+class MemoryInboxLifecycleCommandApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxLifecycleCommandResultV1
+
+
 class MemoryProposalCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -52,11 +52,20 @@ def is_positive_revision(value: object) -> bool:
 
 
 def can_advance_lifecycle(*, current: MemoryInboxSourceState, target: MemoryInboxSourceState) -> bool:
-    """Future transactional commands must use this closed grammar; this story invokes none."""
+    """The only legal Source state transitions; delete/expiry wins every race."""
 
-    if current == target:
-        return False
-    terminal = {MemoryInboxSourceState.DELETED, MemoryInboxSourceState.REJECTED_UNSAFE}
-    if current in terminal:
-        return False
-    return target in MemoryInboxSourceState
+    transitions = {
+        MemoryInboxSourceState.SCANNING: {MemoryInboxSourceState.QUARANTINED, MemoryInboxSourceState.REJECTED_UNSAFE, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.QUARANTINED: {MemoryInboxSourceState.UNPROCESSED, MemoryInboxSourceState.REJECTED_UNSAFE, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.UNPROCESSED: {MemoryInboxSourceState.DRAFT, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.DRAFT: {MemoryInboxSourceState.AWAITING_AUTHORIZATION, MemoryInboxSourceState.RETURNED, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.AWAITING_AUTHORIZATION: {MemoryInboxSourceState.PROCESSING, MemoryInboxSourceState.RETURNED, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.PROCESSING: {MemoryInboxSourceState.REVIEW, MemoryInboxSourceState.AWAITING_AUTHORIZATION, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.REVIEW: {MemoryInboxSourceState.RETURNED, MemoryInboxSourceState.DENIED_RETAINED, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.RETURNED: {MemoryInboxSourceState.DRAFT, MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.DENIED_RETAINED: {MemoryInboxSourceState.DELETE_PENDING},
+        MemoryInboxSourceState.DELETE_PENDING: {MemoryInboxSourceState.DELETED},
+        MemoryInboxSourceState.DELETED: set(),
+        MemoryInboxSourceState.REJECTED_UNSAFE: {MemoryInboxSourceState.DELETE_PENDING},
+    }
+    return target in transitions[current]

@@ -105,6 +105,9 @@ from supervisor.api.schemas import (
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
     MemoryInboxShellApiEnvelope,
+    MemoryInboxLifecycleCommandApiEnvelope,
+    MemoryInboxLifecycleCommandRequest,
+    MemoryInboxLifecycleCommandResultV1,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -161,6 +164,8 @@ from supervisor.application.operator_auth import (
     revoke_all_sessions,
 )
 from supervisor.application.service import SupervisorService
+from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
+from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
     TEST_VIEWER_AUTH_LIFECYCLE_LOCK,
@@ -298,6 +303,23 @@ def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiE
             correlationId=correlation_id,
         )
     )
+
+
+async def require_memory_inbox_command_operator(request: Request, session: AsyncSession) -> DashboardOperator:
+    """Mutating Inbox commands are always session-, Origin-, and CSRF-bound."""
+
+    if not settings.lan_auth_enabled:
+        raise HTTPException(status_code=404, detail="Memory Inbox commands are unavailable.")
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator" or not operator.enabled:
+        raise HTTPException(status_code=401, detail="Sign-in required.")
+    if not exact_https_origin(request.headers.get("origin"), settings):
+        raise HTTPException(status_code=403, detail="Authenticated origin required.")
+    csrf = request.headers.get("x-csrf-token")
+    if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+    return operator
 
 
 def require_local_dogfood_attestation(request: Request) -> None:
@@ -738,6 +760,40 @@ async def get_memory_inbox_shell(
     response.headers["Cache-Control"] = "no-store"
     await require_memory_inbox_shell_operator(request, session)
     return MemoryInboxShellApiEnvelope(data=service.get_memory_inbox_shell_status())
+
+
+@app.post("/memory-inbox/sources/{source_id}/lifecycle", response_model=MemoryInboxLifecycleCommandApiEnvelope)
+async def command_memory_inbox_lifecycle(
+    source_id: str,
+    payload: MemoryInboxLifecycleCommandRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await apply_lifecycle_command(
+            session,
+            MemoryInboxLifecycleCommand(
+                source_id=source_id,
+                expected_revision=payload.expectedRevision,
+                idempotency_key=payload.idempotencyKey,
+                target_state=MemoryInboxSourceState(payload.targetState),
+            ),
+            verified_actor_ref=f"operator:{operator.id}",
+            audit_ref=f"audit:memory-inbox:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox command was not accepted.") from exc
+    return MemoryInboxLifecycleCommandApiEnvelope(data=MemoryInboxLifecycleCommandResultV1(
+        sourceId=result.source_id,
+        expectedRevision=result.expected_revision,
+        resultingRevision=result.resulting_revision,
+        outcome=result.outcome,
+        reasonCode=result.reason_code,
+        lifecycleState=result.lifecycle_state.value if result.lifecycle_state else None,
+    ))
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)
