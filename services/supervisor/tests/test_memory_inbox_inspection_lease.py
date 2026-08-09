@@ -64,7 +64,12 @@ async def test_existing_inspection_job_is_returned_without_another_revision() ->
         id="inbox-job:already-planned", source_revision_id="inbox-source-revision:upload-2",
         capability_ref="inspection-v1", lifecycle_state="Planned",
     )
-    session = RecordingSession([source, existing])
+    revision = MemoryInboxSourceRevision(
+        id="inbox-source-revision:upload-2", source_id=source.id, revision=2,
+        lifecycle_state="Quarantined", actor_ref="operator:verified-operator",
+        audit_ref="audit:prior", policy_ref=source.policy_ref,
+    )
+    session = RecordingSession([source, revision, existing])
 
     job = await plan_inspection_lease(
         session, source_id=source.id, actor_ref="operator:verified-operator",
