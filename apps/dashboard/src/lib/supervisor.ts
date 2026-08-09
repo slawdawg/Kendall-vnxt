@@ -92,9 +92,10 @@ import type {
   WorkerRegistryEntryView,
   MemoryInboxShellStatusV1,
   MemoryInboxProjectionV1,
+  MemoryInboxProposalReaderV1,
   MemoryInboxTextCaptureResultV1,
 } from "@kendall/contracts";
-import { isMemoryInboxProjectionV1, isMemoryInboxShellStatusV1, isMemoryInboxTextCaptureResultV1 } from "@kendall/contracts";
+import { isMemoryInboxProjectionV1, isMemoryInboxProposalReaderV1, isMemoryInboxShellStatusV1, isMemoryInboxTextCaptureResultV1 } from "@kendall/contracts";
 
 export function getSupervisorBaseUrl(): string {
   return canonicalGetSupervisorBaseUrl();
@@ -123,6 +124,12 @@ export async function getMemoryInboxProjection(options?: RequestOptions): Promis
   const projection = await requestJson<unknown>("/memory-inbox/projection", options);
   if (!isMemoryInboxProjectionV1(projection)) throw new Error("Invalid Memory Inbox projection.");
   return projection;
+}
+
+export async function getMemoryInboxProposalReader(proposalId: string, revision: number, options?: RequestOptions): Promise<MemoryInboxProposalReaderV1> {
+  const reader = await requestJson<unknown>(`/memory-inbox/proposals/${encodeURIComponent(proposalId)}/revisions/${revision}/reader`, options);
+  if (!isMemoryInboxProposalReaderV1(reader)) throw new Error("Authenticated Proposal Reader is unavailable.");
+  return reader;
 }
 
 export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {

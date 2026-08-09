@@ -16,6 +16,12 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /memory-inbox-review-ready-count/);
   assert.match(source, /reviewReadyCount/);
   assert.match(source, /aria-label=\{destination\.label\}/);
+  assert.match(source, /Open Proposal Reader/);
+  assert.match(source, /Authenticated Proposal Reader unavailable/);
+  assert.match(source, /Skip to review decision/);
+  assert.match(source, /Review Decision Region/);
+  for (const control of ["Approve proposal", "Deny and retain upload", "Send back for another proposal"]) assert.match(source, new RegExp(control));
+  assert.match(source, /getMemoryInboxProposalReader/);
   assert.match(source, /Refresh Memory Inbox/);
   assert.match(source, /useAuthenticatedPageRead/);
   assert.match(source, /headingRef\.current\?\.focus/);

@@ -1250,6 +1250,8 @@ class MemoryInboxProjectionRowV1(BaseModel):
     retentionDeadlineAt: datetime
     deletionState: Literal["None", "Pending", "Proven", "RetryNeeded"]
     nextSafeAction: str
+    proposalId: str | None = None
+    proposalRevision: PositiveInt | None = None
 
 
 class MemoryInboxProjectionV1(BaseModel):
@@ -1267,6 +1269,23 @@ class MemoryInboxProjectionApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxProjectionV1
+
+
+class MemoryInboxProposalReaderV1(BaseModel):
+    """Content-bearing shape permitted only on the named authenticated reader route."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-proposal-reader/v1"] = "kendall-memory-inbox-proposal-reader/v1"
+    proposalId: str
+    revision: PositiveInt
+    body: str
+
+
+class MemoryInboxProposalReaderApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxProposalReaderV1
 
 
 class MemoryInboxTextCaptureRequest(BaseModel):

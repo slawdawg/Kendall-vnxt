@@ -111,6 +111,8 @@ from supervisor.api.schemas import (
     MemoryInboxProjectionApiEnvelope,
     MemoryInboxProjectionRowV1,
     MemoryInboxProjectionV1,
+    MemoryInboxProposalReaderApiEnvelope,
+    MemoryInboxProposalReaderV1,
     MemoryInboxTextCaptureApiEnvelope,
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
@@ -180,6 +182,7 @@ from supervisor.application.memory_inbox_inspection import require_inspection_ac
 from supervisor.application.memory_inbox_inspection_lease import plan_inspection_lease
 from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
 from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
+from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
@@ -902,9 +905,33 @@ async def get_memory_inbox_projection(
             retentionDeadlineAt=row.retention_deadline_at,
             deletionState=row.deletion_state,
             nextSafeAction=row.next_action_code,
+            proposalId=row.proposal_id,
+            proposalRevision=row.proposal_revision,
         ) for row in rows],
         reviewReadyCount=await read_review_ready_count(session),
         nextSafeAction="refresh_memory_inbox" if not rows else "review_memory_inbox",
+    ))
+
+
+@app.get("/memory-inbox/proposals/{proposal_id}/revisions/{revision}/reader", response_model=MemoryInboxProposalReaderApiEnvelope)
+async def get_memory_inbox_proposal_reader(
+    proposal_id: str,
+    revision: int,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """The only Memory Inbox GET route permitted to return a proposal body."""
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    try:
+        reader = await read_authorized_proposal(
+            session, settings=get_settings(), proposal_id=proposal_id, revision=revision,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Authenticated Proposal Reader is unavailable.") from exc
+    return MemoryInboxProposalReaderApiEnvelope(data=MemoryInboxProposalReaderV1(
+        proposalId=reader.proposal_id, revision=reader.revision, body=reader.body,
     ))
 
 

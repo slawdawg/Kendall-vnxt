@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { captureMemoryInboxText, getMemoryInboxProjection, saveMemoryInboxDraft } from "../lib/supervisor";
+import { captureMemoryInboxText, getMemoryInboxProjection, getMemoryInboxProposalReader, saveMemoryInboxDraft } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -19,6 +19,9 @@ function selectedDestination(value: string | null): MemoryInboxDestinationV1 {
 export function MemoryInboxShell() {
   const searchParams = useSearchParams();
   const selected = selectedDestination(searchParams.get("destination"));
+  const proposalId = selected === "review" ? searchParams.get("proposal") : null;
+  const requestedRevision = Number(searchParams.get("revision"));
+  const proposalRevision = Number.isSafeInteger(requestedRevision) && requestedRevision > 0 ? requestedRevision : null;
   const heading = destinations.find((destination) => destination.id === selected)?.label ?? "Inbox";
   const headingRef = useRef<HTMLHeadingElement>(null);
   const announcementRef = useRef<HTMLParagraphElement>(null);
@@ -48,7 +51,7 @@ export function MemoryInboxShell() {
       <h1 ref={headingRef} id="memory-inbox-heading" tabIndex={-1} className="text-xl font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">{heading}</h1>
       <p id="memory-inbox-status" className="mt-2 text-sm leading-6 text-[var(--muted)]">Supervisor-owned lifecycle projection is current.</p>
       <MemoryInboxCaptureComposer onCaptured={retry} />
-      <MemoryInboxRows selected={selected} rows={state.data.rows} />
+      {proposalId && proposalRevision ? <MemoryInboxProposalReader proposalId={proposalId} revision={proposalRevision} /> : <MemoryInboxRows selected={selected} rows={state.data.rows} />}
       <button type="button" onClick={retry} className="mt-4 inline-flex min-h-11 items-center rounded-[0.375rem] border px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">Refresh Memory Inbox</button>
       <p ref={announcementRef} className="sr-only" aria-live="polite" />
     </section>
@@ -114,7 +117,32 @@ function MemoryInboxRow({ row }: { row: MemoryInboxProjectionRowV1 }) {
     try { await saveMemoryInboxDraft(row.sourceId, row.revision, crypto.randomUUID()); setStatus("Draft saved. Refresh Memory Inbox for current lifecycle truth."); }
     catch { setStatus("This source cannot be saved as a draft in its current state."); }
   }
-  return <li className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p>{row.lifecycleState === "Unprocessed" ? <button type="button" onClick={saveDraft} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Save as draft</button> : null}{status ? <p className="mt-2 text-sm" role="status" aria-live="polite">{status}</p> : null}</li>;
+  const readerHref = row.proposalId && row.proposalRevision ? `/memory-inbox?destination=review&proposal=${encodeURIComponent(row.proposalId)}&revision=${row.proposalRevision}` : null;
+  return <li className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p>{row.lifecycleState === "Unprocessed" ? <button type="button" onClick={saveDraft} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Save as draft</button> : null}{readerHref ? <Link className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium" href={readerHref}>Open Proposal Reader</Link> : null}{status ? <p className="mt-2 text-sm" role="status" aria-live="polite">{status}</p> : null}</li>;
+}
+
+function MemoryInboxProposalReader({ proposalId, revision }: { proposalId: string; revision: number }) {
+  const { state, retry } = useAuthenticatedPageRead(
+    (signal) => getMemoryInboxProposalReader(proposalId, revision, { signal, timeoutMs: 6_000 }),
+    [proposalId, revision], () => false, true, { timeoutMessage: "Authenticated Proposal Reader is unavailable." },
+  );
+  if (state.kind === "loading") return <section role="status" className="mt-4 rounded border p-4">Loading authenticated Proposal Reader.</section>;
+  if (state.kind !== "ready") return <section role="alert" className="mt-4 rounded border p-4"><h2 className="text-base font-semibold">Authenticated Proposal Reader unavailable</h2><p className="mt-2 text-sm text-[var(--muted)]">The selected Proposal cannot be read right now. Refresh Review for current lifecycle truth.</p><button type="button" onClick={retry} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Retry Reader</button></section>;
+  return <article className="mt-4 rounded border p-4" aria-labelledby="memory-inbox-proposal-reader-heading">
+    <h2 id="memory-inbox-proposal-reader-heading" className="text-lg font-semibold">Proposal Reader</h2>
+    <p className="mt-2 text-sm text-[var(--muted)]">Proposal revision {state.data.revision}</p>
+    <a href="#memory-inbox-review-decision" className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Skip to review decision</a>
+    <div className="mt-5 whitespace-pre-wrap text-sm leading-6">{state.data.body}</div>
+    <section id="memory-inbox-review-decision" className="mt-8 border-t pt-5" aria-labelledby="memory-inbox-review-decision-heading">
+      <h3 id="memory-inbox-review-decision-heading" className="text-base font-semibold">Review Decision Region</h3>
+      <p className="mt-2 text-sm text-[var(--muted)]">These controls apply only to Proposal revision {state.data.revision}.</p>
+      <div className="mt-3 flex flex-wrap gap-3">
+        <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Approve proposal</button>
+        <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Deny and retain upload</button>
+        <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Send back for another proposal</button>
+      </div>
+    </section>
+  </article>;
 }
 
 function destinationFor(state: MemoryInboxProjectionRowV1["lifecycleState"]): MemoryInboxDestinationV1 {

@@ -17,6 +17,8 @@ class MemoryInboxProjectionRow:
     retention_deadline_at: datetime
     deletion_state: str
     next_action_code: str
+    proposal_id: str | None = None
+    proposal_revision: int | None = None
 
 
 def next_action_for(state: str) -> str:
@@ -45,9 +47,10 @@ async def read_memory_inbox_projection(session: AsyncSession) -> list[MemoryInbo
     """
 
     sources = (await session.execute(select(MemoryInboxSource).order_by(MemoryInboxSource.updated_at.desc(), MemoryInboxSource.id.asc()))).scalars()
-    ready_source_ids = set((await session.scalars(select(MemoryInboxProposalAggregate.source_id).where(
+    ready_proposals = (await session.execute(select(MemoryInboxProposalAggregate).where(
         MemoryInboxProposalAggregate.lifecycle_state == "Ready"
-    ))).all())
+    ))).scalars().all()
+    ready_by_source = {proposal.source_id: proposal for proposal in ready_proposals}
     return [
         MemoryInboxProjectionRow(
             source_id=source.id,
@@ -56,9 +59,11 @@ async def read_memory_inbox_projection(session: AsyncSession) -> list[MemoryInbo
             retention_deadline_at=source.retention_deadline_at,
             deletion_state=source.deletion_state,
             next_action_code=next_action_for(source.lifecycle_state),
+            proposal_id=ready_by_source[source.id].id if source.lifecycle_state == "Review" else None,
+            proposal_revision=ready_by_source[source.id].current_revision if source.lifecycle_state == "Review" else None,
         )
         for source in sources
-        if source.lifecycle_state != "Review" or source.id in ready_source_ids
+        if source.lifecycle_state != "Review" or source.id in ready_by_source
     ]
 
 
