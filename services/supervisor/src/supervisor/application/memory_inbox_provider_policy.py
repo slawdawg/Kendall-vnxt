@@ -2,12 +2,18 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
+import hashlib
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.infrastructure.db.models import MemoryInboxCostPolicy, MemoryInboxCostPolicyReceipt
+
+
+def _request_digest(*, finite_limit: Decimal | None, unlimited_acknowledged: bool) -> str:
+    value = "unlimited" if finite_limit is None else f"finite:{finite_limit.normalize()}"
+    return hashlib.sha256(f"{value}\x1f{unlimited_acknowledged}".encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -79,7 +85,8 @@ async def read_inbox_cost_policy(session: AsyncSession) -> dict:
         session.add(policy)
         session.add(MemoryInboxCostPolicyReceipt(
             id=f"inbox-cost-policy-receipt:{uuid.uuid4().hex}", policy_id=policy.id,
-            revision=1, mode="finite", idempotency_key="system:policy-bootstrap", actor_ref=policy.actor_ref,
+            revision=1, mode="finite", idempotency_key="system:policy-bootstrap",
+            request_digest=_request_digest(finite_limit=Decimal("0"), unlimited_acknowledged=False), actor_ref=policy.actor_ref,
         ))
         await session.commit()
     return _view(policy)
@@ -91,6 +98,7 @@ async def set_inbox_cost_policy(
 ) -> dict:
     """Version one finite/unlimited policy change with an immutable receipt."""
     validate_policy_change(finite_limit=finite_limit, unlimited_acknowledged=unlimited_acknowledged)
+    request_digest = _request_digest(finite_limit=finite_limit, unlimited_acknowledged=unlimited_acknowledged)
     policy = (await session.execute(
         select(MemoryInboxCostPolicy)
         .where(MemoryInboxCostPolicy.id == "inbox-cost-policy:current")
@@ -108,6 +116,8 @@ async def set_inbox_cost_policy(
         MemoryInboxCostPolicyReceipt.idempotency_key == idempotency_key,
     ))).scalar_one_or_none()
     if prior is not None:
+        if prior.request_digest != request_digest:
+            raise ValueError("policy_idempotency_conflict")
         return _view(policy)
     policy.revision += 1
     policy.finite_limit = finite_limit
@@ -116,7 +126,8 @@ async def set_inbox_cost_policy(
     mode = "unlimited" if finite_limit is None else "finite"
     session.add(MemoryInboxCostPolicyReceipt(
         id=f"inbox-cost-policy-receipt:{uuid.uuid4().hex}", policy_id=policy.id,
-        revision=policy.revision, mode=mode, idempotency_key=idempotency_key, actor_ref=actor_ref,
+        revision=policy.revision, mode=mode, idempotency_key=idempotency_key,
+        request_digest=request_digest, actor_ref=actor_ref,
     ))
     await session.commit()
     return _view(policy)

@@ -647,6 +647,7 @@ class MemoryInboxCostPolicyReceipt(Base):
     revision: Mapped[int] = mapped_column(Integer)
     mode: Mapped[str] = mapped_column(String(16))
     idempotency_key: Mapped[str] = mapped_column(String(160))
+    request_digest: Mapped[str] = mapped_column(String(128))
     actor_ref: Mapped[str] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

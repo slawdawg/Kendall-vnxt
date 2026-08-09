@@ -115,6 +115,7 @@ from supervisor.api.schemas import (
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
     MemoryInboxCostPolicyUpdateRequest,
+    MemoryInboxCostPolicyApiEnvelope,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -780,7 +781,7 @@ async def get_memory_inbox_shell(
     return MemoryInboxShellApiEnvelope(data=service.get_memory_inbox_shell_status())
 
 
-@app.get("/memory-inbox/cost-policy")
+@app.get("/memory-inbox/cost-policy", response_model=MemoryInboxCostPolicyApiEnvelope)
 async def get_memory_inbox_cost_policy(
     request: Request,
     response: Response,
@@ -791,7 +792,7 @@ async def get_memory_inbox_cost_policy(
     return {"data": await read_inbox_cost_policy(session)}
 
 
-@app.post("/memory-inbox/cost-policy")
+@app.post("/memory-inbox/cost-policy", response_model=MemoryInboxCostPolicyApiEnvelope)
 async def update_memory_inbox_cost_policy(
     payload: MemoryInboxCostPolicyUpdateRequest,
     request: Request,
