@@ -114,6 +114,8 @@ from supervisor.api.schemas import (
     MemoryInboxTextCaptureApiEnvelope,
     MemoryInboxTextCaptureRequest,
     MemoryInboxTextCaptureResultV1,
+    MemoryInboxCostPolicyUpdateRequest,
+    MemoryInboxCostPolicyApiEnvelope,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -176,6 +178,7 @@ from supervisor.application.memory_inbox_capture import capture_acknowledged_tex
 from supervisor.application.memory_inbox_upload import receive_quarantined_upload
 from supervisor.application.memory_inbox_inspection import require_inspection_activation
 from supervisor.application.memory_inbox_inspection_lease import plan_inspection_lease
+from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
 from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
@@ -776,6 +779,37 @@ async def get_memory_inbox_shell(
     response.headers["Cache-Control"] = "no-store"
     await require_memory_inbox_shell_operator(request, session)
     return MemoryInboxShellApiEnvelope(data=service.get_memory_inbox_shell_status())
+
+
+@app.get("/memory-inbox/cost-policy", response_model=MemoryInboxCostPolicyApiEnvelope)
+async def get_memory_inbox_cost_policy(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    return {"data": await read_inbox_cost_policy(session)}
+
+
+@app.post("/memory-inbox/cost-policy", response_model=MemoryInboxCostPolicyApiEnvelope)
+async def update_memory_inbox_cost_policy(
+    payload: MemoryInboxCostPolicyUpdateRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        policy = await set_inbox_cost_policy(
+            session, finite_limit=payload.finiteLimit,
+            unlimited_acknowledged=payload.unlimitedAcknowledged,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox Cost Policy was not accepted.") from exc
+    return {"data": policy}
 
 
 @app.post("/memory-inbox/sources/{source_id}/lifecycle", response_model=MemoryInboxLifecycleCommandApiEnvelope)

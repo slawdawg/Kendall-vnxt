@@ -3,6 +3,7 @@ import json
 import re
 import types
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_serializer, model_validator
@@ -1289,6 +1290,47 @@ class MemoryInboxTextCaptureApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxTextCaptureResultV1
+
+
+class MemoryInboxCostPolicyUpdateRequest(BaseModel):
+    """A content-free, explicitly acknowledged Inbox-only policy change."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    finiteLimit: Decimal | None
+    unlimitedAcknowledged: bool = False
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxCostPolicyProviderV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    provider: Literal["local", "openai", "anthropic"]
+    availability: Literal["disabled"]
+
+
+class MemoryInboxCostPolicyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-provider-policy/v1"]
+    policyRevision: PositiveInt
+    currency: Literal["USD"]
+    measuredSpend: str
+    reservedSpend: str
+    finiteLimit: str | None
+    remaining: str | None
+    resetTimezone: str
+    mode: Literal["finite", "unlimited"]
+    providerOrder: list[MemoryInboxCostPolicyProviderV1]
+    updatedAt: datetime
+    actorRef: str
+    providerActivation: Literal["disabled_by_default"]
+
+
+class MemoryInboxCostPolicyApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxCostPolicyV1
 
 
 class MemoryProposalCreateRequest(BaseModel):
