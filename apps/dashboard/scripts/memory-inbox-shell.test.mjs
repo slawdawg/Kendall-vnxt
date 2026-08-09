@@ -25,7 +25,10 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /Upload a document/);
   assert.doesNotMatch(source, /type="file"/);
   assert.match(source, /captureMemoryInboxText/);
+  assert.match(source, /Save as draft/);
+  assert.match(source, /saveMemoryInboxDraft/);
   assert.match(transport, /requestJson<unknown>\("\/memory-inbox\/projection"/);
   assert.match(transport, /isMemoryInboxProjectionV1/);
   assert.match(transport, /requestSupervisorMutation\("\/memory-inbox\/text-capture"/);
+  assert.match(transport, /\/memory-inbox\/sources\/\$\{encodeURIComponent\(sourceId\)\}\/lifecycle/);
 });

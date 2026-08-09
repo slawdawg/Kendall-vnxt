@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { captureMemoryInboxText, getMemoryInboxProjection } from "../lib/supervisor";
+import { captureMemoryInboxText, getMemoryInboxProjection, saveMemoryInboxDraft } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -102,7 +102,17 @@ function MemoryInboxCaptureComposer({ onCaptured }: { onCaptured: () => void }) 
 function MemoryInboxRows({ selected, rows }: { selected: MemoryInboxDestinationV1; rows: MemoryInboxProjectionRowV1[] }) {
   const visible = rows.filter((row) => destinationFor(row.lifecycleState) === selected);
   if (!visible.length) return <p className="mt-4 text-sm text-[var(--muted)]">No {selected} Sources are currently recorded. Refresh Memory Inbox for current lifecycle truth.</p>;
-  return <ul className="mt-4 grid gap-2" aria-label={`${selected} Sources`}>{visible.map((row) => <li key={row.sourceId} className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p></li>)}</ul>;
+  return <ul className="mt-4 grid gap-2" aria-label={`${selected} Sources`}>{visible.map((row) => <MemoryInboxRow key={row.sourceId} row={row} />)}</ul>;
+}
+
+function MemoryInboxRow({ row }: { row: MemoryInboxProjectionRowV1 }) {
+  const [status, setStatus] = useState("");
+  async function saveDraft() {
+    setStatus("Saving draft…");
+    try { await saveMemoryInboxDraft(row.sourceId, row.revision, crypto.randomUUID()); setStatus("Draft saved. Refresh Memory Inbox for current lifecycle truth."); }
+    catch { setStatus("This source cannot be saved as a draft in its current state."); }
+  }
+  return <li className="rounded border p-3 text-sm"><p className="font-medium">{row.sourceId}</p><p className="text-[var(--muted)]">{row.lifecycleState} · revision {row.revision} · {row.nextSafeAction}</p><p className="text-[var(--muted)]">Retention deadline: {new Date(row.retentionDeadlineAt).toLocaleString()}</p>{row.lifecycleState === "Unprocessed" ? <button type="button" onClick={saveDraft} className="mt-3 inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Save as draft</button> : null}{status ? <p className="mt-2 text-sm" role="status" aria-live="polite">{status}</p> : null}</li>;
 }
 
 function destinationFor(state: MemoryInboxProjectionRowV1["lifecycleState"]): MemoryInboxDestinationV1 {
