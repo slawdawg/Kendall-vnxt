@@ -114,9 +114,14 @@ async def test_review_badge_count_uses_only_ready_proposal_aggregates(tmp_path) 
         await connection.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
+        from datetime import UTC, datetime, timedelta
+
+        deadline = datetime.now(UTC) + timedelta(days=1)
         session.add_all((
+            MemoryInboxSource(id="source:one", current_revision=1, lifecycle_state="Review", retention_deadline_at=deadline, deletion_state="None", policy_ref="policy:test"),
+            MemoryInboxSource(id="source:two", current_revision=1, lifecycle_state="DeletePending", retention_deadline_at=deadline, deletion_state="Pending", policy_ref="policy:test"),
             MemoryInboxProposalAggregate(id="proposal:ready", source_id="source:one", current_revision=1, lifecycle_state="Ready"),
-            MemoryInboxProposalAggregate(id="proposal:draft", source_id="source:two", current_revision=1, lifecycle_state="Draft"),
+            MemoryInboxProposalAggregate(id="proposal:stale", source_id="source:two", current_revision=1, lifecycle_state="Ready"),
         ))
         await session.commit()
         assert await read_review_ready_count(session) == 1

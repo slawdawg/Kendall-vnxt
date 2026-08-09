@@ -1,7 +1,7 @@
 """Authoritative, content-free Memory Inbox read projection."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,7 +68,12 @@ async def read_memory_inbox_projection(session: AsyncSession) -> list[MemoryInbo
 
 
 async def read_review_ready_count(session: AsyncSession) -> int:
-    """Count only durable Ready proposals; source state never stands in for it."""
-    return int((await session.scalar(select(func.count()).select_from(MemoryInboxProposalAggregate).where(
-        MemoryInboxProposalAggregate.lifecycle_state == "Ready"
+    """Count only currently reviewable Ready proposals, never stale source truth."""
+    return int((await session.scalar(select(func.count()).select_from(MemoryInboxProposalAggregate).join(
+        MemoryInboxSource, MemoryInboxSource.id == MemoryInboxProposalAggregate.source_id,
+    ).where(
+        MemoryInboxProposalAggregate.lifecycle_state == "Ready",
+        MemoryInboxSource.lifecycle_state == "Review",
+        MemoryInboxSource.deletion_state == "None",
+        MemoryInboxSource.retention_deadline_at > datetime.now(timezone.utc),
     ))) or 0)
