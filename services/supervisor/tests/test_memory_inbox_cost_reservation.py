@@ -23,6 +23,8 @@ async def test_reservation_is_conservative_and_unknown_completion_blocks_repeat_
         await session.commit()
         reservation_id = await reserve_attempt_cost(session, attempt_id=attempt.id, amount=Decimal("3.00"))
         assert await reserve_attempt_cost(session, attempt_id=attempt.id, amount=Decimal("3.00")) == reservation_id
+        with pytest.raises(ValueError, match="reservation_amount_conflict"):
+            await reserve_attempt_cost(session, attempt_id=attempt.id, amount=Decimal("2.00"))
         await record_attempt_completion_unknown(session, attempt_id=attempt.id)
         assert (await session.get(MemoryInboxProcessingAttempt, attempt.id)).lifecycle_state == "CompletionUnknown"
         assert (await session.get(MemoryInboxCostReservation, reservation_id)).lifecycle_state == "CompletionUnknown"

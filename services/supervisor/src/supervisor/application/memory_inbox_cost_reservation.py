@@ -19,6 +19,8 @@ async def reserve_attempt_cost(session: AsyncSession, *, attempt_id: str, amount
         raise ValueError("reservation_attempt_unavailable")
     existing = await session.scalar(select(MemoryInboxCostReservation).where(MemoryInboxCostReservation.attempt_id == attempt_id))
     if existing is not None:
+        if Decimal(str(existing.amount)) != amount:
+            raise ValueError("reservation_amount_conflict")
         return existing.id
     policy = (await session.execute(select(MemoryInboxCostPolicy).where(
         MemoryInboxCostPolicy.id == "inbox-cost-policy:current"
