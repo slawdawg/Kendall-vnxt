@@ -128,6 +128,15 @@ class Settings(BaseSettings):
     memory_inbox_scanner_timeout_seconds: int = Field(
         default=60, ge=1, le=300, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_TIMEOUT_SECONDS"
     )
+    memory_inbox_proposal_reader_enabled: bool = Field(
+        default=False, alias="SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_ENABLED"
+    )
+    memory_inbox_proposal_reader_capability_ref: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_CAPABILITY_REF"
+    )
+    memory_inbox_proposal_reader_max_bytes: int = Field(
+        default=1_048_576, ge=1, le=4_194_304, alias="SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_MAX_BYTES"
+    )
     memory_inbox_upload_storage_quota_bytes: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_STORAGE_QUOTA_BYTES")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
@@ -232,6 +241,13 @@ class Settings(BaseSettings):
         return _private_inspection_component_error(
             self.memory_inbox_extractor_path, "inspection_extractor"
         )
+
+    def memory_inbox_proposal_reader_configuration_error(self) -> str | None:
+        if not self.memory_inbox_proposal_reader_enabled:
+            return "proposal_reader_unconfigured"
+        if not self.memory_inbox_proposal_reader_capability_ref:
+            return "proposal_reader_capability_unconfigured"
+        return self.memory_inbox_capture_configuration_error()
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
