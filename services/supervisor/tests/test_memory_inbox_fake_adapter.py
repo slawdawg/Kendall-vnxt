@@ -46,4 +46,7 @@ def test_fake_adapter_fallback_contract_never_activates_cloud() -> None:
     assert decide_fake_local_adapter(outcome="local_success", fresh_authorization_and_cost=True).route == "materialize_local"
     fallback = decide_fake_local_adapter(outcome="unavailable", fresh_authorization_and_cost=True)
     assert fallback.route == "consider_openai" and fallback.provider == "openai" and not fallback.execution_enabled
+    assert decide_fake_local_adapter(provider="openai", outcome="capacity_timeout", fresh_authorization_and_cost=True).route == "consider_anthropic"
+    assert decide_fake_local_adapter(provider="anthropic", outcome="unsupported_capability", fresh_authorization_and_cost=True).route == "blocked"
     assert decide_fake_local_adapter(outcome="blocked", fresh_authorization_and_cost=True).route == "blocked"
+    assert decide_fake_local_adapter(outcome="unavailable", fresh_authorization_and_cost=False).route == "blocked"
