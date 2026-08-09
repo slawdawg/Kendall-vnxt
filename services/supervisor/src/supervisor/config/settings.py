@@ -118,6 +118,7 @@ class Settings(BaseSettings):
         default=None, ge=1, le=8760, alias="SUPERVISOR_MEMORY_INBOX_RETENTION_HOURS"
     )
     memory_inbox_upload_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_ENABLED")
+    memory_inbox_inspection_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_INSPECTION_ENABLED")
     memory_inbox_upload_storage_quota_bytes: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_STORAGE_QUOTA_BYTES")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")

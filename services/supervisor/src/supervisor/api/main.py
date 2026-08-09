@@ -174,6 +174,7 @@ from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCo
 from supervisor.application.memory_inbox_projection import read_memory_inbox_projection
 from supervisor.application.memory_inbox_capture import capture_acknowledged_text
 from supervisor.application.memory_inbox_upload import receive_quarantined_upload
+from supervisor.application.memory_inbox_inspection import require_inspection_activation
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
@@ -857,6 +858,18 @@ async def receive_memory_inbox_upload(request: Request, response: Response, sess
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Document upload was not accepted.") from exc
     return {"data": {"schemaVersion": "kendall-memory-inbox-upload/v1", "sourceId": source_id, "lifecycleState": "Scanning", "nextSafeAction": "await_inspection"}}
+
+
+@app.post("/memory-inbox/sources/{source_id}/inspection")
+async def request_memory_inbox_inspection(source_id: str, request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    """Report the capability gate without reading or mutating the Source."""
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_command_operator(request, session)
+    try:
+        require_inspection_activation(settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Inspection is unavailable; the quarantined source remains inert.") from exc
+    raise HTTPException(status_code=409, detail="Inspection is unavailable; the quarantined source remains inert.")
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)
