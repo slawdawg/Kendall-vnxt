@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     )
     memory_inbox_upload_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_ENABLED")
     memory_inbox_inspection_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_INSPECTION_ENABLED")
+    memory_inbox_scanner_path: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_PATH"
+    )
+    memory_inbox_scanner_timeout_seconds: int = Field(
+        default=60, ge=1, le=300, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_TIMEOUT_SECONDS"
+    )
     memory_inbox_upload_storage_quota_bytes: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_STORAGE_QUOTA_BYTES")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
@@ -208,6 +214,31 @@ class Settings(BaseSettings):
         if not self.memory_inbox_upload_enabled:
             return "upload_ingress_unconfigured"
         return self.memory_inbox_capture_configuration_error()
+
+    def memory_inbox_inspection_configuration_error(self) -> str | None:
+        """Verify the explicit scanner adapter without enabling a fallback."""
+        if not self.memory_inbox_inspection_enabled:
+            return "inspection_unconfigured"
+        capture_error = self.memory_inbox_capture_configuration_error()
+        if capture_error:
+            return capture_error
+        if not self.memory_inbox_scanner_path:
+            return "inspection_scanner_unconfigured"
+        scanner = Path(self.memory_inbox_scanner_path)
+        try:
+            details = scanner.lstat()
+        except OSError:
+            return "inspection_scanner_unavailable"
+        if (
+            not scanner.is_absolute()
+            or scanner.is_symlink()
+            or not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_mode & 0o022
+            or not details.st_mode & stat.S_IXUSR
+        ):
+            return "inspection_scanner_not_owner_controlled"
+        return None
 
     @property
     def cors_origin_list(self) -> list[str]:
