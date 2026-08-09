@@ -175,6 +175,8 @@ from supervisor.application.memory_inbox_projection import read_memory_inbox_pro
 from supervisor.application.memory_inbox_capture import capture_acknowledged_text
 from supervisor.application.memory_inbox_upload import receive_quarantined_upload
 from supervisor.application.memory_inbox_inspection import require_inspection_activation
+from supervisor.application.memory_inbox_inspection_lease import plan_inspection_lease
+from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
@@ -215,6 +217,7 @@ startup_gate_ready = False
 bus = EventBus()
 service = SupervisorService(settings, bus)
 poller = Poller(service, settings.poll_interval_seconds)
+inspection_poller = MemoryInboxInspectionPoller(settings)
 
 
 @asynccontextmanager
@@ -239,11 +242,14 @@ async def lifespan(_: FastAPI):
         startup_gate_ready = True
     if settings.enable_background:
         await poller.start()
+        if settings.memory_inbox_inspection_configuration_error() is None:
+            await inspection_poller.start()
     try:
         yield
     finally:
         startup_gate_ready = False
         await poller.stop()
+        await inspection_poller.stop()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -854,7 +860,10 @@ async def receive_memory_inbox_upload(request: Request, response: Response, sess
     response.headers["Cache-Control"] = "no-store"
     operator = await require_memory_inbox_command_operator(request, session)
     try:
-        source_id = await receive_quarantined_upload(session, settings=settings, chunks=request.stream(), actor_ref=f"operator:{operator.id}")
+        source_id = await receive_quarantined_upload(
+            session, settings=settings, chunks=request.stream(), actor_ref=f"operator:{operator.id}",
+            declared_media_type=request.headers.get("content-type", "").split(";", 1)[0].lower(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Document upload was not accepted.") from exc
     return {"data": {"schemaVersion": "kendall-memory-inbox-upload/v1", "sourceId": source_id, "lifecycleState": "Scanning", "nextSafeAction": "await_inspection"}}
@@ -862,14 +871,18 @@ async def receive_memory_inbox_upload(request: Request, response: Response, sess
 
 @app.post("/memory-inbox/sources/{source_id}/inspection")
 async def request_memory_inbox_inspection(source_id: str, request: Request, response: Response, session: AsyncSession = Depends(get_session)):
-    """Report the capability gate without reading or mutating the Source."""
+    """Plan a private inspection lease; the request itself never reads content."""
     response.headers["Cache-Control"] = "no-store"
-    await require_memory_inbox_command_operator(request, session)
+    operator = await require_memory_inbox_command_operator(request, session)
     try:
         require_inspection_activation(settings)
+        job = await plan_inspection_lease(
+            session, source_id=source_id, actor_ref=f"operator:{operator.id}",
+            lease_seconds=max(60, settings.memory_inbox_scanner_timeout_seconds * 2 + 10),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Inspection is unavailable; the quarantined source remains inert.") from exc
-    raise HTTPException(status_code=409, detail="Inspection is unavailable; the quarantined source remains inert.")
+    return {"data": {"schemaVersion": "kendall-memory-inbox-inspection/v1", "jobId": job.id, "lifecycleState": job.lifecycle_state, "nextSafeAction": "await_inspection"}}
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)
