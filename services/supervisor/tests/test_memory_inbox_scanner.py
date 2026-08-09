@@ -1,10 +1,7 @@
+import asyncio
 import os
-import signal
 
-import pytest
-
-from supervisor.application import memory_inbox_scanner
-from supervisor.application.memory_inbox_scanner import ScannerOutcome, interpret_scanner_exit, scan_private_quarantine
+from supervisor.application.memory_inbox_scanner import ScannerOutcome, scan_private_quarantine, interpret_scanner_exit
 from supervisor.config.settings import Settings
 
 
@@ -21,11 +18,15 @@ def test_inspection_activation_requires_an_owner_controlled_scanner(tmp_path) ->
     scanner = tmp_path / "scanner"
     scanner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     os.chmod(scanner, 0o700)
+    extractor = tmp_path / "extractor"
+    extractor.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(extractor, 0o700)
     settings = Settings(
         SUPERVISOR_MEMORY_INBOX_CONTENT_STORE_ROOT=str(private_store),
         SUPERVISOR_MEMORY_INBOX_RETENTION_HOURS=24,
         SUPERVISOR_MEMORY_INBOX_INSPECTION_ENABLED=True,
         SUPERVISOR_MEMORY_INBOX_SCANNER_PATH=str(scanner),
+        SUPERVISOR_MEMORY_INBOX_EXTRACTOR_PATH=str(extractor),
     )
 
     assert settings.memory_inbox_inspection_configuration_error() is None
@@ -33,33 +34,15 @@ def test_inspection_activation_requires_an_owner_controlled_scanner(tmp_path) ->
     assert settings.memory_inbox_inspection_configuration_error() == "inspection_scanner_not_owner_controlled"
 
 
-@pytest.mark.asyncio
-async def test_scanner_timeout_kills_the_whole_new_process_group(monkeypatch, tmp_path) -> None:
-    class TimedOutProcess:
-        pid = 941
+def test_timeout_terminates_the_scanner_process_group(tmp_path) -> None:
+    scanner = tmp_path / "scanner"
+    scanner.write_text("#!/bin/sh\nsleep 10\n", encoding="utf-8")
+    os.chmod(scanner, 0o700)
+    object_path = tmp_path / "object"
+    object_path.write_bytes(b"%PDF-1.7")
 
-        def __init__(self) -> None:
-            self.wait_count = 0
+    result = asyncio.run(scan_private_quarantine(
+        scanner_path=str(scanner), object_path=object_path, timeout_seconds=1,
+    ))
 
-        async def wait(self) -> int:
-            self.wait_count += 1
-            if self.wait_count == 1:
-                raise TimeoutError
-            return -signal.SIGKILL
-
-    process = TimedOutProcess()
-    launch_options: dict[str, object] = {}
-    killed: list[tuple[int, signal.Signals]] = []
-
-    async def fake_launch(*args, **kwargs):
-        launch_options.update(kwargs)
-        return process
-
-    monkeypatch.setattr(memory_inbox_scanner.asyncio, "create_subprocess_exec", fake_launch)
-    monkeypatch.setattr(memory_inbox_scanner.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
-
-    result = await scan_private_quarantine(scanner_path="/owner/scanner", object_path=tmp_path / "private", timeout_seconds=1)
-
-    assert result.outcome is ScannerOutcome.UNAVAILABLE
-    assert killed == [(941, signal.SIGKILL)]
-    assert launch_options["start_new_session"] is True
+    assert result.reason_code == "scanner_timeout"

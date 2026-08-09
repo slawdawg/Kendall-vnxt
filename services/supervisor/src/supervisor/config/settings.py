@@ -122,6 +122,9 @@ class Settings(BaseSettings):
     memory_inbox_scanner_path: str | None = Field(
         default=None, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_PATH"
     )
+    memory_inbox_extractor_path: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_EXTRACTOR_PATH"
+    )
     memory_inbox_scanner_timeout_seconds: int = Field(
         default=60, ge=1, le=300, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_TIMEOUT_SECONDS"
     )
@@ -222,24 +225,13 @@ class Settings(BaseSettings):
         capture_error = self.memory_inbox_capture_configuration_error()
         if capture_error:
             return capture_error
-        if not self.memory_inbox_scanner_path:
-            return "inspection_scanner_unconfigured"
-        scanner = Path(self.memory_inbox_scanner_path)
-        try:
-            details = scanner.lstat()
-        except OSError:
-            return "inspection_scanner_unavailable"
-        if (
-            not scanner.is_absolute()
-            or scanner.is_symlink()
-            or not stat.S_ISREG(details.st_mode)
-            or details.st_uid != os.geteuid()
-            or details.st_mode & 0o022
-            or not details.st_mode & stat.S_IXUSR
+        if error := _private_inspection_component_error(
+            self.memory_inbox_scanner_path, "inspection_scanner"
         ):
-            return "inspection_scanner_not_owner_controlled"
-        return None
-
+            return error
+        return _private_inspection_component_error(
+            self.memory_inbox_extractor_path, "inspection_extractor"
+        )
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -247,6 +239,27 @@ class Settings(BaseSettings):
     @property
     def cors_origin_pattern(self) -> re.Pattern[str]:
         return re.compile(self.cors_origin_regex)
+
+
+def _private_inspection_component_error(component_path: str | None, component_name: str) -> str | None:
+    """Require each enabled private inspection component to be owner-controlled."""
+    if not component_path:
+        return f"{component_name}_unconfigured"
+    component = Path(component_path)
+    try:
+        details = component.lstat()
+    except OSError:
+        return f"{component_name}_unavailable"
+    if (
+        not component.is_absolute()
+        or component.is_symlink()
+        or not stat.S_ISREG(details.st_mode)
+        or details.st_uid != os.geteuid()
+        or details.st_mode & 0o022
+        or not details.st_mode & stat.S_IXUSR
+    ):
+        return f"{component_name}_not_owner_controlled"
+    return None
 
 
 @lru_cache
