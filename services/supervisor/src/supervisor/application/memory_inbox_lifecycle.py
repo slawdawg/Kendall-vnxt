@@ -3,6 +3,7 @@
 import hashlib
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -63,6 +64,14 @@ async def apply_lifecycle_command(
     if source.current_revision != command.expected_revision:
         return await _record_terminal_result(session, command, digest, verified_actor_ref, outcome="conflict", reason_code="stale_revision", resulting_revision=source.current_revision)
     current = MemoryInboxSourceState(source.lifecycle_state)
+    if (
+        source.retention_deadline_at <= datetime.now(timezone.utc)
+        and command.target_state is not MemoryInboxSourceState.DELETE_PENDING
+    ):
+        return await _record_terminal_result(
+            session, command, digest, verified_actor_ref, outcome="rejected",
+            reason_code="source_retention_expired", resulting_revision=source.current_revision,
+        )
     if not can_advance_lifecycle(current=current, target=command.target_state):
         return await _record_terminal_result(session, command, digest, verified_actor_ref, outcome="rejected", reason_code="transition_not_allowed", resulting_revision=source.current_revision)
 
@@ -97,4 +106,8 @@ async def _record_terminal_result(session: AsyncSession, command: MemoryInboxLif
         outcome=outcome, reason_code=reason_code, resulting_revision=resulting_revision, actor_ref=actor_ref,
     ))
     await session.commit()
-    return MemoryInboxLifecycleCommandResult(command.source_id, command.expected_revision, resulting_revision, outcome, reason_code, None)
+    source = await session.get(MemoryInboxSource, command.source_id)
+    return MemoryInboxLifecycleCommandResult(
+        command.source_id, command.expected_revision, resulting_revision, outcome,
+        reason_code, MemoryInboxSourceState(source.lifecycle_state) if source else None,
+    )

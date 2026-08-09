@@ -100,6 +100,15 @@ class PrivateContentStore:
 
     def read_for_inspection(self, object_ref: str, *, maximum_bytes: int) -> bytes:
         """A bounded, supervisor-only reader; never expose this through a web route."""
+        target = self.inspection_path(object_ref, maximum_bytes=maximum_bytes)
+        with target.open("rb") as stream:
+            content = stream.read(maximum_bytes + 1)
+        if len(content) > maximum_bytes:
+            raise PrivateContentStoreError("Private Memory Inbox object is unavailable.")
+        return content
+
+    def inspection_path(self, object_ref: str, *, maximum_bytes: int) -> Path:
+        """Return a validated private path for a configured scanner process only."""
         target = self._object_path(object_ref)
         try:
             details = target.lstat()
@@ -107,5 +116,4 @@ class PrivateContentStore:
             raise PrivateContentStoreError("Private Memory Inbox object is unavailable.") from exc
         if target.is_symlink() or not stat.S_ISREG(details.st_mode) or details.st_mode & 0o077 or details.st_size > maximum_bytes:
             raise PrivateContentStoreError("Private Memory Inbox object is unavailable.")
-        with target.open("rb") as stream:
-            return stream.read(maximum_bytes + 1)
+        return target

@@ -255,7 +255,10 @@ jobs:
         run: pnpm run test:supervisor:preflight
 
       - name: Run supervisor tests with duration profile
-        run: pnpm run test:supervisor:profile -- --timeout-ms=600000
+        # Full supervisor teardown can outlive the test assertions; retain a
+        # bounded margin above the observed 9-minute suite rather than
+        # converting a passing test run into a CI timeout.
+        run: pnpm run test:supervisor:profile -- --timeout-ms=720000
 
   full:
     if: github.event_name == 'push'
