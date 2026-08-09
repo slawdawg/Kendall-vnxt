@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { MemoryInboxDestinationV1, MemoryInboxProjectionRowV1 } from "@kendall/contracts";
 import { useAuthenticatedPageRead } from "../lib/authenticated-page-read";
-import { captureMemoryInboxText, denyMemoryInboxProposal, getMemoryInboxProjection, getMemoryInboxProposalReader, returnMemoryInboxProposal, saveMemoryInboxDraft } from "../lib/supervisor";
+import { approveMemoryInboxProposal, captureMemoryInboxText, denyMemoryInboxProposal, getMemoryInboxProjection, getMemoryInboxProposalReader, returnMemoryInboxProposal, saveMemoryInboxDraft } from "../lib/supervisor";
 
 const destinations: ReadonlyArray<{ id: MemoryInboxDestinationV1; label: string }> = [
   { id: "inbox", label: "Inbox" }, { id: "drafts", label: "Drafts" },
@@ -146,6 +146,26 @@ function MemoryInboxReviewDecisionControls({ proposalId, revision }: { proposalI
   const [status, setStatus] = useState("");
   const returnKeyRef = useRef<string | null>(null);
   const denyKeyRef = useRef<string | null>(null);
+  const approveKeyRef = useRef<string | null>(null);
+  const approveTriggerRef = useRef<HTMLButtonElement>(null);
+  const cancelApprovalRef = useRef<HTMLButtonElement>(null);
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  useEffect(() => {
+    if (approvalOpen) cancelApprovalRef.current?.focus();
+  }, [approvalOpen]);
+  function closeApproval() {
+    setApprovalOpen(false);
+    window.setTimeout(() => approveTriggerRef.current?.focus(), 0);
+  }
+  async function approve() {
+    setStatus("Recording approval and deletion barrier…");
+    try {
+      approveKeyRef.current ??= crypto.randomUUID();
+      const result = await approveMemoryInboxProposal(proposalId, revision, approveKeyRef.current);
+      setStatus(result.replayed ? "Approval was already recorded; deletion remains pending proof." : "Approval recorded. Kendall copy deletion is pending proof.");
+    } catch { setStatus("Approval was not accepted. Refresh Review for current lifecycle truth."); }
+    closeApproval();
+  }
   async function sendBack() {
     if (!returnContext.trim()) { setStatus("Add revision context before sending this Proposal back."); return; }
     setStatus("Recording return decision…");
@@ -169,11 +189,21 @@ function MemoryInboxReviewDecisionControls({ proposalId, revision }: { proposalI
     </label>
     <p id="memory-inbox-return-context-help" className="text-sm text-[var(--muted)]">Context is sent only with this decision request and is not retained in lifecycle evidence.</p>
     <div className="flex flex-wrap gap-3">
-      <button type="button" disabled className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium disabled:opacity-60">Approve proposal</button>
+      <button ref={approveTriggerRef} type="button" onClick={() => setApprovalOpen(true)} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Approve proposal</button>
       <button type="button" onClick={deny} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Deny and retain upload</button>
       <button type="button" onClick={sendBack} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Send back for another proposal</button>
     </div>
     {status ? <p role="status" aria-live="polite" className="text-sm">{status}</p> : null}
+    {approvalOpen ? <div role="presentation" className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+      <section role="dialog" aria-modal="true" aria-labelledby="memory-inbox-approval-heading" aria-describedby="memory-inbox-approval-consequence" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeApproval(); } }} className="w-full max-w-lg rounded border bg-[var(--panel)] p-5 shadow-lg">
+        <h4 id="memory-inbox-approval-heading" className="text-lg font-semibold">Approve Proposal revision {revision}?</h4>
+        <p id="memory-inbox-approval-consequence" className="mt-3 text-sm leading-6 text-[var(--muted)]">Approval revokes Proposal access and starts deletion of Kendall-controlled copies. It remains deletion pending until proof is recorded.</p>
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
+          <button ref={cancelApprovalRef} type="button" onClick={closeApproval} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Cancel</button>
+          <button type="button" onClick={approve} className="inline-flex min-h-11 items-center rounded border px-3 py-2 text-sm font-medium">Confirm approval</button>
+        </div>
+      </section>
+    </div> : null}
   </div>;
 }
 

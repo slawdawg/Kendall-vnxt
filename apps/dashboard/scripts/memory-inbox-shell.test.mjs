@@ -26,6 +26,13 @@ test("Memory Inbox renders only the authoritative, content-free lifecycle projec
   assert.match(source, /denyMemoryInboxProposal/);
   assert.match(source, /retry the same revision/);
   assert.match(source, /not retained in lifecycle evidence/);
+  assert.match(source, /approveMemoryInboxProposal/);
+  assert.match(source, /role="dialog"/);
+  assert.match(source, /Approve Proposal revision/);
+  assert.match(source, /Confirm approval/);
+  assert.match(source, /event\.key === "Escape"/);
+  assert.match(source, /cancelApprovalRef\.current\?\.focus/);
+  assert.match(source, /approveTriggerRef\.current\?\.focus/);
   assert.match(source, /Refresh Memory Inbox/);
   assert.match(source, /useAuthenticatedPageRead/);
   assert.match(source, /headingRef\.current\?\.focus/);
