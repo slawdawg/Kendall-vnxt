@@ -686,6 +686,26 @@ class MemoryInboxProcessingDisclosure(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MemoryInboxProposalReaderGrant(Base):
+    """Exact-revision authorization for the authenticated Proposal Reader.
+
+    This table deliberately stores no body or source metadata.  A grant may be
+    revoked without changing the immutable proposal revision it refers to.
+    """
+
+    __tablename__ = "memory_inbox_proposal_reader_grants"
+    __table_args__ = (UniqueConstraint("proposal_revision_id", "capability_ref", name="uq_memory_inbox_reader_grant"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    proposal_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_proposal_revisions.id"), index=True)
+    capability_ref: Mapped[str] = mapped_column(String(160))
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="Approved")
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class MemoryInboxDeletionOperation(Base):
     __tablename__ = "memory_inbox_deletion_operations"
 

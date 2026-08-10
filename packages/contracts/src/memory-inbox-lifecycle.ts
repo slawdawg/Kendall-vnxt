@@ -46,6 +46,8 @@ export interface MemoryInboxProjectionRowV1 {
   retentionDeadlineAt: string;
   deletionState: MemoryInboxDeletionState;
   nextSafeAction: string;
+  proposalId: string | null;
+  proposalRevision: number | null;
 }
 
 export interface MemoryInboxProjectionV1 {
@@ -64,6 +66,14 @@ export interface MemoryInboxTextCaptureResultV1 {
   nextSafeAction: "create_draft";
 }
 
+/** The only content-bearing Inbox client contract, for the named Reader. */
+export interface MemoryInboxProposalReaderV1 {
+  schemaVersion: "kendall-memory-inbox-proposal-reader/v1";
+  proposalId: string;
+  revision: number;
+  body: string;
+}
+
 export function isMemoryInboxProjectionV1(value: unknown): value is MemoryInboxProjectionV1 {
   if (!value || typeof value !== "object") return false;
   const projection = value as Record<string, unknown>;
@@ -73,6 +83,15 @@ export function isMemoryInboxProjectionV1(value: unknown): value is MemoryInboxP
     && Array.isArray(projection.rows)
     && typeof projection.reviewReadyCount === "number"
     && typeof projection.nextSafeAction === "string";
+}
+
+export function isMemoryInboxProposalReaderV1(value: unknown): value is MemoryInboxProposalReaderV1 {
+  if (!value || typeof value !== "object") return false;
+  const reader = value as Record<string, unknown>;
+  return reader.schemaVersion === "kendall-memory-inbox-proposal-reader/v1"
+    && typeof reader.proposalId === "string"
+    && isPositiveMemoryInboxRevision(reader.revision)
+    && typeof reader.body === "string";
 }
 
 export function isMemoryInboxTextCaptureResultV1(value: unknown): value is MemoryInboxTextCaptureResultV1 {

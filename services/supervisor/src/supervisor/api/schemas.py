@@ -1250,6 +1250,8 @@ class MemoryInboxProjectionRowV1(BaseModel):
     retentionDeadlineAt: datetime
     deletionState: Literal["None", "Pending", "Proven", "RetryNeeded"]
     nextSafeAction: str
+    proposalId: str | None = None
+    proposalRevision: PositiveInt | None = None
 
 
 class MemoryInboxProjectionV1(BaseModel):
@@ -1267,6 +1269,149 @@ class MemoryInboxProjectionApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxProjectionV1
+
+
+class MemoryInboxProposalReaderV1(BaseModel):
+    """Content-bearing shape permitted only on the named authenticated reader route."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-proposal-reader/v1"] = "kendall-memory-inbox-proposal-reader/v1"
+    proposalId: str
+    revision: PositiveInt
+    body: str
+
+
+class MemoryInboxProposalReaderApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxProposalReaderV1
+
+
+class MemoryInboxReviewDecisionRequest(BaseModel):
+    """The optional return context is transient and intentionally not persisted."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+    returnContext: Annotated[str, Field(min_length=1, max_length=2_000)] | None = None
+
+
+class MemoryInboxReviewDecisionResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-review-decision/v1"] = "kendall-memory-inbox-review-decision/v1"
+    proposalId: str
+    proposalRevision: PositiveInt
+    sourceId: str
+    sourceRevision: PositiveInt
+    lifecycleState: Literal["Returned", "Denied"]
+    replayed: bool
+    nextSafeAction: Literal["create_draft", "review_retention"]
+
+
+class MemoryInboxReviewDecisionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxReviewDecisionResultV1
+
+
+class MemoryInboxApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxApprovalResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-approval/v1"] = "kendall-memory-inbox-approval/v1"
+    proposalId: str
+    proposalRevision: PositiveInt
+    sourceId: str
+    sourceRevision: PositiveInt
+    deletionOperations: int
+    replayed: bool
+    lifecycleState: Literal["Approved"] = "Approved"
+    deletionState: Literal["Pending"] = "Pending"
+    nextSafeAction: Literal["await_deletion_proof"] = "await_deletion_proof"
+
+
+class MemoryInboxApprovalApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxApprovalResultV1
+
+
+class MemoryInboxSourceDeletionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxSourceDeletionResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-source-deletion/v1"] = "kendall-memory-inbox-source-deletion/v1"
+    sourceId: str
+    sourceRevision: PositiveInt
+    deletionOperations: int
+    initiator: Literal["operator", "retention_expiry", "retry"]
+    replayed: bool
+    lifecycleState: Literal["DeletePending"] = "DeletePending"
+    deletionState: Literal["Pending", "RetryNeeded"]
+    nextSafeAction: Literal["await_deletion_proof", "retry_deletion"]
+
+
+class MemoryInboxSourceDeletionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxSourceDeletionResultV1
+
+
+class MemoryInboxRetentionExtensionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expectedRevision: PositiveInt
+    extensionHours: int = Field(ge=1, le=8760)
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class MemoryInboxRetentionExtensionResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-retention-extension/v1"] = "kendall-memory-inbox-retention-extension/v1"
+    sourceId: str
+    sourceRevision: PositiveInt
+    retentionDeadlineAt: datetime
+    replayed: bool
+    nextSafeAction: Literal["refresh_memory_inbox"] = "refresh_memory_inbox"
+
+
+class MemoryInboxRetentionExtensionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxRetentionExtensionResultV1
+
+
+class MemoryInboxDeletionReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-deletion-receipt/v1"] = "kendall-memory-inbox-deletion-receipt/v1"
+    sourceId: str
+    outcome: Literal["deletion_pending", "deletion_retry_needed", "deleted_after_approval", "deleted_by_operator", "deleted_on_retention_expiry"]
+    proofCount: int = Field(ge=0)
+    summary: Literal["Kendall copy deletion is pending proof.", "Kendall copy deletion needs a recorded proof.", "Kendall copies deleted"]
+    nextSafeAction: Literal["await_deletion_proof", "retry_deletion", "none"]
+
+
+class MemoryInboxDeletionReceiptApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxDeletionReceiptV1
 
 
 class MemoryInboxTextCaptureRequest(BaseModel):
@@ -1330,6 +1475,45 @@ class MemoryInboxProcessingDisclosureApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxProcessingDisclosureV1
+
+
+class MemoryInboxDispatchClaimV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-dispatch-claim/v1"]
+    attemptId: str
+    lifecycleState: Literal["Planned", "Claimed", "Dispatched", "CompletionUnknown", "Reconciled", "Cancelled", "Closed"]
+    replayed: bool
+    nextSafeAction: Literal["reserve_cost", "resolve_completion_unknown", "review", "refresh_memory_inbox"]
+
+
+class MemoryInboxDispatchClaimApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxDispatchClaimV1
+
+
+class MemoryInboxCompletionUnknownResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    resolution: Literal["reconciled", "released"]
+
+
+class MemoryInboxCompletionUnknownResolutionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-completion-resolution/v1"]
+    attemptId: str
+    lifecycleState: Literal["Reconciled", "Cancelled"]
+    nextSafeAction: Literal["refresh_memory_inbox"]
+
+
+class MemoryInboxCompletionUnknownResolutionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxCompletionUnknownResolutionV1
+
+
 class MemoryInboxCostPolicyProviderV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

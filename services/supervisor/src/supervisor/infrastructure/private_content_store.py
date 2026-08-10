@@ -65,6 +65,19 @@ class PrivateContentStore:
         except FileNotFoundError:
             return
 
+    def delete_and_prove_absent(self, object_ref: str) -> None:
+        """Remove one opaque object and prove the owner-private path is absent."""
+        target = self._object_path(object_ref)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            return
+        raise PrivateContentStoreError("Private Memory Inbox object deletion is unproved.")
+
     async def write_stream(self, object_ref: str, chunks, *, maximum_bytes: int) -> int:
         """Atomically promote a bounded ingress stream without retaining it in memory."""
         target = self._object_path(object_ref)
@@ -106,6 +119,18 @@ class PrivateContentStore:
         if len(content) > maximum_bytes:
             raise PrivateContentStoreError("Private Memory Inbox object is unavailable.")
         return content
+
+    def read_for_proposal_reader(self, object_ref: str, *, maximum_bytes: int) -> str:
+        """Read a bounded proposal body only after the reader fence succeeds.
+
+        Callers must not use this for source or quarantine manifests; that
+        invariant belongs to the reader application boundary.
+        """
+        content = self.read_for_inspection(object_ref, maximum_bytes=maximum_bytes)
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PrivateContentStoreError("Private Memory Inbox proposal is unavailable.") from exc
 
     def inspection_path(self, object_ref: str, *, maximum_bytes: int) -> Path:
         """Return a validated private path for a configured scanner process only."""

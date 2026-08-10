@@ -67,7 +67,7 @@ async def record_attempt_completion_unknown(session: AsyncSession, *, attempt_id
 
 async def resolve_attempt_completion_unknown(
     session: AsyncSession, *, attempt_id: str, resolution: Literal["reconciled", "released"],
-) -> None:
+) -> Literal["Reconciled", "Cancelled"]:
     """Close one uncertain attempt only through a deliberate accounting result."""
     attempt = (await session.execute(select(MemoryInboxProcessingAttempt).where(
         MemoryInboxProcessingAttempt.id == attempt_id
@@ -75,6 +75,18 @@ async def resolve_attempt_completion_unknown(
     reservation = await session.scalar(select(MemoryInboxCostReservation).where(
         MemoryInboxCostReservation.attempt_id == attempt_id
     ))
+    if (
+        attempt is not None and reservation is not None
+        and attempt.lifecycle_state == "Reconciled" and reservation.lifecycle_state == "Reconciled"
+        and resolution == "reconciled"
+    ):
+        return "Reconciled"
+    if (
+        attempt is not None and reservation is not None
+        and attempt.lifecycle_state == "Cancelled" and reservation.lifecycle_state == "Released"
+        and resolution == "released"
+    ):
+        return "Cancelled"
     if (
         attempt is None or reservation is None
         or attempt.lifecycle_state != "CompletionUnknown"
@@ -96,6 +108,7 @@ async def resolve_attempt_completion_unknown(
         reservation.lifecycle_state = "Released"
         attempt.lifecycle_state = "Cancelled"
     await session.commit()
+    return attempt.lifecycle_state
 
 
 async def _invalidate_consent_and_cancel_attempt(

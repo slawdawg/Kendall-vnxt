@@ -7,12 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import (
     MemoryInboxCostPolicy,
     MemoryInboxProcessingAttempt,
     MemoryInboxProcessingDisclosure,
     MemoryInboxProposalAggregate,
     MemoryInboxProposalRevision,
+    MemoryInboxManifest,
     MemoryInboxSource,
     MemoryInboxSourceRevision,
 )
@@ -47,7 +49,7 @@ async def claim_processing_dispatch(
         source is None
         or source.current_revision != disclosure.source_revision
         or source.lifecycle_state not in {MemoryInboxSourceState.UNPROCESSED.value, MemoryInboxSourceState.DRAFT.value}
-        or source.deletion_state != "None" or source.retention_deadline_at <= datetime.now(timezone.utc)
+        or source.deletion_state != "None" or retention_expired(source.retention_deadline_at)
         or policy is None or policy.revision != disclosure.policy_revision
     ):
         raise ValueError("dispatch_disclosure_stale")
@@ -65,7 +67,12 @@ async def claim_processing_dispatch(
         proposal_revision_id=proposal_revision_id, consent_ref=disclosure.receipt_ref,
         provider_code="unselected", attempt_sequence=1, lifecycle_state="Claimed",
     )
-    session.add_all((proposal, proposal_revision, attempt))
+    proposal_manifest = MemoryInboxManifest(
+        id=f"inbox-manifest:{uuid.uuid4().hex}", owner_revision_id=proposal_revision_id,
+        copy_class="proposal_body", store_ref=f"inbox-store:{uuid.uuid4().hex}",
+        creation_state="Planned", retention_class="proposal_retention", deletion_state="None",
+    )
+    session.add_all((proposal, proposal_revision, attempt, proposal_manifest))
     source.current_revision += 1
     source.lifecycle_state = MemoryInboxSourceState.PROCESSING.value
     session.add(MemoryInboxSourceRevision(
