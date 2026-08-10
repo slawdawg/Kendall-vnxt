@@ -9,8 +9,8 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier, plan_pending_deletion_operations
-from supervisor.infrastructure.db.models import MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest, MemoryInboxSource, MemoryInboxSourceRevision
+from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier, plan_pending_deletion_operations, source_copy_owner_revision_ids
+from supervisor.infrastructure.db.models import MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest, MemoryInboxSource
 
 DeletionInitiator = Literal["operator", "retention_expiry", "retry"]
 
@@ -74,11 +74,11 @@ async def retry_source_deletion(
     if source is None or source.current_revision != expected_revision or source.lifecycle_state != "DeletePending" or source.deletion_state != "RetryNeeded":
         raise ValueError("source_deletion_retry_unavailable")
     now = datetime.now(timezone.utc)
-    revision_ids = select(MemoryInboxSourceRevision.id).where(MemoryInboxSourceRevision.source_id == source.id)
+    owner_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
     operations = list((await session.scalars(select(MemoryInboxDeletionOperation).join(
         MemoryInboxManifest, MemoryInboxManifest.id == MemoryInboxDeletionOperation.manifest_id,
     ).where(
-        MemoryInboxManifest.owner_revision_id.in_(revision_ids),
+        MemoryInboxManifest.owner_revision_id.in_(owner_revision_ids),
         MemoryInboxDeletionOperation.lifecycle_state == "RetryNeeded",
     ).with_for_update())).all())
     for operation in operations:
@@ -136,8 +136,8 @@ async def _start_source_deletion(
 
 
 async def _operation_count(session: AsyncSession, source_id: str) -> int:
-    revision_ids = select(MemoryInboxSourceRevision.id).where(MemoryInboxSourceRevision.source_id == source_id)
-    manifest_ids = select(MemoryInboxManifest.id).where(MemoryInboxManifest.owner_revision_id.in_(revision_ids))
+    owner_revision_ids = await source_copy_owner_revision_ids(session, source_id=source_id)
+    manifest_ids = select(MemoryInboxManifest.id).where(MemoryInboxManifest.owner_revision_id.in_(owner_revision_ids))
     return len((await session.scalars(select(MemoryInboxDeletionOperation.id).where(
         MemoryInboxDeletionOperation.manifest_id.in_(manifest_ids),
     ))).all())

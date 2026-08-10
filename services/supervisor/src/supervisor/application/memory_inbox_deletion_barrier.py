@@ -85,13 +85,11 @@ async def plan_pending_deletion_operations(
     if source.lifecycle_state != "DeletePending" or source.deletion_state not in {"Pending", "RetryNeeded"}:
         return 0
     now = now or datetime.now(timezone.utc)
-    revision_ids = list((await session.scalars(select(MemoryInboxSourceRevision.id).where(
-        MemoryInboxSourceRevision.source_id == source.id,
-    ))).all())
-    if not revision_ids:
+    source_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
+    if not source_revision_ids:
         return 0
     active_claim = await session.scalar(select(MemoryInboxJob.id).where(
-        MemoryInboxJob.source_revision_id.in_(revision_ids),
+        MemoryInboxJob.source_revision_id.in_(source_revision_ids),
         MemoryInboxJob.lifecycle_state == "Claimed",
         MemoryInboxJob.lease_expires_at.is_not(None),
         MemoryInboxJob.lease_expires_at > now,
@@ -99,7 +97,7 @@ async def plan_pending_deletion_operations(
     if active_claim is not None:
         return 0
     manifests = list((await session.scalars(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id.in_(revision_ids),
+        MemoryInboxManifest.owner_revision_id.in_(source_revision_ids),
         MemoryInboxManifest.deletion_state != "Proven",
     ).with_for_update())).all())
     if not manifests:
@@ -118,3 +116,15 @@ async def plan_pending_deletion_operations(
             ))
             created += 1
     return created
+
+
+async def source_copy_owner_revision_ids(session: AsyncSession, *, source_id: str) -> list[str]:
+    """Return every revision owner that can hold a Kendall-controlled source copy."""
+    source_revision_ids = list((await session.scalars(select(MemoryInboxSourceRevision.id).where(
+        MemoryInboxSourceRevision.source_id == source_id,
+    ))).all())
+    proposal_revision_ids = list((await session.scalars(select(MemoryInboxProposalRevision.id).join(
+        MemoryInboxProposalAggregate,
+        MemoryInboxProposalAggregate.id == MemoryInboxProposalRevision.proposal_id,
+    ).where(MemoryInboxProposalAggregate.source_id == source_id))).all())
+    return [*source_revision_ids, *proposal_revision_ids]

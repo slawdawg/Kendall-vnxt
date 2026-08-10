@@ -8,11 +8,10 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier
+from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier, source_copy_owner_revision_ids
 from supervisor.infrastructure.db.models import (
     MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest,
     MemoryInboxProposalAggregate, MemoryInboxProposalRevision, MemoryInboxSource,
-    MemoryInboxSourceRevision,
 )
 
 
@@ -78,6 +77,6 @@ async def approve_proposal_for_deletion(
 
 
 async def _operation_count(session: AsyncSession, source_id: str) -> int:
-    revision_ids = select(MemoryInboxSourceRevision.id).where(MemoryInboxSourceRevision.source_id == source_id)
-    manifest_ids = select(MemoryInboxManifest.id).where(MemoryInboxManifest.owner_revision_id.in_(revision_ids))
+    owner_revision_ids = await source_copy_owner_revision_ids(session, source_id=source_id)
+    manifest_ids = select(MemoryInboxManifest.id).where(MemoryInboxManifest.owner_revision_id.in_(owner_revision_ids))
     return len((await session.scalars(select(MemoryInboxDeletionOperation.id).where(MemoryInboxDeletionOperation.manifest_id.in_(manifest_ids)))).all())
