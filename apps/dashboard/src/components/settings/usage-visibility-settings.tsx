@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 const usageVisibilityOptions = [
   {
-    description: "Show Codex 5h and weekly usage bars in the pipeline cockpit.",
+    description: "Show the current Codex account-allowance meter in the pipeline cockpit.",
     key: "kendall.dashboard.usage.codex.visible",
     label: "Codex usage",
   },

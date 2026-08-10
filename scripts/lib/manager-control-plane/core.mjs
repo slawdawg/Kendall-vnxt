@@ -1735,6 +1735,8 @@ function buildUsageGovernorSummary(parsed = {}, context = {}) {
   );
   return {
     source: sanitizeLedgerField(parsed.source || "fetch-codex-usage", "fetch-codex-usage", 80),
+    usageWindow: "current_account_allowance",
+    sourceConfidence: sanitizeLedgerField(context.sourceConfidence || "direct_provider_metadata", "direct_provider_metadata", 80),
     state,
     remainingPercent: Number.isFinite(parsed.remainingPercent) ? boundedPercent(parsed.remainingPercent) : null,
     sampledAt,
@@ -1745,7 +1747,7 @@ function buildUsageGovernorSummary(parsed = {}, context = {}) {
     leaseIssuancePolicy: usageLeaseIssuancePolicy(state, weekly),
     activeWorkPolicy: usageActiveWorkPolicy(state),
     modelQualityPolicy: "preserve_task_fit_quality",
-    managerOnlyReason: managerOnly ? "five_hour_usage_at_or_below_2_percent" : "",
+    managerOnlyReason: managerOnly ? "account_allowance_at_or_below_2_percent" : "",
     resumeTrigger: managerOnly ? usageResumeTrigger(parsed) : "",
     rawPayloadRetained: false,
   };
@@ -1765,9 +1767,9 @@ function usageGovernorWarnings(summary = {}) {
 }
 
 function usageResumeTrigger(parsed = {}) {
-  if (parsed.resetTime) return `5h_reset_at_${sanitizeLedgerField(parsed.resetTime, "unknown", 40)}`;
-  if (Number.isFinite(parsed.resetInSeconds)) return `5h_reset_in_${Math.max(0, Math.floor(parsed.resetInSeconds))}s`;
-  return "wait_for_5h_reset";
+  if (parsed.resetTime) return `provider_reset_at_${sanitizeLedgerField(parsed.resetTime, "unknown", 40)}`;
+  if (Number.isFinite(parsed.resetInSeconds)) return `provider_reset_in_${Math.max(0, Math.floor(parsed.resetInSeconds))}s`;
+  return "wait_for_provider_reset";
 }
 
 function usageLeaseIssuancePolicy(state = "unknown", weekly = {}) {
@@ -1868,13 +1870,16 @@ export function buildUsageStatus(context = {}) {
   const runner = context.runner || spawnSync;
   const usagePath = context.usagePath || defaultAgentUsageScript(context.env || process.env);
   const fetcherPath = context.fetcherPath || defaultCodexUsageFetcher(usagePath);
-  const agentUsage = readAgentCodexUsage(usagePath, runner, context);
-  if (agentUsage.packet) {
-    return agentUsage.packet;
-  }
   const directUsage = readDirectCodexUsage(fetcherPath, runner, context);
   if (directUsage.packet) {
     return directUsage.packet;
+  }
+  const agentUsage = readAgentCodexUsage(usagePath, runner, context);
+  if (agentUsage.packet) {
+    return {
+      ...agentUsage.packet,
+      warnings: [...directUsage.warnings, ...agentUsage.packet.warnings],
+    };
   }
   const weekly = selectWeeklyUsagePressure(context.weeklyUsage, context.weeklyUsageContext, context.weeklyUsagePressure);
   return packet({
@@ -1899,6 +1904,10 @@ export function buildUsageStatus(context = {}) {
   });
 }
 
+function isStatusBarZeroSentinel(parsed = {}) {
+  return parsed.remainingPercent === 0 && (!parsed.resetTime || parsed.resetTime === "00:00");
+}
+
 function readAgentCodexUsage(usagePath, runner, context = {}) {
   if (!usagePath || !existsSync(usagePath)) {
     return {
@@ -1911,7 +1920,16 @@ function readAgentCodexUsage(usagePath, runner, context = {}) {
   if ((result.status ?? 1) === 0) {
     const parsed = parseCodexUsageOutput(result.stdout || "");
     if (parsed) {
-      const summary = buildUsageGovernorSummary(parsed, context);
+      if (isStatusBarZeroSentinel(parsed)) {
+        return {
+          packet: null,
+          warnings: [{
+            code: "usage-agent-script-zero-sentinel",
+            message: "Status-bar Codex usage returned the zero sentinel after direct telemetry was unavailable.",
+          }],
+        };
+      }
+      const summary = buildUsageGovernorSummary(parsed, { ...context, sourceConfidence: "status_bar_compatibility_fallback" });
       return {
         packet: packet({
           status: parsed.state,
@@ -1930,7 +1948,7 @@ function readAgentCodexUsage(usagePath, runner, context = {}) {
     packet: null,
     warnings: [{
       code: "usage-agent-script-failed",
-      message: (result.stderr || result.error?.message || "agent_usage.sh codex failed").trim(),
+      message: "Could not read Codex status-bar usage.",
     }],
   };
 }
@@ -1950,7 +1968,7 @@ function readDirectCodexUsage(fetcherPath, runner, context = {}) {
     const resetOk = (reset.status ?? 1) === 0;
     const parsed = parseCodexFetcherUsage(percent.stdout || "", resetOk ? reset.stdout || "" : "");
     if (parsed) {
-      const summary = buildUsageGovernorSummary(parsed, context);
+      const summary = buildUsageGovernorSummary(parsed, { ...context, sourceConfidence: "direct_provider_metadata" });
       const warnings = usageGovernorWarnings(summary);
       if (!resetOk) {
         warnings.push({
@@ -1979,7 +1997,7 @@ function readDirectCodexUsage(fetcherPath, runner, context = {}) {
     fetcherAvailable: true,
     warnings: [{
       code: "usage-fetcher-failed",
-      message: (percent.stderr || reset.stderr || percent.error?.message || reset.error?.message || "direct Codex usage fetch failed").trim(),
+      message: "Could not read direct Codex account allowance.",
     }],
   };
 }
@@ -28855,6 +28873,8 @@ function normalizeUsagePacketContext(context = {}, outer = {}) {
   );
   const summary = {
     source: sanitizeLedgerField(base.source || context.source || "injected-usage-context", "injected-usage-context", 80),
+    usageWindow: sanitizeLedgerField(base.usageWindow || context.usageWindow || "current_account_allowance", "current_account_allowance", 80),
+    sourceConfidence: sanitizeLedgerField(base.sourceConfidence || context.sourceConfidence || "injected_context", "injected_context", 80),
     state: status,
     remainingPercent: Number.isFinite(rawRemaining) ? boundedPercent(rawRemaining) : null,
     sampledAt,
@@ -28865,7 +28885,7 @@ function normalizeUsagePacketContext(context = {}, outer = {}) {
     leaseIssuancePolicy: base.leaseIssuancePolicy || usageLeaseIssuancePolicy(status, weekly),
     activeWorkPolicy: base.activeWorkPolicy || usageActiveWorkPolicy(status),
     modelQualityPolicy: "preserve_task_fit_quality",
-    managerOnlyReason: managerOnly ? sanitizeLedgerField(base.managerOnlyReason || "five_hour_usage_at_or_below_2_percent", "five_hour_usage_at_or_below_2_percent", 120) : "",
+    managerOnlyReason: managerOnly ? sanitizeLedgerField(base.managerOnlyReason || "account_allowance_at_or_below_2_percent", "account_allowance_at_or_below_2_percent", 120) : "",
     resumeTrigger: managerOnly ? sanitizeLedgerField(base.resumeTrigger || usageResumeTrigger(parsedForResume), usageResumeTrigger(parsedForResume), 120) : "",
     available: typeof base.available === "boolean" ? base.available : typeof context.available === "boolean" ? context.available : undefined,
     fetcherPath: base.fetcherPath || context.fetcherPath ? sanitizeLedgerField(base.fetcherPath || context.fetcherPath, "", 240) : undefined,

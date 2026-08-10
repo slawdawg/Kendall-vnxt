@@ -1556,7 +1556,7 @@ test("classifies Codex usage threshold boundaries", () => {
   }
 });
 
-test("builds usage status from live agent usage script", () => {
+test("direct Codex account allowance takes precedence over status-bar usage", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-usage-"));
   const usagePath = join(stateRoot, "agent_usage.sh");
   const fetcherPath = join(stateRoot, "fetch_codex_usage.py");
@@ -1567,21 +1567,23 @@ test("builds usage status from live agent usage script", () => {
       usagePath,
       fetcherPath,
       runner(command, args) {
-        if (command === usagePath && args[0] === "codex") {
-          return { status: 0, stdout: ">_ 85% 03:16\n", stderr: "" };
-        }
         if (command === "python3" && args.includes("--field") && args.includes("percent")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "73\n", stderr: "" };
         }
         if (command === "python3" && args.includes("--field") && args.includes("reset_in")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "11800\n", stderr: "" };
+        }
+        if (command === usagePath && args[0] === "codex") {
+          return { status: 0, stdout: ">_ 85% 03:16\n", stderr: "" };
         }
         throw new Error(`unexpected usage command ${command}`);
       },
     });
     assert.equal(usage.status, "normal");
-    assert.equal(usage.summary.source, "agent-usage-tmux");
-    assert.equal(usage.summary.remainingPercent, 85);
+    assert.equal(usage.summary.source, "fetch-codex-usage");
+    assert.equal(usage.summary.sourceConfidence, "direct_provider_metadata");
+    assert.equal(usage.summary.usageWindow, "current_account_allowance");
+    assert.equal(usage.summary.remainingPercent, 73);
     assert.equal(usage.summary.resetTime, "03:16");
     assert.equal(usage.summary.weekly.state, "unknown");
     assert.equal(usage.summary.weekly.reliable, false);
@@ -1590,7 +1592,7 @@ test("builds usage status from live agent usage script", () => {
   }
 });
 
-test("usage status enters manager-only with reset metadata and reliable weekly pressure", () => {
+test("valid direct zero enters manager-only with generic reset metadata and reliable weekly pressure", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-usage-pressure-"));
   const usagePath = join(stateRoot, "agent_usage.sh");
   const fetcherPath = join(stateRoot, "fetch_codex_usage.py");
@@ -1602,14 +1604,14 @@ test("usage status enters manager-only with reset metadata and reliable weekly p
       fetcherPath,
       weeklyUsage: { state: "pressured", source: "fixture-weekly-budget", reliable: true, resetTime: "Friday 20:00" },
       runner(command, args) {
-        if (command === usagePath && args[0] === "codex") {
-          return { status: 0, stdout: ">_ 2% 00:01\n", stderr: "" };
-        }
         if (command === "python3" && args.includes("--field") && args.includes("percent")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "2\n", stderr: "" };
         }
         if (command === "python3" && args.includes("--field") && args.includes("reset_in")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "60\n", stderr: "" };
+        }
+        if (command === usagePath && args[0] === "codex") {
+          return { status: 0, stdout: ">_ 2% 00:01\n", stderr: "" };
         }
         throw new Error(`unexpected usage command ${command}`);
       },
@@ -1618,9 +1620,9 @@ test("usage status enters manager-only with reset metadata and reliable weekly p
     assert.equal(usage.status, "manager_only");
     assert.equal(usage.summary.remainingPercent, 2);
     assert.equal(usage.summary.resetTime, "00:01");
-    assert.equal(usage.summary.resetInSeconds, null);
-    assert.equal(usage.summary.resumeTrigger, "5h_reset_at_00:01");
-    assert.equal(usage.summary.managerOnlyReason, "five_hour_usage_at_or_below_2_percent");
+    assert.equal(usage.summary.resetInSeconds, 60);
+    assert.equal(usage.summary.resumeTrigger, "provider_reset_at_00:01");
+    assert.equal(usage.summary.managerOnlyReason, "account_allowance_at_or_below_2_percent");
     assert.equal(usage.summary.weekly.state, "pressured");
     assert.equal(usage.summary.weekly.leasePolicy, "reduce_new_leases_or_defer_optional_work");
     assert.equal(usage.summary.weekly.modelQualityPolicy, "preserve_task_fit_quality");
@@ -1642,14 +1644,14 @@ test("usage status ignores unreliable weekly and stale transcript-like usage cla
       fetcherPath,
       weeklyUsage: { state: "pressured raw transcript sk-weekly-secret", source: "tmux:pane-scrollback", reliable: false },
       runner(command, args) {
-        if (command === usagePath && args[0] === "codex") {
-          return { status: 0, stdout: ">_ 26% 01:00\n", stderr: "" };
-        }
         if (command === "python3" && args.includes("--field") && args.includes("percent")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "26\n", stderr: "" };
         }
         if (command === "python3" && args.includes("--field") && args.includes("reset_in")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "3600\n", stderr: "" };
+        }
+        if (command === usagePath && args[0] === "codex") {
+          return { status: 0, stdout: ">_ 26% 01:00\n", stderr: "" };
         }
         throw new Error(`unexpected usage command ${command}`);
       },
@@ -1665,7 +1667,7 @@ test("usage status ignores unreliable weekly and stale transcript-like usage cla
   }
 });
 
-test("usage status falls back to direct fetcher when agent usage script fails", () => {
+test("direct account allowance preserves state when provider reset metadata is unavailable", () => {
   const stateRoot = mkdtempSync(join(tmpdir(), "manager-usage-reset-fail-"));
   const usagePath = join(stateRoot, "agent_usage.sh");
   const fetcherPath = join(stateRoot, "fetch_codex_usage.py");
@@ -1693,7 +1695,7 @@ test("usage status falls back to direct fetcher when agent usage script fails", 
     assert.equal(usage.summary.source, "fetch-codex-usage");
     assert.equal(usage.summary.remainingPercent, 2);
     assert.equal(usage.summary.resetTime, null);
-    assert.equal(usage.summary.resumeTrigger, "wait_for_5h_reset");
+    assert.equal(usage.summary.resumeTrigger, "wait_for_provider_reset");
     assert.ok(usage.warnings.some((warning) => warning.code === "usage-reset-fetcher-failed"));
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
@@ -1713,14 +1715,14 @@ test("usage status selects reliable weekly pressure after unavailable aliases", 
       weeklyUsage: { state: "unknown", source: "missing-weekly-budget", reliable: false },
       weeklyUsageContext: { state: "unknown", pressure: "pressured", source: "weekly-panel-budget", reliable: true },
       runner(command, args) {
-        if (command === usagePath && args[0] === "codex") {
-          return { status: 0, stdout: ">_ 85% 01:00\n", stderr: "" };
-        }
         if (command === "python3" && args.includes("--field") && args.includes("percent")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "85\n", stderr: "" };
         }
         if (command === "python3" && args.includes("--field") && args.includes("reset_in")) {
-          throw new Error("direct usage fetcher should not be called when agent_usage.sh succeeds");
+          return { status: 0, stdout: "3600\n", stderr: "" };
+        }
+        if (command === usagePath && args[0] === "codex") {
+          return { status: 0, stdout: ">_ 85% 01:00\n", stderr: "" };
         }
         throw new Error(`unexpected usage command ${command}`);
       },
@@ -1730,6 +1732,64 @@ test("usage status selects reliable weekly pressure after unavailable aliases", 
     assert.equal(usage.summary.weekly.state, "pressured");
     assert.equal(usage.summary.weekly.source, "weekly-panel-budget");
     assert.equal(usage.summary.leaseIssuancePolicy, "reduce_new_leases_or_defer_optional_work");
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("direct failure plus status-bar zero sentinel remains unknown and conservative", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-usage-zero-sentinel-"));
+  const usagePath = join(stateRoot, "agent_usage.sh");
+  const fetcherPath = join(stateRoot, "fetch_codex_usage.py");
+  writeFileSync(usagePath, "#!/usr/bin/env bash\n");
+  writeFileSync(fetcherPath, "#!/usr/bin/env python3\n");
+  try {
+    const usage = buildUsageStatus({
+      usagePath,
+      fetcherPath,
+      runner(command, args) {
+        if (command === "python3" && args.includes("--field")) {
+          return { status: 1, stdout: "", stderr: "direct usage unavailable" };
+        }
+        if (command === usagePath && args[0] === "codex") {
+          return { status: 0, stdout: ">_ 0% 00:00\n", stderr: "" };
+        }
+        throw new Error(`unexpected usage command ${command}`);
+      },
+    });
+    assert.equal(usage.status, "unknown");
+    assert.equal(usage.summary.leaseIssuancePolicy, "usage_unknown_conservative_new_lease_policy");
+    assert.match(JSON.stringify(usage.warnings), /usage-fetcher-failed/);
+    assert.match(JSON.stringify(usage.warnings), /usage-agent-script-zero-sentinel/);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("non-sentinel status-bar usage is a compatibility fallback after direct failure", () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "manager-usage-status-bar-fallback-"));
+  const usagePath = join(stateRoot, "agent_usage.sh");
+  const fetcherPath = join(stateRoot, "fetch_codex_usage.py");
+  writeFileSync(usagePath, "#!/usr/bin/env bash\n");
+  writeFileSync(fetcherPath, "#!/usr/bin/env python3\n");
+  try {
+    const usage = buildUsageStatus({
+      usagePath,
+      fetcherPath,
+      runner(command, args) {
+        if (command === "python3" && args.includes("--field")) {
+          return { status: 1, stdout: "", stderr: "direct usage unavailable" };
+        }
+        if (command === usagePath && args[0] === "codex") {
+          return { status: 0, stdout: ">_ 13% 01:20\n", stderr: "" };
+        }
+        throw new Error(`unexpected usage command ${command}`);
+      },
+    });
+    assert.equal(usage.status, "conserve");
+    assert.equal(usage.summary.source, "agent-usage-tmux");
+    assert.equal(usage.summary.sourceConfidence, "status_bar_compatibility_fallback");
+    assert.match(JSON.stringify(usage.warnings), /usage-fetcher-failed/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -1761,6 +1821,7 @@ test("reports unknown usage when agent usage script and direct Codex fetcher fai
     assert.equal(usage.summary.rawPayloadRetained, false);
     assert.match(JSON.stringify(usage.warnings), /usage-agent-script-failed/);
     assert.match(JSON.stringify(usage.warnings), /usage-fetcher-failed/);
+    assert.doesNotMatch(JSON.stringify(usage.warnings), /agent usage failed|request failed/);
   } finally {
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -20269,7 +20330,7 @@ test("cycle dispatch posture stops new dispatch before reducing model quality", 
       },
     );
     assert.equal(injectedManagerOnly.summary.usage.remainingPercent, 2);
-    assert.equal(injectedManagerOnly.summary.usage.resumeTrigger, "5h_reset_at_00:01");
+    assert.equal(injectedManagerOnly.summary.usage.resumeTrigger, "provider_reset_at_00:01");
     assert.equal(injectedManagerOnly.summary.usage.weekly.state, "normal");
     assert.equal(injectedManagerOnly.summary.dispatchPosture.newDispatchAllowed, false);
 
@@ -26606,7 +26667,7 @@ test("progress beacon adapts cadence for pressure waiting unknown and no materia
       usageState: "manager_only",
       resourceState: "normal",
       operatorActionState: "none",
-      usageSummary: { managerOnlyReason: "five_hour_usage_at_or_below_2_percent", resumeTrigger: "reset at 21:34" },
+      usageSummary: { managerOnlyReason: "account_allowance_at_or_below_2_percent", resumeTrigger: "reset at 21:34" },
     },
   );
   assert.equal(managerOnly.summary.heartbeat.cadence.mode, "state_change_or_hourly");

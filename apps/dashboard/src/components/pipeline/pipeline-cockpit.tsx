@@ -3477,8 +3477,7 @@ function globalUsageItems() {
     {
       detail: disconnectedUsageDetail,
       meters: [
-        { label: "5h", percent: 0 },
-        { label: "Weekly", percent: 0 },
+        { label: "Current allowance", percent: 0 },
       ],
       provider: "Codex",
       providerKey: "codex" as const,

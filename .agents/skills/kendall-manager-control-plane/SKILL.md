@@ -550,13 +550,23 @@ The operator may steer an active run with pause, resume, stop after current lane
 
 ## Usage Rules
 
-- Use the live `agent-usage-tmux` status-bar script for current Codex 5-hour usage:
-  `$HOME/.tmux/plugins/agent-usage-tmux/scripts/agent_usage.sh codex`.
-- Parse the `>_ NN%` and `HH:MM` fields from that script output. This script
-  output is manager dispatch evidence; raw tmux pane scrollback is not.
-- Use `fetch_codex_usage.py --field percent` and `--field reset_in` only as a
-  fallback when the live status-bar script is unavailable or unparsable.
-- At or below 2% 5-hour usage remaining, enter manager-only mode.
+- Use the existing read-only `fetch_codex_usage.py --field percent` and
+  `--field reset_in` helper first for current Codex account allowance and
+  provider-reported reset metadata. Treat it as plan-specific account telemetry,
+  not a public five-hour or weekly guarantee.
+- Preserve only bounded source, confidence, allowance, reset, and policy fields;
+  never retain provider responses, headers, credentials, or tmux scrollback.
+- If direct telemetry fails, parse the `>_ NN%` and `HH:MM` fields from
+  `$HOME/.tmux/plugins/agent-usage-tmux/scripts/agent_usage.sh codex` only as a
+  lower-confidence compatibility fallback. Its `0% 00:00` (or zero/empty reset)
+  result is a failure sentinel: report `unknown` and keep conservative workers,
+  not manager-only.
+- At or below 2% valid current account allowance remaining, enter manager-only
+  mode and resume on the provider-reported reset. Reliable weekly policy, when
+  supplied, remains a separate optional input.
+- The superseded instruction "At or below 2% 5-hour usage remaining, enter
+  manager-only mode" is not a provider contract and must not be used for a
+  direct source or dashboard claim.
 - In drain mode, stop new dispatch before interrupting safe active work.
 - If usage source is unavailable, report `unknown` and use conservative worker targets.
 
