@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier, source_copy_owner_revision_ids
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import (
     MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest,
     MemoryInboxProposalAggregate, MemoryInboxProposalRevision, MemoryInboxSource,
@@ -52,7 +53,7 @@ async def approve_proposal_for_deletion(
     source = (await session.execute(select(MemoryInboxSource).where(
         MemoryInboxSource.id == proposal.source_id
     ).with_for_update())).scalar_one_or_none()
-    if source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or source.retention_deadline_at <= datetime.now(timezone.utc):
+    if source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or retention_expired(source.retention_deadline_at):
         raise ValueError("approval_revision_unavailable")
     proposal_revision = (await session.execute(select(MemoryInboxProposalRevision).where(
         MemoryInboxProposalRevision.proposal_id == proposal.id,

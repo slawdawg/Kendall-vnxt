@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import (
     MemoryInboxCostPolicy,
     MemoryInboxProcessingAttempt,
@@ -48,7 +49,7 @@ async def claim_processing_dispatch(
         source is None
         or source.current_revision != disclosure.source_revision
         or source.lifecycle_state not in {MemoryInboxSourceState.UNPROCESSED.value, MemoryInboxSourceState.DRAFT.value}
-        or source.deletion_state != "None" or source.retention_deadline_at <= datetime.now(timezone.utc)
+        or source.deletion_state != "None" or retention_expired(source.retention_deadline_at)
         or policy is None or policy.revision != disclosure.policy_revision
     ):
         raise ValueError("dispatch_disclosure_stale")

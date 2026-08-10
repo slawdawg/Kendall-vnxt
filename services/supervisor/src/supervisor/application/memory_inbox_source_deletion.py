@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.application.memory_inbox_deletion_barrier import establish_deletion_barrier, plan_pending_deletion_operations, source_copy_owner_revision_ids
+from supervisor.domain.memory_inbox_time import as_utc
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxManifest, MemoryInboxSource
 
 DeletionInitiator = Literal["operator", "retention_expiry", "retry"]
@@ -120,7 +121,7 @@ async def _start_source_deletion(
     if (
         source is None or source.current_revision != expected_revision
         or source.lifecycle_state in {"DeletePending", "Deleted"}
-        or (require_expired and source.retention_deadline_at > now)
+        or (require_expired and as_utc(source.retention_deadline_at) > now)
     ):
         raise ValueError("source_deletion_revision_unavailable")
     operation_count = await establish_deletion_barrier(session, source=source, actor_ref=actor_ref, now=now)

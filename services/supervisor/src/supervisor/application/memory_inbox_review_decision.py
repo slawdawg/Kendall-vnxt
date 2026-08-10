@@ -9,6 +9,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import (
     MemoryInboxCommandResult,
     MemoryInboxProcessingAttempt,
@@ -81,7 +82,7 @@ async def _apply_decision(
     source = (await session.execute(select(MemoryInboxSource).where(
         MemoryInboxSource.id == proposal.source_id
     ).with_for_update())).scalar_one_or_none()
-    if proposal_revision is None or source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or source.retention_deadline_at <= datetime.now(timezone.utc):
+    if proposal_revision is None or source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or retention_expired(source.retention_deadline_at):
         raise ValueError("review_decision_revision_unavailable")
     attempts = (await session.execute(select(MemoryInboxProcessingAttempt).where(
         MemoryInboxProcessingAttempt.proposal_revision_id == proposal_revision.id

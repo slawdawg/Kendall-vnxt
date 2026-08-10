@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy
 from supervisor.domain.memory_inbox import MemoryInboxSourceState
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import (
     MemoryInboxCostPolicy,
     MemoryInboxProcessingDisclosure,
@@ -27,7 +28,7 @@ async def present_processing_disclosure(
         raise ValueError("disclosure_source_revision_mismatch")
     if source.lifecycle_state not in {MemoryInboxSourceState.UNPROCESSED.value, MemoryInboxSourceState.DRAFT.value}:
         raise ValueError("disclosure_source_not_safe")
-    if source.retention_deadline_at <= datetime.now(timezone.utc):
+    if retention_expired(source.retention_deadline_at):
         raise ValueError("disclosure_source_expired")
     source_revision = (await session.execute(select(MemoryInboxSourceRevision).where(
         MemoryInboxSourceRevision.source_id == source.id,

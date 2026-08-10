@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.domain.memory_inbox import MemoryInboxSourceState, can_advance_lifecycle, is_positive_revision
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult, MemoryInboxSource, MemoryInboxSourceRevision
 
 
@@ -65,7 +66,7 @@ async def apply_lifecycle_command(
         return await _record_terminal_result(session, command, digest, verified_actor_ref, outcome="conflict", reason_code="stale_revision", resulting_revision=source.current_revision)
     current = MemoryInboxSourceState(source.lifecycle_state)
     if (
-        source.retention_deadline_at <= datetime.now(timezone.utc)
+            retention_expired(source.retention_deadline_at)
         and command.target_state is not MemoryInboxSourceState.DELETE_PENDING
     ):
         return await _record_terminal_result(

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.config.settings import Settings
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import (
     MemoryInboxManifest,
     MemoryInboxProposalAggregate,
@@ -41,7 +42,7 @@ async def read_authorized_proposal(
         MemoryInboxProposalRevision.lifecycle_state == "Ready",
     ))).scalar_one_or_none()
     source = await session.get(MemoryInboxSource, proposal.source_id)
-    if proposal_revision is None or source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or source.retention_deadline_at <= datetime.now(timezone.utc):
+    if proposal_revision is None or source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or retention_expired(source.retention_deadline_at):
         raise ValueError("proposal_reader_revision_unavailable")
     grant = (await session.execute(select(MemoryInboxProposalReaderGrant).where(
         MemoryInboxProposalReaderGrant.proposal_revision_id == proposal_revision.id,

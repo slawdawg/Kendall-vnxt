@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from supervisor.domain.memory_inbox_time import retention_expired
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult, MemoryInboxProcessingDisclosure, MemoryInboxSource, MemoryInboxSourceRevision
 
 
@@ -46,7 +47,7 @@ async def extend_source_retention(
     now = datetime.now(timezone.utc)
     if (
         source is None or source.current_revision != expected_revision
-        or source.retention_deadline_at <= now
+        or retention_expired(source.retention_deadline_at, now=now)
         or source.lifecycle_state in {"DeletePending", "Deleted"}
     ):
         raise ValueError("retention_extension_unavailable")
