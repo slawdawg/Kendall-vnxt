@@ -36,11 +36,13 @@ async def test_disclosure_binds_one_safe_source_revision_and_disabled_policy(tmp
             actor_ref="operator:verified",
         )
         accepted = await accept_processing_disclosure(session, disclosure_id=disclosure["disclosureId"], actor_ref="operator:verified")
+        replayed_acceptance = await accept_processing_disclosure(session, disclosure_id=disclosure["disclosureId"], actor_ref="operator:verified")
         assert disclosure["providerOrder"] == ["local", "openai", "anthropic"]
         assert disclosure["providerActivation"] == "disabled_by_default"
         assert disclosure["noWriteGuarantee"] is True
         assert replay["replayed"] is True
         assert accepted["lifecycleState"] == "Accepted"
+        assert replayed_acceptance["replayed"] is True
         assert accepted["nextSafeAction"] == "dispatch_unavailable"
     await engine.dispose()
 

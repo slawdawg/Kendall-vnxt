@@ -81,6 +81,27 @@ async def test_stale_source_is_closed_before_inspection_content_can_be_read(tmp_
 
 
 @pytest.mark.asyncio
+async def test_missing_quarantine_manifest_is_closed_without_retrying_or_reading(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'missing-manifest.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        source = MemoryInboxSource(id="inbox-source:missing-manifest", current_revision=2, lifecycle_state="Quarantined", retention_deadline_at=now + timedelta(hours=24), deletion_state="None", policy_ref="memory-inbox-retention-v1")
+        revision = MemoryInboxSourceRevision(id="inbox-source-revision:missing-manifest", source_id=source.id, revision=2, lifecycle_state="Quarantined", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
+        job = MemoryInboxJob(id="inbox-job:missing-manifest", source_revision_id=revision.id, capability_ref="inspection-v1", lifecycle_state="Planned", lease_expires_at=now + timedelta(seconds=60), timeout_at=now + timedelta(seconds=60))
+        session.add_all((source, revision, job))
+        await session.commit()
+        with pytest.raises(ValueError, match="inspection_manifest_unavailable"):
+            await claim_inspection_job(session, job_id=job.id)
+        closed_job = await session.get(MemoryInboxJob, job.id)
+        assert closed_job.lifecycle_state == "Closed"
+        assert closed_job.result_ref.startswith("inspection:manifest_unavailable:")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_job_is_closed_before_inspection_content_can_be_read(tmp_path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancelled.db'}")
     async with engine.begin() as connection:

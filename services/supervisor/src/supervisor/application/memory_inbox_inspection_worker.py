@@ -90,6 +90,9 @@ async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> Inspect
         raise ValueError("inspection_job_expired")
     revision = await session.get(MemoryInboxSourceRevision, job.source_revision_id)
     if revision is None:
+        job.lifecycle_state = "Closed"
+        job.result_ref = f"inspection:revision_unavailable:{uuid.uuid4().hex}"
+        await session.commit()
         raise ValueError("inspection_revision_unavailable")
     source = (await session.execute(
         select(MemoryInboxSource)
@@ -113,6 +116,9 @@ async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> Inspect
         MemoryInboxManifest.deletion_state == "None",
     ))).scalar_one_or_none()
     if manifest is None or not manifest.declared_media_type:
+        job.lifecycle_state = "Closed"
+        job.result_ref = f"inspection:manifest_unavailable:{uuid.uuid4().hex}"
+        await session.commit()
         raise ValueError("inspection_manifest_unavailable")
     job.lifecycle_state = "Claimed"
     job.heartbeat_at = now
