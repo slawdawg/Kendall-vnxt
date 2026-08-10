@@ -134,6 +134,7 @@ from supervisor.api.schemas import (
     MemoryInboxProcessingDisclosureRequest,
     MemoryInboxProcessingDisclosureApiEnvelope,
     MemoryInboxCostPolicyApiEnvelope,
+    MemoryInboxDispatchClaimApiEnvelope,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -198,6 +199,7 @@ from supervisor.application.memory_inbox_inspection import require_inspection_ac
 from supervisor.application.memory_inbox_inspection_lease import plan_inspection_lease
 from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
 from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
+from supervisor.application.memory_inbox_dispatch_claim import claim_processing_dispatch
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
@@ -878,6 +880,35 @@ async def accept_memory_inbox_processing_disclosure(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="Processing Disclosure acceptance is unavailable.") from exc
     return {"data": disclosure}
+
+
+@app.post("/memory-inbox/processing-disclosures/{disclosure_id}/dispatch", response_model=MemoryInboxDispatchClaimApiEnvelope)
+async def dispatch_memory_inbox_processing(
+    disclosure_id: str,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create or read back exactly one no-egress ProcessingAttempt claim."""
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        claim = await claim_processing_dispatch(
+            session, disclosure_id=disclosure_id, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox dispatch is unavailable.") from exc
+    lifecycle_state = claim["lifecycleState"]
+    next_safe_action = {
+        "Claimed": "reserve_cost",
+        "CompletionUnknown": "resolve_completion_unknown",
+        "Closed": "review",
+    }.get(lifecycle_state, "refresh_memory_inbox")
+    return {"data": {
+        "schemaVersion": "kendall-memory-inbox-dispatch-claim/v1",
+        **claim,
+        "nextSafeAction": next_safe_action,
+    }}
 
 
 @app.post("/memory-inbox/sources/{source_id}/lifecycle", response_model=MemoryInboxLifecycleCommandApiEnvelope)

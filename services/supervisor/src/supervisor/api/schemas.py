@@ -1475,6 +1475,24 @@ class MemoryInboxProcessingDisclosureApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     data: MemoryInboxProcessingDisclosureV1
+
+
+class MemoryInboxDispatchClaimV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-dispatch-claim/v1"]
+    attemptId: str
+    lifecycleState: Literal["Planned", "Claimed", "Dispatched", "CompletionUnknown", "Reconciled", "Cancelled", "Closed"]
+    replayed: bool
+    nextSafeAction: Literal["reserve_cost", "resolve_completion_unknown", "review", "refresh_memory_inbox"]
+
+
+class MemoryInboxDispatchClaimApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxDispatchClaimV1
+
+
 class MemoryInboxCostPolicyProviderV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
