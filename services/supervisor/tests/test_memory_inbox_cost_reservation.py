@@ -29,7 +29,8 @@ async def test_reservation_is_conservative_and_unknown_completion_blocks_repeat_
         assert (await session.get(MemoryInboxCostReservation, reservation_id)).lifecycle_state == "CompletionUnknown"
         with pytest.raises(ValueError, match="reservation_attempt_unavailable"):
             await reserve_attempt_cost(session, attempt_id=attempt.id, amount=Decimal("1.00"))
-        await resolve_attempt_completion_unknown(session, attempt_id=attempt.id, resolution="released")
+        assert await resolve_attempt_completion_unknown(session, attempt_id=attempt.id, resolution="released") == "Cancelled"
+        assert await resolve_attempt_completion_unknown(session, attempt_id=attempt.id, resolution="released") == "Cancelled"
         assert (await session.get(MemoryInboxProcessingAttempt, attempt.id)).lifecycle_state == "Cancelled"
         assert (await session.get(MemoryInboxCostReservation, reservation_id)).lifecycle_state == "Released"
     await engine.dispose()

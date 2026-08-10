@@ -135,6 +135,8 @@ from supervisor.api.schemas import (
     MemoryInboxProcessingDisclosureApiEnvelope,
     MemoryInboxCostPolicyApiEnvelope,
     MemoryInboxDispatchClaimApiEnvelope,
+    MemoryInboxCompletionUnknownResolutionApiEnvelope,
+    MemoryInboxCompletionUnknownResolutionRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -200,6 +202,7 @@ from supervisor.application.memory_inbox_inspection_lease import plan_inspection
 from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
 from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
 from supervisor.application.memory_inbox_dispatch_claim import claim_processing_dispatch
+from supervisor.application.memory_inbox_cost_reservation import resolve_attempt_completion_unknown
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
 from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
@@ -908,6 +911,31 @@ async def dispatch_memory_inbox_processing(
         "schemaVersion": "kendall-memory-inbox-dispatch-claim/v1",
         **claim,
         "nextSafeAction": next_safe_action,
+    }}
+
+
+@app.post("/memory-inbox/processing-attempts/{attempt_id}/resolve-completion-unknown", response_model=MemoryInboxCompletionUnknownResolutionApiEnvelope)
+async def resolve_memory_inbox_completion_unknown(
+    attempt_id: str,
+    payload: MemoryInboxCompletionUnknownResolutionRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Record one authenticated, content-safe closeout for an uncertain attempt."""
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_command_operator(request, session)
+    try:
+        lifecycle_state = await resolve_attempt_completion_unknown(
+            session, attempt_id=attempt_id, resolution=payload.resolution,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox completion resolution is unavailable.") from exc
+    return {"data": {
+        "schemaVersion": "kendall-memory-inbox-completion-resolution/v1",
+        "attemptId": attempt_id,
+        "lifecycleState": lifecycle_state,
+        "nextSafeAction": "refresh_memory_inbox",
     }}
 
 

@@ -1493,6 +1493,27 @@ class MemoryInboxDispatchClaimApiEnvelope(BaseModel):
     data: MemoryInboxDispatchClaimV1
 
 
+class MemoryInboxCompletionUnknownResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    resolution: Literal["reconciled", "released"]
+
+
+class MemoryInboxCompletionUnknownResolutionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schemaVersion: Literal["kendall-memory-inbox-completion-resolution/v1"]
+    attemptId: str
+    lifecycleState: Literal["Reconciled", "Cancelled"]
+    nextSafeAction: Literal["refresh_memory_inbox"]
+
+
+class MemoryInboxCompletionUnknownResolutionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: MemoryInboxCompletionUnknownResolutionV1
+
+
 class MemoryInboxCostPolicyProviderV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
