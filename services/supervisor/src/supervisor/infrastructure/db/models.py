@@ -652,6 +652,27 @@ class MemoryInboxCostPolicyReceipt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class MemoryInboxProcessingDisclosure(Base):
+    """Immutable, metadata-only authorization disclosure for one source revision."""
+
+    __tablename__ = "memory_inbox_processing_disclosures"
+    __table_args__ = (UniqueConstraint("source_revision_id", "idempotency_key", name="uq_memory_inbox_disclosure_replay"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_source_revisions.id"), index=True)
+    source_revision: Mapped[int] = mapped_column(Integer)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"))
+    policy_revision: Mapped[int] = mapped_column(Integer)
+    provider_order: Mapped[str] = mapped_column(String(64), default="local>openai>anthropic")
+    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="Presented")
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    receipt_ref: Mapped[str] = mapped_column(String(160), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class MemoryInboxDeletionOperation(Base):
     __tablename__ = "memory_inbox_deletion_operations"
 
