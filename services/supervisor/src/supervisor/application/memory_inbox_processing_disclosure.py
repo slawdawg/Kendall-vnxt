@@ -61,7 +61,11 @@ async def accept_processing_disclosure(session: AsyncSession, *, disclosure_id: 
     disclosure = (await session.execute(select(MemoryInboxProcessingDisclosure).where(
         MemoryInboxProcessingDisclosure.id == disclosure_id
     ).with_for_update())).scalar_one_or_none()
-    if disclosure is None or disclosure.lifecycle_state != "Presented":
+    if disclosure is None:
+        raise ValueError("disclosure_unavailable")
+    if disclosure.lifecycle_state == "Accepted":
+        return _view(disclosure, replayed=True)
+    if disclosure.lifecycle_state != "Presented":
         raise ValueError("disclosure_unavailable")
     disclosure.lifecycle_state = "Accepted"
     disclosure.accepted_at = datetime.now(timezone.utc)

@@ -1,6 +1,7 @@
 """Atomic, no-egress ProcessingAttempt claim for one accepted disclosure."""
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,14 +38,17 @@ async def claim_processing_dispatch(
     if existing is not None:
         return {"attemptId": existing.id, "lifecycleState": existing.lifecycle_state, "replayed": True}
     source_revision = await session.get(MemoryInboxSourceRevision, disclosure.source_revision_id)
+    if source_revision is None:
+        raise ValueError("dispatch_disclosure_stale")
     source = (await session.execute(select(MemoryInboxSource).where(
-        MemoryInboxSource.id == source_revision.source_id if source_revision else False
+        MemoryInboxSource.id == source_revision.source_id
     ).with_for_update())).scalar_one_or_none()
     policy = await session.get(MemoryInboxCostPolicy, disclosure.policy_id)
     if (
-        source_revision is None or source is None
+        source is None
         or source.current_revision != disclosure.source_revision
         or source.lifecycle_state not in {MemoryInboxSourceState.UNPROCESSED.value, MemoryInboxSourceState.DRAFT.value}
+        or source.deletion_state != "None" or source.retention_deadline_at <= datetime.now(timezone.utc)
         or policy is None or policy.revision != disclosure.policy_revision
     ):
         raise ValueError("dispatch_disclosure_stale")
