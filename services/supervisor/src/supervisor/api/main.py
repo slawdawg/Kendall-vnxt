@@ -175,7 +175,7 @@ from supervisor.application.operator_auth import (
 )
 from supervisor.application.service import SupervisorService
 from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
-from supervisor.application.memory_inbox_projection import read_memory_inbox_projection
+from supervisor.application.memory_inbox_projection import read_memory_inbox_projection, read_review_ready_count
 from supervisor.application.memory_inbox_capture import capture_acknowledged_text
 from supervisor.application.memory_inbox_upload import receive_quarantined_upload
 from supervisor.application.memory_inbox_inspection import require_inspection_activation
@@ -905,7 +905,7 @@ async def get_memory_inbox_projection(
             deletionState=row.deletion_state,
             nextSafeAction=row.next_action_code,
         ) for row in rows],
-        reviewReadyCount=sum(row.lifecycle_state == "Review" for row in rows),
+        reviewReadyCount=await read_review_ready_count(session),
         nextSafeAction="refresh_memory_inbox" if not rows else "review_memory_inbox",
     ))
 
