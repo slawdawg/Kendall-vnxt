@@ -104,6 +104,39 @@ from supervisor.api.schemas import (
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
+    MemoryInboxShellApiEnvelope,
+    MemoryInboxLifecycleCommandApiEnvelope,
+    MemoryInboxLifecycleCommandRequest,
+    MemoryInboxLifecycleCommandResultV1,
+    MemoryInboxProjectionApiEnvelope,
+    MemoryInboxProjectionRowV1,
+    MemoryInboxProjectionV1,
+    MemoryInboxProposalReaderApiEnvelope,
+    MemoryInboxProposalReaderV1,
+    MemoryInboxReviewDecisionApiEnvelope,
+    MemoryInboxReviewDecisionRequest,
+    MemoryInboxReviewDecisionResultV1,
+    MemoryInboxApprovalApiEnvelope,
+    MemoryInboxApprovalRequest,
+    MemoryInboxApprovalResultV1,
+    MemoryInboxSourceDeletionApiEnvelope,
+    MemoryInboxSourceDeletionRequest,
+    MemoryInboxSourceDeletionResultV1,
+    MemoryInboxRetentionExtensionApiEnvelope,
+    MemoryInboxRetentionExtensionRequest,
+    MemoryInboxRetentionExtensionResultV1,
+    MemoryInboxDeletionReceiptApiEnvelope,
+    MemoryInboxDeletionReceiptV1,
+    MemoryInboxTextCaptureApiEnvelope,
+    MemoryInboxTextCaptureRequest,
+    MemoryInboxTextCaptureResultV1,
+    MemoryInboxCostPolicyUpdateRequest,
+    MemoryInboxProcessingDisclosureRequest,
+    MemoryInboxProcessingDisclosureApiEnvelope,
+    MemoryInboxCostPolicyApiEnvelope,
+    MemoryInboxDispatchClaimApiEnvelope,
+    MemoryInboxCompletionUnknownResolutionApiEnvelope,
+    MemoryInboxCompletionUnknownResolutionRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -160,6 +193,25 @@ from supervisor.application.operator_auth import (
     revoke_all_sessions,
 )
 from supervisor.application.service import SupervisorService
+from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
+from supervisor.application.memory_inbox_projection import read_memory_inbox_projection, read_review_ready_count
+from supervisor.application.memory_inbox_capture import capture_acknowledged_text
+from supervisor.application.memory_inbox_upload import receive_quarantined_upload
+from supervisor.application.memory_inbox_inspection import require_inspection_activation
+from supervisor.application.memory_inbox_inspection_lease import plan_inspection_lease
+from supervisor.application.memory_inbox_provider_policy import read_inbox_cost_policy, set_inbox_cost_policy
+from supervisor.application.memory_inbox_processing_disclosure import accept_processing_disclosure, present_processing_disclosure
+from supervisor.application.memory_inbox_dispatch_claim import claim_processing_dispatch
+from supervisor.application.memory_inbox_cost_reservation import resolve_attempt_completion_unknown
+from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
+from supervisor.application.memory_inbox_review_decision import deny_proposal_retaining_source, return_proposal_for_revision
+from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
+from supervisor.application.memory_inbox_source_deletion import delete_source_by_operator, retry_source_deletion
+from supervisor.application.memory_inbox_deletion_receipt import read_deletion_receipt
+from supervisor.application.memory_inbox_retention import extend_source_retention
+from supervisor.worker.memory_inbox_deletion_poller import MemoryInboxDeletionPoller
+from supervisor.worker.memory_inbox_inspection_poller import MemoryInboxInspectionPoller
+from supervisor.domain.memory_inbox import MemoryInboxSourceState
 from supervisor.application.lan_auth_bootstrap import (
     LanAuthConfigurationError,
     TEST_VIEWER_AUTH_LIFECYCLE_LOCK,
@@ -176,7 +228,7 @@ from supervisor.domain.bmad_import import BmadImportError
 from supervisor.domain.obsidian_metadata_import import ObsidianMetadataImportError
 from supervisor.domain.types import ErrorCategory, WorkItemFilterScope
 from supervisor.infrastructure.db.database import SessionLocal, get_session, init_db
-from supervisor.infrastructure.db.models import DashboardOperator, LocalDogfoodAuthorization, WorkItem
+from supervisor.infrastructure.db.models import DashboardOperator, LocalDogfoodAuthorization, MemoryInboxSource, WorkItem
 from supervisor.infrastructure.streaming.bus import EventBus
 from supervisor.worker.poller import Poller
 from pydantic import BaseModel
@@ -199,6 +251,8 @@ startup_gate_ready = False
 bus = EventBus()
 service = SupervisorService(settings, bus)
 poller = Poller(service, settings.poll_interval_seconds)
+inspection_poller = MemoryInboxInspectionPoller(settings)
+deletion_poller = MemoryInboxDeletionPoller(settings)
 
 
 @asynccontextmanager
@@ -223,11 +277,17 @@ async def lifespan(_: FastAPI):
         startup_gate_ready = True
     if settings.enable_background:
         await poller.start()
+        if settings.memory_inbox_inspection_configuration_error() is None:
+            await inspection_poller.start()
+        if settings.memory_inbox_capture_configuration_error() is None:
+            await deletion_poller.start()
     try:
         yield
     finally:
         startup_gate_ready = False
         await poller.stop()
+        await inspection_poller.stop()
+        await deletion_poller.stop()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -276,6 +336,17 @@ def require_local_operational_boundary(request: Request) -> None:
         )
 
 
+async def require_memory_inbox_shell_operator(request: Request, session: AsyncSession) -> None:
+    """Keep the shell's content-free projection behind the verified LAN session."""
+
+    if not settings.lan_auth_enabled:
+        return
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator":
+        raise HTTPException(status_code=401, detail="Sign-in required.")
+
+
 def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiErrorEnvelope:
     return ApiErrorEnvelope(
         error=ApiErrorShape(
@@ -286,6 +357,23 @@ def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiE
             correlationId=correlation_id,
         )
     )
+
+
+async def require_memory_inbox_command_operator(request: Request, session: AsyncSession) -> DashboardOperator:
+    """Mutating Inbox commands are always session-, Origin-, and CSRF-bound."""
+
+    if not settings.lan_auth_enabled:
+        raise HTTPException(status_code=404, detail="Memory Inbox commands are unavailable.")
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator" or not operator.enabled:
+        raise HTTPException(status_code=401, detail="Sign-in required.")
+    if not exact_https_origin(request.headers.get("origin"), settings):
+        raise HTTPException(status_code=403, detail="Authenticated origin required.")
+    csrf = request.headers.get("x-csrf-token")
+    if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+    return operator
 
 
 def require_local_dogfood_attestation(request: Request) -> None:
@@ -713,6 +801,423 @@ async def create_work_item(payload: WorkItemCreate, session: AsyncSession = Depe
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "work_item_intake_blocked").model_dump()) from exc
     return WorkItemApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.get("/memory-inbox/shell", response_model=MemoryInboxShellApiEnvelope)
+async def get_memory_inbox_shell(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """The initial shell reads no capture, proposal, or vault-backed state."""
+
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    return MemoryInboxShellApiEnvelope(data=service.get_memory_inbox_shell_status())
+
+
+@app.get("/memory-inbox/cost-policy", response_model=MemoryInboxCostPolicyApiEnvelope)
+async def get_memory_inbox_cost_policy(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    return {"data": await read_inbox_cost_policy(session)}
+
+
+@app.post("/memory-inbox/cost-policy", response_model=MemoryInboxCostPolicyApiEnvelope)
+async def update_memory_inbox_cost_policy(
+    payload: MemoryInboxCostPolicyUpdateRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        policy = await set_inbox_cost_policy(
+            session, finite_limit=payload.finiteLimit,
+            unlimited_acknowledged=payload.unlimitedAcknowledged,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox Cost Policy was not accepted.") from exc
+    return {"data": policy}
+
+
+@app.post("/memory-inbox/sources/{source_id}/processing-disclosure", response_model=MemoryInboxProcessingDisclosureApiEnvelope)
+async def present_memory_inbox_processing_disclosure(
+    source_id: str,
+    payload: MemoryInboxProcessingDisclosureRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        disclosure = await present_processing_disclosure(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Processing Disclosure is unavailable for this Source.") from exc
+    return {"data": disclosure}
+
+
+@app.post("/memory-inbox/processing-disclosures/{disclosure_id}/accept", response_model=MemoryInboxProcessingDisclosureApiEnvelope)
+async def accept_memory_inbox_processing_disclosure(
+    disclosure_id: str,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        disclosure = await accept_processing_disclosure(
+            session, disclosure_id=disclosure_id, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Processing Disclosure acceptance is unavailable.") from exc
+    return {"data": disclosure}
+
+
+@app.post("/memory-inbox/processing-disclosures/{disclosure_id}/dispatch", response_model=MemoryInboxDispatchClaimApiEnvelope)
+async def dispatch_memory_inbox_processing(
+    disclosure_id: str,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create or read back exactly one no-egress ProcessingAttempt claim."""
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        claim = await claim_processing_dispatch(
+            session, disclosure_id=disclosure_id, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox dispatch is unavailable.") from exc
+    lifecycle_state = claim["lifecycleState"]
+    next_safe_action = {
+        "Claimed": "reserve_cost",
+        "CompletionUnknown": "resolve_completion_unknown",
+        "Closed": "review",
+    }.get(lifecycle_state, "refresh_memory_inbox")
+    return {"data": {
+        "schemaVersion": "kendall-memory-inbox-dispatch-claim/v1",
+        **claim,
+        "nextSafeAction": next_safe_action,
+    }}
+
+
+@app.post("/memory-inbox/processing-attempts/{attempt_id}/resolve-completion-unknown", response_model=MemoryInboxCompletionUnknownResolutionApiEnvelope)
+async def resolve_memory_inbox_completion_unknown(
+    attempt_id: str,
+    payload: MemoryInboxCompletionUnknownResolutionRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Record one authenticated, content-safe closeout for an uncertain attempt."""
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_command_operator(request, session)
+    try:
+        lifecycle_state = await resolve_attempt_completion_unknown(
+            session, attempt_id=attempt_id, resolution=payload.resolution,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox completion resolution is unavailable.") from exc
+    return {"data": {
+        "schemaVersion": "kendall-memory-inbox-completion-resolution/v1",
+        "attemptId": attempt_id,
+        "lifecycleState": lifecycle_state,
+        "nextSafeAction": "refresh_memory_inbox",
+    }}
+
+
+@app.post("/memory-inbox/sources/{source_id}/lifecycle", response_model=MemoryInboxLifecycleCommandApiEnvelope)
+async def command_memory_inbox_lifecycle(
+    source_id: str,
+    payload: MemoryInboxLifecycleCommandRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await apply_lifecycle_command(
+            session,
+            MemoryInboxLifecycleCommand(
+                source_id=source_id,
+                expected_revision=payload.expectedRevision,
+                idempotency_key=payload.idempotencyKey,
+                target_state=MemoryInboxSourceState(payload.targetState),
+            ),
+            verified_actor_ref=f"operator:{operator.id}",
+            audit_ref=f"audit:memory-inbox:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox command was not accepted.") from exc
+    return MemoryInboxLifecycleCommandApiEnvelope(data=MemoryInboxLifecycleCommandResultV1(
+        sourceId=result.source_id,
+        expectedRevision=result.expected_revision,
+        resultingRevision=result.resulting_revision,
+        outcome=result.outcome,
+        reasonCode=result.reason_code,
+        lifecycleState=result.lifecycle_state.value if result.lifecycle_state else None,
+    ))
+
+
+@app.get("/memory-inbox/projection", response_model=MemoryInboxProjectionApiEnvelope)
+async def get_memory_inbox_projection(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    rows = await read_memory_inbox_projection(session)
+    return MemoryInboxProjectionApiEnvelope(data=MemoryInboxProjectionV1(
+        rows=[MemoryInboxProjectionRowV1(
+            sourceId=row.source_id,
+            lifecycleState=row.lifecycle_state,
+            revision=row.revision,
+            retentionDeadlineAt=row.retention_deadline_at,
+            deletionState=row.deletion_state,
+            nextSafeAction=row.next_action_code,
+            proposalId=row.proposal_id,
+            proposalRevision=row.proposal_revision,
+        ) for row in rows],
+        reviewReadyCount=await read_review_ready_count(session),
+        nextSafeAction="refresh_memory_inbox" if not rows else "review_memory_inbox",
+    ))
+
+
+@app.get("/memory-inbox/proposals/{proposal_id}/revisions/{revision}/reader", response_model=MemoryInboxProposalReaderApiEnvelope)
+async def get_memory_inbox_proposal_reader(
+    proposal_id: str,
+    revision: int,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """The only Memory Inbox GET route permitted to return a proposal body."""
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    try:
+        reader = await read_authorized_proposal(
+            session, settings=get_settings(), proposal_id=proposal_id, revision=revision,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Authenticated Proposal Reader is unavailable.") from exc
+    return MemoryInboxProposalReaderApiEnvelope(data=MemoryInboxProposalReaderV1(
+        proposalId=reader.proposal_id, revision=reader.revision, body=reader.body,
+    ))
+
+
+@app.post("/memory-inbox/proposals/{proposal_id}/return", response_model=MemoryInboxReviewDecisionApiEnvelope)
+async def return_memory_inbox_proposal(
+    proposal_id: str, payload: MemoryInboxReviewDecisionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    if payload.returnContext is None:
+        raise HTTPException(status_code=422, detail="Revision context is required to return a Proposal.")
+    try:
+        result = await return_proposal_for_revision(
+            session, proposal_id=proposal_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The Proposal return is unavailable.") from exc
+    return MemoryInboxReviewDecisionApiEnvelope(data=MemoryInboxReviewDecisionResultV1(
+        proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
+        sourceRevision=result.source_revision, lifecycleState=result.lifecycle_state,
+        replayed=result.replayed, nextSafeAction=result.next_safe_action,
+    ))
+
+
+@app.post("/memory-inbox/proposals/{proposal_id}/deny", response_model=MemoryInboxReviewDecisionApiEnvelope)
+async def deny_memory_inbox_proposal(
+    proposal_id: str, payload: MemoryInboxReviewDecisionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await deny_proposal_retaining_source(
+            session, proposal_id=proposal_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The Proposal denial is unavailable.") from exc
+    return MemoryInboxReviewDecisionApiEnvelope(data=MemoryInboxReviewDecisionResultV1(
+        proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
+        sourceRevision=result.source_revision, lifecycleState=result.lifecycle_state,
+        replayed=result.replayed, nextSafeAction=result.next_safe_action,
+    ))
+
+
+@app.post("/memory-inbox/proposals/{proposal_id}/approve", response_model=MemoryInboxApprovalApiEnvelope)
+async def approve_memory_inbox_proposal(
+    proposal_id: str, payload: MemoryInboxApprovalRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await approve_proposal_for_deletion(
+            session, proposal_id=proposal_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="The Proposal approval is unavailable.") from exc
+    return MemoryInboxApprovalApiEnvelope(data=MemoryInboxApprovalResultV1(
+        proposalId=result.proposal_id, proposalRevision=result.proposal_revision, sourceId=result.source_id,
+        sourceRevision=result.source_revision, deletionOperations=result.deletion_operations, replayed=result.replayed,
+    ))
+
+
+@app.post("/memory-inbox/sources/{source_id}/delete", response_model=MemoryInboxSourceDeletionApiEnvelope)
+async def delete_memory_inbox_source(
+    source_id: str, payload: MemoryInboxSourceDeletionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    """Enter the same version-locked deletion barrier without reading a Source."""
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await delete_source_by_operator(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox source deletion is unavailable.") from exc
+    source = await session.get(MemoryInboxSource, source_id)
+    deletion_state = source.deletion_state if source else "RetryNeeded"
+    return MemoryInboxSourceDeletionApiEnvelope(data=MemoryInboxSourceDeletionResultV1(
+        sourceId=result.source_id, sourceRevision=result.source_revision,
+        deletionOperations=result.deletion_operations, initiator=result.initiator,
+        replayed=result.replayed, deletionState=deletion_state,
+        nextSafeAction="retry_deletion" if deletion_state == "RetryNeeded" else "await_deletion_proof",
+    ))
+
+
+@app.post("/memory-inbox/sources/{source_id}/retry-deletion", response_model=MemoryInboxSourceDeletionApiEnvelope)
+async def retry_memory_inbox_source_deletion(
+    source_id: str, payload: MemoryInboxSourceDeletionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await retry_source_deletion(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            idempotency_key=payload.idempotencyKey, actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox deletion retry is unavailable.") from exc
+    source = await session.get(MemoryInboxSource, source_id)
+    deletion_state = source.deletion_state if source else "RetryNeeded"
+    return MemoryInboxSourceDeletionApiEnvelope(data=MemoryInboxSourceDeletionResultV1(
+        sourceId=result.source_id, sourceRevision=result.source_revision,
+        deletionOperations=result.deletion_operations, initiator=result.initiator,
+        replayed=result.replayed, deletionState=deletion_state,
+        nextSafeAction="retry_deletion" if deletion_state == "RetryNeeded" else "await_deletion_proof",
+    ))
+
+
+@app.get("/memory-inbox/sources/{source_id}/deletion-receipt", response_model=MemoryInboxDeletionReceiptApiEnvelope)
+async def get_memory_inbox_deletion_receipt(
+    source_id: str, request: Request, response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    await require_memory_inbox_shell_operator(request, session)
+    try:
+        receipt = await read_deletion_receipt(session, source_id=source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox deletion receipt is unavailable.") from exc
+    return MemoryInboxDeletionReceiptApiEnvelope(data=MemoryInboxDeletionReceiptV1(
+        sourceId=receipt.source_id, outcome=receipt.outcome, proofCount=receipt.proof_count,
+        summary=receipt.summary, nextSafeAction=receipt.next_safe_action,
+    ))
+
+
+@app.post("/memory-inbox/sources/{source_id}/retention-extension", response_model=MemoryInboxRetentionExtensionApiEnvelope)
+async def extend_memory_inbox_source_retention(
+    source_id: str, payload: MemoryInboxRetentionExtensionRequest, request: Request,
+    response: Response, session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        result = await extend_source_retention(
+            session, source_id=source_id, expected_revision=payload.expectedRevision,
+            extension_hours=payload.extensionHours, idempotency_key=payload.idempotencyKey,
+            actor_ref=f"operator:{operator.id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Memory Inbox retention extension is unavailable.") from exc
+    return MemoryInboxRetentionExtensionApiEnvelope(data=MemoryInboxRetentionExtensionResultV1(
+        sourceId=result.source_id, sourceRevision=result.source_revision,
+        retentionDeadlineAt=result.retention_deadline_at, replayed=result.replayed,
+    ))
+
+
+@app.post("/memory-inbox/text-capture", response_model=MemoryInboxTextCaptureApiEnvelope)
+async def capture_memory_inbox_text(
+    payload: MemoryInboxTextCaptureRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        source_id = await capture_acknowledged_text(
+            session, settings=settings, text_value=payload.text,
+            acknowledged_non_sensitive=payload.acknowledgedNonSensitive, actor_ref=f"operator:{operator.id}",
+            idempotency_key=payload.idempotencyKey,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Text capture was not accepted.") from exc
+    return MemoryInboxTextCaptureApiEnvelope(data=MemoryInboxTextCaptureResultV1(sourceId=source_id))
+
+
+@app.post("/memory-inbox/upload")
+async def receive_memory_inbox_upload(request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        source_id = await receive_quarantined_upload(
+            session, settings=settings, chunks=request.stream(), actor_ref=f"operator:{operator.id}",
+            declared_media_type=request.headers.get("content-type", "").split(";", 1)[0].lower(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Document upload was not accepted.") from exc
+    return {"data": {"schemaVersion": "kendall-memory-inbox-upload/v1", "sourceId": source_id, "lifecycleState": "Scanning", "nextSafeAction": "await_inspection"}}
+
+
+@app.post("/memory-inbox/sources/{source_id}/inspection")
+async def request_memory_inbox_inspection(source_id: str, request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    """Plan a private inspection lease; the request itself never reads content."""
+    response.headers["Cache-Control"] = "no-store"
+    operator = await require_memory_inbox_command_operator(request, session)
+    try:
+        require_inspection_activation(settings)
+        job = await plan_inspection_lease(
+            session, source_id=source_id, actor_ref=f"operator:{operator.id}",
+            lease_seconds=max(60, settings.memory_inbox_scanner_timeout_seconds * 2 + 10),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Inspection is unavailable; the quarantined source remains inert.") from exc
+    return {"data": {"schemaVersion": "kendall-memory-inbox-inspection/v1", "jobId": job.id, "lifecycleState": job.lifecycle_state, "nextSafeAction": "await_inspection"}}
 
 
 @app.post("/candidate-work", response_model=CandidateWorkApiEnvelope)

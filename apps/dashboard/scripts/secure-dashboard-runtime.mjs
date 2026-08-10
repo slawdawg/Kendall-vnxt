@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createPacketDetailMediator } from "./packet-detail-mediator.mjs";
 import { createAuthProxy, safeReturnPath, supervisorSessionRole } from "./dashboard-auth-proxy.mjs";
 import { createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
+import { createMemoryInboxUploadProxy } from "./memory-inbox-upload-proxy.mjs";
 
 export class LanAuthConfigurationError extends Error {}
 
@@ -31,6 +32,7 @@ const DASHBOARD_PAGE_PATHS = new Set([
   "/attention",
   "/audit",
   "/controls",
+  "/memory-inbox",
   "/pipeline",
   "/proposed-work",
   "/queue",
@@ -368,6 +370,9 @@ async function main() {
   const supervisorProxy = config.lanAuthEnabled
     ? createSupervisorProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
     : null;
+  const memoryInboxUploadProxy = config.lanAuthEnabled
+    ? createMemoryInboxUploadProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
+    : null;
   server.removeAllListeners("request");
   const nextHandler = dashboard.getRequestHandler();
   server.on("request", async (request, response) => {
@@ -382,6 +387,7 @@ async function main() {
     }
     if (mediator && await mediator(request, response)) return;
     if (authProxy && await authProxy(request, response)) return;
+    if (memoryInboxUploadProxy && await memoryInboxUploadProxy(request, response)) return;
     if (supervisorProxy && await supervisorProxy(request, response)) return;
     if (config.lanAuthEnabled && isDashboardEntryRoute(request)) {
       const cookie = request.headers.cookie;

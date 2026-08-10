@@ -111,6 +111,33 @@ class Settings(BaseSettings):
         default=True, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_NO_PROXY"
     )
     obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
+    memory_inbox_content_store_root: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_CONTENT_STORE_ROOT"
+    )
+    memory_inbox_retention_hours: int | None = Field(
+        default=None, ge=1, le=8760, alias="SUPERVISOR_MEMORY_INBOX_RETENTION_HOURS"
+    )
+    memory_inbox_upload_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_ENABLED")
+    memory_inbox_inspection_enabled: bool = Field(default=False, alias="SUPERVISOR_MEMORY_INBOX_INSPECTION_ENABLED")
+    memory_inbox_scanner_path: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_PATH"
+    )
+    memory_inbox_extractor_path: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_EXTRACTOR_PATH"
+    )
+    memory_inbox_scanner_timeout_seconds: int = Field(
+        default=60, ge=1, le=300, alias="SUPERVISOR_MEMORY_INBOX_SCANNER_TIMEOUT_SECONDS"
+    )
+    memory_inbox_proposal_reader_enabled: bool = Field(
+        default=False, alias="SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_ENABLED"
+    )
+    memory_inbox_proposal_reader_capability_ref: str | None = Field(
+        default=None, alias="SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_CAPABILITY_REF"
+    )
+    memory_inbox_proposal_reader_max_bytes: int = Field(
+        default=1_048_576, ge=1, le=4_194_304, alias="SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_MAX_BYTES"
+    )
+    memory_inbox_upload_storage_quota_bytes: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_STORAGE_QUOTA_BYTES")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
     deliver_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_DELIVER_WIP_LIMIT")
@@ -177,6 +204,50 @@ class Settings(BaseSettings):
         if parent.is_symlink() or parent_details.st_uid != os.geteuid() or parent_details.st_mode & 0o077:
             raise ValueError("local dogfood attestation API socket parent must be private and owner-controlled")
 
+    def memory_inbox_capture_configuration_error(self) -> str | None:
+        """Return a safe gate reason; text capture never falls back to another store."""
+        if not self.memory_inbox_content_store_root or not self.memory_inbox_retention_hours:
+            return "private_store_or_retention_unconfigured"
+        root = Path(self.memory_inbox_content_store_root)
+        try:
+            details = root.lstat()
+        except OSError:
+            return "private_store_unavailable"
+        if (
+            root.is_symlink()
+            or not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_mode & 0o077
+        ):
+            return "private_store_not_owner_private"
+        return None
+
+    def memory_inbox_upload_configuration_error(self) -> str | None:
+        if not self.memory_inbox_upload_enabled:
+            return "upload_ingress_unconfigured"
+        return self.memory_inbox_capture_configuration_error()
+
+    def memory_inbox_inspection_configuration_error(self) -> str | None:
+        """Verify the explicit scanner adapter without enabling a fallback."""
+        if not self.memory_inbox_inspection_enabled:
+            return "inspection_unconfigured"
+        capture_error = self.memory_inbox_capture_configuration_error()
+        if capture_error:
+            return capture_error
+        if error := _private_inspection_component_error(
+            self.memory_inbox_scanner_path, "inspection_scanner"
+        ):
+            return error
+        return _private_inspection_component_error(
+            self.memory_inbox_extractor_path, "inspection_extractor"
+        )
+
+    def memory_inbox_proposal_reader_configuration_error(self) -> str | None:
+        if not self.memory_inbox_proposal_reader_enabled:
+            return "proposal_reader_unconfigured"
+        if not self.memory_inbox_proposal_reader_capability_ref:
+            return "proposal_reader_capability_unconfigured"
+        return self.memory_inbox_capture_configuration_error()
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -184,6 +255,27 @@ class Settings(BaseSettings):
     @property
     def cors_origin_pattern(self) -> re.Pattern[str]:
         return re.compile(self.cors_origin_regex)
+
+
+def _private_inspection_component_error(component_path: str | None, component_name: str) -> str | None:
+    """Require each enabled private inspection component to be owner-controlled."""
+    if not component_path:
+        return f"{component_name}_unconfigured"
+    component = Path(component_path)
+    try:
+        details = component.lstat()
+    except OSError:
+        return f"{component_name}_unavailable"
+    if (
+        not component.is_absolute()
+        or component.is_symlink()
+        or not stat.S_ISREG(details.st_mode)
+        or details.st_uid != os.geteuid()
+        or details.st_mode & 0o022
+        or not details.st_mode & stat.S_IXUSR
+    ):
+        return f"{component_name}_not_owner_controlled"
+    return None
 
 
 @lru_cache

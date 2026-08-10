@@ -90,7 +90,12 @@ import type {
   WorkflowEventView,
   WorkItemView,
   WorkerRegistryEntryView,
+  MemoryInboxShellStatusV1,
+  MemoryInboxProjectionV1,
+  MemoryInboxProposalReaderV1,
+  MemoryInboxTextCaptureResultV1,
 } from "@kendall/contracts";
+import { isMemoryInboxProjectionV1, isMemoryInboxProposalReaderV1, isMemoryInboxShellStatusV1, isMemoryInboxTextCaptureResultV1 } from "@kendall/contracts";
 
 export function getSupervisorBaseUrl(): string {
   return canonicalGetSupervisorBaseUrl();
@@ -105,6 +110,110 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
     // supervisor reader; pipeline runtime opts into the same policy explicitly.
     rejectServerLanAuth: options.rejectServerLanAuth ?? true,
   });
+}
+
+export async function getMemoryInboxShellStatus(options?: RequestOptions): Promise<MemoryInboxShellStatusV1> {
+  const status = await requestJson<unknown>("/memory-inbox/shell", options);
+  if (!isMemoryInboxShellStatusV1(status)) {
+    throw new Error("Invalid Memory Inbox shell status.");
+  }
+  return status;
+}
+
+export async function getMemoryInboxProjection(options?: RequestOptions): Promise<MemoryInboxProjectionV1> {
+  const projection = await requestJson<unknown>("/memory-inbox/projection", options);
+  if (!isMemoryInboxProjectionV1(projection)) throw new Error("Invalid Memory Inbox projection.");
+  return projection;
+}
+
+export async function getMemoryInboxProposalReader(proposalId: string, revision: number, options?: RequestOptions): Promise<MemoryInboxProposalReaderV1> {
+  const reader = await requestJson<unknown>(`/memory-inbox/proposals/${encodeURIComponent(proposalId)}/revisions/${revision}/reader`, options);
+  if (!isMemoryInboxProposalReaderV1(reader)) throw new Error("Authenticated Proposal Reader is unavailable.");
+  return reader;
+}
+
+export type MemoryInboxReviewDecision = {
+  proposalId: string; proposalRevision: number; sourceId: string; sourceRevision: number;
+  lifecycleState: "Returned" | "Denied"; replayed: boolean; nextSafeAction: "create_draft" | "review_retention";
+};
+
+async function decideMemoryInboxProposal(proposalId: string, action: "return" | "deny", expectedRevision: number, idempotencyKey: string, returnContext?: string): Promise<MemoryInboxReviewDecision> {
+  const response = await requestSupervisorMutation(`/memory-inbox/proposals/${encodeURIComponent(proposalId)}/${action}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision, idempotencyKey, ...(returnContext === undefined ? {} : { returnContext }) }),
+  });
+  if (!response.ok) throw new Error("The Proposal decision was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxReviewDecision>;
+  if (!envelope?.data || typeof envelope.data.proposalId !== "string") throw new Error("The Proposal decision returned an invalid result.");
+  return envelope.data;
+}
+
+export function returnMemoryInboxProposal(proposalId: string, expectedRevision: number, idempotencyKey: string, returnContext: string): Promise<MemoryInboxReviewDecision> {
+  return decideMemoryInboxProposal(proposalId, "return", expectedRevision, idempotencyKey, returnContext);
+}
+
+export function denyMemoryInboxProposal(proposalId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxReviewDecision> {
+  return decideMemoryInboxProposal(proposalId, "deny", expectedRevision, idempotencyKey);
+}
+
+export type MemoryInboxApproval = { proposalId: string; proposalRevision: number; sourceId: string; sourceRevision: number; deletionOperations: number; replayed: boolean; lifecycleState: "Approved"; deletionState: "Pending"; nextSafeAction: "await_deletion_proof"; };
+
+export async function approveMemoryInboxProposal(proposalId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxApproval> {
+  const response = await requestSupervisorMutation(`/memory-inbox/proposals/${encodeURIComponent(proposalId)}/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
+  if (!response.ok) throw new Error("The Proposal approval was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxApproval>;
+  if (!envelope?.data || envelope.data.lifecycleState !== "Approved" || envelope.data.deletionState !== "Pending") throw new Error("The Proposal approval returned an invalid result.");
+  return envelope.data;
+}
+
+export type MemoryInboxSourceDeletion = { sourceId: string; sourceRevision: number; deletionOperations: number; initiator: "operator" | "retention_expiry" | "retry"; replayed: boolean; lifecycleState: "DeletePending"; deletionState: "Pending" | "RetryNeeded"; nextSafeAction: "await_deletion_proof" | "retry_deletion"; };
+
+export async function deleteMemoryInboxSource(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxSourceDeletion> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
+  if (!response.ok) throw new Error("Memory Inbox source deletion was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxSourceDeletion>;
+  if (!envelope?.data || envelope.data.lifecycleState !== "DeletePending") throw new Error("Memory Inbox source deletion returned an invalid result.");
+  return envelope.data;
+}
+
+export async function retryMemoryInboxSourceDeletion(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<MemoryInboxSourceDeletion> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/retry-deletion`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, idempotencyKey }) });
+  if (!response.ok) throw new Error("Memory Inbox deletion retry was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxSourceDeletion>;
+  if (!envelope?.data || envelope.data.initiator !== "retry") throw new Error("Memory Inbox deletion retry returned an invalid result.");
+  return envelope.data;
+}
+
+export type MemoryInboxRetentionExtension = { sourceId: string; sourceRevision: number; retentionDeadlineAt: string; replayed: boolean; nextSafeAction: "refresh_memory_inbox"; };
+
+export async function extendMemoryInboxRetention(sourceId: string, expectedRevision: number, extensionHours: number, idempotencyKey: string): Promise<MemoryInboxRetentionExtension> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/retention-extension`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, extensionHours, idempotencyKey }) });
+  if (!response.ok) throw new Error("Memory Inbox retention extension was not accepted.");
+  const envelope = (await response.json()) as ApiEnvelope<MemoryInboxRetentionExtension>;
+  if (!envelope?.data || typeof envelope.data.retentionDeadlineAt !== "string") throw new Error("Memory Inbox retention extension returned an invalid result.");
+  return envelope.data;
+}
+
+export async function captureMemoryInboxText(text: string, acknowledgedNonSensitive: boolean, idempotencyKey: string): Promise<MemoryInboxTextCaptureResultV1> {
+  const response = await requestSupervisorMutation("/memory-inbox/text-capture", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, acknowledgedNonSensitive, idempotencyKey }),
+  });
+  if (!response.ok) throw new Error("Text capture was not accepted. Check the acknowledgement and try again.");
+  const envelope = (await response.json()) as ApiEnvelope<unknown>;
+  if (!isMemoryInboxTextCaptureResultV1(envelope?.data)) throw new Error("Text capture returned an invalid result.");
+  return envelope.data;
+}
+
+export async function saveMemoryInboxDraft(sourceId: string, expectedRevision: number, idempotencyKey: string): Promise<void> {
+  const response = await requestSupervisorMutation(`/memory-inbox/sources/${encodeURIComponent(sourceId)}/lifecycle`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision, idempotencyKey, targetState: "Draft" }),
+  });
+  if (!response.ok) throw new Error("This source cannot be saved as a draft in its current state.");
+  const envelope = (await response.json()) as ApiEnvelope<unknown>;
+  if (!envelope?.data) throw new Error("Draft transition returned an invalid result.");
 }
 
 export async function getRunStatus(options?: RequestOptions): Promise<RunStatusView> {

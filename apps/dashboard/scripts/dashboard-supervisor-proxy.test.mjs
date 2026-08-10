@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CONTROLS_MUTATION_PATHS, CONTROLS_READ_PATHS, createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
+import { CONTROLS_MUTATION_PATHS, CONTROLS_READ_PATHS, MEMORY_INBOX_MUTATION_PATHS, createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
 
 function listen(server, target) { return new Promise((resolve) => server.listen(target, resolve)); }
 function close(server) { return new Promise((resolve) => server.close(resolve)); }
@@ -100,7 +100,7 @@ test("authenticated POST forwards the follow-up subresource exactly and rejects 
       });
     });
     await listen(supervisor, socketPath);
-    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(); });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
     await listen(dashboard, 0);
     const port = dashboard.address().port;
     proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: `https://127.0.0.1:${port}` });
@@ -222,6 +222,111 @@ test("Controls has a finite operator-only no-query proxy contract with a capped 
       { method: "POST", url: "/pipeline-control-plane/actions/v1" },
       { method: "GET", url: "/supervisor/report-catalog" },
     ]);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("Memory Inbox reads are exact operator-only, no-query proxy capabilities", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-memory-inbox-shell-proxy-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") {
+        const viewer = request.headers.cookie?.includes("viewer=ok");
+        response.writeHead(200).end(JSON.stringify({ authenticated: true, role: viewer ? "test_viewer" : "operator" }));
+        return;
+      }
+      forwarded.push({ method: request.method, url: request.url });
+      response.end(JSON.stringify({ data: { schemaVersion: "kendall-memory-inbox-shell/v1", state: "unavailable", freshness: "current", nextSafeAction: "refresh_memory_inbox" } }));
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    for (const target of ["shell", "projection"]) {
+      const path = `/api/supervisor/memory-inbox/${target}`;
+      assert.equal((await request(port, path, { headers: { cookie: "operator=ok" } })).status, 200);
+      assert.equal((await request(port, path, { method: "POST", body: "{}", headers: { cookie: "operator=ok", origin: "https://dashboard.test", "content-type": "application/json" } })).status, 405);
+      assert.equal((await request(port, `${path}?state=inbox`, { headers: { cookie: "operator=ok" } })).status, 404);
+      assert.equal((await request(port, path, { headers: { cookie: "viewer=ok" } })).status, 404);
+    }
+    assert.deepEqual(forwarded, [{ method: "GET", url: "/memory-inbox/shell" }, { method: "GET", url: "/memory-inbox/projection" }]);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("Memory Inbox text capture is an exact operator-only CSRF capability", async () => {
+  assert.deepEqual([...MEMORY_INBOX_MUTATION_PATHS], ["/memory-inbox/text-capture"]);
+  const directory = mkdtempSync(join(tmpdir(), "kendall-memory-inbox-capture-proxy-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") {
+        const viewer = request.headers.cookie?.includes("viewer=ok");
+        response.writeHead(200).end(JSON.stringify({ authenticated: true, role: viewer ? "test_viewer" : "operator" }));
+        return;
+      }
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        forwarded.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString("utf8") });
+        response.end(JSON.stringify({ data: { schemaVersion: "kendall-memory-inbox-capture/v1", sourceId: "inbox-source:opaque", lifecycleState: "Unprocessed", nextSafeAction: "create_draft" } }));
+      });
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    const path = "/api/supervisor/memory-inbox/text-capture";
+    const operator = { cookie: "operator=ok; kendall_operator_csrf=csrf-ok", origin: "https://dashboard.test", "x-csrf-token": "csrf-ok", "content-type": "application/json" };
+    assert.equal((await request(port, path, { method: "GET", headers: operator })).status, 405);
+    assert.equal((await request(port, `${path}?extra=1`, { method: "POST", headers: operator })).status, 404);
+    assert.equal((await request(port, path, { method: "POST", headers: { ...operator, "x-csrf-token": "wrong" } })).status, 403);
+    assert.equal((await request(port, path, { method: "POST", headers: { cookie: "viewer=ok; kendall_operator_csrf=csrf-ok", origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 404);
+    const body = JSON.stringify({ text: "non-sensitive", acknowledgedNonSensitive: true, idempotencyKey: "capture-test-key-0001" });
+    assert.equal((await request(port, path, { method: "POST", body, headers: operator })).status, 200);
+    assert.deepEqual(forwarded, [{ method: "POST", url: "/memory-inbox/text-capture", body }]);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("the disabled Memory Inbox upload path rejects raw bytes before proxy buffering or supervisor forwarding", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-memory-inbox-upload-gate-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      forwarded.push({ method: request.method, url: request.url });
+      response.end(JSON.stringify({ authenticated: true, role: "operator" }));
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    const rawDocument = "private document bytes that must not be buffered";
+    const response = await request(port, "/api/supervisor/memory-inbox/upload", {
+      method: "POST", body: rawDocument,
+      headers: { cookie: "operator=ok", origin: "https://dashboard.test", "content-type": "application/octet-stream" },
+    });
+    assert.equal(response.status, 404);
+    assert.deepEqual(forwarded, []);
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);

@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
@@ -469,6 +469,276 @@ class MemoryProposal(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     work_item: Mapped[WorkItem] = relationship(back_populates="memory_proposals")
+
+
+# This is a wholly separate lifecycle plane.  It deliberately has no relation
+# to WorkItem, MemoryProposal, ExecutionAttempt, QueueLease, or their events.
+# The absence of free-form JSON/Text columns is intentional: content belongs
+# to a future private store and must never enter lifecycle persistence.
+class MemoryInboxSource(Base):
+    __tablename__ = "memory_inbox_sources"
+    __table_args__ = (
+        CheckConstraint("current_revision > 0", name="ck_memory_inbox_source_positive_revision"),
+        CheckConstraint(
+            "lifecycle_state IN ('Scanning','Quarantined','Unprocessed','Draft','AwaitingAuthorization','Processing','Review','Returned','DeniedRetained','DeletePending','Deleted','RejectedUnsafe')",
+            name="ck_memory_inbox_source_state",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    current_revision: Mapped[int] = mapped_column(Integer, default=1)
+    lifecycle_state: Mapped[str] = mapped_column(String(32), default="Scanning")
+    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deletion_state: Mapped[str] = mapped_column(String(16), default="None")
+    policy_ref: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MemoryInboxSourceRevision(Base):
+    __tablename__ = "memory_inbox_source_revisions"
+    __table_args__ = (
+        UniqueConstraint("source_id", "revision", name="uq_memory_inbox_source_revision"),
+        CheckConstraint("revision > 0", name="ck_memory_inbox_source_revision_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_sources.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    lifecycle_state: Mapped[str] = mapped_column(String(32))
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    audit_ref: Mapped[str] = mapped_column(String(160))
+    policy_ref: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxProposalAggregate(Base):
+    __tablename__ = "memory_inbox_proposals"
+    __table_args__ = (
+        CheckConstraint("current_revision > 0", name="ck_memory_inbox_proposal_positive_revision"),
+        CheckConstraint("lifecycle_state IN ('Absent','Draft','Ready','Returned','Denied','Approved')", name="ck_memory_inbox_proposal_state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_sources.id"), index=True)
+    current_revision: Mapped[int] = mapped_column(Integer, default=1)
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="Absent")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MemoryInboxProposalRevision(Base):
+    __tablename__ = "memory_inbox_proposal_revisions"
+    __table_args__ = (
+        UniqueConstraint("proposal_id", "revision", name="uq_memory_inbox_proposal_revision"),
+        CheckConstraint("revision > 0", name="ck_memory_inbox_proposal_revision_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    proposal_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_proposals.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    lifecycle_state: Mapped[str] = mapped_column(String(16))
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    audit_ref: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxCommandResult(Base):
+    __tablename__ = "memory_inbox_command_results"
+    __table_args__ = (
+        UniqueConstraint("aggregate_id", "idempotency_key", name="uq_memory_inbox_command_replay"),
+        CheckConstraint("expected_revision > 0", name="ck_memory_inbox_command_positive_revision"),
+        CheckConstraint("resulting_revision > 0", name="ck_memory_inbox_command_positive_result"),
+        CheckConstraint("outcome IN ('accepted','replayed','conflict','rejected')", name="ck_memory_inbox_command_outcome"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    aggregate_id: Mapped[str] = mapped_column(String(80), index=True)
+    expected_revision: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    command_kind: Mapped[str] = mapped_column(String(48))
+    request_digest: Mapped[str] = mapped_column(String(128))
+    outcome: Mapped[str] = mapped_column(String(16))
+    reason_code: Mapped[str] = mapped_column(String(64))
+    resulting_revision: Mapped[int] = mapped_column(Integer)
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxManifest(Base):
+    __tablename__ = "memory_inbox_manifests"
+    __table_args__ = (UniqueConstraint("owner_revision_id", "copy_class", name="uq_memory_inbox_manifest_copy"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    owner_revision_id: Mapped[str] = mapped_column(String(80), index=True)
+    copy_class: Mapped[str] = mapped_column(String(32))
+    store_ref: Mapped[str] = mapped_column(String(200), unique=True)
+    declared_media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    inspected_media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    creation_state: Mapped[str] = mapped_column(String(16), default="Planned")
+    retention_class: Mapped[str] = mapped_column(String(32))
+    deletion_state: Mapped[str] = mapped_column(String(16), default="None")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MemoryInboxProcessingAttempt(Base):
+    __tablename__ = "memory_inbox_processing_attempts"
+    __table_args__ = (
+        UniqueConstraint("source_revision_id", "proposal_revision_id", "consent_ref", "provider_code", "attempt_sequence", name="uq_memory_inbox_attempt_fence"),
+        CheckConstraint("attempt_sequence > 0", name="ck_memory_inbox_attempt_positive_sequence"),
+        CheckConstraint("lifecycle_state IN ('Planned','Claimed','Dispatched','CompletionUnknown','Reconciled','Cancelled','Closed')", name="ck_memory_inbox_attempt_state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_source_revisions.id"))
+    proposal_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_proposal_revisions.id"))
+    consent_ref: Mapped[str] = mapped_column(String(160))
+    provider_code: Mapped[str] = mapped_column(String(64))
+    attempt_sequence: Mapped[int] = mapped_column(Integer)
+    lifecycle_state: Mapped[str] = mapped_column(String(24), default="Planned")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MemoryInboxJob(Base):
+    __tablename__ = "memory_inbox_jobs"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_source_revisions.id"), index=True)
+    capability_ref: Mapped[str] = mapped_column(String(160))
+    lifecycle_state: Mapped[str] = mapped_column(String(24), default="Planned")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxCostPolicy(Base):
+    """One supervisor-owned Inbox policy; it never shares generic provider state."""
+
+    __tablename__ = "memory_inbox_cost_policies"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    finite_limit: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    measured_spend: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    reserved_spend: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    reset_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    high_cost_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MemoryInboxCostPolicyReceipt(Base):
+    """Immutable, content-free receipt for each Inbox policy revision."""
+
+    __tablename__ = "memory_inbox_cost_policy_receipts"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "revision", name="uq_memory_inbox_cost_policy_receipt_revision"),
+        UniqueConstraint("policy_id", "idempotency_key", name="uq_memory_inbox_cost_policy_receipt_replay"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String(16))
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    request_digest: Mapped[str] = mapped_column(String(128))
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxCostReservation(Base):
+    __tablename__ = "memory_inbox_cost_reservations"
+    __table_args__ = (UniqueConstraint("attempt_id", name="uq_memory_inbox_cost_reservation_attempt"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_processing_attempts.id"), index=True)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"))
+    amount: Mapped[float] = mapped_column(Numeric(18, 2))
+    lifecycle_state: Mapped[str] = mapped_column(String(24), default="Reserved")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MemoryInboxProcessingDisclosure(Base):
+    """Immutable, metadata-only authorization disclosure for one source revision."""
+
+    __tablename__ = "memory_inbox_processing_disclosures"
+    __table_args__ = (UniqueConstraint("source_revision_id", "idempotency_key", name="uq_memory_inbox_disclosure_replay"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_source_revisions.id"), index=True)
+    source_revision: Mapped[int] = mapped_column(Integer)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"))
+    policy_revision: Mapped[int] = mapped_column(Integer)
+    provider_order: Mapped[str] = mapped_column(String(64), default="local>openai>anthropic")
+    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="Presented")
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    receipt_ref: Mapped[str] = mapped_column(String(160), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MemoryInboxProposalReaderGrant(Base):
+    """Exact-revision authorization for the authenticated Proposal Reader.
+
+    This table deliberately stores no body or source metadata.  A grant may be
+    revoked without changing the immutable proposal revision it refers to.
+    """
+
+    __tablename__ = "memory_inbox_proposal_reader_grants"
+    __table_args__ = (UniqueConstraint("proposal_revision_id", "capability_ref", name="uq_memory_inbox_reader_grant"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    proposal_revision_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_proposal_revisions.id"), index=True)
+    capability_ref: Mapped[str] = mapped_column(String(160))
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="Approved")
+    actor_ref: Mapped[str] = mapped_column(String(160))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MemoryInboxDeletionOperation(Base):
+    __tablename__ = "memory_inbox_deletion_operations"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    manifest_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_manifests.id"), unique=True)
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="None")
+    requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MemoryInboxDeletionProof(Base):
+    __tablename__ = "memory_inbox_deletion_proofs"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    deletion_operation_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_deletion_operations.id"), unique=True)
+    proof_ref: Mapped[str] = mapped_column(String(160), unique=True)
+    lifecycle_state: Mapped[str] = mapped_column(String(16), default="None")
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryInboxProjectionSnapshot(Base):
+    __tablename__ = "memory_inbox_projection_snapshots"
+    __table_args__ = (UniqueConstraint("source_id", "projection_version", name="uq_memory_inbox_projection_version"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_sources.id"), index=True)
+    projection_version: Mapped[int] = mapped_column(Integer)
+    lifecycle_state: Mapped[str] = mapped_column(String(32))
+    freshness_state: Mapped[str] = mapped_column(String(16))
+    next_action_code: Mapped[str] = mapped_column(String(64))
+    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deletion_state: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class SupervisorControl(Base):

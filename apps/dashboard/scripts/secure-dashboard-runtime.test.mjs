@@ -23,7 +23,7 @@ test("disabled LAN auth is loopback-only HTTP", () => {
 });
 
 test("LAN auth gates every dashboard page and defaults unknown app paths to deny", () => {
-  for (const url of ["/", "/active-work", "/active-work/", "/attention", "/audit", "/controls", "/pipeline", "/pipeline/packets/packet-1", "/proposed-work", "/queue", "/settings", "/work-items/item-1"]) {
+  for (const url of ["/", "/active-work", "/active-work/", "/attention", "/audit", "/controls", "/memory-inbox", "/pipeline", "/pipeline/packets/packet-1", "/proposed-work", "/queue", "/settings", "/work-items/item-1"]) {
     assert.equal(isDashboardEntryRoute({ url }), true, url);
     assert.equal(isProtectedNextRoute({ url }), true, url);
   }
@@ -57,7 +57,7 @@ test("sign-in sends one explicit fixed account selector without exposing lifecyc
 
 test("test viewer dashboard surface is limited to pipeline pages", () => {
   for (const url of ["/pipeline", "/pipeline/", "/pipeline/packets/packet-1"]) assert.equal(isTestViewerDashboardRoute({ url }), true, url);
-  for (const url of ["/", "/controls", "/audit", "/settings", "/work-items/item-1", "/pipeline%252fescape"]) assert.equal(isTestViewerDashboardRoute({ url }), false, url);
+  for (const url of ["/", "/controls", "/memory-inbox", "/audit", "/settings", "/work-items/item-1", "/pipeline%252fescape"]) assert.equal(isTestViewerDashboardRoute({ url }), false, url);
 });
 
 test("numeric LAN parser rejects wildcard, loopback, hostnames and localhost", () => {
