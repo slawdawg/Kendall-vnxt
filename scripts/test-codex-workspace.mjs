@@ -9701,6 +9701,44 @@ try {
     }
   });
 
+  test("settle-external-intent requires exact owner, dead runner, and immutable intent before releasing a fenced retry", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      const digest = createHash("sha256").update(initial.token).digest("hex");
+      const intentId = "22222222-2222-4222-8222-222222222222";
+      const intentDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-intents");
+      mkdirSync(intentDirectory, { recursive: true });
+      writeFileSync(join(intentDirectory, `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: digest,
+        intent_id: intentId,
+        runner_pid: initial.pid,
+        runner_process_start_identity: initial.process_start_identity,
+        command_digest: "b".repeat(64),
+        started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      const wrongOwner = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved bounded intent settlement", "--owner", "runner-b", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(wrongOwner.code !== 0, "foreign owner settled an external intent");
+      const preview = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(preview.stdout.includes('"allowed": true'), preview.stdout);
+      const apply = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved bounded intent settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(apply.code === 0, apply.stderr || apply.stdout);
+      const completion = readJson(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-completions", `${intentId}.json`));
+      assert(completion.status === 125 && completion.settlement === "owner-attested-runner-absent/v1", "settlement completion is not bounded owner-attested evidence");
+      const retry = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(retry.code === 0, retry.stderr || retry.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("durable manifest intent prevents a crash gap from becoming an unobserved retry", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {

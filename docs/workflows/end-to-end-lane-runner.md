@@ -261,6 +261,15 @@ publisher.
    registered a remote branch through `--delete-remote`, preserve that flag on
    resume: the runner refuses to downgrade a still-present registered remote
    target and close the manifest while that branch remains.
+   If a versioned lease reports `external_command_fence_unresolved`, do not
+   rerun delivery, delete the lock, or manufacture a completion file. First
+   prove the recorded runner PID/start identity is absent and inspect the exact
+   immutable intent ID. Only the current manifest owner, with recorded operator
+   approval, may preview then apply
+   `settle-external-intent <task> --intent-id <uuid> --dry-run|--apply`.
+   Settlement records that bounded owner attestation with status 125; it does
+   not claim the interrupted command had no effects. The next governed command
+   must repeat its ordinary verification, ownership, and delivery gates.
    A no-PR lane that is not ancestral but was carried forward by a later merged
    PR must use `cleanup-superseded <task>` rather than `cleanup-integrated`.
    First review its `--summary-json` proof with the exact source head, merged

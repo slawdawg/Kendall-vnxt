@@ -241,6 +241,9 @@ try {
     case "inspect-task-lock":
       inspectTaskLockCommand(commandArgs);
       break;
+    case "settle-external-intent":
+      settleExternalIntent(commandArgs);
+      break;
     case "adopt-legacy-recovery":
       adoptLegacyRecovery(commandArgs);
       break;
@@ -440,6 +443,13 @@ record-check-stage-evidence options:
 inspect-task-lock options:
   <task-id>                 Exact managed task id to inspect.
   --summary-json            Print a redacted, read-only lock inspection packet.
+
+settle-external-intent options:
+  <task-id>                 Exact owner-managed task with one unresolved external intent.
+  --intent-id <uuid>        Exact immutable unresolved intent to settle.
+  --dry-run                 Print the bounded settlement packet without mutation.
+  --apply                   Append an immutable owner-attested completion record.
+  --approval <text>         Required with --apply; records the operator authorization.
 
 adopt-legacy-recovery options:
   --dry-run                 Print exact dead-owner and inode/hash evidence without mutation.
@@ -2728,6 +2738,108 @@ function inspectTaskLockCommand(argv) {
     `heartbeat_at=${packet.heartbeatAt || "unknown"}`,
     "mutation=none; read-only lock inspection",
   ]);
+}
+
+function externalIntentSettlementPacket(state, taskId, intentId, owner) {
+  const manifestPath = join(state.tasksDir, `${taskId}.json`);
+  const manifest = readManifest(manifestPath);
+  validateManifest(manifest, manifestPath);
+  const blockers = [];
+  if (manifest.owner !== owner) blockers.push("current runner is not the exact manifest owner");
+  const inspection = inspectTaskLock(state, taskId);
+  if (inspection.protocol !== "versioned_lease" || inspection.status !== "ambiguous" || inspection.reason !== "external_command_fence_unresolved") {
+    blockers.push("task does not have the exact unresolved versioned external-command fence");
+  }
+  const metadata = inspection.metadata;
+  const tokenDigest = metadata?.token ? taskLeaseTokenDigest(metadata.token) : "";
+  let intent = null;
+  if (metadata && tokenDigest) {
+    try {
+      intent = unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest);
+    } catch {
+      blockers.push("unresolved external intent record is invalid");
+    }
+  }
+  if (!intent || intent.intent_id !== intentId) blockers.push("requested intent is not the exact unresolved external intent");
+  if (intent) {
+    const observedIdentity = processStartIdentity(intent.runner_pid);
+    if (observedIdentity !== null) blockers.push("intent runner PID/start identity is still observable or reused");
+    try {
+      process.kill(intent.runner_pid, 0);
+      blockers.push("intent runner PID is still live or not probeable as absent");
+    } catch (error) {
+      if (error?.code !== "ESRCH") blockers.push("intent runner PID absence could not be proven");
+    }
+  }
+  return {
+    taskId,
+    intentId,
+    owner,
+    manifestPath,
+    generation: metadata?.generation || null,
+    tokenDigest: tokenDigest || null,
+    runnerPid: intent?.runner_pid || null,
+    runnerProcessStartIdentity: intent?.runner_process_start_identity || null,
+    commandDigest: intent?.command_digest || null,
+    startedAt: intent?.started_at || null,
+    allowed: blockers.length === 0,
+    blockers,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function settleExternalIntent(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) throw new Error("settle-external-intent requires exactly one task id.");
+  if (Boolean(options.dryRun) === Boolean(options.apply)) throw new Error("settle-external-intent requires exactly one of --dry-run or --apply.");
+  const taskId = String(positional[0] || "").trim();
+  const intentId = String(options.intentId || "").trim();
+  assertSafeTaskId(taskId);
+  if (!isUuid(intentId)) throw new Error("settle-external-intent requires an exact --intent-id UUID.");
+  if (options.apply && !validTakeoverReason(options.approval)) {
+    throw new Error("settle-external-intent --apply requires explicit operator approval of at least 10 non-whitespace characters.");
+  }
+  const state = workspaceState(options);
+  const owner = currentLaneOwner(options);
+  const packet = externalIntentSettlementPacket(state, taskId, intentId, owner);
+  if (options.dryRun) {
+    const output = { ...packet, mutation: "none; dry-run only" };
+    if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+    else printPlan("settle-external-intent", [JSON.stringify(output)]);
+    return;
+  }
+  if (!packet.allowed) throw new Error(`external intent settlement blocked: ${packet.blockers.join("; ")}`);
+  const fresh = externalIntentSettlementPacket(state, taskId, intentId, owner);
+  if (!fresh.allowed || fresh.generation !== packet.generation || fresh.tokenDigest !== packet.tokenDigest || fresh.commandDigest !== packet.commandDigest || fresh.startedAt !== packet.startedAt) {
+    throw new Error("external intent settlement evidence changed before immutable completion; refusing to settle.");
+  }
+  try {
+    writeNewJson(taskLeasePath(state, taskId, "external-completions", intentId), {
+      schema_version: taskLeaseSchemaVersion,
+      task_id: taskId,
+      generation: fresh.generation,
+      token_digest: fresh.tokenDigest,
+      intent_id: intentId,
+      status: 125,
+      completed_at: new Date().toISOString(),
+      settlement: "owner-attested-runner-absent/v1",
+      approval: String(options.approval).trim(),
+      metadata_only: true,
+      raw_payload_retained: false,
+    });
+  } catch (error) {
+    if (error?.code === "EEXIST") throw new Error("external intent completion already exists; refusing to overwrite immutable evidence.");
+    throw error;
+  }
+  const output = {
+    ...fresh,
+    settledAt: new Date().toISOString(),
+    settlement: "owner-attested-runner-absent/v1",
+    mutation: "immutable external completion published; subsequent governed operation must re-prove all normal gates",
+  };
+  if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+  else printPlan("settle-external-intent", [JSON.stringify(output)]);
 }
 
 function adoptLegacyRecovery(argv) {
