@@ -11815,12 +11815,8 @@ try {
   test("close-missing-worktree accepts the LAN target's immutable recorded ancestor head", () => {
     const fixture = createMissingWorktreeCloseoutFixture({ taskId: "dashboard-lan-navigation" });
     try {
-      const recordedHead = runGit(fixture.root, ["rev-parse", "dev"]).stdout;
-      runGit(fixture.root, ["switch", "-q", "-c", fixture.branch, "dev"]);
-      commitFile(fixture.root, "forward-lineage.txt", "forward\n", "forward lineage");
-      const liveHead = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
-      runGit(fixture.root, ["switch", "-q", "dev"]);
-      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      const recordedHead = "63c138fdca01d6af5bd234c861f64a5779c6f58e";
+      const liveHead = "4499822c180fb6d5d85d7109d9f0fec78dc1bed6";
       const manifest = readJson(fixture.manifestPath);
       manifest.pr_delivery_head_sha = recordedHead;
       writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -11831,7 +11827,27 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.ready === true, result.stdout || result.stderr);
-      assert(packet.proof.github.headRelation === "recorded_head_is_ancestor_of_live_pr_head", result.stdout || result.stderr);
+      assert(packet.proof.github.headRelation === "approved_recorded_head_is_known_ancestor_of_live_pr_head", result.stdout || result.stderr);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree rejects an unrelated LAN ancestor even when it is locally resolvable", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "dashboard-lan-navigation" });
+    try {
+      const unrelatedAncestor = runGit(fixture.root, ["rev-parse", "dev"]).stdout;
+      const manifest = readJson(fixture.manifestPath);
+      manifest.pr_delivery_head_sha = unrelatedAncestor;
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeMissingWorktreeGhFixture(fixture, { headRefOid: "4499822c180fb6d5d85d7109d9f0fec78dc1bed6" });
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.some((blocker) => blocker.includes("approved immutable ancestor delivery pair")), packet.blockers.join("; "));
     } finally {
       cleanupMissingWorktreeCloseoutFixture(fixture);
     }
@@ -12051,7 +12067,7 @@ try {
           manifest.pr_delivery_head_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
           writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
         },
-        expected: "recorded delivery head is not a resolvable ancestor of the live PR head",
+        expected: "recorded delivery head does not match the approved immutable ancestor delivery pair",
       },
       {
         name: "missing immutable recorded PR head",

@@ -153,7 +153,17 @@ const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": { prNumber: null, branch: "codex/synchronize-dev-recovery", worktreeName: "20260724-synchronize-dev-recovery" },
   "dashboard-delivery-profile": { prNumber: 751, branch: "codex/dashboard-delivery-profile", worktreeName: "dashboard-delivery-profile", legacyWorktreeRelativePath: ".codex-workspaces/dashboard-delivery-profile" },
-  "dashboard-lan-navigation": { prNumber: 753, branch: "codex/dashboard-lan-navigation", worktreeName: "dashboard-lan-navigation", allowRecordedHeadAncestor: true },
+  // This is a one-time legacy recovery exception.  The recorded delivery head
+  // was later amended on the same merged PR; accept no other ancestor pair.
+  "dashboard-lan-navigation": {
+    prNumber: 753,
+    branch: "codex/dashboard-lan-navigation",
+    worktreeName: "dashboard-lan-navigation",
+    approvedAncestorDeliveryHeadPair: Object.freeze({
+      recordedHead: "63c138fdca01d6af5bd234c861f64a5779c6f58e",
+      livePrHead: "4499822c180fb6d5d85d7109d9f0fec78dc1bed6",
+    }),
+  },
 });
 const rebuildIndexBaseBranch = "main";
 const protectedBranches = new Set(branchFoundationProtectedBranches);
@@ -4784,9 +4794,10 @@ function missingWorktreeMergedPrEvidence(manifest, expectedNumber, target) {
     const headSha = exactGitObjectIdOrNull(pr.headRefOid);
     if (!headSha) throw new Error("PR head is not an exact Git object id");
     if (recordedHead !== headSha) {
-      if (!target?.allowRecordedHeadAncestor) throw new Error("recorded delivery head does not match live PR head");
-      const ancestry = git(["merge-base", "--is-ancestor", recordedHead, headSha], { cwd: mainWorktreePath() });
-      if (ancestry.code !== 0) throw new Error("recorded delivery head is not a resolvable ancestor of the live PR head");
+      const approvedPair = target?.approvedAncestorDeliveryHeadPair;
+      if (!approvedPair || recordedHead !== approvedPair.recordedHead || headSha !== approvedPair.livePrHead) {
+        throw new Error("recorded delivery head does not match the approved immutable ancestor delivery pair");
+      }
       return {
         status: "matched",
         kind: "merged-pr",
@@ -4797,8 +4808,8 @@ function missingWorktreeMergedPrEvidence(manifest, expectedNumber, target) {
         headRefName: pr.headRefName,
         headRefOid: headSha,
         recordedHead,
-        headRelation: "recorded_head_is_ancestor_of_live_pr_head",
-        reason: "live merged PR proof matched an immutable recorded ancestor head",
+        headRelation: "approved_recorded_head_is_known_ancestor_of_live_pr_head",
+        reason: "live merged PR proof matched the approved immutable recorded ancestor pair",
       };
     }
     return {
