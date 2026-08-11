@@ -69,8 +69,10 @@ async def _reader_app(tmp_path, monkeypatch, *, lan_auth_enabled: bool):
         proposal = MemoryInboxProposalAggregate(id="proposal:reader-api", source_id=source.id, current_revision=1, lifecycle_state="Ready")
         revision = MemoryInboxProposalRevision(id="proposal-revision:reader-api", proposal_id=proposal.id, revision=1, lifecycle_state="Ready", actor_ref="operator:test", audit_ref="audit:test")
         grant = MemoryInboxProposalReaderGrant(id="reader-grant:reader-api", proposal_revision_id=revision.id, capability_ref="capability:reader", lifecycle_state="Approved", actor_ref="operator:test")
-        manifest = MemoryInboxManifest(id="manifest:proposal-reader-api", owner_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader-api", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
-        session.add_all((source, proposal, revision, grant, manifest))
+        session.add_all((source, proposal, revision, grant))
+        await session.flush()
+        manifest = MemoryInboxManifest(id="manifest:proposal-reader-api", legacy_owner_revision_id=revision.id, proposal_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader-api", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
+        session.add(manifest)
     return main.app, SessionLocal
 
 

@@ -29,7 +29,7 @@ async def test_fake_local_success_materializes_only_through_registered_manifest(
         source_revision = MemoryInboxSourceRevision(id="source-revision:fake", source_id=source.id, revision=1, lifecycle_state="Unprocessed", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
         proposal = MemoryInboxProposalAggregate(id="proposal:fake", source_id=source.id, current_revision=1, lifecycle_state="Draft")
         proposal_revision = MemoryInboxProposalRevision(id="proposal-revision:fake", proposal_id=proposal.id, revision=1, lifecycle_state="Draft", actor_ref="operator:seed", audit_ref="audit:seed")
-        manifest = MemoryInboxManifest(id="manifest:fake", owner_revision_id=proposal_revision.id, copy_class="proposal_body", store_ref="inbox-store:fake", creation_state="Planned", retention_class="proposal_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="manifest:fake", proposal_revision_id=proposal_revision.id, copy_class="proposal_body", store_ref="inbox-store:fake", creation_state="Planned", retention_class="proposal_retention", deletion_state="None")
         attempt = MemoryInboxProcessingAttempt(id="attempt:fake", source_revision_id=source_revision.id, proposal_revision_id=proposal_revision.id, consent_ref="receipt:fake", provider_code="local.fake", attempt_sequence=1, lifecycle_state="Claimed")
         session.add_all((source, source_revision, proposal, proposal_revision, manifest, attempt)); await session.commit()
         assert await materialize_fake_local_proposal(session, settings=settings, attempt_id=attempt.id, proposal_body="Generated proposal", actor_ref="fake:local") == proposal.id
