@@ -160,7 +160,8 @@ const missingWorktreeCloseoutTargets = Object.freeze({
     // merged successor without permitting a general missing-head fallback.
     supersededBy: {
       prNumber: 710,
-      sourceHead: "d0a31e95c7ebdb6c57fb2281e6a40dcd40603275",
+      recoveredSourceCommit: "d0a31e95c7ebdb6c57fb2281e6a40dcd40603275",
+      sourceTree: "88e56c34edd9afb6a32a41d2a6a551d91d7c5247",
       sourceParent: "0697c3e6ff4c10ecfd581b074ea3ba423a42caa4",
       prHead: "751d8f8936bfa987257b0002326f6bad82ea84df",
       mergeCommit: "84d8c21feb9940ec85b818007654ee6765aeb169",
@@ -4771,9 +4772,13 @@ function missingWorktreeNoPrEvidence(manifest, expectedHistoricalHead = null) {
     return { status: "blocked", kind: "no-pr", reason: "no-PR manifest retains PR URL metadata" };
   }
   const recordedHistoricalHead = exactGitObjectIdOrNull(manifest.historical_source_head_sha);
+  const historicalHeadWasRecorded = manifest.historical_source_head_sha !== undefined && manifest.historical_source_head_sha !== null;
   const expectedHead = expectedHistoricalHead === null ? null : exactGitObjectIdOrNull(expectedHistoricalHead);
   if (expectedHistoricalHead !== null && !expectedHead) {
     return { status: "blocked", kind: "no-pr", reason: "approved no-PR supersession source head is invalid" };
+  }
+  if (historicalHeadWasRecorded && !recordedHistoricalHead) {
+    return { status: "blocked", kind: "no-pr", reason: "no-PR manifest historical source head is invalid" };
   }
   if (recordedHistoricalHead && expectedHead && recordedHistoricalHead !== expectedHead) {
     return { status: "blocked", kind: "no-pr", reason: "manifest historical source head does not match the approved supersession source head" };
@@ -4801,31 +4806,29 @@ function missingWorktreeNoPrEvidence(manifest, expectedHistoricalHead = null) {
 }
 
 function missingWorktreeSupersessionEvidence(manifest, target) {
-  const sourceHead = exactGitObjectIdOrNull(target?.sourceHead);
+  const recoveredSourceCommit = exactGitObjectIdOrNull(target?.recoveredSourceCommit);
+  const sourceTree = exactGitObjectIdOrNull(target?.sourceTree);
   const sourceParent = exactGitObjectIdOrNull(target?.sourceParent);
   const prHead = exactGitObjectIdOrNull(target?.prHead);
   const mergeCommit = exactGitObjectIdOrNull(target?.mergeCommit);
   const prNumber = Number(target?.prNumber);
   const scope = Array.isArray(target?.scope) ? [...target.scope].sort() : [];
-  if (!sourceHead || !sourceParent || !prHead || !mergeCommit || !Number.isSafeInteger(prNumber) || prNumber <= 0 || scope.length === 0 || scope.some((path) => typeof path !== "string" || !path)) {
+  if (!recoveredSourceCommit || !sourceTree || !sourceParent || !prHead || !mergeCommit || !Number.isSafeInteger(prNumber) || prNumber <= 0 || scope.length === 0 || scope.some((path) => typeof path !== "string" || !path)) {
     return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession target is malformed" };
   }
-  const noPr = missingWorktreeNoPrEvidence(manifest, sourceHead);
+  const noPr = missingWorktreeNoPrEvidence(manifest, recoveredSourceCommit);
   if (noPr.status !== "matched") return { ...noPr, kind: "superseded-no-pr" };
   const cwd = mainWorktreePath();
-  if (![sourceHead, sourceParent, prHead, mergeCommit].every((commit) => gitCommitExists(commit, cwd))) {
+  if (![sourceParent, prHead, mergeCommit].every((commit) => gitCommitExists(commit, cwd))) {
     return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession commit evidence is unavailable locally" };
   }
-  if (!sameStringList(gitCommitParents(sourceHead, cwd), [sourceParent]) || !sameStringList(gitCommitParents(prHead, cwd), [sourceParent])) {
-    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession source and PR head do not share the exact immutable parent" };
+  if (!sameStringList(gitCommitParents(prHead, cwd), [sourceParent])) {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession PR head does not retain the exact immutable source parent" };
   }
-  const sourceToHead = git(["diff", "--quiet", sourceHead, prHead], { cwd });
-  if (sourceToHead.code > 1) return { status: "blocked", kind: "superseded-no-pr", reason: "cannot compare approved supersession source and PR head trees" };
-  if (sourceToHead.code !== 0) return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession source and PR head trees differ" };
-  const sourceScope = scopedChangedPaths(sourceParent, sourceHead, [], cwd);
+  const reachableTree = git(["rev-parse", `${prHead}^{tree}`], { cwd });
   const headScope = scopedChangedPaths(sourceParent, prHead, [], cwd);
-  if (sourceScope.error || headScope.error || !sameStringList(sourceScope.paths, scope) || !sameStringList(headScope.paths, scope)) {
-    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession scope does not exactly match the recovered source and PR head changes" };
+  if (reachableTree.code !== 0 || exactGitObjectIdOrNull(reachableTree.stdout.trim()) !== sourceTree || headScope.error || !sameStringList(headScope.paths, scope)) {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession reachable PR-head tree or scoped change evidence does not match the recovered source evidence" };
   }
   const result = run("gh", ["pr", "view", String(prNumber), "--json", "number,mergedAt,state,baseRefName,headRefOid,mergeCommit"], { cwd });
   if (result.code !== 0) return { status: "blocked", kind: "superseded-no-pr", reason: "live GitHub successor PR proof is unavailable" };
@@ -4837,15 +4840,22 @@ function missingWorktreeSupersessionEvidence(manifest, target) {
       return { status: "blocked", kind: "superseded-no-pr", reason: "live GitHub successor PR does not match the approved immutable PR #710 evidence" };
     }
     const headToMerge = git(["diff", "--quiet", prHead, mergeCommit], { cwd });
-    if (headToMerge.code > 1 || headToMerge.code !== 0 || !gitCommitParents(mergeCommit, cwd).includes(prHead) || !gitCommitIsAncestor(mergeCommit, `origin/${defaultBaseBranch}`, cwd)) {
+    let liveBaseHead;
+    try {
+      liveBaseHead = originBranchSha(defaultBaseBranch, cwd) || null;
+    } catch {
+      return { status: "blocked", kind: "superseded-no-pr", reason: "live canonical origin/dev evidence is unavailable" };
+    }
+    const localBaseHead = branchSha(`origin/${defaultBaseBranch}`, cwd) || null;
+    if (headToMerge.code > 1 || headToMerge.code !== 0 || !gitCommitParents(mergeCommit, cwd).includes(prHead) || !liveBaseHead || liveBaseHead !== localBaseHead || !gitCommitIsAncestor(mergeCommit, localBaseHead, cwd)) {
       return { status: "blocked", kind: "superseded-no-pr", reason: "approved successor merge is not exactly retained in canonical dev" };
     }
     return {
       status: "matched",
       kind: "superseded-no-pr",
-      historicalHead: sourceHead,
+      historicalHead: recoveredSourceCommit,
       count: noPr.count,
-      supersededBy: { prNumber, sourceHead, sourceParent, prHead, mergeCommit, scope },
+      supersededBy: { prNumber, recoveredSourceCommit, sourceTree, sourceParent, prHead, mergeCommit, scope, liveBaseHead },
       reason: `live no-PR source proof and immutable PR #${prNumber} supersession proof matched`,
     };
   } catch {

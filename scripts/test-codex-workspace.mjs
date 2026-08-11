@@ -11746,7 +11746,8 @@ try {
       assert(packet.proof.github.kind === "superseded-no-pr", result.stdout || result.stderr);
       assert(packet.proof.github.status === "matched", result.stdout || result.stderr);
       assert(packet.proof.github.supersededBy.prNumber === 710, result.stdout || result.stderr);
-      assert(packet.proof.github.supersededBy.sourceHead === fixture.supersession.sourceHead, result.stdout || result.stderr);
+      assert(packet.proof.github.supersededBy.recoveredSourceCommit === fixture.supersession.sourceHead, result.stdout || result.stderr);
+      assert(packet.proof.github.supersededBy.sourceTree === fixture.supersession.sourceTree, result.stdout || result.stderr);
       assert(packet.proof.worktree.status === "absent_unregistered", result.stdout || result.stderr);
       assert(packet.proof.localBranch.status === "absent", result.stdout || result.stderr);
       assert(packet.proof.remoteBranch.status === "absent", result.stdout || result.stderr);
@@ -12052,6 +12053,24 @@ try {
           writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
         },
         expected: "historical source head does not match the approved supersession source head",
+      },
+      {
+        name: "recovered supersession malformed historical source head",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.historical_source_head_sha = "not-a-git-object";
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "historical source head is invalid",
+      },
+      {
+        name: "recovered supersession live canonical base mismatch",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          runGit(fixture.remoteRoot, ["update-ref", "refs/heads/dev", fixture.supersession.sourceParent]);
+        },
+        expected: "successor merge is not exactly retained in canonical dev",
       },
       {
         name: "no-PR GitHub head mismatch",
@@ -14278,10 +14297,11 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
     const source = readFileSync(join(root, "scripts", "codex-workspace.mjs"), "utf8")
       .replaceAll("d0a31e95c7ebdb6c57fb2281e6a40dcd40603275", sourceHead)
       .replaceAll("0697c3e6ff4c10ecfd581b074ea3ba423a42caa4", sourceParent)
+      .replaceAll("88e56c34edd9afb6a32a41d2a6a551d91d7c5247", tree)
       .replaceAll("751d8f8936bfa987257b0002326f6bad82ea84df", prHead)
       .replaceAll("84d8c21feb9940ec85b818007654ee6765aeb169", mergeCommit);
     writeFileSync(join(root, "scripts", "codex-workspace.mjs"), source);
-    supersession = { sourceHead, sourceParent, prHead, mergeCommit };
+    supersession = { sourceHead, sourceParent, sourceTree: tree, prHead, mergeCommit };
   }
   runGit(root, ["branch", branch, "dev"]);
   runGit(root, ["push", "-q", "-u", "origin", branch]);
