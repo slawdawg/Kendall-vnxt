@@ -11238,7 +11238,7 @@ try {
     assert(match, "cleanupIntegrated source not found");
     assert(match[0].includes("merge-base"), "cleanup-integrated must require ancestry against the base ref");
     assert(match[0].includes("worktreeCleanupStatus"), "cleanup-integrated must inspect worktree cleanliness");
-    assert(match[0].includes("manifest.pr_url || manifest.pr_number"), "cleanup-integrated must reject PR-backed workspaces");
+    assert(match[0].includes("!closedPrIntegrated"), "cleanup-integrated must reject PR-backed workspaces unless the explicit closed-PR mode is selected");
     assert(match[0].includes("deleteLocalBranchIfPresent"), "cleanup-integrated must use exact-head local branch deletion");
     assert(!match[0].includes("deleteRemoteBranchIfPresent"), "cleanup-integrated must not delete remote branches");
   });
@@ -11297,6 +11297,52 @@ try {
       const assignment = readJson(join(fixture.stateRoot, "assignments", "integrated-assignment.json"));
       assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
       assert(assignment.last_result === "closed after integrated cleanup of integrated-task", `assignment last_result is ${assignment.last_result}`);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated closes one clean integrated non-open PR lane only with explicit approval and live branch proof", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const args = ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved closed integrated PR closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("Closed integrated-task"), result.stdout || result.stderr);
+      assert(!existsSync(fixture.worktree), "closed-PR integrated cleanup did not remove worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "closed-PR integrated cleanup did not delete local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "closed-PR integrated cleanup deleted remote branch");
+      const closed = readJson(manifestPath);
+      assert(closed.status === "closed", `manifest status is ${closed.status}`);
+      assert(closed.closed_pr_integrated_cleanup?.retainedPr?.number === 77, "closed-PR cleanup evidence missing retained PR identity");
+      assert(closed.cleanup_remote_branch_policy === "not-deleted-closed-pr-integrated-cleanup", "closed-PR cleanup remote policy missing");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated closed-PR mode refuses an open source PR", () => {
+    const prEvidence = [{ number: 77, state: "OPEN", mergedAt: null, closedAt: null, headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved closed integrated PR closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("open PR"), result.stdout || result.stderr);
+      assert(existsSync(fixture.worktree), "open PR cleanup removed worktree");
+      assert(branchExists(fixture.root, fixture.branch), "open PR cleanup deleted local branch");
     } finally {
       cleanupIntegratedCleanupFixture(fixture);
     }
