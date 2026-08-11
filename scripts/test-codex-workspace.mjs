@@ -12044,14 +12044,14 @@ try {
         expected: "no-PR manifest retains PR number metadata",
       },
       {
-        name: "no-PR missing historical source head",
+        name: "recovered supersession historical source head mismatch",
         taskId: "20260724-synchronize-dev-recovery",
         mutate(fixture) {
           const manifest = readJson(fixture.manifestPath);
-          delete manifest.historical_source_head_sha;
+          manifest.historical_source_head_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
           writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
         },
-        expected: "historical source head is missing or invalid",
+        expected: "historical source head does not match the approved supersession source head",
       },
       {
         name: "no-PR GitHub head mismatch",
@@ -12068,7 +12068,7 @@ try {
         taskId: "20260724-synchronize-dev-recovery",
         mutate(fixture) {
           const ghPath = join(fixture.fakeBin, "gh");
-          const source = readFileSync(ghPath, "utf8").replace("console.log('[]'); process.exit(0);", "console.log(JSON.stringify([{ headRefOid: '0123456789012345678901234567890123456789' }])); process.exit(0);");
+          const source = readFileSync(ghPath, "utf8").replace("console.log('[]'); process.exit(0);", `console.log(JSON.stringify([{ headRefOid: '${fixture.supersession.sourceHead}' }])); process.exit(0);`);
           writeFileSync(ghPath, source);
         },
         expected: "found PR evidence matching the immutable historical source head",
@@ -14314,7 +14314,7 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
         pr_number: prNumber,
         pr_url: `https://example.test/pull/${prNumber}`,
         pr_delivery_head_sha: "0123456789012345678901234567890123456789",
-      } : {
+      } : taskId === "20260724-synchronize-dev-recovery" ? {} : {
         historical_source_head_sha: "0123456789012345678901234567890123456789",
       }),
       events: [],
