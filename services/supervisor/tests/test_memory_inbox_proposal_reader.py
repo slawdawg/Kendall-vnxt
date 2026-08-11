@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
-from supervisor.application.memory_inbox_reader_serialization import serialize_memory_inbox_source_use
+from supervisor.application.memory_inbox_reader_serialization import (
+    serialize_memory_inbox_source_use,
+    sqlite_source_lock_registry_size,
+)
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.models import (
@@ -68,6 +71,7 @@ async def test_sqlite_serializes_reader_and_deletion_source_use(tmp_path) -> Non
     await asyncio.wait_for(reader_task, timeout=2)
     await asyncio.wait_for(deletion_task, timeout=2)
     assert deletion_entered.is_set()
+    assert sqlite_source_lock_registry_size() == 0
     await engine.dispose()
 
 
@@ -131,7 +135,7 @@ async def test_reader_locks_the_live_grant_until_private_content_is_read(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_reader_rejects_a_grant_revoked_by_the_deletion_barrier(tmp_path) -> None:
+async def test_sqlite_reader_waits_for_deletion_commit_before_rechecking_its_grant(tmp_path, monkeypatch) -> None:
     root = tmp_path / "private"
     root.mkdir(mode=0o700)
     os.chmod(root, 0o700)
@@ -146,7 +150,8 @@ async def test_reader_rejects_a_grant_revoked_by_the_deletion_barrier(tmp_path) 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reader-revoked.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
         deadline = datetime.now(timezone.utc) + timedelta(hours=1)
         source = MemoryInboxSource(id="source:reader-revoked", current_revision=2, lifecycle_state="Review", retention_deadline_at=deadline, deletion_state="None", policy_ref="policy:test")
         proposal = MemoryInboxProposalAggregate(id="proposal:reader-revoked", source_id=source.id, current_revision=1, lifecycle_state="Ready")
@@ -156,14 +161,32 @@ async def test_reader_rejects_a_grant_revoked_by_the_deletion_barrier(tmp_path) 
         session.add_all((source, proposal, revision, grant, manifest))
         await session.commit()
 
-        assert (await read_authorized_proposal(session, settings=settings, proposal_id=proposal.id, revision=1)).body == "Proposal body that must not survive deletion."
-        await approve_proposal_for_deletion(
-            session, proposal_id=proposal.id, expected_revision=1,
-            idempotency_key="reader-revocation-delete-0001", actor_ref="operator:test",
-        )
+    deletion_ready_to_commit = asyncio.Event()
+    release_deletion_commit = asyncio.Event()
+    async with sessions() as deletion_session, sessions() as reader_session:
+        original_commit = deletion_session.commit
 
+        async def paused_commit() -> None:
+            deletion_ready_to_commit.set()
+            await release_deletion_commit.wait()
+            await original_commit()
+
+        monkeypatch.setattr(deletion_session, "commit", paused_commit)
+        deletion_task = asyncio.create_task(approve_proposal_for_deletion(
+            deletion_session, proposal_id=proposal.id, expected_revision=1,
+            idempotency_key="reader-revocation-delete-0001", actor_ref="operator:test",
+        ))
+        await asyncio.wait_for(deletion_ready_to_commit.wait(), timeout=2)
+        reader_task = asyncio.create_task(read_authorized_proposal(
+            reader_session, settings=settings, proposal_id=proposal.id, revision=1,
+        ))
+        await asyncio.sleep(0)
+        assert not reader_task.done(), "SQLite reader must wait until deletion publishes its revoked grant"
+        release_deletion_commit.set()
+        await asyncio.wait_for(deletion_task, timeout=2)
         with pytest.raises(ValueError, match="proposal_reader_revision_unavailable"):
-            await read_authorized_proposal(session, settings=settings, proposal_id=proposal.id, revision=1)
+            await asyncio.wait_for(reader_task, timeout=2)
+    assert sqlite_source_lock_registry_size() == 0
     await engine.dispose()
 
 
