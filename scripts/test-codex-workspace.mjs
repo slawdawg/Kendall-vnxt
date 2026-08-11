@@ -11733,7 +11733,7 @@ try {
     }
   });
 
-  test("close-missing-worktree previews an exact no-PR absent-worktree record without mutation", () => {
+  test("close-missing-worktree proves the exact PR 710 supersession for the recovered no-PR record without mutation", () => {
     const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260724-synchronize-dev-recovery" });
     try {
       const before = readFileSync(fixture.manifestPath, "utf8");
@@ -11743,8 +11743,11 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.ready === true, result.stdout || result.stderr);
-      assert(packet.proof.github.kind === "no-pr", result.stdout || result.stderr);
+      assert(packet.proof.github.kind === "superseded-no-pr", result.stdout || result.stderr);
       assert(packet.proof.github.status === "matched", result.stdout || result.stderr);
+      assert(packet.proof.github.supersededBy.prNumber === 710, result.stdout || result.stderr);
+      assert(packet.proof.github.supersededBy.recoveredSourceCommit === fixture.supersession.sourceHead, result.stdout || result.stderr);
+      assert(packet.proof.github.supersededBy.sourceTree === fixture.supersession.sourceTree, result.stdout || result.stderr);
       assert(packet.proof.worktree.status === "absent_unregistered", result.stdout || result.stderr);
       assert(packet.proof.localBranch.status === "absent", result.stdout || result.stderr);
       assert(packet.proof.remoteBranch.status === "absent", result.stdout || result.stderr);
@@ -11752,6 +11755,22 @@ try {
       assert(!existsSync(fixture.worktree), "dry run recreated the missing worktree");
       assert(!branchExists(fixture.root, fixture.branch), "dry run recreated the local branch");
       assert(!remoteBranchExists(fixture.root, fixture.branch), "dry run recreated the remote branch");
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree refuses the recovered supersession record when PR 710 head evidence drifts", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260724-synchronize-dev-recovery" });
+    try {
+      writeMissingWorktreeGhFixture(fixture, { headRefOid: fixture.supersession.sourceHead });
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.some((blocker) => blocker.includes("successor PR does not match")), packet.blockers.join("; "));
     } finally {
       cleanupMissingWorktreeCloseoutFixture(fixture);
     }
@@ -11866,6 +11885,10 @@ try {
         assert(manifest.status === "closed", `${taskId}: manifest status is ${manifest.status}`);
         assert(manifest.missing_worktree_closeout?.proof?.worktree?.status === "absent_unregistered", `${taskId}: missing worktree proof absent`);
         assert(manifest.missing_worktree_closeout?.authorityDecision?.operation === "close-missing-worktree", `${taskId}: authority evidence absent`);
+        if (taskId === "20260724-synchronize-dev-recovery") {
+          assert(manifest.missing_worktree_closeout?.proof?.github?.supersededBy?.prNumber === 710, `${taskId}: PR 710 supersession proof absent`);
+          assert(manifest.closed_reason === "approved missing managed worktree recovery superseded by PR #710", `${taskId}: supersession close reason absent`);
+        }
         assert(manifest.events.some((event) => event.type === "missing_worktree_closeout_verified"), `${taskId}: recovery event absent`);
         assert(refSnapshot(fixture.root) === beforeRefs, `${taskId}: closeout changed a branch ref`);
         assert(!existsSync(fixture.worktree), `${taskId}: worktree changed`);
@@ -12022,14 +12045,32 @@ try {
         expected: "no-PR manifest retains PR number metadata",
       },
       {
-        name: "no-PR missing historical source head",
+        name: "recovered supersession historical source head mismatch",
         taskId: "20260724-synchronize-dev-recovery",
         mutate(fixture) {
           const manifest = readJson(fixture.manifestPath);
-          delete manifest.historical_source_head_sha;
+          manifest.historical_source_head_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
           writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
         },
-        expected: "historical source head is missing or invalid",
+        expected: "historical source head does not match the approved supersession source head",
+      },
+      {
+        name: "recovered supersession malformed historical source head",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.historical_source_head_sha = "not-a-git-object";
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "historical source head is invalid",
+      },
+      {
+        name: "recovered supersession live canonical base mismatch",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          runGit(fixture.remoteRoot, ["update-ref", "refs/heads/dev", fixture.supersession.sourceParent]);
+        },
+        expected: "successor merge is not exactly retained in canonical dev",
       },
       {
         name: "no-PR GitHub head mismatch",
@@ -12046,7 +12087,7 @@ try {
         taskId: "20260724-synchronize-dev-recovery",
         mutate(fixture) {
           const ghPath = join(fixture.fakeBin, "gh");
-          const source = readFileSync(ghPath, "utf8").replace("console.log('[]'); process.exit(0);", "console.log(JSON.stringify([{ headRefOid: '0123456789012345678901234567890123456789' }])); process.exit(0);");
+          const source = readFileSync(ghPath, "utf8").replace("console.log('[]'); process.exit(0);", `console.log(JSON.stringify([{ headRefOid: '${fixture.supersession.sourceHead}' }])); process.exit(0);`);
           writeFileSync(ghPath, source);
         },
         expected: "found PR evidence matching the immutable historical source head",
@@ -14235,6 +14276,33 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
   runGit(remoteRoot, ["init", "--bare", "-q"]);
   runGit(root, ["remote", "add", "origin", remoteRoot]);
   runGit(root, ["push", "-q", "-u", "origin", "dev"]);
+  let supersession = null;
+  if (taskId === "20260724-synchronize-dev-recovery") {
+    const sourceParent = runGit(root, ["rev-parse", "dev"]).stdout;
+    for (const [path, content] of [
+      ["AGENTS.md", "superseded agent guidance\n"],
+      ["docs/workflows/end-to-end-lane-runner.md", "superseded lane runner workflow\n"],
+      ["docs/workflows/tool-churn-rca-examples.md", "superseded tool churn examples\n"],
+    ]) {
+      mkdirSync(join(root, dirname(path)), { recursive: true });
+      writeFileSync(join(root, path), content);
+      runGit(root, ["add", path]);
+    }
+    const tree = runGit(root, ["write-tree"]).stdout;
+    const sourceHead = runGit(root, ["commit-tree", tree, "-p", sourceParent, "-m", "recovered source candidate"]).stdout;
+    const prHead = runGit(root, ["commit-tree", tree, "-p", sourceParent, "-m", "PR 710 carried-forward head"]).stdout;
+    const mergeCommit = runGit(root, ["commit-tree", tree, "-p", sourceParent, "-p", prHead, "-m", "merge PR 710"]).stdout;
+    runGit(root, ["update-ref", "refs/heads/dev", mergeCommit]);
+    runGit(root, ["push", "-q", "--force", "origin", "dev"]);
+    const source = readFileSync(join(root, "scripts", "codex-workspace.mjs"), "utf8")
+      .replaceAll("d0a31e95c7ebdb6c57fb2281e6a40dcd40603275", sourceHead)
+      .replaceAll("0697c3e6ff4c10ecfd581b074ea3ba423a42caa4", sourceParent)
+      .replaceAll("88e56c34edd9afb6a32a41d2a6a551d91d7c5247", tree)
+      .replaceAll("751d8f8936bfa987257b0002326f6bad82ea84df", prHead)
+      .replaceAll("84d8c21feb9940ec85b818007654ee6765aeb169", mergeCommit);
+    writeFileSync(join(root, "scripts", "codex-workspace.mjs"), source);
+    supersession = { sourceHead, sourceParent, sourceTree: tree, prHead, mergeCommit };
+  }
   runGit(root, ["branch", branch, "dev"]);
   runGit(root, ["push", "-q", "-u", "origin", branch]);
   mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
@@ -14266,13 +14334,13 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
         pr_number: prNumber,
         pr_url: `https://example.test/pull/${prNumber}`,
         pr_delivery_head_sha: "0123456789012345678901234567890123456789",
-      } : {
+      } : taskId === "20260724-synchronize-dev-recovery" ? {} : {
         historical_source_head_sha: "0123456789012345678901234567890123456789",
       }),
       events: [],
     }, null, 2)}\n`,
   );
-  const fixture = { root, remoteRoot, stateRoot: stateRootFixture, fakeBin, taskId, prNumber, branch, worktree, manifestPath, script: join(root, "scripts", "codex-workspace.mjs"), env };
+  const fixture = { root, remoteRoot, stateRoot: stateRootFixture, fakeBin, taskId, prNumber, branch, worktree, manifestPath, script: join(root, "scripts", "codex-workspace.mjs"), env, supersession };
   writeMissingWorktreeGhFixture(fixture);
   return fixture;
 }
@@ -14289,7 +14357,19 @@ function writeMissingWorktreeGhFixture(fixture, overrides = {}) {
         headRefOid: "0123456789012345678901234567890123456789",
         ...overrides,
       }
-    : null;
+    : fixture.supersession
+      ? {
+          number: 710,
+          url: "https://example.test/pull/710",
+          mergedAt: "2026-07-31T00:00:00Z",
+          state: "MERGED",
+          baseRefName: "dev",
+          headRefName: "codex/reconcile-stale-dev-wip",
+          headRefOid: fixture.supersession.prHead,
+          mergeCommit: { oid: fixture.supersession.mergeCommit },
+          ...overrides,
+        }
+      : null;
   writeFileSync(
     join(fixture.fakeBin, "gh"),
     [
