@@ -11776,6 +11776,67 @@ try {
     }
   });
 
+  test("close-missing-worktree accepts only the profile target's exact legacy repo-local absent path", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "dashboard-delivery-profile" });
+    try {
+      const manifest = readJson(fixture.manifestPath);
+      manifest.worktree_path = join(fixture.root, ".codex-workspaces", "dashboard-delivery-profile");
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      assert(packet.proof.worktree.status === "absent_unregistered", result.stdout || result.stderr);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree rejects a different legacy repo-local profile path", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "dashboard-delivery-profile" });
+    try {
+      const manifest = readJson(fixture.manifestPath);
+      manifest.worktree_path = join(fixture.root, ".codex-workspaces", "other-dashboard-delivery-profile");
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.some((blocker) => blocker.includes("exact approved target")), packet.blockers.join("; "));
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree accepts the LAN target's immutable recorded ancestor head", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "dashboard-lan-navigation" });
+    try {
+      const recordedHead = runGit(fixture.root, ["rev-parse", "dev"]).stdout;
+      runGit(fixture.root, ["switch", "-q", "-c", fixture.branch, "dev"]);
+      commitFile(fixture.root, "forward-lineage.txt", "forward\n", "forward lineage");
+      const liveHead = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["switch", "-q", "dev"]);
+      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      const manifest = readJson(fixture.manifestPath);
+      manifest.pr_delivery_head_sha = recordedHead;
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeMissingWorktreeGhFixture(fixture, { headRefOid: liveHead });
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      assert(packet.proof.github.headRelation === "recorded_head_is_ancestor_of_live_pr_head", result.stdout || result.stderr);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
   test("close-missing-worktree applies only bounded manifest closeout evidence for every approved task", () => {
     for (const taskId of ["20260724-synchronize-dev-recovery", "dashboard-delivery-profile", "dashboard-lan-navigation"]) {
       const fixture = createMissingWorktreeCloseoutFixture({ taskId });
@@ -11990,7 +12051,7 @@ try {
           manifest.pr_delivery_head_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
           writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
         },
-        expected: "recorded delivery head does not match live PR head",
+        expected: "recorded delivery head is not a resolvable ancestor of the live PR head",
       },
       {
         name: "missing immutable recorded PR head",
@@ -14141,7 +14202,9 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
     "dashboard-lan-navigation": "codex/dashboard-lan-navigation",
   };
   const branch = expectedBranches[taskId];
-  const worktree = join(stateRootFixture, "worktrees", taskId);
+  const worktree = taskId === "dashboard-delivery-profile"
+    ? join(root, ".codex-workspaces", taskId)
+    : join(stateRootFixture, "worktrees", taskId);
   const manifestPath = join(stateRootFixture, "tasks", `${taskId}.json`);
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
 
@@ -14159,6 +14222,7 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
   runGit(root, ["branch", branch, "dev"]);
   runGit(root, ["push", "-q", "-u", "origin", branch]);
   mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
+  mkdirSync(dirname(worktree), { recursive: true });
   runGit(root, ["worktree", "add", "-q", worktree, branch]);
   runGit(root, ["worktree", "remove", worktree]);
   runGit(root, ["branch", "-D", branch]);
