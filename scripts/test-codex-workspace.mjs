@@ -6637,7 +6637,11 @@ try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "original pre-write evidence\n");
       const source = readFileSync(fixture.script, "utf8");
       const ownerApply = "      applyManifestTakeover(manifest, packet);";
-      const finalOwnerWrite = "      writeManifest(path, manifest);";
+      const finalOwnerWrite = [
+        "      writeManifest(path, manifest, {",
+        '        testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME",',
+        "      });",
+      ].join("\n");
       const finalRevalidation = "      finalizeDirtyInLaneTakeover(packet);";
       const ownerApplyOffset = source.indexOf(ownerApply);
       const ownerWriteOffset = source.indexOf(finalOwnerWrite, ownerApplyOffset + ownerApply.length);
@@ -6964,7 +6968,11 @@ try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "branch identity must remain stable\n");
       const source = readFileSync(fixture.script, "utf8");
       const ownerApply = "      applyManifestTakeover(manifest, packet);";
-      const finalOwnerWrite = "      writeManifest(path, manifest);";
+      const finalOwnerWrite = [
+        "      writeManifest(path, manifest, {",
+        '        testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME",',
+        "      });",
+      ].join("\n");
       const finalRevalidation = "      finalizeDirtyInLaneTakeover(packet);";
       const ownerApplyOffset = source.indexOf(ownerApply);
       const ownerWriteOffset = source.indexOf(finalOwnerWrite, ownerApplyOffset + ownerApply.length);
