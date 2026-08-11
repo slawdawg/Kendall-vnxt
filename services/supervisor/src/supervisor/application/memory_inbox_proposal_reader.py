@@ -49,7 +49,7 @@ async def read_authorized_proposal(
         MemoryInboxProposalReaderGrant.capability_ref == settings.memory_inbox_proposal_reader_capability_ref,
         MemoryInboxProposalReaderGrant.lifecycle_state == "Approved",
         MemoryInboxProposalReaderGrant.revoked_at.is_(None),
-    ))).scalar_one_or_none()
+    ).with_for_update())).scalar_one_or_none()
     if grant is None or (grant.expires_at is not None and grant.expires_at <= datetime.now(timezone.utc)):
         raise ValueError("proposal_reader_unavailable")
     manifest = (await session.execute(select(MemoryInboxManifest).where(
