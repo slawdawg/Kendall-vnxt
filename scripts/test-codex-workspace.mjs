@@ -6324,7 +6324,7 @@ try {
     }
   });
 
-  test("malformed zero-byte dirty lock recovers only the Story 36.5-shaped approved lane", () => {
+  test("legacy zero-byte dirty lock remains inspection-only even with approval", () => {
     const fixture = createDirtyTakeoverFixture("story-36-5-zero-byte-lock");
     try {
       const corePath = join(fixture.worktree, "scripts", "lib", "manager-control-plane", "core.mjs");
@@ -6341,21 +6341,16 @@ try {
         dirtyTakeoverArgs(fixture, ["scripts/lib/manager-control-plane/core.mjs", "tests/manager-control-plane.test.mjs"]),
       );
 
-      assert(result.code === 0, result.stderr || result.stdout);
-      const manifest = readFixtureDirtyTakeoverManifest(fixture);
-      const recovery = manifest.takeover_decisions.at(-1).dirty_in_lane_evidence.malformed_lock_recovery;
-      assert(recovery.status === "recovered", JSON.stringify(recovery));
-      assert(recovery.classification === "zero_byte", JSON.stringify(recovery));
-      const archives = readdirSync(join(fixture.stateRoot, "tasks", ".lock-history"));
-      assert(archives.length === 1, JSON.stringify(archives));
-      assert(readFileSync(join(fixture.stateRoot, "tasks", ".lock-history", archives[0]), "utf8") === "", "recovery did not archive the exact zero-byte lock");
-      assert(!existsSync(lockPath), "recovered zero-byte lock remained after takeover");
+      assert(result.code !== 0, "legacy zero-byte lock unexpectedly recovered");
+      assert(readFileSync(lockPath, "utf8") === "", "legacy zero-byte lock changed");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "legacy lock was archived");
+      assert(readFixtureDirtyTakeoverManifest(fixture).owner === "runner-b", "legacy lock takeover changed ownership");
     } finally {
       cleanupDirtyTakeoverFixture(fixture);
     }
   });
 
-  test("malformed nonempty dirty lock remains blocked without archival or ownership mutation", () => {
+  test("legacy malformed nonempty dirty lock remains fail-closed without archival or ownership mutation", () => {
     const fixture = createDirtyTakeoverFixture("nonempty-malformed-lock");
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "must remain blocked\n");
@@ -6530,7 +6525,7 @@ try {
         takeoverStateRoot,
       ]);
       assert(result.code !== 0, "dirty takeover unexpectedly passed with an active task lock");
-      assert(result.stdout.includes("requires proof that no task lock is active or retained"), result.stderr || result.stdout);
+      assert(result.stderr.includes("Takeover blocked"), result.stderr || result.stdout);
       assert(readFileSync(manifestPath, "utf8") === before, "active-lock dirty takeover changed the manifest");
     } finally {
       rmSync(takeoverStateRoot, { recursive: true, force: true });
@@ -6641,19 +6636,21 @@ try {
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "original pre-write evidence\n");
       const source = readFileSync(fixture.script, "utf8");
-      const seam = [
-        "    writeManifest(path, manifest);",
-        "    try {",
-        "      finalizeDirtyInLaneTakeover(packet);",
-      ].join("\n");
-      assert(source.includes(seam), "fixture did not expose the dirty takeover post-write revalidation seam");
-      const replacement = [
-        "    writeManifest(path, manifest);",
-        '    writeFileSync(join(packet.worktree_evidence.path, "dirty.txt"), "drift after manifest persistence\\n");',
-        "    try {",
-        "      finalizeDirtyInLaneTakeover(packet);",
-      ].join("\n");
-      writeFileSync(fixture.script, source.replace(seam, replacement));
+      const ownerApply = "      applyManifestTakeover(manifest, packet);";
+      const finalOwnerWrite = "      writeManifest(path, manifest);";
+      const finalRevalidation = "      finalizeDirtyInLaneTakeover(packet);";
+      const ownerApplyOffset = source.indexOf(ownerApply);
+      const ownerWriteOffset = source.indexOf(finalOwnerWrite, ownerApplyOffset + ownerApply.length);
+      const finalRevalidationOffset = source.indexOf(finalRevalidation, ownerWriteOffset + finalOwnerWrite.length);
+      assert(ownerApplyOffset >= 0 && ownerWriteOffset > ownerApplyOffset, "fixture did not expose the final owner manifest write");
+      assert(finalRevalidationOffset > ownerWriteOffset, "fixture did not revalidate dirty fingerprints after the final owner manifest write");
+      assert(
+        !source.slice(ownerWriteOffset + finalOwnerWrite.length, finalRevalidationOffset).includes(finalOwnerWrite),
+        "fixture found an unexpected manifest write between owner persistence and final fingerprint revalidation",
+      );
+      const injection = '\n      writeFileSync(join(packet.worktree_evidence.path, "dirty.txt"), "drift after manifest persistence\\n");';
+      const finalOwnerWriteEnd = ownerWriteOffset + finalOwnerWrite.length;
+      writeFileSync(fixture.script, `${source.slice(0, finalOwnerWriteEnd)}${injection}${source.slice(finalOwnerWriteEnd)}`);
       runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
       runGit(fixture.worktree, ["commit", "-q", "-m", "fixture post-write dirty drift seam"]);
       const before = readFileSync(fixture.manifestPath, "utf8");
@@ -6663,34 +6660,190 @@ try {
       assert(result.stderr.includes("fingerprints changed while the manifest lock was held"), result.stderr || result.stdout);
       const restored = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
       const original = JSON.parse(before);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "post-write drift did not restore the exact prior manifest bytes");
       assert(restored.owner === original.owner, "post-write drift left ownership persisted");
+      assert(!restored.pending_dirty_takeover, "post-write drift left a visible dirty takeover transaction");
       assert(!Array.isArray(restored.takeover_decisions), "post-write drift retained a takeover decision");
       assert(!Array.isArray(restored.ownership_takeovers), "post-write drift retained ownership takeover evidence");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId);
+      const intents = leaseJsonRecordsForFixture(join(leaseRoot, "manifest-intents"));
+      const commits = new Map(leaseJsonRecordsForFixture(join(leaseRoot, "manifest-commits")).map((record) => [record.intent_id, record]));
+      assert(intents.length >= 2, "takeover and rollback did not each journal an immutable manifest intent");
+      assert(intents.every((intent) => commits.has(intent.intent_id)), "manifest rollback left an uncommitted write intent");
+      const restoredManifestDigest = createHash("sha256").update(`${JSON.stringify(restored, null, 2)}\n`).digest("hex");
+      const rollbackIntents = intents.filter((intent) => intent.manifest_digest === restoredManifestDigest);
+      assert(
+        rollbackIntents.length === 1 && commits.has(rollbackIntents[0].intent_id),
+        "rollback intent does not bind the restored manifest bytes",
+      );
     } finally {
       cleanupDirtyTakeoverFixture(fixture);
     }
   });
 
-  test("takeover dirty-lane path rechecks a retained lock after preflight", () => {
-    const fixture = createDirtyTakeoverFixture("retained-lock-recheck");
+  test("dirty takeover post-rename interruption restores the prior owner and permits a clean retry", () => {
+    const fixture = createDirtyTakeoverFixture("post-rename-interruption");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "preserve through takeover interruption\n");
+      const interrupted = runFixtureScript(
+        fixture,
+        dirtyTakeoverArgs(fixture, ["dirty.txt"]),
+        { env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME: "1" } },
+      );
+      assert(interrupted.code !== 0, "post-rename takeover interruption unexpectedly completed");
+      assert(interrupted.stderr.includes("CODEX_WORKSPACE_TEST_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME"), interrupted.stderr || interrupted.stdout);
+      const restored = readFixtureDirtyTakeoverManifest(fixture);
+      assert(restored.owner === "runner-b", "interrupted staging published the requesting owner");
+      assert(!restored.pending_dirty_takeover, "interrupted staging left an ambiguous visible transaction");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId);
+      const intents = leaseJsonRecordsForFixture(join(leaseRoot, "manifest-intents"));
+      const committed = new Set(leaseJsonRecordsForFixture(join(leaseRoot, "manifest-commits")).map((record) => record.intent_id));
+      assert(intents.length >= 2 && intents.every((intent) => committed.has(intent.intent_id)), "rollback did not close every observed manifest intent");
+
+      const retry = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+      assert(retry.code === 0, retry.stderr || retry.stdout);
+      assert(readFixtureDirtyTakeoverManifest(fixture).owner === "runner-a", "clean retry did not complete the takeover");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("true crash pending dirty takeover recovers only its exact digest-bound staged manifest", () => {
+    const fixture = createDirtyTakeoverFixture("true-crash-recovery");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "preserve through hard crash\n");
+      const crashed = runFixtureScript(
+        fixture,
+        dirtyTakeoverArgs(fixture, ["dirty.txt"]),
+        { env: { ...fixture.env, CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME: "1" } },
+      );
+      assert(crashed.code === 86, `hard-crash fixture exited ${crashed.code}: ${crashed.stderr || crashed.stdout}`);
+      const staged = readFixtureDirtyTakeoverManifest(fixture);
+      assert(staged.owner === "runner-b", "hard crash published a requesting owner");
+      assert(staged.pending_dirty_takeover?.previous_owner === "runner-b", JSON.stringify(staged.pending_dirty_takeover));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId);
+      const stagedIntents = leaseJsonRecordsForFixture(join(leaseRoot, "manifest-intents"));
+      assert(stagedIntents.length === 1, `hard crash wrote ${stagedIntents.length} manifest intents`);
+      const stagedIntent = stagedIntents[0];
+      const stagedDigest = createHash("sha256").update(`${JSON.stringify(staged, null, 2)}\n`).digest("hex");
+      assert(stagedIntent.manifest_digest === stagedDigest, `fixture staged digest mismatch: ${stagedIntent.manifest_digest} != ${stagedDigest}`);
+      const recovered = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(readFixtureDirtyTakeoverManifest(fixture).owner === "runner-a", "verified stale pending recovery did not resume takeover");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+
+    const tampered = createDirtyTakeoverFixture("true-crash-recovery-tamper");
+    try {
+      writeFileSync(join(tampered.worktree, "dirty.txt"), "tamper must stop recovery\n");
+      const crashed = runFixtureScript(
+        tampered,
+        dirtyTakeoverArgs(tampered, ["dirty.txt"]),
+        { env: { ...tampered.env, CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME: "1" } },
+      );
+      assert(crashed.code === 86, `tamper hard-crash fixture exited ${crashed.code}: ${crashed.stderr || crashed.stdout}`);
+      const staged = readFixtureDirtyTakeoverManifest(tampered);
+      staged.pending_dirty_takeover.prior_manifest_digest = "0".repeat(64);
+      writeFileSync(tampered.manifestPath, `${JSON.stringify(staged, null, 2)}\n`);
+      const blocked = runFixtureScript(tampered, dirtyTakeoverArgs(tampered, ["dirty.txt"]));
+      assert(blocked.code !== 0, "tampered staged takeover unexpectedly recovered");
+      assert(blocked.stderr.includes("staged manifest does not match its immutable write intent"), blocked.stderr || blocked.stdout);
+      const retained = readFixtureDirtyTakeoverManifest(tampered);
+      assert(retained.owner === "runner-b" && retained.pending_dirty_takeover, "tampered recovery mutated the staged manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(tampered);
+    }
+  });
+
+  test("hard crash after final dirty-takeover owner rename restores only the retained digest-bound prior state", () => {
+    const fixture = createDirtyTakeoverFixture("final-owner-hard-crash");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "preserve through final owner crash\n");
+      const crashed = runFixtureScript(
+        fixture,
+        dirtyTakeoverArgs(fixture, ["dirty.txt"]),
+        { env: { ...fixture.env, CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME: "1" } },
+      );
+      assert(crashed.code === 86, `final-owner hard crash exited ${crashed.code}: ${crashed.stderr || crashed.stdout}`);
+      const published = readFixtureDirtyTakeoverManifest(fixture);
+      assert(published.owner === "runner-a", "final owner was not durably published before the crash");
+      assert(published.pending_dirty_takeover?.previous_owner === "runner-b", JSON.stringify(published.pending_dirty_takeover));
+      assert(published.pending_dirty_takeover?.prior_manifest?.owner === "runner-b", "prior owner snapshot was not retained with the transaction");
+      assert(
+        published.takeover_decisions?.some((entry) => entry.dirty_takeover_transaction_id === published.pending_dirty_takeover.transaction_id),
+        "final owner evidence was not bound to the retained dirty takeover transaction",
+      );
+
+      const recovered = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(readFixtureDirtyTakeoverManifest(fixture).owner === "runner-a", "recovery did not deterministically retry the verified takeover");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+
+    const drifted = createDirtyTakeoverFixture("final-owner-hard-crash-drift");
+    try {
+      writeFileSync(join(drifted.worktree, "dirty.txt"), "do not erase drift after owner write\n");
+      const crashed = runFixtureScript(
+        drifted,
+        dirtyTakeoverArgs(drifted, ["dirty.txt"]),
+        { env: { ...drifted.env, CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME: "1" } },
+      );
+      assert(crashed.code === 86, `drift fixture exited ${crashed.code}: ${crashed.stderr || crashed.stdout}`);
+      writeFileSync(join(drifted.worktree, "dirty.txt"), "drift after final owner write\n");
+      const blocked = runFixtureScript(drifted, dirtyTakeoverArgs(drifted, ["dirty.txt"]));
+      assert(blocked.code !== 0, "drifted final-owner crash unexpectedly recovered");
+      assert(blocked.stderr.includes("fingerprints changed while the manifest lock was held"), blocked.stderr || blocked.stdout);
+      const retained = readFixtureDirtyTakeoverManifest(drifted);
+      assert(retained.owner === "runner-a" && retained.pending_dirty_takeover, "drift recovery changed the final-owner transaction");
+    } finally {
+      cleanupDirtyTakeoverFixture(drifted);
+    }
+  });
+
+  test("takeover dirty-lane path rechecks an active versioned lease after preflight", () => {
+    const fixture = createDirtyTakeoverFixture("versioned-lease-recheck");
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "dirty work guarded by lock recheck\n");
       const source = readFileSync(fixture.script, "utf8");
       const seam = "  const applied = applyTakeover(state, target, {";
       assert(source.includes(seam), "fixture did not expose the dirty takeover lock recheck seam");
       const replacement = [
-        '  writeFileSync(taskLockPath(state, target.record.task_id), "{}\\n");',
+        "  const fixtureGeneration = randomUUID();",
+        "  const fixtureToken = randomUUID();",
+        "  const fixtureProcessStart = processStartIdentity(process.pid);",
+        "  if (!fixtureProcessStart) throw new Error(\"fixture process identity is unavailable\");",
+        "  const fixtureLease = {",
+        "    schema_version: taskLeaseSchemaVersion,",
+        "    task_id: target.record.task_id,",
+        "    generation: fixtureGeneration,",
+        "    owner: \"fixture-retained-owner\",",
+        "    pid: process.pid,",
+        "    process_start_identity: fixtureProcessStart,",
+        "    acquired_at: new Date().toISOString(),",
+        "    token: fixtureToken,",
+        "  };",
+        "  ensureTaskLeaseDirectories(state, target.record.task_id);",
+        "  writeNewJson(taskLeasePath(state, target.record.task_id, \"generations\", fixtureGeneration), fixtureLease);",
+        "  appendTaskLeaseHeartbeat(state, target.record.task_id, fixtureLease);",
+        "  publishTaskLeaseRoot(state, target.record.task_id, {",
+        "    schema_version: taskLeaseSchemaVersion,",
+        "    task_id: target.record.task_id,",
+        "    initial_generation: fixtureGeneration,",
+        "    created_at: new Date().toISOString(),",
+        "  });",
         seam,
       ].join("\n");
       writeFileSync(fixture.script, source.replace(seam, replacement));
       runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
-      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture retained lock recheck seam"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture versioned lease recheck seam"]);
       const before = readFileSync(fixture.manifestPath, "utf8");
       const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
 
-      assert(result.code !== 0, "post-preflight retained lock unexpectedly succeeded");
-      assert(result.stderr.includes("Task lock is retained during dirty in-lane takeover"), result.stderr || result.stdout);
-      assert(readFileSync(fixture.manifestPath, "utf8") === before, "retained-lock recheck mutated the manifest");
+      assert(result.code !== 0, "post-preflight versioned lease unexpectedly succeeded");
+      assert(result.stderr.includes("Task lease cannot be handed off"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "versioned-lease recheck mutated the manifest");
     } finally {
       cleanupDirtyTakeoverFixture(fixture);
     }
@@ -6810,15 +6963,17 @@ try {
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "branch identity must remain stable\n");
       const source = readFileSync(fixture.script, "utf8");
-      const seam = ["    writeManifest(path, manifest);", "    try {", "      finalizeDirtyInLaneTakeover(packet);"].join("\n");
-      assert(source.includes(seam), "fixture did not expose the final branch identity seam");
-      const replacement = [
-        "    writeManifest(path, manifest);",
-        '    git(["commit", "--allow-empty", "-m", "fixture post-write head drift"], { cwd: packet.worktree_evidence.path });',
-        "    try {",
-        "      finalizeDirtyInLaneTakeover(packet);",
-      ].join("\n");
-      writeFileSync(fixture.script, source.replace(seam, replacement));
+      const ownerApply = "      applyManifestTakeover(manifest, packet);";
+      const finalOwnerWrite = "      writeManifest(path, manifest);";
+      const finalRevalidation = "      finalizeDirtyInLaneTakeover(packet);";
+      const ownerApplyOffset = source.indexOf(ownerApply);
+      const ownerWriteOffset = source.indexOf(finalOwnerWrite, ownerApplyOffset + ownerApply.length);
+      const finalRevalidationOffset = source.indexOf(finalRevalidation, ownerWriteOffset + finalOwnerWrite.length);
+      assert(ownerApplyOffset >= 0 && ownerWriteOffset > ownerApplyOffset, "fixture did not expose the final owner manifest write");
+      assert(finalRevalidationOffset > ownerWriteOffset, "fixture did not expose the final branch identity revalidation");
+      const finalOwnerWriteEnd = ownerWriteOffset + finalOwnerWrite.length;
+      const injection = '\n      git(["commit", "--allow-empty", "-m", "fixture post-write head drift"], { cwd: packet.worktree_evidence.path });';
+      writeFileSync(fixture.script, `${source.slice(0, finalOwnerWriteEnd)}${injection}${source.slice(finalOwnerWriteEnd)}`);
       runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
       runGit(fixture.worktree, ["commit", "-q", "-m", "fixture final head drift seam"]);
       const before = readFileSync(fixture.manifestPath, "utf8");
@@ -8969,7 +9124,7 @@ try {
     }
   });
 
-  test("task lock inspection and stale recovery are exact-task, redacted, and fail closed", () => {
+  test("legacy task locks are exact-task, redacted, and permanently inspection-only", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const lockPath = writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task"));
@@ -8980,7 +9135,8 @@ try {
       );
       assert(activeInspection.code === 0, activeInspection.stderr || activeInspection.stdout);
       const activePacket = JSON.parse(activeInspection.stdout);
-      assert(activePacket.status === "active", activeInspection.stdout);
+      assert(activePacket.status === "legacy_retained", activeInspection.stdout);
+      assert(activePacket.protocol === "legacy_lock", activeInspection.stdout);
       assert(activePacket.processStartIdentityPresent === true, activeInspection.stdout);
       assert(activePacket.mutation === "none; read-only lock inspection", activeInspection.stdout);
       assert(!activeInspection.stdout.includes("11111111-1111-4111-8111-111111111111"), "inspection leaked lock token");
@@ -8990,8 +9146,8 @@ try {
         ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(activeAttempt.code !== 0, "active lock unexpectedly recovered");
-      assert(activeAttempt.stderr.includes("status=active"), activeAttempt.stderr || activeAttempt.stdout);
+      assert(activeAttempt.code !== 0, "legacy lock unexpectedly recovered");
+      assert(activeAttempt.stderr.includes("Legacy task lock is retained"), activeAttempt.stderr || activeAttempt.stdout);
       assert(existsSync(lockPath), "active lock was changed");
 
       writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task", { process_start_identity: "linux-proc-start-ticks:pid-reuse" }));
@@ -9000,67 +9156,383 @@ try {
         ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(ambiguousAttempt.code !== 0, "ambiguous lock unexpectedly recovered");
-      assert(ambiguousAttempt.stderr.includes("status=ambiguous"), ambiguousAttempt.stderr || ambiguousAttempt.stdout);
+      assert(ambiguousAttempt.code !== 0, "legacy lock unexpectedly recovered");
+      assert(ambiguousAttempt.stderr.includes("Legacy task lock is retained"), ambiguousAttempt.stderr || ambiguousAttempt.stdout);
 
       writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task", {
         pid: 999_999_999,
         process_start_identity: "linux-proc-start-ticks:1",
         token: "33333333-3333-4333-8333-333333333333",
       }));
-      const staleRecovery = runFixtureScript(
+      const staleAttempt = runFixtureScript(
         fixture,
         ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(staleRecovery.code === 0, staleRecovery.stderr || staleRecovery.stdout);
-      assert(!existsSync(lockPath), "recovered lock remained after successful finish-pr cleanup");
-      assert(
-        existsSync(join(fixture.stateRoot, "tasks", ".lock-history", "resumed-task-33333333-3333-4333-8333-333333333333.stale-lock")),
-        "stale lock archive was not preserved",
-      );
+      assert(staleAttempt.code !== 0, "stale legacy lock unexpectedly recovered");
+      assert(staleAttempt.stderr.includes("Legacy task lock is retained"), staleAttempt.stderr || staleAttempt.stdout);
+      assert(existsSync(lockPath), "legacy lock was removed");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "legacy lock was archived");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
-  test("task lock stale recovery re-reads the exact token before replacing a raced lock", () => {
+  test("versioned task leases use immutable predecessor handoff gates instead of legacy lock replacement", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
-      writeFixtureTaskLock(fixture, fixtureTaskLockMetadata("resumed-task", {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
         pid: 999_999_999,
         process_start_identity: "linux-proc-start-ticks:1",
-        token: "44444444-4444-4444-8444-444444444444",
       }));
-      const source = readFileSync(fixture.script, "utf8");
-      const seam = "const reread = inspectTaskLock(state, taskId);";
-      assert(source.includes(seam), "fixture did not expose stale-lock reread seam");
-      writeFileSync(
-        fixture.script,
-        source.replace(
-          seam,
-          [
-            'if (process.env.CODEX_WORKSPACE_FIXTURE_LOCK_RACE === "1") {',
-            '  const replacement = JSON.parse(readFileSync(taskLockPath(state, taskId), "utf8"));',
-            '  replacement.token = "55555555-5555-4555-8555-555555555555";',
-            '  writeFileSync(taskLockPath(state, taskId), `${JSON.stringify(replacement)}\\n`);',
-            "}",
-            seam,
-          ].join("\n"),
-        ),
-      );
-      runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
-      runGit(fixture.root, ["commit", "-q", "-m", "fixture stale-lock recovery race seam"]);
       const result = runFixtureScript(
         fixture,
         ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
-        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_LOCK_RACE: "1" } },
+        { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(result.code !== 0, "raced stale lock unexpectedly recovered");
-      assert(result.stderr.includes("status=stale"), result.stderr || result.stdout);
-      const replacement = JSON.parse(readFileSync(join(fixture.stateRoot, "tasks", "resumed-task.lock"), "utf8"));
-      assert(replacement.token === "55555555-5555-4555-8555-555555555555", "raced lock was replaced or deleted");
-      assert(!existsSync(join(fixture.stateRoot, "tasks", ".lock-history")), "raced lock was archived despite token change");
+      assert(result.code === 0, result.stderr || result.stdout);
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const handoff = readJson(join(leaseRoot, "handoffs", `${initial.generation}.json`));
+      assert(handoff.from_generation === initial.generation, JSON.stringify(handoff));
+      assert(handoff.reason === "stale_owner_process_absent", JSON.stringify(handoff));
+      const successor = readJson(join(leaseRoot, "generations", `${handoff.to_generation}.json`));
+      const release = readJson(join(leaseRoot, "releases", `${handoff.to_generation}.json`));
+      assert(release.generation === handoff.to_generation, JSON.stringify(release));
+      assert(release.token_digest === createHash("sha256").update(successor.token).digest("hex"), JSON.stringify(release));
+      const externalIntents = leaseJsonRecordsForFixture(join(leaseRoot, "external-intents"));
+      const externalCompletions = new Set(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).map((record) => record.intent_id));
+      assert(
+        externalIntents.filter((intent) => intent.generation === handoff.to_generation).every((intent) => externalCompletions.has(intent.intent_id)),
+        "successor generation retained an unresolved external command intent",
+      );
+      assert(!existsSync(join(fixture.stateRoot, "tasks", "resumed-task.lock")), "versioned lease created a legacy lock");
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("immutable predecessor generation"), "versioned handoff gate missing");
+      assert(source.includes("fsyncSync(fd);"), "immutable lease records must fsync their file data before publication");
+      assert(source.includes("fsyncDirectory(dirname(fixedPath));"), "immutable lease publication must fsync its fixed-record directory");
+      assert(!source.includes("recoverStaleTaskLock"), "legacy stale lock recovery remained enabled");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("versioned lease reserves bounded traversal capacity before callbacks and leaves the final released generation reusable", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      // The protocol can inspect 64 immutable generations.  The 65th callback
+      // must be refused before heartbeatManifest can write its manifest event.
+      for (let invocation = 0; invocation <= 64; invocation += 1) {
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runFixtureScript(
+          fixture,
+          ["heartbeat", "resumed-task", "--phase", "lease-capacity-test", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        if (invocation < 64) {
+          assert(result.code === 0, `invocation ${invocation + 1}: ${result.stderr || result.stdout}`);
+        } else {
+          assert(result.code !== 0, "callback beyond traversal capacity unexpectedly ran");
+          assert(result.stderr.includes("Task lease handoff capacity is exhausted"), result.stderr || result.stdout);
+          assert(readFileSync(manifestPath, "utf8") === before, "capacity rejection entered the protected callback");
+        }
+      }
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "generations")).length === 64, "capacity rejection published an unreachable generation");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "releases")).length === 64, "a successful callback did not release its generation");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "handoffs")).length === 63, "handoff history does not match the bounded generation chain");
+      const inspection = runFixtureScript(
+        fixture,
+        ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      const packet = JSON.parse(inspection.stdout);
+      assert(packet.status === "released", inspection.stdout);
+      assert(packet.reason === "owner_released_generation", inspection.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("versioned lease reserves exact-full heartbeat and intent ledgers before root or callback admission", () => {
+    const heartbeatFixture = createFinishPrExistingCommitFixture();
+    try {
+      const source = readFileSync(heartbeatFixture.script, "utf8");
+      const seam = [
+        "  appendTaskLeaseHeartbeat(state, taskId, metadata);",
+        "  // Check immediately after the initial heartbeat but before publishing this",
+      ].join("\n");
+      assert(source.includes(seam), "fixture did not expose the pre-callback heartbeat reservation seam");
+      const replacement = [
+        "  appendTaskLeaseHeartbeat(state, taskId, metadata);",
+        "  // The initial heartbeat above is already one of the 1,024 records.",
+        "  for (let fixtureHeartbeat = 0; fixtureHeartbeat < taskLeaseMaximumHeartbeatHistoryRecords - 1; fixtureHeartbeat += 1) {",
+        "    writeNewJson(join(taskLeasePath(state, taskId, \"heartbeats\"), metadata.generation, `fixture-overflow-${fixtureHeartbeat}.json`), {",
+        "      schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: metadata.generation,",
+        "      token_digest: taskLeaseTokenDigest(metadata.token), heartbeat_at: new Date().toISOString(),",
+        "    });",
+        "  }",
+        "  // Check immediately after the initial heartbeat but before publishing this",
+      ].join("\n");
+      writeFileSync(heartbeatFixture.script, source.replace(seam, replacement));
+      const manifestPath = join(heartbeatFixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(
+        heartbeatFixture,
+        ["heartbeat", "resumed-task", "--phase", "heartbeat-overflow", "--state-root", heartbeatFixture.stateRoot],
+        { cwd: heartbeatFixture.worktree, env: heartbeatFixture.env },
+      );
+      assert(result.code !== 0, `exact-full heartbeat history unexpectedly entered the callback: ${result.stderr || result.stdout}`);
+      assert(result.stderr.includes("heartbeat callback reservation capacity is exhausted"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "exact-full heartbeat history mutated the manifest");
+      const leaseRoot = join(heartbeatFixture.stateRoot, "tasks", ".leases", "resumed-task");
+      assert(!existsSync(join(leaseRoot, "root.json")), "exact-full heartbeat history published a root lease");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "heartbeats")).length === 0, "heartbeat fixture unexpectedly changed the generation directory shape");
+      const generations = readdirSync(join(leaseRoot, "heartbeats"));
+      assert(generations.length === 1, "heartbeat fixture did not retain exactly one unpublished generation");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "heartbeats", generations[0])).length === 1_024, "heartbeat fixture did not seed the exact 1,024-record boundary");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "manifest-intents")).length === 0, "exact-full heartbeat history began a manifest write");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-intents")).length === 0, "exact-full heartbeat history began an external side effect");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(heartbeatFixture);
+    }
+
+    for (const [kind, expectedError] of [
+      ["external-intents", "external_intent callback reservation capacity is exhausted"],
+      ["external-completions", "external_completion callback reservation capacity is exhausted"],
+      ["manifest-intents", "manifest_intent callback reservation capacity is exhausted"],
+      ["manifest-commits", "manifest_commit callback reservation capacity is exhausted"],
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const ledger = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", kind);
+        mkdirSync(ledger, { recursive: true });
+        for (let index = 0; index < 4_096; index += 1) {
+          writeFileSync(join(ledger, `fixture-overflow-${index}.json`), "{}\n");
+        }
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runFixtureScript(
+          fixture,
+          ["heartbeat", "resumed-task", "--phase", `${kind}-overflow`, "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${kind} exact-full boundary unexpectedly entered the callback`);
+        assert(result.stderr.includes(expectedError), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${kind} overflow mutated the manifest before callback admission`);
+        const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+        assert(leaseJsonRecordsForFixture(join(leaseRoot, kind)).length === 4_096, `${kind} fixture did not seed the exact 4,096-record boundary`);
+        assert(leaseJsonRecordsForFixture(join(leaseRoot, "manifest-intents")).length === (kind === "manifest-intents" ? 4_096 : 0), `${kind} exact-full boundary wrote a callback manifest intent`);
+        assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-intents")).length === (kind === "external-intents" ? 4_096 : 0), `${kind} exact-full boundary began an external side effect`);
+        assert(!existsSync(join(leaseRoot, "root.json")), `${kind} exact-full boundary published a root lease`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("versioned lease malformed and over-depth histories fail closed before callbacks", () => {
+    const malformedFixture = createFinishPrExistingCommitFixture();
+    try {
+      const leaseRoot = writeFixtureTaskLeaseChain(malformedFixture, 2, { malformedHandoffAt: 0 });
+      const manifestPath = join(malformedFixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(
+        malformedFixture,
+        ["heartbeat", "resumed-task", "--phase", "malformed-history", "--state-root", malformedFixture.stateRoot],
+        { cwd: malformedFixture.worktree, env: malformedFixture.env },
+      );
+      assert(result.code !== 0, "malformed immutable handoff unexpectedly entered callback");
+      assert(result.stderr.includes("lease_handoff_record_invalid"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "malformed history mutated the manifest");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "generations")).length === 2, "malformed history published a new generation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(malformedFixture);
+    }
+
+    const deepFixture = createFinishPrExistingCommitFixture();
+    try {
+      const leaseRoot = writeFixtureTaskLeaseChain(deepFixture, 65);
+      const manifestPath = join(deepFixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(
+        deepFixture,
+        ["heartbeat", "resumed-task", "--phase", "over-depth-history", "--state-root", deepFixture.stateRoot],
+        { cwd: deepFixture.worktree, env: deepFixture.env },
+      );
+      assert(result.code !== 0, "over-depth immutable history unexpectedly entered callback");
+      assert(result.stderr.includes("lease_handoff_depth_exceeded"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "over-depth history mutated the manifest");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "generations")).length === 65, "over-depth history published a new generation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(deepFixture);
+    }
+  });
+
+  test("first heartbeat durably creates its generation directory before publication and interruption can retry", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const interrupted = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_HEARTBEAT_DIRECTORY_DURABLE: "1" } },
+      );
+      assert(interrupted.code !== 0, "heartbeat-directory interruption unexpectedly completed delivery");
+      assert(interrupted.stderr.includes("durable heartbeat directory creation"), interrupted.stderr || interrupted.stdout);
+      const heartbeatRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "heartbeats");
+      const generations = readdirSync(heartbeatRoot);
+      assert(generations.length > 0, "interruption did not leave the durable heartbeat generation directory");
+      assert(generations.every((generation) => existsSync(join(heartbeatRoot, generation))), "heartbeat generation directory vanished before retry");
+
+      const retry = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(retry.code === 0, retry.stderr || retry.stdout);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("ensureDurableDirectory(directory, state.tasksDir);"), "heartbeat generation directory durability boundary is missing");
+      assert(source.includes("crash after durable heartbeat directory creation before heartbeat publication"), "heartbeat crash ordering fixture is missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("versioned lease rejects a symlinked .leases intermediate before any callback or external publication", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const external = mkdtempSync(join(tmpdir(), "codex-lease-symlink-escape-"));
+    try {
+      const tasksDir = join(fixture.stateRoot, "tasks");
+      const manifestPath = join(tasksDir, "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      symlinkSync(external, join(tasksDir, ".leases"), "dir");
+      const result = runFixtureScript(
+        fixture,
+        ["heartbeat", "resumed-task", "--phase", "symlink-containment", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "symlinked lease intermediate unexpectedly entered the callback");
+      assert(result.stderr.includes("Task lease directory is not a regular directory"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "symlinked lease intermediate mutated the manifest");
+      assert(readdirSync(external).length === 0, "lease creation escaped through the .leases symlink");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
+  test("versioned lease fails closed on an orphaned external-command intent before stale takeover", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      const digest = createHash("sha256").update(initial.token).digest("hex");
+      const intentDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-intents");
+      mkdirSync(intentDirectory, { recursive: true });
+      writeFileSync(join(intentDirectory, "11111111-1111-4111-8111-111111111111.json"), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: digest,
+        intent_id: "11111111-1111-4111-8111-111111111111",
+        runner_pid: initial.pid,
+        runner_process_start_identity: initial.process_start_identity,
+        command_digest: "a".repeat(64),
+        started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "orphan external command intent unexpectedly allowed takeover");
+      assert(result.stderr.includes("external_command_fence_unresolved"), result.stderr || result.stdout);
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "handoffs", `${initial.generation}.json`)), "orphan fence published a handoff");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("durable manifest intent prevents a crash gap from becoming an unobserved retry", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const interrupted = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_MANIFEST_RENAME: "1" } },
+      );
+      assert(interrupted.code !== 0, "manifest crash injection unexpectedly completed delivery");
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      assert(readJson(manifestPath).task_id === "resumed-task", "atomic manifest write left a truncated manifest");
+      const retry = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(retry.code !== 0, "uncommitted manifest intent unexpectedly allowed a retry");
+      assert(retry.stderr.includes("manifest_write_intent_unresolved"), retry.stderr || retry.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("the exact legacy recovery task can adopt only a dead inode/hash-pinned v1 lock", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const taskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
+    try {
+      const tasksDir = join(fixture.stateRoot, "tasks");
+      const sourceManifest = readJson(join(tasksDir, "resumed-task.json"));
+      sourceManifest.task_id = taskId;
+      sourceManifest.branch = "codex/recover-finish-pr-preflight-and-stale-lock-lifec";
+      sourceManifest.owner = "runner-a";
+      writeFileSync(join(tasksDir, `${taskId}.json`), `${JSON.stringify(sourceManifest, null, 2)}\n`);
+      const lockPath = join(tasksDir, `${taskId}.lock`);
+      writeFileSync(lockPath, `${JSON.stringify(fixtureTaskLockMetadata(taskId, {
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }))}\n`);
+      const dryRun = runFixtureScript(
+        fixture,
+        ["adopt-legacy-recovery", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      const dryPacket = JSON.parse(dryRun.stdout);
+      assert(dryPacket.allowed === true, dryRun.stdout);
+      const interrupted = runFixtureScript(
+        fixture,
+        ["adopt-legacy-recovery", "--apply", "--approval", "operator approved dead v1 recovery adoption", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_DURABLE_LEGACY_ADOPTION_CANDIDATE: "1" } },
+      );
+      assert(interrupted.code !== 0, "legacy adoption durability interruption unexpectedly completed");
+      assert(interrupted.stderr.includes("durable legacy adoption candidate publication"), interrupted.stderr || interrupted.stdout);
+      const candidatePath = join(tasksDir, ".leases", taskId, "legacy-adoption-candidates", `${dryPacket.snapshot.sha256}.json`);
+      const adoptionPath = join(tasksDir, ".leases", taskId, "legacy-adoptions", "adoption.json");
+      assert(existsSync(candidatePath), "interrupted adoption did not retain its durable hard-link candidate");
+      assert(!existsSync(adoptionPath), "interrupted adoption wrote a record before the candidate publication boundary");
+      const applied = runFixtureScript(
+        fixture,
+        ["adopt-legacy-recovery", "--apply", "--approval", "operator approved dead v1 recovery adoption", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const adoption = JSON.parse(applied.stdout);
+      assert(adoption.protocol === "legacy-v1-to-v2-adoption", applied.stdout);
+      assert(existsSync(lockPath), "adoption removed the retained legacy lock");
+      writeFileSync(lockPath, `${JSON.stringify(fixtureTaskLockMetadata(taskId, {
+        pid: 999_999_998,
+        process_start_identity: "linux-proc-start-ticks:2",
+      }))}\n`);
+      const inspection = runFixtureScript(
+        fixture,
+        ["inspect-task-lock", taskId, "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      assert(JSON.parse(inspection.stdout).reason === "legacy_adoption_evidence_invalid", inspection.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -12165,6 +12637,113 @@ function writeFixtureTaskLock(fixture, metadata) {
   return path;
 }
 
+function fixtureTaskLeaseMetadata(taskId, overrides = {}) {
+  return {
+    schema_version: 1,
+    task_id: taskId,
+    generation: "66666666-6666-4666-8666-666666666666",
+    owner: "runner-b",
+    pid: process.pid,
+    process_start_identity: currentLinuxStartIdentity(),
+    acquired_at: "2026-07-26T00:00:00.000Z",
+    token: "77777777-7777-4777-8777-777777777777",
+    ...overrides,
+  };
+}
+
+function writeFixtureTaskLease(fixture, metadata) {
+  const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", metadata.task_id);
+  const tokenDigest = createHash("sha256").update(metadata.token).digest("hex");
+  const heartbeatAt = "2026-07-26T00:00:00.000Z";
+  mkdirSync(join(leaseRoot, "generations"), { recursive: true });
+  mkdirSync(join(leaseRoot, "heartbeats", metadata.generation), { recursive: true });
+  mkdirSync(join(leaseRoot, "releases"), { recursive: true });
+  mkdirSync(join(leaseRoot, "handoffs"), { recursive: true });
+  writeFileSync(join(leaseRoot, "root.json"), `${JSON.stringify({
+    schema_version: 1,
+    task_id: metadata.task_id,
+    initial_generation: metadata.generation,
+    created_at: heartbeatAt,
+  })}\n`);
+  writeFileSync(join(leaseRoot, "generations", `${metadata.generation}.json`), `${JSON.stringify(metadata)}\n`);
+  writeFileSync(join(leaseRoot, "heartbeats", metadata.generation, "seed.json"), `${JSON.stringify({
+    schema_version: 1,
+    task_id: metadata.task_id,
+    generation: metadata.generation,
+    token_digest: tokenDigest,
+    heartbeat_at: heartbeatAt,
+  })}\n`);
+  return metadata;
+}
+
+function fixtureLeaseUuid(prefix, index) {
+  return `${prefix}0000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+}
+
+function writeFixtureTaskLeaseChain(fixture, length, options = {}) {
+  assert(Number.isInteger(length) && length >= 1, "fixture lease chain requires at least one generation");
+  const taskId = "resumed-task";
+  const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", taskId);
+  const generations = Array.from({ length }, (_, index) => fixtureTaskLeaseMetadata(taskId, {
+    generation: fixtureLeaseUuid("1", index + 1),
+    token: fixtureLeaseUuid("2", index + 1),
+    pid: 999_999_999,
+    process_start_identity: "linux-proc-start-ticks:1",
+  }));
+  const createdAt = "2026-07-26T00:00:00.000Z";
+  mkdirSync(join(leaseRoot, "generations"), { recursive: true });
+  mkdirSync(join(leaseRoot, "releases"), { recursive: true });
+  mkdirSync(join(leaseRoot, "handoffs"), { recursive: true });
+  writeFileSync(join(leaseRoot, "root.json"), `${JSON.stringify({
+    schema_version: 1,
+    task_id: taskId,
+    initial_generation: generations[0].generation,
+    created_at: createdAt,
+  })}\n`);
+  for (let index = 0; index < generations.length; index += 1) {
+    const metadata = generations[index];
+    const tokenDigest = createHash("sha256").update(metadata.token).digest("hex");
+    mkdirSync(join(leaseRoot, "heartbeats", metadata.generation), { recursive: true });
+    writeFileSync(join(leaseRoot, "generations", `${metadata.generation}.json`), `${JSON.stringify(metadata)}\n`);
+    writeFileSync(join(leaseRoot, "heartbeats", metadata.generation, "seed.json"), `${JSON.stringify({
+      schema_version: 1,
+      task_id: taskId,
+      generation: metadata.generation,
+      token_digest: tokenDigest,
+      heartbeat_at: createdAt,
+    })}\n`);
+    writeFileSync(join(leaseRoot, "releases", `${metadata.generation}.json`), `${JSON.stringify({
+      schema_version: 1,
+      task_id: taskId,
+      generation: metadata.generation,
+      token_digest: tokenDigest,
+      released_at: createdAt,
+    })}\n`);
+    if (index < generations.length - 1) {
+      const handoff = {
+        schema_version: 1,
+        task_id: taskId,
+        from_generation: metadata.generation,
+        to_generation: generations[index + 1].generation,
+        from_token_digest: tokenDigest,
+        reason: "released",
+        handed_off_at: createdAt,
+      };
+      if (options.malformedHandoffAt === index) handoff.from_token_digest = "not-a-token-digest";
+      writeFileSync(join(leaseRoot, "handoffs", `${metadata.generation}.json`), `${JSON.stringify(handoff)}\n`);
+    }
+  }
+  return leaseRoot;
+}
+
+function leaseJsonRecordsForFixture(directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => readJson(join(directory, name)));
+}
+
 function createFinishPrExistingCommitFixture(options = {}) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-finish-existing-commit-"));
   const remoteRoot = `${fixtureRoot}-remote.git`;
@@ -12349,14 +12928,14 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
   const fixtureScript = profile === "dashboard" ? "./scripts/dashboard-delivery.mjs" : "./scripts/test-codex-workspace.mjs";
   let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", ${JSON.stringify(fixtureScript)}],`);
   if (mode === "ambiguous-result") {
-    const spawnLine = "const result = spawnSync(resolved.command, resolved.args, spawnOptions);";
+    const spawnLine = "    result = spawnSync(resolved.command, resolved.args, spawnOptions);";
     assert(patchedSource.includes(spawnLine), "fixture did not contain the verification spawn boundary");
     patchedSource = patchedSource.replace(
       spawnLine,
       [
-        'const result = process.env.CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT === "1" && resolved.command === "fixture-verification"',
-        '  ? { status: null, signal: null, error: null, stdout: "", stderr: "" }',
-        "  : spawnSync(resolved.command, resolved.args, spawnOptions);",
+        '    result = process.env.CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT === "1" && resolved.command === "fixture-verification"',
+        '      ? { status: null, signal: null, error: null, stdout: "", stderr: "" }',
+        "      : spawnSync(resolved.command, resolved.args, spawnOptions);",
       ].join("\n"),
     );
   }
