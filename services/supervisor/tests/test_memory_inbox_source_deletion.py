@@ -21,7 +21,7 @@ async def _seed_source(session, *, source_id: str, deadline: datetime) -> tuple[
     proposal = MemoryInboxProposalAggregate(id=f"proposal:{source_id}", source_id=source.id, current_revision=1, lifecycle_state="Ready")
     proposal_revision = MemoryInboxProposalRevision(id=f"proposal-revision:{source_id}", proposal_id=proposal.id, revision=1, lifecycle_state="Ready", actor_ref="operator:seed", audit_ref="audit:seed")
     grant = MemoryInboxProposalReaderGrant(id=f"grant:{source_id}", proposal_revision_id=proposal_revision.id, capability_ref="capability:reader", lifecycle_state="Approved", actor_ref="operator:seed")
-    manifest = MemoryInboxManifest(id=f"manifest:{source_id}", owner_revision_id=source_revision.id, copy_class="quarantine", store_ref=f"inbox-store:{source_id}", creation_state="Created", retention_class="source_retention", deletion_state="None")
+    manifest = MemoryInboxManifest(id=f"manifest:{source_id}", source_revision_id=source_revision.id, copy_class="quarantine", store_ref=f"inbox-store:{source_id}", creation_state="Created", retention_class="source_retention", deletion_state="None")
     session.add_all((source, source_revision, proposal, proposal_revision, grant, manifest))
     await session.commit()
     return source, grant
@@ -68,7 +68,7 @@ async def test_deletion_retry_requeues_only_existing_retry_needed_operations(tmp
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         source = MemoryInboxSource(id="source:retry", current_revision=3, lifecycle_state="DeletePending", retention_deadline_at=datetime.now(timezone.utc), deletion_state="RetryNeeded", policy_ref="policy:test")
         revision = MemoryInboxSourceRevision(id="revision:retry", source_id=source.id, revision=3, lifecycle_state="DeletePending", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
-        manifest = MemoryInboxManifest(id="manifest:retry", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:retry", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="manifest:retry", source_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:retry", creation_state="Created", retention_class="source_retention", deletion_state="None")
         operation = MemoryInboxDeletionOperation(id="operation:retry", manifest_id=manifest.id, lifecycle_state="RetryNeeded")
         session.add_all((source, revision, manifest, operation)); await session.commit()
         accepted = await retry_source_deletion(session, source_id=source.id, expected_revision=3, idempotency_key="deletion-retry-key-0001", actor_ref="operator:test")
@@ -88,7 +88,7 @@ async def test_deletion_receipt_exposes_only_proven_terminal_outcome_metadata(tm
         source = MemoryInboxSource(id="source:receipt", current_revision=3, lifecycle_state="Deleted", retention_deadline_at=datetime.now(timezone.utc), deletion_state="Proven", policy_ref="policy:test")
         source_revision = MemoryInboxSourceRevision(id="revision:receipt", source_id=source.id, revision=3, lifecycle_state="Deleted", actor_ref="worker:test", audit_ref="audit:test", policy_ref=source.policy_ref)
         proposal = MemoryInboxProposalAggregate(id="proposal:receipt", source_id=source.id, current_revision=2, lifecycle_state="Approved")
-        manifest = MemoryInboxManifest(id="manifest:receipt", owner_revision_id=source_revision.id, copy_class="quarantine", store_ref="inbox-store:receipt", creation_state="Created", retention_class="source_retention", deletion_state="Proven")
+        manifest = MemoryInboxManifest(id="manifest:receipt", source_revision_id=source_revision.id, copy_class="quarantine", store_ref="inbox-store:receipt", creation_state="Created", retention_class="source_retention", deletion_state="Proven")
         operation = MemoryInboxDeletionOperation(id="operation:receipt", manifest_id=manifest.id, lifecycle_state="Proven")
         proof = MemoryInboxDeletionProof(id="proof:receipt", deletion_operation_id=operation.id, proof_ref="receipt:opaque", lifecycle_state="Proven")
         session.add_all((source, source_revision, proposal, manifest, operation, proof)); await session.commit()

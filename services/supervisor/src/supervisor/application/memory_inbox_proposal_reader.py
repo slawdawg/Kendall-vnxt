@@ -66,7 +66,7 @@ async def read_authorized_proposal(
         if grant is None or (grant.expires_at is not None and grant.expires_at <= datetime.now(timezone.utc)):
             raise ValueError("proposal_reader_unavailable")
         manifest = (await session.execute(select(MemoryInboxManifest).where(
-            MemoryInboxManifest.owner_revision_id == proposal_revision.id,
+            MemoryInboxManifest.proposal_revision_id == proposal_revision.id,
             MemoryInboxManifest.copy_class == "proposal_body",
             MemoryInboxManifest.creation_state == "Created",
             MemoryInboxManifest.deletion_state == "None",

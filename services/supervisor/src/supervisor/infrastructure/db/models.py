@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, TypeDecorator, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
@@ -10,6 +10,23 @@ from supervisor.infrastructure.db.database import Base
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UtcDateTime(TypeDecorator[datetime]):
+    """Store Inbox deadlines in UTC and restore their timezone after SQLite reads."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect):  # noqa: ANN001
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+    def process_result_value(self, value: datetime | None, dialect):  # noqa: ANN001
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class DashboardOperator(Base):
@@ -488,7 +505,7 @@ class MemoryInboxSource(Base):
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     current_revision: Mapped[int] = mapped_column(Integer, default=1)
     lifecycle_state: Mapped[str] = mapped_column(String(32), default="Scanning")
-    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    retention_deadline_at: Mapped[datetime] = mapped_column(UtcDateTime())
     deletion_state: Mapped[str] = mapped_column(String(16), default="None")
     policy_ref: Mapped[str] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -500,6 +517,10 @@ class MemoryInboxSourceRevision(Base):
     __table_args__ = (
         UniqueConstraint("source_id", "revision", name="uq_memory_inbox_source_revision"),
         CheckConstraint("revision > 0", name="ck_memory_inbox_source_revision_positive"),
+        CheckConstraint(
+            "lifecycle_state IN ('Scanning','Quarantined','Unprocessed','Draft','AwaitingAuthorization','Processing','Review','Returned','DeniedRetained','DeletePending','Deleted','RejectedUnsafe')",
+            name="ck_memory_inbox_source_revision_state",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
@@ -532,6 +553,10 @@ class MemoryInboxProposalRevision(Base):
     __table_args__ = (
         UniqueConstraint("proposal_id", "revision", name="uq_memory_inbox_proposal_revision"),
         CheckConstraint("revision > 0", name="ck_memory_inbox_proposal_revision_positive"),
+        CheckConstraint(
+            "lifecycle_state IN ('Absent','Draft','Ready','Returned','Denied','Approved')",
+            name="ck_memory_inbox_proposal_revision_state",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
@@ -567,10 +592,21 @@ class MemoryInboxCommandResult(Base):
 
 class MemoryInboxManifest(Base):
     __tablename__ = "memory_inbox_manifests"
-    __table_args__ = (UniqueConstraint("owner_revision_id", "copy_class", name="uq_memory_inbox_manifest_copy"),)
+    __table_args__ = (
+        UniqueConstraint("source_revision_id", "copy_class", name="uq_memory_inbox_source_manifest_copy"),
+        UniqueConstraint("proposal_revision_id", "copy_class", name="uq_memory_inbox_proposal_manifest_copy"),
+        CheckConstraint(
+            "(source_revision_id IS NOT NULL AND proposal_revision_id IS NULL) OR (source_revision_id IS NULL AND proposal_revision_id IS NOT NULL)",
+            name="ck_memory_inbox_manifest_single_owner",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    owner_revision_id: Mapped[str] = mapped_column(String(80), index=True)
+    # Additive migration compatibility only. Runtime ownership and authorization
+    # use exactly one of the explicit revision FKs below.
+    legacy_owner_revision_id: Mapped[str] = mapped_column("owner_revision_id", String(80), default="")
+    source_revision_id: Mapped[str | None] = mapped_column(ForeignKey("memory_inbox_source_revisions.id"), index=True, nullable=True)
+    proposal_revision_id: Mapped[str | None] = mapped_column(ForeignKey("memory_inbox_proposal_revisions.id"), index=True, nullable=True)
     copy_class: Mapped[str] = mapped_column(String(32))
     store_ref: Mapped[str] = mapped_column(String(200), unique=True)
     declared_media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -677,7 +713,7 @@ class MemoryInboxProcessingDisclosure(Base):
     policy_id: Mapped[str] = mapped_column(ForeignKey("memory_inbox_cost_policies.id"))
     policy_revision: Mapped[int] = mapped_column(Integer)
     provider_order: Mapped[str] = mapped_column(String(64), default="local>openai>anthropic")
-    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    retention_deadline_at: Mapped[datetime] = mapped_column(UtcDateTime())
     lifecycle_state: Mapped[str] = mapped_column(String(16), default="Presented")
     idempotency_key: Mapped[str] = mapped_column(String(160))
     actor_ref: Mapped[str] = mapped_column(String(160))
@@ -736,7 +772,7 @@ class MemoryInboxProjectionSnapshot(Base):
     lifecycle_state: Mapped[str] = mapped_column(String(32))
     freshness_state: Mapped[str] = mapped_column(String(16))
     next_action_code: Mapped[str] = mapped_column(String(64))
-    retention_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    retention_deadline_at: Mapped[datetime] = mapped_column(UtcDateTime())
     deletion_state: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
