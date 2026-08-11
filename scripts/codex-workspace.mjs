@@ -43,6 +43,10 @@ const codexWorkspaceVerificationTimeoutMs = 600_000;
 const dashboardVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
 const resumableCheckInvocationBudgetMs = 180_000;
+// Every ordinary leaf must start with enough time to produce useful evidence.
+// Otherwise a short, healthy command can be killed solely because a prior leaf
+// consumed the invocation budget just before it began.
+const resumableCheckDefaultLeafExecutionReserveMs = 30_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
 const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
@@ -8417,7 +8421,10 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     const invocationBudgetMs = stage === externalCheckStageEvidenceStage ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
     const remainingMs = invocationBudgetMs - (Date.now() - started);
     const needsSupervisorLeafReserve = resumableCheckSupervisorLeafSet.has(stage);
-    if (remainingMs <= 0 || (needsSupervisorLeafReserve && remainingMs < resumableCheckSupervisorLeafExecutionReserveMs)) {
+    const executionReserveMs = needsSupervisorLeafReserve
+      ? resumableCheckSupervisorLeafExecutionReserveMs
+      : resumableCheckDefaultLeafExecutionReserveMs;
+    if (remainingMs < executionReserveMs) {
       packet.status = "partial"; packet.next_stage = stage; packet.updated_at = new Date().toISOString(); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest);
       throw new Error(`Check verification packet paused before ${packet.next_stage}; resume finish-pr to continue.`);
     }
@@ -12359,15 +12366,30 @@ function isUuid(value) {
 
 function writeNewJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
+  // A direct O_EXCL create makes the final .json name visible before its bytes
+  // are durable.  ENOSPC or a hard termination in that window leaves a zero
+  // length record which correctly fences recovery, but needlessly bricks the
+  // task.  Keep the incomplete inode under a non-record suffix and publish
+  // the completed inode with link(2), which is an atomic no-replace operation.
+  const directory = dirname(path);
+  const candidatePath = join(directory, `.${basename(path)}.${randomUUID()}.pending`);
   let fd;
   try {
-    fd = openSync(path, "wx", 0o600);
+    fd = openSync(candidatePath, "wx", 0o600);
     writeFileSync(fd, `${JSON.stringify(value)}\n`);
     fsyncSync(fd);
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
-  fsyncDirectory(dirname(path));
+  try {
+    linkSync(candidatePath, path);
+    fsyncDirectory(directory);
+  } finally {
+    // The final record owns a second link after successful publication.  The
+    // private candidate has no protocol meaning and can be removed; a crash
+    // before this point leaves it ignored because it is not a .json record.
+    try { rmSync(candidatePath, { force: true }); } catch { /* leave ignored candidate on cleanup failure */ }
+  }
 }
 
 function fsyncDirectory(path) {
