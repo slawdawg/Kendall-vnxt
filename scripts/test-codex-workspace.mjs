@@ -6636,7 +6636,7 @@ try {
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "original pre-write evidence\n");
       const source = readFileSync(fixture.script, "utf8");
-      const ownerApply = "      applyManifestTakeover(manifest, packet);";
+      const ownerApply = "      applyManifestTakeover(manifest, packet, { dirtyTakeoverTransactionId: pendingTakeover.transaction_id });";
       const finalOwnerWrite = [
         "      writeManifest(path, manifest, {",
         '        testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME",',
@@ -6967,7 +6967,7 @@ try {
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "branch identity must remain stable\n");
       const source = readFileSync(fixture.script, "utf8");
-      const ownerApply = "      applyManifestTakeover(manifest, packet);";
+      const ownerApply = "      applyManifestTakeover(manifest, packet, { dirtyTakeoverTransactionId: pendingTakeover.transaction_id });";
       const finalOwnerWrite = [
         "      writeManifest(path, manifest, {",
         '        testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME",',
