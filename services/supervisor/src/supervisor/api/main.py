@@ -347,6 +347,17 @@ async def require_memory_inbox_shell_operator(request: Request, session: AsyncSe
         raise HTTPException(status_code=401, detail="Sign-in required.")
 
 
+async def require_memory_inbox_proposal_reader_operator(request: Request, session: AsyncSession) -> None:
+    """Require an enabled LAN-authenticated operator before returning proposal content."""
+
+    if not settings.lan_auth_enabled:
+        raise HTTPException(status_code=404, detail="Authenticated Proposal Reader is unavailable.")
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator" or not operator.enabled:
+        raise HTTPException(status_code=401, detail="Sign-in required.")
+
+
 def error_response(message: str, code: str, correlation_id: str = "n/a") -> ApiErrorEnvelope:
     return ApiErrorEnvelope(
         error=ApiErrorShape(
@@ -1008,7 +1019,7 @@ async def get_memory_inbox_proposal_reader(
 ):
     """The only Memory Inbox GET route permitted to return a proposal body."""
     response.headers["Cache-Control"] = "no-store"
-    await require_memory_inbox_shell_operator(request, session)
+    await require_memory_inbox_proposal_reader_operator(request, session)
     try:
         reader = await read_authorized_proposal(
             session, settings=get_settings(), proposal_id=proposal_id, revision=revision,
