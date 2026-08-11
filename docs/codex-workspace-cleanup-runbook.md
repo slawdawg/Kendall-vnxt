@@ -12,6 +12,106 @@ The cleanup path removes generated Python artifacts before removing a disposable
 worktree. This prevents stale cache and temporary-file residue from blocking
 `git worktree remove`.
 
+## Versioned task lease operations and recovery
+
+Task-manifest mutation is protected by an append-only, versioned lease under
+`tasks/.leases/<task-id>/`. Generation, heartbeat, release, handoff, external
+command, and manifest-write records are immutable. A lease is never recovered
+by renaming, unlinking, or overwriting another runner's pathname.
+
+Start every operational investigation with read-only evidence:
+
+```bash
+node ./scripts/codex-workspace.mjs doctor --summary-json
+node ./scripts/codex-workspace.mjs coordination-report --summary-json
+node ./scripts/codex-workspace.mjs inspect-task-lock <task-id> --summary-json
+```
+
+`inspect-task-lock` redacts lease tokens and performs no mutation. Treat its
+status as the authority for the exact task:
+
+| Status | Meaning | Safe next action |
+| --- | --- | --- |
+| `absent` | No published lease owns the task. | Use the ordinary governed command; it will acquire a new lease. |
+| `active` | The recorded process PID and start identity still match. | Do not take over, edit its manifest, or clean its worktree. |
+| `released` | The latest immutable generation released normally. | A later governed command may create one successor generation; do not write lease files manually. |
+| `stale` | The owner process is provably absent and no unresolved external-command or manifest-write intent remains. | Re-run the same governed command. It may publish the predecessor-bound handoff after a fresh check. |
+| `ambiguous` | Lease evidence, owner identity, capacity, or an intent fence cannot be proven. | Stop. Preserve all files and collect the exact reason code for review. |
+| `legacy_retained` | A pre-versioned `<task-id>.lock` is present. | Preserve the lock. It blocks normal mutation until the restricted adoption procedure below is proven. |
+
+The protocol has deliberate capacities for generations, heartbeats, and
+intent/completion records. A capacity error is a stop condition, not an
+invitation to prune immutable evidence. Do not delete records, edit lease JSON,
+or retry an external action outside the workspace command in an attempt to make
+space.
+
+### Interruptions and fenced operations
+
+Before a governed external command or manifest write, the lease records an
+intent; normal completion writes matching immutable evidence. If an owner dies
+while an intent is unresolved, inspection returns an ambiguous fence such as
+`external_command_fence_unresolved` or `manifest_write_intent_unresolved`.
+
+Do not assume the child process died with its parent, rerun the command, clear
+the fence, or take ownership. Preserve the task, inspect the retained
+diagnostic and exact worktree state, and escalate with the task id, lease
+generation, intent reason, and command boundary. The recovery decision must
+prove that the original external effect cannot still complete.
+
+For a dirty in-lane takeover, the workspace command writes a digest-bound
+pending transaction before changing visible ownership and revalidates the final
+owner snapshot. If a crash leaves that transaction behind, do not edit the
+manifest or remove the lease. Re-run the same governed takeover only after its
+read-only proof shows the retained digest and exact dirty paths still match;
+any mismatch remains a hold.
+
+### Legacy v1 lock adoption
+
+Legacy `<task-id>.lock` files are inspection-only because their mutable
+pathname cannot be safely recovered with a check-then-rename or unlink. The
+only supported bridge is deliberately limited to the historical recovery task
+`20260810-recover-finish-pr-preflight-and-stale-lock-lifec`.
+
+Preview it first:
+
+```bash
+node ./scripts/codex-workspace.mjs adopt-legacy-recovery \
+  --dry-run --summary-json
+```
+
+The preview must prove all of the following: the exact target task, a readable
+bounded regular legacy record, a dead PID with the recorded start identity no
+longer observable, and a stable device/inode/size/SHA-256 snapshot. Any live,
+reused, unreadable, replaced, symbolic-link, zero-byte, or oversized record is
+a hold.
+
+After reviewing the unchanged packet, apply only with explicit operator
+approval:
+
+```bash
+node ./scripts/codex-workspace.mjs adopt-legacy-recovery \
+  --apply --approval "reviewed exact legacy recovery adoption"
+```
+
+Apply hard-links and durably syncs the proven legacy inode before recording an
+immutable adoption record. It does **not** delete or rename the legacy lock.
+The adoption remains valid only while the retained pathname and candidate still
+match the recorded snapshot. No other task id, malformed legacy lock, or broad
+legacy cleanup is eligible for this command.
+
+### Missing worktrees and cleanup separation
+
+A missing worktree for a non-closed task is ambiguous state, not proof that the
+lane can be deleted. Run `doctor --summary-json` and
+`coordination-report --summary-json`, then repair or rebuild only through an
+explicit, separately reviewed workspace procedure. Do not use filesystem
+deletion, manually close the manifest, or discard a branch as a substitute.
+
+Lease recovery also does not authorize cleanup. Cleanup requires its own exact
+task proof, merged/integrated evidence, clean worktree result, and the
+applicable owner and independent-audit gates described below. Always create a
+fresh dry-run packet before an `--apply` cleanup command.
+
 ## Reconcile a merged PR before cleanup
 
 If a managed lane's PR is already merged but its manifest lacks current merged
