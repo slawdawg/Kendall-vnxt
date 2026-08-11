@@ -11348,6 +11348,28 @@ try {
     }
   });
 
+  test("cleanup-integrated closed-PR mode accepts an exact canonical tree replay without ancestry", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      runGit(fixture.worktree, ["commit", "--allow-empty", "-m", "replayed integrated tree"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved exact tree replay closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!existsSync(fixture.worktree), "exact-tree replay cleanup did not remove worktree");
+      const closed = readJson(manifestPath);
+      assert(closed.closed_pr_integrated_cleanup?.integration?.mode === "exact-tree", "exact-tree reconciliation evidence missing");
+      assert(closed.closed_pr_integrated_cleanup.integration.sourceTree === closed.closed_pr_integrated_cleanup.integration.baseTree, "exact-tree reconciliation did not retain equal tree evidence");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-integrated closes an assignment after an approved owner takeover", () => {
     const fixture = createIntegratedCleanupFixture({
       manifestOwner: "runner-a",

@@ -5940,14 +5940,17 @@ function cleanupIntegratedPlan(record, state, context) {
     return { ...base, status: "ready", reason: `clean no-PR workspace has an exact ${context.baseRef} tree and explicit closeout evidence`, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha || manifest.cleanup_expected_head_sha || null, remoteBranchSha: null, strictResume };
   }
   const integrated = git(["merge-base", "--is-ancestor", manifest.branch, context.baseRef], { cwd: cleanupCwd });
-  if (integrated.code !== 0) {
+  const sourceTree = closedPrIntegrated ? gitTreeSha(manifest.branch, cleanupCwd) : null;
+  const baseTree = closedPrIntegrated ? gitTreeSha(context.baseRef, cleanupCwd) : null;
+  const exactTreeIntegrated = Boolean(closedPrIntegrated && sourceTree && baseTree && sourceTree === baseTree);
+  if (integrated.code !== 0 && !exactTreeIntegrated) {
     return {
       ...base,
       cleanupCwd,
       worktree: cleanupWorktreeSummary(worktreeStatus),
       localBranchSha,
       expectedHeadSha: localBranchSha,
-      reason: `branch is not an ancestor of ${context.baseRef}`,
+        reason: closedPrIntegrated ? `branch is not an ancestor of ${context.baseRef} and does not have an exact base tree match` : `branch is not an ancestor of ${context.baseRef}`,
     };
   }
 
@@ -5970,13 +5973,13 @@ function cleanupIntegratedPlan(record, state, context) {
   return {
     ...base,
     status: "ready",
-    reason: closedPrIntegrated ? `clean non-open PR workspace already integrated into ${context.baseRef}` : `clean no-PR workspace already integrated into ${context.baseRef}`,
+    reason: closedPrIntegrated ? `clean non-open PR workspace already integrated into ${context.baseRef} by ${exactTreeIntegrated && integrated.code !== 0 ? "exact tree" : "ancestry"}` : `clean no-PR workspace already integrated into ${context.baseRef}`,
     cleanupCwd,
     worktree: cleanupWorktreeSummary(worktreeStatus),
     localBranchSha,
     expectedHeadSha: localBranchSha,
     remoteBranchSha: branchSha(`origin/${manifest.branch}`, cleanupCwd) || null,
-    proof: closedPrIntegrated ? { closedPr: closedPrProof, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
+    proof: closedPrIntegrated ? { closedPr: closedPrProof, integration: { mode: exactTreeIntegrated && integrated.code !== 0 ? "exact-tree" : "ancestry", sourceTree, baseTree }, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
   };
 }
 
@@ -6269,6 +6272,7 @@ function applyCleanupIntegrated(state, plan, options) {
           baseRef: freshPlan.baseRef,
           expectedHeadSha: freshPlan.expectedHeadSha,
           retainedPr: freshPlan.proof.closedPr.retainedPr,
+          integration: freshPlan.proof.integration,
           approval: freshPlan.proof.approval,
           metadataOnly: true,
           rawPayloadRetained: false,
