@@ -151,7 +151,22 @@ const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
-  "20260724-synchronize-dev-recovery": { prNumber: null, branch: "codex/synchronize-dev-recovery", worktreeName: "20260724-synchronize-dev-recovery" },
+  "20260724-synchronize-dev-recovery": {
+    prNumber: null,
+    branch: "codex/synchronize-dev-recovery",
+    worktreeName: "20260724-synchronize-dev-recovery",
+    // The original manifest pre-dates source-head persistence. This one-task
+    // profile binds the recovered source candidate to the independently
+    // merged successor without permitting a general missing-head fallback.
+    supersededBy: {
+      prNumber: 710,
+      sourceHead: "d0a31e95c7ebdb6c57fb2281e6a40dcd40603275",
+      sourceParent: "0697c3e6ff4c10ecfd581b074ea3ba423a42caa4",
+      prHead: "751d8f8936bfa987257b0002326f6bad82ea84df",
+      mergeCommit: "84d8c21feb9940ec85b818007654ee6765aeb169",
+      scope: ["AGENTS.md", "docs/workflows/end-to-end-lane-runner.md", "docs/workflows/tool-churn-rca-examples.md"],
+    },
+  },
   "dashboard-delivery-profile": { prNumber: 751, branch: "codex/dashboard-delivery-profile", worktreeName: "dashboard-delivery-profile", legacyWorktreeRelativePath: ".codex-workspaces/dashboard-delivery-profile" },
   // This is a one-time legacy recovery exception.  The recorded delivery head
   // was later amended on the same merged PR; accept no other ancestor pair.
@@ -4445,7 +4460,9 @@ function closeMissingWorktree(argv) {
     manifest.status = "closed";
     manifest.closed_at = closedAt;
     manifest.updated_at = closedAt;
-    manifest.closed_reason = "approved missing managed worktree recovery";
+    manifest.closed_reason = lockedPacket.proof.github.kind === "superseded-no-pr"
+      ? `approved missing managed worktree recovery superseded by PR #${lockedPacket.proof.github.supersededBy.prNumber}`
+      : "approved missing managed worktree recovery";
     appendTaskEvent(manifest, "missing_worktree_closeout_verified", "all required absent-resource and GitHub evidence matched under manifest and assignment-index locks");
     appendTaskEvent(manifest, "closed", "approved missing-worktree metadata-only closeout");
     writeManifest(lockedRecord.path, manifest);
@@ -4533,8 +4550,10 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
   const assignments = missingWorktreeAssignmentEvidence(state, manifest);
   if (assignments.status !== "absent") blockers.push(assignments.reason);
 
-  const github = target?.prNumber === null
-    ? missingWorktreeNoPrEvidence(manifest)
+  const github = target?.supersededBy
+    ? missingWorktreeSupersessionEvidence(manifest, target.supersededBy)
+    : target?.prNumber === null
+      ? missingWorktreeNoPrEvidence(manifest)
     : missingWorktreeMergedPrEvidence(manifest, target?.prNumber, target);
   if (github.status !== "matched") blockers.push(github.reason);
 
@@ -4545,7 +4564,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
     "managed worktree path is absent and unregistered",
     "local and remote branch refs are absent",
     "no linked assignment metadata exists",
-    target?.prNumber === null ? "live GitHub exact branch query contains no PR" : `live GitHub PR #${target?.prNumber} is merged to dev with an exact head`,
+    target?.supersededBy ? `live GitHub confirms no source PR and exact merged successor PR #${target.supersededBy.prNumber}` : target?.prNumber === null ? "live GitHub exact branch query contains no PR" : `live GitHub PR #${target?.prNumber} is merged to dev with an exact head`,
     "explicit approval is required for apply",
   ];
   const ready = blockers.length === 0;
@@ -4744,14 +4763,22 @@ function missingWorktreeAssignmentEvidence(state, manifest) {
   }
 }
 
-function missingWorktreeNoPrEvidence(manifest) {
+function missingWorktreeNoPrEvidence(manifest, expectedHistoricalHead = null) {
   if (manifest.pr_number !== undefined && manifest.pr_number !== null) {
     return { status: "blocked", kind: "no-pr", reason: "no-PR manifest retains PR number metadata" };
   }
   if (typeof manifest.pr_url === "string" && manifest.pr_url.trim()) {
     return { status: "blocked", kind: "no-pr", reason: "no-PR manifest retains PR URL metadata" };
   }
-  const historicalHead = exactGitObjectIdOrNull(manifest.historical_source_head_sha);
+  const recordedHistoricalHead = exactGitObjectIdOrNull(manifest.historical_source_head_sha);
+  const expectedHead = expectedHistoricalHead === null ? null : exactGitObjectIdOrNull(expectedHistoricalHead);
+  if (expectedHistoricalHead !== null && !expectedHead) {
+    return { status: "blocked", kind: "no-pr", reason: "approved no-PR supersession source head is invalid" };
+  }
+  if (recordedHistoricalHead && expectedHead && recordedHistoricalHead !== expectedHead) {
+    return { status: "blocked", kind: "no-pr", reason: "manifest historical source head does not match the approved supersession source head" };
+  }
+  const historicalHead = expectedHead || recordedHistoricalHead;
   if (!historicalHead) {
     return { status: "blocked", kind: "no-pr", reason: "no-PR manifest historical source head is missing or invalid" };
   }
@@ -4770,6 +4797,59 @@ function missingWorktreeNoPrEvidence(manifest) {
     return { status: "matched", kind: "no-pr", count: 0, historicalHead, reason: "live GitHub no-PR proof matched" };
   } catch {
     return { status: "blocked", kind: "no-pr", reason: "live GitHub no-PR proof is unavailable" };
+  }
+}
+
+function missingWorktreeSupersessionEvidence(manifest, target) {
+  const sourceHead = exactGitObjectIdOrNull(target?.sourceHead);
+  const sourceParent = exactGitObjectIdOrNull(target?.sourceParent);
+  const prHead = exactGitObjectIdOrNull(target?.prHead);
+  const mergeCommit = exactGitObjectIdOrNull(target?.mergeCommit);
+  const prNumber = Number(target?.prNumber);
+  const scope = Array.isArray(target?.scope) ? [...target.scope].sort() : [];
+  if (!sourceHead || !sourceParent || !prHead || !mergeCommit || !Number.isSafeInteger(prNumber) || prNumber <= 0 || scope.length === 0 || scope.some((path) => typeof path !== "string" || !path)) {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession target is malformed" };
+  }
+  const noPr = missingWorktreeNoPrEvidence(manifest, sourceHead);
+  if (noPr.status !== "matched") return { ...noPr, kind: "superseded-no-pr" };
+  const cwd = mainWorktreePath();
+  if (![sourceHead, sourceParent, prHead, mergeCommit].every((commit) => gitCommitExists(commit, cwd))) {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession commit evidence is unavailable locally" };
+  }
+  if (!sameStringList(gitCommitParents(sourceHead, cwd), [sourceParent]) || !sameStringList(gitCommitParents(prHead, cwd), [sourceParent])) {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession source and PR head do not share the exact immutable parent" };
+  }
+  const sourceToHead = git(["diff", "--quiet", sourceHead, prHead], { cwd });
+  if (sourceToHead.code > 1) return { status: "blocked", kind: "superseded-no-pr", reason: "cannot compare approved supersession source and PR head trees" };
+  if (sourceToHead.code !== 0) return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession source and PR head trees differ" };
+  const sourceScope = scopedChangedPaths(sourceParent, sourceHead, [], cwd);
+  const headScope = scopedChangedPaths(sourceParent, prHead, [], cwd);
+  if (sourceScope.error || headScope.error || !sameStringList(sourceScope.paths, scope) || !sameStringList(headScope.paths, scope)) {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "approved supersession scope does not exactly match the recovered source and PR head changes" };
+  }
+  const result = run("gh", ["pr", "view", String(prNumber), "--json", "number,mergedAt,state,baseRefName,headRefOid,mergeCommit"], { cwd });
+  if (result.code !== 0) return { status: "blocked", kind: "superseded-no-pr", reason: "live GitHub successor PR proof is unavailable" };
+  try {
+    const pr = parseGhJson(result.stdout, `superseding PR #${prNumber}`);
+    const liveHead = exactGitObjectIdOrNull(pr?.headRefOid);
+    const liveMerge = exactGitObjectIdOrNull(pr?.mergeCommit?.oid);
+    if (Number(pr?.number) !== prNumber || String(pr?.state || "").toUpperCase() !== "MERGED" || String(pr?.baseRefName || "") !== defaultBaseBranch || liveHead !== prHead || liveMerge !== mergeCommit || !pr?.mergedAt) {
+      return { status: "blocked", kind: "superseded-no-pr", reason: "live GitHub successor PR does not match the approved immutable PR #710 evidence" };
+    }
+    const headToMerge = git(["diff", "--quiet", prHead, mergeCommit], { cwd });
+    if (headToMerge.code > 1 || headToMerge.code !== 0 || !gitCommitParents(mergeCommit, cwd).includes(prHead) || !gitCommitIsAncestor(mergeCommit, `origin/${defaultBaseBranch}`, cwd)) {
+      return { status: "blocked", kind: "superseded-no-pr", reason: "approved successor merge is not exactly retained in canonical dev" };
+    }
+    return {
+      status: "matched",
+      kind: "superseded-no-pr",
+      historicalHead: sourceHead,
+      count: noPr.count,
+      supersededBy: { prNumber, sourceHead, sourceParent, prHead, mergeCommit, scope },
+      reason: `live no-PR source proof and immutable PR #${prNumber} supersession proof matched`,
+    };
+  } catch {
+    return { status: "blocked", kind: "superseded-no-pr", reason: "live GitHub successor PR proof is unavailable" };
   }
 }
 
