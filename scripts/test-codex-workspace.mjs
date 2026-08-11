@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -8262,6 +8262,213 @@ try {
     }
   });
 
+  test("finish-pr retries one exact environment-only preflight packet without changing its reviewed snapshot", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["preflight", "check:packet-after-preflight"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const stagedBefore = fixtureStagedInputDigest(fixture);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "retry did not rerun the exact preflight then its original next stage");
+      assert(fixtureStagedInputDigest(fixture) === stagedBefore, "environment retry changed the reviewed staged snapshot");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.environment_preflight_retry_history?.length === 1, JSON.stringify(updated.environment_preflight_retry_history));
+      assert(updated.environment_preflight_retry_history[0]?.status === "preflight_passed", JSON.stringify(updated.environment_preflight_retry_history));
+      assert(updated.events?.some((event) => event.type === "environment_preflight_retry_started"), JSON.stringify(updated.events));
+      assert(updated.events?.some((event) => event.type === "environment_preflight_retry_passed"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr environment preflight retry never bootstraps a missing or malformed packet", () => {
+    for (const scenario of [
+      { name: "missing packet", mutate: (manifest) => { delete manifest.check_verification_packet; }, expected: "requires an existing terminal failed" },
+      { name: "malformed history without packet", mutate: (manifest) => { delete manifest.check_verification_packet; manifest.environment_preflight_retry_history = { malformed: true }; }, expected: "retry history" },
+      { name: "malformed packet", mutate: (manifest) => { manifest.check_verification_packet = { status: "failed" }; }, expected: "check verification packet" },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["preflight", "check:packet-after-preflight"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        scenario.mutate(manifest);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.name} unexpectedly began a retry`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} ran a check stage`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} reached delivery`);
+        const persisted = readJson(manifestPath);
+        if (scenario.name === "malformed packet") {
+          assert(JSON.stringify(persisted.check_verification_packet) === JSON.stringify({ status: "failed" }), "malformed packet was replaced");
+        } else {
+          assert(!Object.hasOwn(persisted, "check_verification_packet"), `${scenario.name} created a fresh check packet`);
+        }
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("finish-pr environment preflight retry refuses changed snapshots, profile switching, and repeat consumption", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["preflight", "check:packet-after-preflight"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages, { preflight: "secret-nonzero" });
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "failed environment retry unexpectedly delivered");
+      assert(first.stderr.includes("check stage=preflight"), first.stderr || first.stdout);
+      const afterFirst = readJson(manifestPath);
+      assert(afterFirst.check_verification_packet?.status === "failed", JSON.stringify(afterFirst.check_verification_packet));
+      assert(afterFirst.environment_preflight_retry_history?.[0]?.status === "failed", JSON.stringify(afterFirst.environment_preflight_retry_history));
+
+      const repeat = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(repeat.code !== 0, "repeat environment retry unexpectedly ran");
+      assert(repeat.stderr.includes("already consumed"), repeat.stderr || repeat.stdout);
+
+      const switched = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(switched.code !== 0, "profile-switched retry unexpectedly ran");
+      assert(switched.stderr.includes("explicit unchanged --verify check"), switched.stderr || switched.stdout);
+
+      const changed = readJson(manifestPath);
+      changed.environment_preflight_retry_history = [];
+      changed.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(changed, null, 2)}\n`);
+      runGit(fixture.worktree, ["read-tree", "HEAD"]);
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed\n");
+      runGit(fixture.worktree, ["add", "reviewed-staged-input.txt"]);
+      const snapshotChanged = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(snapshotChanged.code !== 0, "changed snapshot retry unexpectedly ran");
+      assert(snapshotChanged.stderr.includes("unchanged task, owner, head, plan, and staged input binding"), snapshotChanged.stderr || snapshotChanged.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === "preflight", "refused retry ran a different stage");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr environment preflight retry rejects every malformed or ambiguous history entry before execution", () => {
+    for (const mutate of [
+      (history) => ({ not: "an-array" }),
+      (history) => [{ ...history[0], status: "ignored" }],
+      (history) => [{ ...history[0], profile: "scoped" }],
+      (history) => [{ ...history[0], delivery: "delivery may continue" }],
+      (history) => [{ ...history[0], unexpected: "unbounded" }],
+      (history) => {
+        const record = { ...history[0] };
+        delete record.started_at;
+        return [record];
+      },
+      (history) => {
+        const record = { ...history[0] };
+        delete record.completed_at;
+        return [record];
+      },
+      (history) => {
+        const record = { ...history[0] };
+        delete record.task_id;
+        return [record];
+      },
+      (history) => [{ ...history[0], started_at: "2026-08-10T00:00:00Z" }],
+      (history) => [{ ...history[0], completed_at: "2026-08-10T00:01:00.000+00:00" }],
+      (history) => [{ ...history[0], started_at: "not-a-timestamp" }],
+      (history) => [{ ...history[0], started_at: "2026-08-10T00:02:00.000Z", completed_at: "2026-08-10T00:01:00.000Z" }],
+      (history) => {
+        const startedAt = Date.now() + 60_000;
+        return [{ ...history[0], started_at: new Date(startedAt).toISOString(), completed_at: new Date(startedAt + 1_000).toISOString() }];
+      },
+      (history) => [{ ...history[0], started_at: new Date(Date.now() - 60_000).toISOString(), completed_at: new Date(Date.now() + 60_000).toISOString() }],
+      (history) => Array.from({ length: 33 }, () => ({ ...history[0] })),
+      (history) => [
+        { ...history[0], head: "1".repeat(40), started_at: "2026-08-10T00:03:00.000Z", completed_at: "2026-08-10T00:04:00.000Z" },
+        { ...history[0], head: "2".repeat(40), started_at: "2026-08-10T00:01:00.000Z", completed_at: "2026-08-10T00:02:00.000Z" },
+      ],
+      (history) => [
+        { ...history[0], head: "3".repeat(40), started_at: "2026-08-10T00:00:00.000Z", completed_at: "2026-08-10T00:01:00.000Z" },
+        { ...history[0], head: "3".repeat(40), started_at: "2026-08-10T00:02:00.000Z", completed_at: "2026-08-10T00:03:00.000Z" },
+      ],
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["preflight", "check:packet-after-preflight"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
+        const binding = manifest.check_verification_packet;
+        const validHistory = [{
+          schema_version: 1,
+          started_at: "2026-08-10T00:00:00.000Z",
+          completed_at: "2026-08-10T00:01:00.000Z",
+          task_id: binding.task_id,
+          owner: binding.owner,
+          profile: "check",
+          failed_stage: "preflight",
+          head: binding.head,
+          plan_digest: binding.plan_digest,
+          staged_input_digest: binding.staged_input_digest,
+          status: "failed",
+          delivery: "none; verification retry only",
+        }];
+        manifest.environment_preflight_retry_history = mutate(validHistory);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, "malformed retry history unexpectedly resumed");
+        assert(result.stderr.includes("retry history"), result.stderr || result.stdout);
+        assert(readFixtureStageLog(stageLog).length === 0, "malformed retry history ran preflight");
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), "malformed retry history reached delivery");
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
   test("finish-pr records a fixed supervisor leaf timeout without launching later leaves or delivery", () => {
     const fixture = createFinishPrExistingCommitFixture();
     const timeoutStage = "test:supervisor:check:integration:orchestrator-fake-workers";
@@ -13055,8 +13262,9 @@ function readFixtureStageLog(path) {
 function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const remaining = "    const remainingMs = resumableCheckInvocationBudgetMs - (Date.now() - started);";
-  assert(source.includes(started) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
+  const invocationBudget = "    const invocationBudgetMs = stage === externalCheckStageEvidenceStage ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;";
+  const remaining = "    const remainingMs = invocationBudgetMs - (Date.now() - started);";
+  assert(source.includes(started) && source.includes(invocationBudget) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
   const patched = source
     .replace(
       started,
@@ -13071,7 +13279,7 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
         "  const started = fixturePacketNow();",
       ].join("\n"),
     )
-    .replace(remaining, "    const remainingMs = resumableCheckInvocationBudgetMs - (fixturePacketNow() - started);");
+    .replace(remaining, "    const remainingMs = invocationBudgetMs - (fixturePacketNow() - started);");
   writeFileSync(fixture.script, patched);
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pause clock"]);

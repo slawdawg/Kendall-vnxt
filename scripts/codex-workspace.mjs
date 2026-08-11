@@ -48,6 +48,32 @@ const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
 const resumableCheckPacketTtlMs = 30 * 60 * 1000;
 const resumableCheckPacketFutureSkewMs = 30_000;
+// Retry history is audit evidence, not a scheduler. Thirty seconds tolerates
+// ordinary local clock skew while rejecting timestamps projected far enough
+// ahead to make the bounded record untrustworthy.
+const environmentPreflightRetryHistoryFutureSkewMs = 30_000;
+const environmentPreflightRetryHistoryLimit = 32;
+const environmentPreflightRetryStatuses = new Set([
+  "started",
+  "failed",
+  "blocked_snapshot_changed",
+  "blocked_packet_changed",
+  "preflight_passed",
+]);
+const environmentPreflightRetryHistoryFields = new Set([
+  "schema_version",
+  "started_at",
+  "completed_at",
+  "task_id",
+  "owner",
+  "profile",
+  "failed_stage",
+  "head",
+  "plan_digest",
+  "staged_input_digest",
+  "status",
+  "delivery",
+]);
 const resumableCheckRoutingPreviewLeaves = Object.freeze([
   "test:supervisor:check-routing-preview-01",
   "test:supervisor:check-routing-preview-02",
@@ -96,6 +122,7 @@ const resumableCheckTrailingWorkspaceDuplicates = new Set([
 ]);
 const externalCheckStageEvidenceStage = "test:codex-workspace";
 const externalCheckStageEvidenceCommand = Object.freeze(["pnpm", "run", externalCheckStageEvidenceStage]);
+const resumableCheckLongLeafBudgetMs = codexWorkspaceVerificationTimeoutMs;
 const taskLockSchemaVersion = 1;
 const taskLeaseSchemaVersion = 1;
 const legacyRecoveryAdoptionTaskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
@@ -351,6 +378,8 @@ finish-pr options:
   --message <text>          Commit message. Defaults to task title.
   --stage-all               Stage all current worktree changes before commit.
   --verify <profile>        Verification profile: scoped, preflight, check, check-fast, dashboard, workspace-fast, manager-control-plane, docs, codex-workspace.
+  --retry-environment-preflight
+                            Re-run one exact-bound check packet that failed at its initial preflight stage without staging or changing its source snapshot.
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
@@ -2402,6 +2431,7 @@ function finishPr(argv) {
   });
   const { manifest, path: manifestPath } = manifestRecord;
 
+  assertFinishPrRecoveryOptions(options);
   if (!options.noVerify) {
     assertKnownVerificationProfile(String(options.verify || ""));
   }
@@ -2471,6 +2501,9 @@ function finishPr(argv) {
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
     assertCurrentBranch(manifest);
+    if (lock.recovery?.classification === "same_owner_stale_child_pid_reuse") {
+      appendTaskEvent(manifest, "task_lock_recovered", "same-owner stale child lock with a proven replaced PID identity archived before delivery recovery");
+    }
 
     worktreeStatus = parseStatus(manifest.worktree_path);
     if (worktreeStatus.unstaged && options.stageAll) {
@@ -2491,6 +2524,7 @@ function finishPr(argv) {
           owner: currentLaneOwner(options),
           cwd: manifest.worktree_path,
           allowTerminalPacketRecovery: Boolean(options.stageAll),
+          allowEnvironmentPreflightRetry: Boolean(options.retryEnvironmentPreflight),
         });
       } else runBoundedVerification(verificationPlan, {
         cwd: manifest.worktree_path,
@@ -2599,6 +2633,19 @@ function finishPr(argv) {
     }
   }
   console.log(`PR: ${manifest.pr_url}`);
+}
+
+function assertFinishPrRecoveryOptions(options = {}) {
+  if (options.retryEnvironmentPreflight === undefined) return;
+  if (options.retryEnvironmentPreflight !== true) {
+    throw new Error("--retry-environment-preflight accepts only a bare flag.");
+  }
+  if (options.stageAll) {
+    throw new Error("--retry-environment-preflight refuses --stage-all so it cannot alter the reviewed staged snapshot.");
+  }
+  if (options.noVerify || String(options.verify || "") !== "check") {
+    throw new Error("--retry-environment-preflight requires the explicit unchanged --verify check profile.");
+  }
 }
 
 function inspectTaskLockCommand(argv) {
@@ -8329,12 +8376,31 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
   const stagedInputDigest = stagedInputDigestForWorktree(options.cwd);
   const prior = manifest.check_verification_packet;
   let packet = prior;
-  if (prior) {
+  let environmentPreflightRetry = null;
+  if (options.allowEnvironmentPreflightRetry) {
+    // This flag is a narrowly bounded retry of an already-recorded terminal
+    // packet. It must never bootstrap a new check packet, even if the prior
+    // manifest state is absent or malformed.
+    if (!prior) {
+      validatedEnvironmentPreflightRetryHistory(manifest.environment_preflight_retry_history);
+      throw new Error("environment preflight retry requires an existing terminal failed initial-preflight check packet.");
+    }
+    const expected = { taskId: manifest.task_id, owner: options.owner, head, plan, stagedInputDigest };
+    environmentPreflightRetry = prepareExactEnvironmentPreflightRetry(manifest, manifestPath, prior, expected, options);
+    packet = prior;
+  } else if (prior) {
     try {
       validateResumableCheckPacket(prior, { taskId: manifest.task_id, owner: options.owner, head, plan, stagedInputDigest });
     } catch (error) {
-      if (!discardRecoverableTerminalCheckPacket(manifest, manifestPath, prior, { taskId: manifest.task_id, owner: options.owner, head, plan, stagedInputDigest }, options)) throw error;
-      packet = null;
+      const expected = { taskId: manifest.task_id, owner: options.owner, head, plan, stagedInputDigest };
+      environmentPreflightRetry = prepareExactEnvironmentPreflightRetry(manifest, manifestPath, prior, expected, options);
+      if (environmentPreflightRetry) {
+        packet = prior;
+      } else if (discardRecoverableTerminalCheckPacket(manifest, manifestPath, prior, expected, options)) {
+        packet = null;
+      } else {
+        throw error;
+      }
     }
   }
   if (!packet) {
@@ -8343,9 +8409,13 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     writeManifest(manifestPath, manifest);
   }
   const started = Date.now();
+  if (environmentPreflightRetry) {
+    runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, environmentPreflightRetry, options, started);
+  }
   for (let index = packet.stages.length; index < plan.stages.length; index += 1) {
     const stage = plan.stages[index];
-    const remainingMs = resumableCheckInvocationBudgetMs - (Date.now() - started);
+    const invocationBudgetMs = stage === externalCheckStageEvidenceStage ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
+    const remainingMs = invocationBudgetMs - (Date.now() - started);
     const needsSupervisorLeafReserve = resumableCheckSupervisorLeafSet.has(stage);
     if (remainingMs <= 0 || (needsSupervisorLeafReserve && remainingMs < resumableCheckSupervisorLeafExecutionReserveMs)) {
       packet.status = "partial"; packet.next_stage = stage; packet.updated_at = new Date().toISOString(); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest);
@@ -8368,6 +8438,212 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
   }
+}
+
+function prepareExactEnvironmentPreflightRetry(manifest, manifestPath, packet, expected, options = {}) {
+  if (!options.allowEnvironmentPreflightRetry) return false;
+  validateTerminalCheckPacketForDiscard(packet, expected);
+  if (
+    packet.status !== "failed" ||
+    packet.task_id !== expected.taskId ||
+    packet.owner !== expected.owner ||
+    packet.head !== expected.head ||
+    packet.plan_digest !== expected.plan.digest ||
+    packet.staged_input_digest !== expected.stagedInputDigest
+  ) {
+    throw new Error("environment preflight retry requires an unchanged task, owner, head, plan, and staged input binding.");
+  }
+  const preflightStage = expected.plan.stages[0];
+  if (
+    preflightStage !== "preflight" ||
+    packet.failed_stage !== preflightStage ||
+    packet.next_stage !== preflightStage ||
+    packet.stages.length !== 1 ||
+    packet.stages[0]?.stage !== preflightStage
+  ) {
+    throw new Error("environment preflight retry accepts only a failed initial preflight stage.");
+  }
+  const history = validatedEnvironmentPreflightRetryHistory(manifest.environment_preflight_retry_history);
+  if (history.some((record) => record.status === "started")) {
+    throw new Error("environment preflight retry history contains an unfinished retry; refusing concurrent recovery.");
+  }
+  if ((history || []).some((record) => environmentPreflightRetryMatchesBinding(record, expected))) {
+    throw new Error("environment preflight retry was already consumed for this exact source and staged-input binding.");
+  }
+  if (history.length >= environmentPreflightRetryHistoryLimit) {
+    throw new Error("environment preflight retry history is full; refusing recovery.");
+  }
+  const priorCompletedAt = history.length > 0 ? Date.parse(history.at(-1).completed_at) : 0;
+  const startedAt = new Date(Math.max(Date.now(), priorCompletedAt + 1)).toISOString();
+  manifest.environment_preflight_retry_history = [
+    ...(history || []),
+    {
+      schema_version: 1,
+      started_at: startedAt,
+      task_id: expected.taskId,
+      owner: expected.owner,
+      profile: "check",
+      failed_stage: preflightStage,
+      head: expected.head,
+      plan_digest: expected.plan.digest,
+      staged_input_digest: expected.stagedInputDigest,
+      status: "started",
+      delivery: "none; verification retry only",
+    },
+  ];
+  appendTaskEvent(manifest, "environment_preflight_retry_started", "exact check preflight retry authorized without source or staged-input mutation");
+  writeManifest(manifestPath, manifest);
+  return { expected, startedAt };
+}
+
+function validatedEnvironmentPreflightRetryHistory(history) {
+  if (history === undefined) return [];
+  if (!Array.isArray(history) || history.length > environmentPreflightRetryHistoryLimit) {
+    throw new Error("environment preflight retry history is malformed or exceeds its bounded retention; refusing recovery.");
+  }
+  const bindings = new Set();
+  let priorCompletedAt = null;
+  for (let index = 0; index < history.length; index += 1) {
+    const record = history[index];
+    if (!validEnvironmentPreflightRetryHistoryRecord(record)) {
+      throw new Error("environment preflight retry history contains a malformed or ambiguous record; refusing recovery.");
+    }
+    const binding = environmentPreflightRetryBindingKey(record);
+    if (bindings.has(binding)) {
+      throw new Error("environment preflight retry history contains a duplicate retry binding; refusing recovery.");
+    }
+    bindings.add(binding);
+    const startedAt = Date.parse(record.started_at);
+    if (priorCompletedAt !== null && startedAt <= priorCompletedAt) {
+      throw new Error("environment preflight retry history is not in strict chronological order; refusing recovery.");
+    }
+    if (record.status === "started") {
+      if (index !== history.length - 1) {
+        throw new Error("environment preflight retry history contains an unfinished nonterminal record; refusing recovery.");
+      }
+      priorCompletedAt = null;
+    } else {
+      priorCompletedAt = Date.parse(record.completed_at);
+    }
+  }
+  return history;
+}
+
+function environmentPreflightRetryBindingKey(record) {
+  return [
+    record.task_id,
+    record.owner,
+    record.profile,
+    record.failed_stage,
+    record.head,
+    record.plan_digest,
+    record.staged_input_digest,
+  ].join("\u0000");
+}
+
+function validEnvironmentPreflightRetryHistoryRecord(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record) || Object.getPrototypeOf(record) !== Object.prototype) return false;
+  if (Object.keys(record).some((field) => !environmentPreflightRetryHistoryFields.has(field))) return false;
+  const completed = record.completed_at;
+  const completedStatus = record.status !== "started";
+  const now = Date.now();
+  const startedAt = isCanonicalIsoTimestamp(record.started_at) ? Date.parse(record.started_at) : null;
+  const completedAt = completedStatus && isCanonicalIsoTimestamp(completed) ? Date.parse(completed) : null;
+  return Boolean(
+    record.schema_version === 1 &&
+      typeof record.task_id === "string" && record.task_id.length > 0 && record.task_id.length <= 120 &&
+      typeof record.owner === "string" && record.owner.length > 0 && record.owner.length <= 240 &&
+      record.profile === "check" &&
+      record.failed_stage === "preflight" &&
+      typeof record.head === "string" && /^[0-9a-f]{40}$/i.test(record.head) &&
+      typeof record.plan_digest === "string" && /^[0-9a-f]{64}$/i.test(record.plan_digest) &&
+      typeof record.staged_input_digest === "string" && /^[0-9a-f]{64}$/i.test(record.staged_input_digest) &&
+      record.delivery === "none; verification retry only" &&
+      environmentPreflightRetryStatuses.has(record.status) &&
+      startedAt !== null &&
+      startedAt <= now + environmentPreflightRetryHistoryFutureSkewMs &&
+      (completedStatus
+        ? completedAt !== null && completedAt >= startedAt && completedAt <= now + environmentPreflightRetryHistoryFutureSkewMs
+        : completed === undefined),
+  );
+}
+
+function environmentPreflightRetryMatchesBinding(record, expected) {
+  return Boolean(
+    validEnvironmentPreflightRetryHistoryRecord(record) &&
+      record.schema_version === 1 &&
+      record.task_id === expected.taskId &&
+      record.owner === expected.owner &&
+      record.profile === "check" &&
+      record.failed_stage === "preflight" &&
+      record.head === expected.head &&
+      record.plan_digest === expected.plan.digest &&
+      record.staged_input_digest === expected.stagedInputDigest &&
+      record.delivery === "none; verification retry only" &&
+      isCanonicalIsoTimestamp(record.started_at),
+  );
+}
+
+function runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, retry, options, started) {
+  const result = run("pnpm", ["run", "preflight"], {
+    cwd: options.cwd,
+    timeout: Math.max(1, resumableCheckInvocationBudgetMs - (Date.now() - started)),
+    killSignal: "SIGKILL",
+  });
+  const outcome = verificationOutcome(result);
+  if (outcome !== "success") {
+    completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "failed");
+    const diagnostic = persistVerificationDiagnostic({
+      context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"],
+      elapsedMs: Date.now() - started, timeoutMs: checkVerificationTimeoutMs, outcome, result,
+    });
+    throw new Error(`Verification ${outcome}: profile=check; check stage=preflight; timeout_ms=${checkVerificationTimeoutMs}; child_output=omitted; diagnostic=${diagnostic.status}.`);
+  }
+  const currentHead = git(["rev-parse", "HEAD"], { cwd: options.cwd }).stdout.trim();
+  const currentPlan = resumableCheckPlan(options.cwd);
+  const currentStagedInputDigest = stagedInputDigestForWorktree(options.cwd);
+  const currentStatus = parseStatus(options.cwd);
+  if (
+    currentHead !== retry.expected.head ||
+    currentPlan.digest !== retry.expected.plan.digest ||
+    currentStagedInputDigest !== retry.expected.stagedInputDigest ||
+    currentStatus.unstaged
+  ) {
+    completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "blocked_snapshot_changed");
+    throw new Error("environment preflight retry changed or lost the exact source, plan, or staged-input snapshot; refusing continuation or delivery.");
+  }
+  validateTerminalCheckPacketForDiscard(packet, retry.expected);
+  if (
+    packet.status !== "failed" ||
+    packet.failed_stage !== "preflight" ||
+    packet.next_stage !== "preflight" ||
+    packet.stages.length !== 1 ||
+    packet.stages[0]?.stage !== "preflight"
+  ) {
+    completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "blocked_packet_changed");
+    throw new Error("environment preflight retry packet changed before the retry could be recorded; refusing continuation or delivery.");
+  }
+  const completedAt = new Date().toISOString();
+  packet.stages = [{ stage: "preflight", completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }];
+  packet.updated_at = completedAt;
+  packet.status = retry.expected.plan.stages.length === 1 ? "passed" : "partial";
+  packet.next_stage = retry.expected.plan.stages[1] || null;
+  delete packet.failed_stage;
+  if (packet.status === "passed") packet.completed_at = completedAt;
+  manifest.check_verification_packet = packet;
+  completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "preflight_passed", { write: false });
+  appendTaskEvent(manifest, "environment_preflight_retry_passed", "exact check preflight passed and the unchanged packet resumed at its original next stage");
+  writeManifest(manifestPath, manifest);
+}
+
+function completeEnvironmentPreflightRetry(manifest, manifestPath, expected, status, options = {}) {
+  const history = validatedEnvironmentPreflightRetryHistory(manifest.environment_preflight_retry_history);
+  const index = history.findLastIndex((record) => environmentPreflightRetryMatchesBinding(record, expected) && record.status === "started");
+  if (index < 0) throw new Error("environment preflight retry audit record changed before completion; refusing continuation.");
+  const completedAt = new Date(Math.max(Date.now(), Date.parse(history[index].started_at))).toISOString();
+  history[index] = { ...history[index], status, completed_at: completedAt };
+  manifest.environment_preflight_retry_history = history;
+  if (options.write !== false) writeManifest(manifestPath, manifest);
 }
 
 function discardRecoverableTerminalCheckPacket(manifest, manifestPath, packet, expected, options = {}) {
@@ -12744,6 +13020,12 @@ function isIsoTimestamp(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+function isCanonicalIsoTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
 function validTaskLockMetadata(metadata, taskId) {
   return Boolean(
     metadata &&
@@ -13624,6 +13906,10 @@ function run(commandName, commandArguments, options = {}) {
     stdio: "pipe",
     timeout: options.timeout || defaultVerificationTimeoutMs,
   };
+  // Bounded verification must own an entire process group. `spawnSync` kills
+  // only its direct child on timeout; pnpm can otherwise leave test fixtures
+  // behind after the lease is released.
+  if (process.platform !== "win32") spawnOptions.detached = true;
   if (options.killSignal) {
     spawnOptions.killSignal = options.killSignal;
   }
@@ -13632,6 +13918,9 @@ function run(commandName, commandArguments, options = {}) {
   let result;
   try {
     result = spawnSync(resolved.command, resolved.args, spawnOptions);
+    if (result?.error?.code === "ETIMEDOUT" && process.platform !== "win32" && Number.isInteger(result.pid) && result.pid > 0) {
+      try { process.kill(-result.pid, "SIGKILL"); } catch (error) { if (error?.code !== "ESRCH") throw error; }
+    }
   } finally {
     // Completion is intentionally appended even for a launch error.  If this
     // process disappears before here, the immutable intent fences stale
