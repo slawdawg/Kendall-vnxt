@@ -12,6 +12,7 @@ from supervisor.infrastructure.db.models import (
     MemoryInboxProposalAggregate, MemoryInboxProposalReaderGrant,
     MemoryInboxProposalRevision, MemoryInboxSource, MemoryInboxSourceRevision,
 )
+from supervisor.application.memory_inbox_reader_serialization import serialize_memory_inbox_source_use
 
 
 async def establish_deletion_barrier(
@@ -25,6 +26,13 @@ async def establish_deletion_barrier(
     reader-grant revocation, or the bounded active-job lease fence.
     """
     now = now or datetime.now(timezone.utc)
+    async with serialize_memory_inbox_source_use(session, source.id):
+        return await _establish_deletion_barrier(session, source=source, actor_ref=actor_ref, now=now)
+
+
+async def _establish_deletion_barrier(
+    session: AsyncSession, *, source: MemoryInboxSource, actor_ref: str, now: datetime,
+) -> int:
     revisions = list((await session.scalars(select(MemoryInboxSourceRevision).where(
         MemoryInboxSourceRevision.source_id == source.id,
     ).with_for_update())).all())

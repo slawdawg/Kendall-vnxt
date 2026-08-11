@@ -4,11 +4,13 @@ import os
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.memory_inbox_approval import approve_proposal_for_deletion
 from supervisor.application.memory_inbox_proposal_reader import read_authorized_proposal
+from supervisor.application.memory_inbox_reader_serialization import serialize_memory_inbox_source_use
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.models import (
@@ -38,6 +40,35 @@ class _RecordingReaderSession:
 
     async def get(self, _model, _identifier):
         return self.source
+
+
+@pytest.mark.asyncio
+async def test_sqlite_serializes_reader_and_deletion_source_use(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reader-serialization.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    reader_entered = asyncio.Event()
+    release_reader = asyncio.Event()
+    deletion_entered = asyncio.Event()
+
+    async def reader() -> None:
+        async with sessions() as session, serialize_memory_inbox_source_use(session, "source:serialized"):
+            reader_entered.set()
+            await release_reader.wait()
+
+    async def deletion() -> None:
+        async with sessions() as session, serialize_memory_inbox_source_use(session, "source:serialized"):
+            deletion_entered.set()
+
+    reader_task = asyncio.create_task(reader())
+    await asyncio.wait_for(reader_entered.wait(), timeout=2)
+    deletion_task = asyncio.create_task(deletion())
+    await asyncio.sleep(0)
+    assert not deletion_entered.is_set(), "SQLite deletion must not pass a live reader gate"
+    release_reader.set()
+    await asyncio.wait_for(reader_task, timeout=2)
+    await asyncio.wait_for(deletion_task, timeout=2)
+    assert deletion_entered.is_set()
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -202,6 +233,13 @@ def test_postgres_reader_grant_lock_blocks_deletion_until_reader_finishes_when_a
 
             lock_acquired = asyncio.Event()
             release_reader = asyncio.Event()
+            deletion_reached_grant = asyncio.Event()
+            observe_deletion = False
+
+            @event.listens_for(engine.sync_engine, "before_cursor_execute")
+            def observe_contested_grant(_connection, _cursor, statement, _parameters, _context, _executemany):
+                if observe_deletion and "memory_inbox_proposal_reader_grants" in statement and "FOR UPDATE" in statement:
+                    deletion_reached_grant.set()
 
             class PausedReaderSession:
                 def __init__(self, session) -> None:
@@ -229,12 +267,13 @@ def test_postgres_reader_grant_lock_blocks_deletion_until_reader_finishes_when_a
                 ))
                 await asyncio.wait_for(lock_acquired.wait(), timeout=2)
 
+                observe_deletion = True
                 deletion_task = asyncio.create_task(approve_proposal_for_deletion(
                     deletion_session, proposal_id=proposal_id, expected_revision=1,
                     idempotency_key=f"reader-postgres-lock-delete:{suffix}", actor_ref="operator:test",
                 ))
-                await asyncio.sleep(0.1)
-                assert not deletion_task.done(), "deletion must wait on the reader's live grant lock"
+                await asyncio.wait_for(deletion_reached_grant.wait(), timeout=2)
+                assert not deletion_task.done(), "deletion grant query must wait on the reader's live lock"
 
                 release_reader.set()
                 reader = await asyncio.wait_for(reader_task, timeout=2)

@@ -256,7 +256,16 @@ test("Memory Inbox reads are exact operator-only, no-query proxy capabilities", 
       assert.equal((await request(port, `${path}?state=inbox`, { headers: { cookie: "operator=ok" } })).status, 404);
       assert.equal((await request(port, path, { headers: { cookie: "viewer=ok" } })).status, 404);
     }
-    assert.deepEqual(forwarded, [{ method: "GET", url: "/memory-inbox/shell" }, { method: "GET", url: "/memory-inbox/projection" }]);
+    const readerPath = "/api/supervisor/memory-inbox/proposals/proposal-1/revisions/1/reader";
+    assert.equal((await request(port, readerPath, { headers: { cookie: "operator=ok" } })).status, 200);
+    assert.equal((await request(port, readerPath, { method: "POST", headers: { cookie: "operator=ok", origin: "https://dashboard.test" } })).status, 405);
+    assert.equal((await request(port, `${readerPath}?extra=1`, { headers: { cookie: "operator=ok" } })).status, 404);
+    assert.equal((await request(port, readerPath, { headers: { cookie: "viewer=ok" } })).status, 404);
+    assert.deepEqual(forwarded, [
+      { method: "GET", url: "/memory-inbox/shell" },
+      { method: "GET", url: "/memory-inbox/projection" },
+      { method: "GET", url: "/memory-inbox/proposals/proposal-1/revisions/1/reader" },
+    ]);
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);
