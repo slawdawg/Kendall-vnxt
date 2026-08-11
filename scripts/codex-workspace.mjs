@@ -42,6 +42,9 @@ const defaultVerificationTimeoutMs = 120_000;
 const codexWorkspaceVerificationTimeoutMs = 600_000;
 const dashboardVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
+const verificationDiagnosticSchemaVersion = 2;
+const verificationDiagnosticTailMaxBytes = 2_048;
+const verificationDiagnosticCaptureMaxBytes = 4 * 1024 * 1024;
 const resumableCheckInvocationBudgetMs = 180_000;
 // Every ordinary leaf must start with enough time to produce useful evidence.
 // Otherwise a short, healthy command can be killed solely because a prior leaf
@@ -183,6 +186,16 @@ const missingWorktreeCloseoutTargets = Object.freeze({
 });
 const rebuildIndexBaseBranch = "main";
 const protectedBranches = new Set(branchFoundationProtectedBranches);
+const maxReviewRequestPages = 100;
+const maxResolutionRecoveryHops = 20;
+const maxResolutionOutcomeRetention = 20;
+const resolutionRetentionOverflowStatus = "unrecovered-history-truncated";
+const recognizedResolutionRecoveryMutations = new Set([
+  "attempt-recorded",
+  "ambiguous-or-failed",
+  "confirmed-by-mutation-response",
+  "confirmed-by-post-audit-recovery",
+]);
 // This is deliberately not a general non-ancestral recovery mechanism. It is
 // the one operator-authorized historical rewrite recorded for PR #723. A
 // later implementation commit necessarily advances the PR beyond the
@@ -3411,6 +3424,13 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   });
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : emptyReviewThreadState();
+  const resolutionOutcomes = [
+    ...(Array.isArray(manifest.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : []).map((outcome) => ({ kind: "current", outcome })),
+    ...(Array.isArray(manifest.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : []).map((outcome) => ({ kind: "outdated", outcome })),
+  ];
+  const unrecoveredAttempts = resolutionOutcomes.filter(({ kind, outcome }) =>
+    isUnrecoveredResolutionAttempt(resolutionOutcomes, kind, outcome),
+  );
   const blockers = [];
   if (manifest.status !== "pr_open") blockers.push(`Manifest status is ${manifest.status || "missing"}; only pr_open lanes may refresh a delivery head`);
   if (lockInspection.status !== "absent" && lockInspection.status !== "owned") blockers.push(`Task lock is ${lockInspection.status || "ambiguous"}; explicit refresh requires an idle or owned lane lock`);
@@ -3451,6 +3471,9 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   if (reviewThreads.errorCount > 0) blockers.push(`Review-thread query returned ${reviewThreads.errorCount} GraphQL error(s)`);
   if (reviewThreads.hasNextPage || reviewThreads.reviewRequestHasNextPage) blockers.push("Review-thread audit is incomplete");
   if (reviewThreads.pendingReviewRequestCount > 0) blockers.push(`Pending review requests: ${reviewThreads.pendingReviewRequestCount}`);
+  if (unrecoveredAttempts.length) {
+    blockers.push(`Unrecovered review-thread mutation outcomes block delivery-head refresh: ${unrecoveredAttempts.map(({ kind, outcome }) => `${kind}:${outcome?.threadId || "unknown"}`).join(", ")}`);
+  }
   const requiredGates = [
     "exact managed owner plus absent or owned task lock",
     "canonical Kendall_Nxt repository and matching managed PR identity",
@@ -3776,27 +3799,14 @@ function resolveAdjudicatedThread(argv) {
     writeManifest(manifestPath, locked);
 
     const mutation = run("gh", ["api", "graphql", "-f", "query=mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}}", "-F", `threadId=${threadId}`], { cwd: locked.worktree_path });
-    let mutationBlocker = "";
-    if (mutation.code !== 0) {
-      mutationBlocker = safeMetadataText(mutation.stderr || mutation.stdout || `gh exited ${mutation.code}`, 500);
-    } else {
-      try {
-        const parsedMutation = parseGhJson(mutation.stdout, "review-thread resolution mutation");
-        const resolved = parsedMutation?.data?.resolveReviewThread?.thread;
-        if (!resolved || resolved.id !== threadId || resolved.isResolved !== true || (Array.isArray(parsedMutation?.errors) && parsedMutation.errors.length)) {
-          mutationBlocker = "GitHub resolution mutation returned an incomplete or mismatched target result";
-        }
-      } catch (error) {
-        mutationBlocker = safeMetadataText(error.message, 500);
-      }
-    }
+    const mutationBlocker = reviewThreadMutationBlocker(mutation, threadId, "review-thread resolution mutation");
 
     let postResolutionState = null;
-    let postAuditError = "";
+    let postAuditFailure = null;
     try {
       postResolutionState = loadPostResolutionExactState(locked, fresh);
     } catch (error) {
-      postAuditError = safeMetadataText(error.message, 500);
+      postAuditFailure = postResolutionAuditFailureCategory(error);
     }
     const postResolutionAudit = postResolutionState?.reviewThreads || null;
     const outcome = locked.outdated_thread_resolution_outcomes.find((entry) => entry?.attemptId === attempt.attemptId);
@@ -3810,10 +3820,10 @@ function resolveAdjudicatedThread(argv) {
     };
     outcome.postResolutionAudit = postResolutionAudit ? compactReviewThreadAudit(postResolutionAudit) : null;
     outcome.postResolutionState = postResolutionState ? compactPostResolutionExactState(postResolutionState) : null;
-    outcome.recoveryPath = mutationBlocker || postAuditError
+    outcome.recoveryPath = mutationBlocker || postAuditFailure
       ? "The mutation outcome is not fully proven. Do not retry blindly; inspect this retained attempt, re-audit GitHub, and resume only with a fresh exact-head adjudication."
       : "Re-run verify-pr-gates before an exact-head merge. Any remaining current or outdated thread is a merge hold.";
-    if (postAuditError) outcome.postAuditError = postAuditError;
+    if (postAuditFailure) outcome.postAuditFailure = { category: postAuditFailure, metadataOnly: true, rawPayloadRetained: false };
 
     const target = postResolutionAudit?.threadRefs.find((thread) => thread.id === threadId);
     const postBlockers = [
@@ -3821,13 +3831,13 @@ function resolveAdjudicatedThread(argv) {
       ...reviewThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh),
     ];
     if (mutationBlocker) postBlockers.unshift(mutationBlocker);
-    if (postAuditError) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditError}`);
+    if (postAuditFailure) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditFailure}`);
     outcome.status = postBlockers.length ? "needs-recovery" : "resolved";
     outcome.postResolutionHolds = postResolutionAudit ? {
       unresolvedCurrent: postResolutionAudit.unresolvedNonOutdatedCount,
       unresolvedOutdated: postResolutionAudit.unresolvedOutdatedCount,
       pendingRequests: postResolutionAudit.pendingReviewRequestCount,
-      mergeReady: postResolutionAudit.unresolvedNonOutdatedCount === 0 && postResolutionAudit.unresolvedOutdatedCount === 0 && postResolutionAudit.pendingReviewRequestCount === 0,
+      mergeReady: Boolean(postResolutionAudit.querySucceeded) && Boolean(postResolutionAudit.reviewThreadComplete) && Boolean(postResolutionAudit.reviewRequestComplete) && postResolutionAudit.unresolvedNonOutdatedCount === 0 && postResolutionAudit.unresolvedOutdatedCount === 0 && postResolutionAudit.pendingReviewRequestCount === 0,
     } : null;
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     appendTaskEvent(locked, outcome.status === "resolved" ? "outdated_review_thread_resolved" : "outdated_review_thread_resolution_needs_recovery", `${threadId} ${fresh.expectedHeadSha}`);
@@ -3991,32 +4001,24 @@ function resolveAdjudicatedCurrentThread(argv) {
     appendTaskEvent(locked, "current_review_thread_resolution_attempted", `${threadId} ${fresh.expectedHeadSha}`);
     writeManifest(manifestPath, locked);
     const mutation = run("gh", ["api", "graphql", "-f", "query=mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}}", "-F", `threadId=${threadId}`], { cwd: locked.worktree_path });
-    let mutationBlocker = "";
-    if (mutation.code !== 0) mutationBlocker = safeMetadataText(mutation.stderr || mutation.stdout || `gh exited ${mutation.code}`, 500);
-    else {
-      try {
-        const parsed = parseGhJson(mutation.stdout, "current review-thread resolution mutation");
-        const resolved = parsed?.data?.resolveReviewThread?.thread;
-        if (!resolved || resolved.id !== threadId || resolved.isResolved !== true || (Array.isArray(parsed?.errors) && parsed.errors.length)) mutationBlocker = "GitHub resolution mutation returned an incomplete or mismatched target result";
-      } catch (error) { mutationBlocker = safeMetadataText(error.message, 500); }
-    }
+    const mutationBlocker = reviewThreadMutationBlocker(mutation, threadId, "current review-thread resolution mutation");
     let postResolutionState = null;
-    let postAuditError = "";
-    try { postResolutionState = loadPostResolutionExactState(locked, fresh); } catch (error) { postAuditError = safeMetadataText(error.message, 500); }
+    let postAuditFailure = null;
+    try { postResolutionState = loadPostResolutionExactState(locked, fresh); } catch (error) { postAuditFailure = postResolutionAuditFailureCategory(error); }
     const postResolutionAudit = postResolutionState?.reviewThreads || null;
     const outcome = locked.current_thread_resolution_outcomes.find((entry) => entry?.attemptId === attempt.attemptId);
     outcome.completedAt = new Date().toISOString();
     outcome.mutation = { status: mutationBlocker ? "ambiguous-or-failed" : "confirmed-by-mutation-response", exitCode: mutation.code, result: mutationBlocker || "target returned resolved", replyPosted: false, metadataOnly: true };
     outcome.postResolutionAudit = postResolutionAudit ? compactReviewThreadAudit(postResolutionAudit) : null;
     outcome.postResolutionState = postResolutionState ? compactPostResolutionExactState(postResolutionState) : null;
-    if (postAuditError) outcome.postAuditError = postAuditError;
+    if (postAuditFailure) outcome.postAuditFailure = { category: postAuditFailure, metadataOnly: true, rawPayloadRetained: false };
     const target = postResolutionAudit?.threadRefs.find((thread) => thread.id === threadId);
     const postBlockers = [
       ...postResolutionExactStateBlockers(postResolutionState, fresh),
       ...currentThreadResolutionPostMutationBlockers(postResolutionAudit, target, fresh),
     ];
     if (mutationBlocker) postBlockers.unshift(mutationBlocker);
-    if (postAuditError) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditError}`);
+    if (postAuditFailure) postBlockers.unshift(`Post-resolution thread-aware audit unavailable: ${postAuditFailure}`);
     outcome.status = postBlockers.length ? "needs-recovery" : "resolved";
     outcome.postResolutionHolds = reviewThreadResolutionHolds(postResolutionAudit);
     outcome.recoveryPath = postBlockers.length
@@ -4142,6 +4144,65 @@ function loadPostResolutionExactState(manifest, fresh) {
   return { repository, pr, headState, reviewThreads, checks };
 }
 
+function graphqlErrorsOrThrow(parsed, label) {
+  if (parsed && typeof parsed === "object" && Object.hasOwn(parsed, "errors") && !Array.isArray(parsed.errors)) {
+    throw new Error(`${label} returned a malformed errors field`);
+  }
+  return Array.isArray(parsed?.errors) ? parsed.errors : [];
+}
+
+function graphqlErrorCategories(errors) {
+  const knownCategories = new Set([
+    "BAD_USER_INPUT",
+    "FORBIDDEN",
+    "INTERNAL",
+    "NOT_FOUND",
+    "RATE_LIMITED",
+    "SERVICE_UNAVAILABLE",
+    "UNAUTHORIZED",
+    "VALIDATION",
+  ]);
+  const categories = new Set();
+  for (const error of Array.isArray(errors) ? errors : []) {
+    const candidate = typeof error?.type === "string"
+      ? error.type
+      : typeof error?.extensions?.code === "string"
+        ? error.extensions.code
+        : "";
+    const normalized = candidate.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+    categories.add(knownCategories.has(normalized) ? normalized.toLowerCase() : "unspecified");
+  }
+  return [...categories].sort().slice(0, 8);
+}
+
+function postResolutionAuditFailureCategory(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (message.includes("malformed errors field")) return "graphql-errors-malformed";
+  if (message.includes("invalid json")) return "github-response-invalid-json";
+  if (message.includes("pagination")) return "graphql-pagination-incomplete";
+  if (message.includes("github cli")) return "github-cli-unavailable";
+  return "post-resolution-audit-unavailable";
+}
+
+function reviewThreadMutationBlocker(mutation, threadId, label) {
+  // Mutation stdout/stderr can contain provider-supplied text. Retain only a
+  // bounded category and exit code in the outcome record; raw provider text is
+  // neither needed for recovery nor safe to persist in lane evidence.
+  if (mutation.code !== 0) return "GitHub resolution mutation did not return a confirmed process result";
+  try {
+    const parsed = parseGhJson(mutation.stdout, label);
+    const errors = graphqlErrorsOrThrow(parsed, label);
+    const resolved = parsed?.data?.resolveReviewThread?.thread;
+    if (errors.length) return "GitHub resolution mutation returned GraphQL errors";
+    if (!resolved || resolved.id !== threadId || resolved.isResolved !== true) {
+      return "GitHub resolution mutation returned an incomplete or mismatched target result";
+    }
+    return "";
+  } catch {
+    return "GitHub resolution mutation did not return a valid confirmed response";
+  }
+}
+
 function postResolutionExactStateBlockers(post, fresh = {}) {
   const blockers = [];
   if (!post) return ["Post-resolution exact PR state re-audit is unavailable"];
@@ -4188,22 +4249,58 @@ function reviewThreadResolutionHolds(audit) {
     unresolvedCurrentThreadIds,
     unresolvedOutdatedThreadIds,
     pendingRequests: audit.pendingReviewRequestCount,
-    mergeReady: audit.unresolvedNonOutdatedCount === 0 && audit.unresolvedOutdatedCount === 0 && audit.pendingReviewRequestCount === 0,
+    mergeReady: Boolean(audit.querySucceeded) && Boolean(audit.reviewThreadComplete) && Boolean(audit.reviewRequestComplete) && audit.unresolvedNonOutdatedCount === 0 && audit.unresolvedOutdatedCount === 0 && audit.pendingReviewRequestCount === 0,
   };
 }
 
 function appendResolutionOutcome(existing, attempt) {
-  const outcomes = Array.isArray(existing) ? existing : [];
-  const retainedRecovery = outcomes.filter((entry) => entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded");
-  const terminal = outcomes.filter((entry) => !retainedRecovery.includes(entry)).slice(-19);
-  return [...retainedRecovery, ...terminal, attempt];
+  return boundedResolutionOutcomes([...(Array.isArray(existing) ? existing : []), attempt]);
 }
 
 function retainedResolutionOutcomes(outcomes) {
+  return boundedResolutionOutcomes(outcomes);
+}
+
+function isResolutionRetentionOverflow(entry) {
+  return entry?.retention?.status === resolutionRetentionOverflowStatus;
+}
+
+function boundedResolutionOutcomes(outcomes) {
   const entries = Array.isArray(outcomes) ? outcomes : [];
-  const recovery = entries.filter((entry) => entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded");
-  const terminal = entries.filter((entry) => !recovery.includes(entry)).slice(-20);
-  return [...recovery, ...terminal];
+  const existingOverflow = entries.find(isResolutionRetentionOverflow) || null;
+  const attempts = entries.filter((entry) => !isResolutionRetentionOverflow(entry));
+  const recovery = attempts.filter((entry) => isUnrecoveredResolutionAttemptSameKind(attempts, entry));
+  const terminal = attempts.filter((entry) => !recovery.includes(entry));
+  // One current recovery record plus nineteen terminal records is sufficient
+  // for normal operation. Once more than one recovery record would need to be
+  // retained, discard the ambiguous history behind a durable fail-closed
+  // marker. The marker intentionally cannot be superseded by a later thread
+  // mutation: a later outcome cannot prove which discarded attempt it covers.
+  if (!existingOverflow && recovery.length <= 1) {
+    return [...recovery, ...terminal.slice(-(maxResolutionOutcomeRetention - recovery.length))];
+  }
+  const retainedRecovery = recovery.slice(-1);
+  const retainedTerminal = terminal.slice(-(maxResolutionOutcomeRetention - 1 - retainedRecovery.length));
+  const priorDiscarded = Number.isSafeInteger(existingOverflow?.retention?.discardedUnrecoveredCount)
+    ? existingOverflow.retention.discardedUnrecoveredCount
+    : 0;
+  return [
+    {
+      schemaVersion: 1,
+      status: "needs-recovery",
+      threadId: "retention-overflow",
+      mutation: { status: "retention-limit-exceeded", metadataOnly: true },
+      retention: {
+        status: resolutionRetentionOverflowStatus,
+        discardedUnrecoveredCount: priorDiscarded + Math.max(0, recovery.length - retainedRecovery.length),
+        retainedAt: new Date().toISOString(),
+      },
+      recoveryPath: "Resolution recovery history exceeded its bounded retention limit. The discarded interrupted attempts cannot be proven recovered; preserve this fail-closed hold for operator investigation.",
+      metadataOnly: true,
+    },
+    ...retainedTerminal,
+    ...retainedRecovery,
+  ];
 }
 
 function isHighRiskReviewThreadPath(path) {
@@ -4217,10 +4314,7 @@ function assertNoUnrecoveredResolutionAttempt(manifest, kind, freshAdjudication 
     ...(Array.isArray(manifest?.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : []).map((outcome) => ({ kind: "current", outcome })),
     ...(Array.isArray(manifest?.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : []).map((outcome) => ({ kind: "outdated", outcome })),
   ];
-  const unrecovered = outcomes.filter(({ kind: attemptKind, outcome }) =>
-    (outcome?.status === "needs-recovery" || outcome?.mutation?.status === "attempt-recorded")
-    && !resolutionAttemptRecovered(outcomes, attemptKind, outcome),
-  );
+  const unrecovered = outcomes.filter(({ kind: attemptKind, outcome }) => isUnrecoveredResolutionAttempt(outcomes, attemptKind, outcome));
   if (!unrecovered.length) return;
   const details = unrecovered.map(({ kind: attemptKind, outcome }) => `${attemptKind}:${outcome?.threadId || "unknown"}`).join(", ");
   throw new Error(`An outstanding ${kind} review-thread resolution attempt is unrecovered; do not mutate another thread until recovery is recorded: ${details}.`);
@@ -4272,7 +4366,10 @@ function reviewThreadResolutionPostMutationBlockers(audit, target, fresh = {}) {
 function emptyReviewThreadState() {
   return {
     querySucceeded: false,
+    reviewThreadComplete: false,
+    reviewRequestComplete: false,
     errorCount: 1,
+    errorCategories: ["audit-unavailable"],
     hasNextPage: false,
     reviewRequestHasNextPage: false,
     pendingReviewRequestCount: 0,
@@ -4297,7 +4394,10 @@ function compactReviewThreadAudit(audit) {
   return {
     checkedAt: new Date().toISOString(),
     querySucceeded: Boolean(audit?.querySucceeded),
+    reviewThreadComplete: Boolean(audit?.reviewThreadComplete),
+    reviewRequestComplete: Boolean(audit?.reviewRequestComplete),
     errorCount: Number(audit?.errorCount || 0),
+    errorCategories: Array.isArray(audit?.errorCategories) ? audit.errorCategories.filter((category) => typeof category === "string").slice(0, 8) : [],
     hasNextPage: Boolean(audit?.hasNextPage),
     reviewRequestHasNextPage: Boolean(audit?.reviewRequestHasNextPage),
     pendingReviewRequestCount: Number(audit?.pendingReviewRequestCount || 0),
@@ -5285,8 +5385,8 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   const diffSummary = safeMetadataText(options.diffSummary, 500);
   const fileSet = diffRiskPathSet(options.mappedFiles);
   const files = fileSet.paths;
-  const verification = safeMetadataText(options.verification, 500);
-  const verificationCommand = safeMetadataText(options.verificationCommand, 300);
+  const verification = evidenceText(options.verification, 500);
+  const verificationCommand = evidenceText(options.verificationCommand, 300);
   const verificationExitCode = safeMetadataText(options.verificationExitCode, 12);
   const reviewSummary = safeMetadataText(options.reviewSummary, 500);
   const reviewerId = typeof options.reviewerId === "string" ? safeMetadataText(options.reviewerId, 120) : "";
@@ -5606,6 +5706,10 @@ function safeMetadataText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function evidenceText(value, maxLength) {
+  return typeof value === "string" ? safeMetadataText(value, maxLength) : "";
+}
+
 function shapeExactHeadMergePlanEvidence(options = {}, context = {}) {
   const plannedMergeMethod = safeMetadataText(options.mergeMethod, 500);
   const rollbackPath = typeof options.rollbackPath === "string" ? safeMetadataText(options.rollbackPath, 500) : "";
@@ -5731,10 +5835,7 @@ function prGateBlockers(manifest, pr, context) {
     ...(context.currentResolutionOutcomes || []).map((outcome) => ({ kind: "current", outcome })),
     ...(context.outdatedResolutionOutcomes || []).map((outcome) => ({ kind: "outdated", outcome })),
   ];
-  const unrecovered = resolutionOutcomes.filter(({ kind, outcome }) =>
-    (outcome?.status === "needs-recovery" || outcome?.mutation?.status === "attempt-recorded")
-    && !resolutionAttemptRecovered(resolutionOutcomes, kind, outcome),
-  );
+  const unrecovered = resolutionOutcomes.filter(({ kind, outcome }) => isUnrecoveredResolutionAttempt(resolutionOutcomes, kind, outcome));
   if (unrecovered.length) blockers.push(`Unrecovered review-thread mutation outcomes: ${unrecovered.map(({ outcome }) => outcome.threadId || "unknown").join(", ")}`);
   return blockers;
 }
@@ -5743,12 +5844,17 @@ function resolutionAttemptSupersedes(superseder, supersederKind, attempt, attemp
   const supersederCompletedAt = Date.parse(superseder?.completedAt || superseder?.attemptedAt || "");
   const attemptCompletedAt = Date.parse(attempt?.completedAt || attempt?.attemptedAt || "");
   return supersederKind === attemptKind
-    && superseder?.attemptId
-    && superseder.attemptId !== attempt?.attemptId
-    && superseder?.supersedesAttemptId === attempt?.attemptId
+    && isNonEmptyResolutionIdentifier(superseder?.attemptId)
+    && isNonEmptyResolutionIdentifier(superseder?.supersedesAttemptId)
+    && isNonEmptyResolutionIdentifier(attempt?.attemptId)
+    && hasValidResolutionRecoveryChainAttempt(superseder)
+    && hasValidResolutionRecoveryChainAttempt(attempt)
+    && superseder.attemptId !== attempt.attemptId
+    && superseder.supersedesAttemptId === attempt.attemptId
     && superseder?.threadId === attempt?.threadId
     && superseder?.repository?.fullName === attempt?.repository?.fullName
     && superseder?.expectedHeadSha === attempt?.expectedHeadSha
+    && superseder?.targetRequestFingerprint === attempt?.targetRequestFingerprint
     && Number.isFinite(supersederCompletedAt)
     && Number.isFinite(attemptCompletedAt)
     && supersederCompletedAt > attemptCompletedAt;
@@ -5757,11 +5863,13 @@ function resolutionAttemptSupersedes(superseder, supersederKind, attempt, attemp
 function resolutionAttemptRecovered(outcomes, attemptKind, attempt) {
   const visited = new Set([attempt?.attemptId]);
   const queue = [attempt];
-  while (queue.length) {
+  let hops = 0;
+  while (queue.length && hops < maxResolutionRecoveryHops) {
+    hops += 1;
     const prior = queue.shift();
     for (const candidate of outcomes || []) {
       if (!resolutionAttemptSupersedes(candidate.outcome, candidate.kind, prior, attemptKind)) continue;
-      if (candidate.outcome?.status === "resolved" && ["confirmed-by-mutation-response", "confirmed-by-post-audit-recovery"].includes(candidate.outcome?.mutation?.status)) return true;
+      if (isValidTerminalResolutionOutcome(candidate.outcome)) return true;
       if (!visited.has(candidate.outcome?.attemptId)) {
         visited.add(candidate.outcome?.attemptId);
         queue.push(candidate.outcome);
@@ -5769,6 +5877,69 @@ function resolutionAttemptRecovered(outcomes, attemptKind, attempt) {
     }
   }
   return false;
+}
+
+function isNonEmptyResolutionIdentifier(value) {
+  return typeof value === "string" && Boolean(value.trim());
+}
+
+function isCanonicalResolutionRepositoryFullName(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+}
+
+function isValidResolutionTargetRequestFingerprint(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function hasValidResolutionRecoveryChainAttempt(attempt) {
+  const attemptedAt = Date.parse(attempt?.attemptedAt || "");
+  const hasCompletedAt = Object.hasOwn(attempt || {}, "completedAt");
+  const completedAt = Date.parse(attempt?.completedAt || "");
+  const isInitialAttemptRecorded = attempt?.mutation?.status === "attempt-recorded"
+    && !isNonEmptyResolutionIdentifier(attempt?.supersedesAttemptId);
+  return isNonEmptyResolutionIdentifier(attempt?.attemptId)
+    && isNonEmptyResolutionIdentifier(attempt?.threadId)
+    && exactGitObjectIdOrNull(attempt?.expectedHeadSha) === attempt?.expectedHeadSha
+    && isCanonicalResolutionRepositoryFullName(attempt?.repository?.fullName)
+    && isValidResolutionTargetRequestFingerprint(attempt?.targetRequestFingerprint)
+    && recognizedResolutionRecoveryMutations.has(attempt?.mutation?.status)
+    && Number.isFinite(attemptedAt)
+    && (isInitialAttemptRecorded
+      ? (!hasCompletedAt || (Number.isFinite(completedAt) && completedAt >= attemptedAt))
+      : (hasCompletedAt && Number.isFinite(completedAt) && completedAt >= attemptedAt));
+}
+
+function hasCompleteResolutionAttemptIdentity(attempt) {
+  const attemptedAt = Date.parse(attempt?.attemptedAt || "");
+  const completedAt = Date.parse(attempt?.completedAt || "");
+  return hasValidResolutionRecoveryChainAttempt(attempt)
+    && Number.isFinite(completedAt)
+    && completedAt >= attemptedAt;
+}
+
+function isValidTerminalResolutionOutcome(attempt) {
+  return attempt?.status === "resolved"
+    && ["confirmed-by-mutation-response", "confirmed-by-post-audit-recovery"].includes(attempt?.mutation?.status)
+    && hasCompleteResolutionAttemptIdentity(attempt);
+}
+
+function isMalformedResolutionOutcome(attempt) {
+  if (isResolutionRetentionOverflow(attempt)) return false;
+  if (attempt?.status === "resolved") return !isValidTerminalResolutionOutcome(attempt);
+  if (attempt?.status === "needs-recovery" || attempt?.mutation?.status === "attempt-recorded") return !hasValidResolutionRecoveryChainAttempt(attempt);
+  return attempt?.status !== "needs-recovery" && attempt?.mutation?.status !== "attempt-recorded";
+}
+
+function isUnrecoveredResolutionAttempt(outcomes, attemptKind, attempt) {
+  return isResolutionRetentionOverflow(attempt)
+    || isMalformedResolutionOutcome(attempt)
+    || ((attempt?.status === "needs-recovery" || attempt?.mutation?.status === "attempt-recorded")
+    && !resolutionAttemptRecovered(outcomes, attemptKind, attempt));
+}
+
+function isUnrecoveredResolutionAttemptSameKind(outcomes, attempt) {
+  const normalized = (Array.isArray(outcomes) ? outcomes : []).map((outcome) => ({ kind: "same-kind", outcome }));
+  return isUnrecoveredResolutionAttempt(normalized, "same-kind", attempt);
 }
 
 function renderPrGateEvidence(packet = {}) {
@@ -5861,16 +6032,15 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     "nodes{id,isResolved,isOutdated,path,comments(first:100){nodes{id,url,body}pageInfo{hasNextPage,endCursor}}}",
     "pageInfo{hasNextPage,endCursor}",
     "}",
-    "reviewRequests(first:100){nodes{id}pageInfo{hasNextPage}}",
     "}",
     "}",
     "}",
   ].join("");
   const nodes = [];
   const errors = [];
-  let reviewRequests = null;
   let cursor = null;
   let connectionComplete = true;
+  let reviewThreadComplete = true;
   let hasNextPage = false;
   let pages = 0;
   do {
@@ -5883,9 +6053,10 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     if (cursor) args.push("-F", `after=${cursor}`);
     const result = runChecked("gh", args, { cwd: manifest.worktree_path });
     const parsed = parseGhJson(result.stdout, "review-thread state");
-    errors.push(...(Array.isArray(parsed?.errors) ? parsed.errors : []));
+    const pageErrors = graphqlErrorsOrThrow(parsed, "Review-thread state");
+    errors.push(...pageErrors);
+    if (pageErrors.length) reviewThreadComplete = false;
     const connection = parsed?.data?.repository?.pullRequest?.reviewThreads;
-    if (!reviewRequests) reviewRequests = parsed?.data?.repository?.pullRequest?.reviewRequests;
     const pageComplete = Array.isArray(connection?.nodes) && typeof connection?.pageInfo?.hasNextPage === "boolean";
     connectionComplete = connectionComplete && pageComplete;
     if (!pageComplete) break;
@@ -5894,9 +6065,10 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
     cursor = hasNextPage ? connection.pageInfo.endCursor : null;
     if (hasNextPage && !cursor) throw new Error("Review-thread pagination omitted a next-page cursor");
   } while (cursor);
-  connectionComplete = connectionComplete
-    && Array.isArray(reviewRequests?.nodes)
-    && typeof reviewRequests?.pageInfo?.hasNextPage === "boolean";
+  const reviewRequests = fetchCompleteReviewRequestSnapshot(manifest, repository, prNumber);
+  errors.push(...reviewRequests.errors);
+  reviewThreadComplete = reviewThreadComplete && connectionComplete;
+  const reviewRequestComplete = reviewRequests.complete && reviewRequests.errors.length === 0;
   const threadRefs = nodes.map((thread) => {
     const comments = reviewThreadCommentAudit(thread.comments);
     return {
@@ -5916,23 +6088,64 @@ function fetchReviewThreadState(manifest, repository, prNumber) {
   const unresolvedNonOutdated = threadRefs.filter((thread) => !thread.isResolved && !thread.isOutdated);
   const unresolvedOutdated = threadRefs.filter((thread) => !thread.isResolved && thread.isOutdated);
   return {
-    querySucceeded: connectionComplete,
+    querySucceeded: reviewThreadComplete && reviewRequestComplete,
+    reviewThreadComplete,
+    reviewRequestComplete,
     errorCount: errors.length,
-    errorMessages: errors.map((error) => String(error?.message || "GraphQL error")).filter(Boolean).slice(0, 5),
+    errorCategories: graphqlErrorCategories(errors),
     totalCount: threadRefs.length,
     unresolvedNonOutdatedCount: unresolvedNonOutdated.length,
     unresolvedOutdatedCount: unresolvedOutdated.length,
     outdatedCount: threadRefs.filter((thread) => thread.isOutdated).length,
     resolvedCount: threadRefs.filter((thread) => thread.isResolved).length,
     hasNextPage,
-    pendingReviewRequestCount: Array.isArray(reviewRequests?.nodes) ? reviewRequests.nodes.length : 0,
-    reviewRequestHasNextPage: Boolean(reviewRequests?.pageInfo?.hasNextPage),
+    pendingReviewRequestCount: reviewRequests.nodes.length,
+    reviewRequestHasNextPage: reviewRequests.hasNextPage,
     unresolvedNonOutdatedRefs: unresolvedNonOutdated.map((thread) => thread.url || thread.id).filter(Boolean),
     unresolvedOutdatedRefs: unresolvedOutdated.map((thread) => thread.url || thread.id).filter(Boolean),
     incompleteCommentThreadRefs: threadRefs.filter((thread) => !thread.commentsComplete).map((thread) => thread.url || thread.id).filter(Boolean),
     auditFingerprint: reviewThreadAuditFingerprint(threadRefs, reviewRequests),
     threadRefs,
   };
+}
+
+function fetchCompleteReviewRequestSnapshot(manifest, repository, prNumber) {
+  const query = [
+    "query($owner:String!,$name:String!,$number:Int!,$after:String){",
+    "repository(owner:$owner,name:$name){",
+    "pullRequest(number:$number){reviewRequests(first:100,after:$after){nodes{id}pageInfo{hasNextPage,endCursor}}}",
+    "}",
+    "}",
+  ].join("");
+  const nodes = [];
+  const errors = [];
+  let cursor = null;
+  let hasNextPage = false;
+  let complete = true;
+  let pages = 0;
+  do {
+    if (pages++ >= maxReviewRequestPages) {
+      hasNextPage = true;
+      complete = false;
+      break;
+    }
+    const args = ["api", "graphql", "-f", `query=${query}`, "-F", `owner=${repository.owner}`, "-F", `name=${repository.name}`, "-F", `number=${prNumber}`];
+    if (cursor) args.push("-F", `after=${cursor}`);
+    const result = runChecked("gh", args, { cwd: manifest.worktree_path });
+    const parsed = parseGhJson(result.stdout, "review-request state");
+    const pageErrors = graphqlErrorsOrThrow(parsed, "Review-request state");
+    errors.push(...pageErrors);
+    if (pageErrors.length) complete = false;
+    const connection = parsed?.data?.repository?.pullRequest?.reviewRequests;
+    const pageComplete = Array.isArray(connection?.nodes) && typeof connection?.pageInfo?.hasNextPage === "boolean";
+    complete = complete && pageComplete;
+    if (!pageComplete) break;
+    nodes.push(...connection.nodes);
+    hasNextPage = Boolean(connection.pageInfo.hasNextPage);
+    cursor = hasNextPage ? connection.pageInfo.endCursor : null;
+    if (hasNextPage && !cursor) throw new Error("Review-request pagination omitted a next-page cursor");
+  } while (cursor);
+  return { nodes, errors, complete, hasNextPage };
 }
 
 function hydrateReviewThreadComments(manifest, thread) {
@@ -5948,7 +6161,7 @@ function hydrateReviewThreadComments(manifest, thread) {
     const result = runChecked("gh", ["api", "graphql", "-f", `query=${query}`, "-F", `id=${thread.id}`, "-F", `after=${cursor}`], { cwd: manifest.worktree_path });
     const parsed = parseGhJson(result.stdout, "review-thread comment page");
     const page = parsed?.data?.node?.comments;
-    if (Array.isArray(parsed?.errors) && parsed.errors.length) throw new Error("Review-thread comment pagination returned GraphQL errors");
+    if (graphqlErrorsOrThrow(parsed, "Review-thread comment pagination").length) throw new Error("Review-thread comment pagination returned GraphQL errors");
     if (!Array.isArray(page?.nodes) || typeof page?.pageInfo?.hasNextPage !== "boolean") throw new Error("Review-thread comment pagination returned incomplete evidence");
     comments.push(...page.nodes);
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
@@ -6075,14 +6288,34 @@ function sourceOwnedSkipPolicySection(policyText) {
   const policyHeading = /^[ ]{0,3}(#{2,3})[ \t]+Documented Non-Required Checks(?:[ \t]+#+)?[ \t]*$/;
   const atxHeading = /^[ ]{0,3}(#{1,6})[ \t]+/;
   const setextUnderline = /^[ ]{0,3}(?:=+|-+)[ \t]*$/;
-  let fence = "";
+  let fence = null;
   let headingDepth = 0;
   const section = [];
   for (const line of lines) {
-    const fenceMatch = /^[ ]{0,3}(`{3,}|~{3,})/.exec(line);
+    const fenceMatch = fence
+      ? /^([ \t]*)(`{3,}|~{3,})([^\r\n]*)$/.exec(line)
+      : /^([ \t]*)(?:([-+*]|\d+[.)])([ \t]+))?(`{3,}|~{3,})([^\r\n]*)$/.exec(line);
     if (fenceMatch) {
-      if (!fence) fence = fenceMatch[1][0];
-      else if (fenceMatch[1][0] === fence) fence = "";
+      const opening = !fence;
+      const indentation = fenceMatch[1];
+      const marker = fenceMatch[opening ? 4 : 2];
+      const suffix = fenceMatch[opening ? 5 : 3];
+      if (!fence) {
+        // CommonMark permits any info string on tilde fences, while a
+        // backtick fence cannot contain a backtick in its info string.
+        if (marker[0] === "`" && suffix.includes("`")) continue;
+        const openingIndent = markdownIndentationColumns(indentation);
+        if (openingIndent > 3) continue;
+        const listIndent = fenceMatch[2] ? markdownIndentationColumns(`${fenceMatch[2]}${fenceMatch[3]}`) : 0;
+        fence = {
+          character: marker[0],
+          length: marker.length,
+          minClosingIndent: listIndent ? openingIndent + listIndent : 0,
+          maxClosingIndent: listIndent ? openingIndent + listIndent + 3 : 3,
+        };
+      } else if (markdownIndentationColumns(indentation) >= fence.minClosingIndent && markdownIndentationColumns(indentation) <= fence.maxClosingIndent && marker[0] === fence.character && marker.length >= fence.length && /^[ \t]*$/.test(suffix)) {
+        fence = null;
+      }
       continue;
     }
     if (fence) {
@@ -6104,6 +6337,14 @@ function sourceOwnedSkipPolicySection(policyText) {
   return headingDepth ? section.join("\n") : null;
 }
 
+function markdownIndentationColumns(value) {
+  let columns = 0;
+  for (const character of String(value || "")) {
+    columns = character === "\t" ? columns + (4 - (columns % 4)) : columns + 1;
+  }
+  return columns;
+}
+
 function shapeDiffRiskEvidence(options = {}, context = {}) {
   const summary = safeMetadataText(options.diffRiskSummary, 500);
   // Diff-risk evidence is an exact-head coverage set, not a display list.  Do
@@ -6111,8 +6352,8 @@ function shapeDiffRiskEvidence(options = {}, context = {}) {
   // becomes impossible to prove even when every path was supplied.
   const fileSet = diffRiskPathSet(options.diffRiskFiles);
   const files = fileSet.paths;
-  const verification = safeMetadataText(options.diffRiskVerification, 500);
-  const verificationCommand = safeMetadataText(options.diffRiskVerificationCommand, 500);
+  const verification = evidenceText(options.diffRiskVerification, 500);
+  const verificationCommand = evidenceText(options.diffRiskVerificationCommand, 500);
   const verificationExitCode = String(options.diffRiskVerificationExitCode ?? "").trim();
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
   const expectedPrNumber = Number(context.expectedPrNumber);
@@ -12267,7 +12508,13 @@ function runBoundedVerification(verificationPlan, options = {}) {
   const profile = String(verificationPlan.resolvedProfile || verificationPlan.profile || "unknown");
   const timeoutMs = verificationTimeoutMs(profile);
   const startedAt = Date.now();
-  const result = run(command[0], command.slice(1), { ...options, timeout: timeoutMs, killSignal: "SIGKILL" });
+  const result = run(command[0], command.slice(1), {
+    ...options,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    preserveChildOutput: profile === "codex-workspace",
+    maxBuffer: profile === "codex-workspace" ? verificationDiagnosticCaptureMaxBytes : undefined,
+  });
   const elapsedMs = Math.max(0, Date.now() - startedAt);
   const outcome = verificationOutcome(result);
   if (outcome === "success") {
@@ -12296,8 +12543,9 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
     assertSafeTaskId(context.taskId);
     const diagnosticsDir = join(context.state.tasksDir, ".diagnostics");
     mkdirSync(diagnosticsDir, { recursive: true });
+    const child = boundedVerificationDiagnosticChild(profile, result);
     const record = {
-      schema_version: 1,
+      schema_version: verificationDiagnosticSchemaVersion,
       recorded_at: new Date().toISOString(),
       operation: "finish-pr-verification",
       task_id: context.taskId,
@@ -12306,13 +12554,22 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
       outcome,
       elapsed_ms: elapsedMs,
       timeout_ms: timeoutMs,
+      execution: {
+        outcome,
+        elapsed_ms: elapsedMs,
+        timeout_ms: timeoutMs,
+        timed_out: outcome === "timeout",
+      },
       child: {
-        status: Number.isInteger(result?.status) ? result.status : null,
-        signal: result?.signal || null,
-        error_code: result?.errorCode || null,
-        stdout_bytes: Buffer.byteLength(String(result?.stdout || "")),
-        stderr_bytes: Buffer.byteLength(String(result?.stderr || "")),
-        output: "omitted",
+        ...child,
+        process: {
+          status: Number.isInteger(result?.status) ? result.status : null,
+          signal: result?.signal || null,
+          error_code: result?.errorCode || null,
+          error_message: sanitizeVerificationDiagnosticText(result?.errorMessage || "", 320).value || null,
+          output_capture_limited: result?.errorCode === "ENOBUFS",
+          max_buffer_bytes: profile === "codex-workspace" ? verificationDiagnosticCaptureMaxBytes : null,
+        },
       },
       check_projection: boundedCheckProjection(profile, result),
       lock: redactTaskLockInspection(inspectTaskLock(context.state, context.taskId)),
@@ -12323,6 +12580,60 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
   } catch {
     return { status: "unavailable" };
   }
+}
+
+function boundedVerificationDiagnosticChild(profile, result) {
+  const child = {
+    status: Number.isInteger(result?.status) ? result.status : null,
+    signal: result?.signal || null,
+    error_code: result?.errorCode || null,
+    stdout_bytes: Buffer.byteLength(String(result?.stdout || "")),
+    stderr_bytes: Buffer.byteLength(String(result?.stderr || "")),
+    output: "omitted",
+  };
+  if (profile !== "codex-workspace") return child;
+  return {
+    ...child,
+    output: "sanitized-tail-v1",
+    stdout_tail: sanitizeVerificationDiagnosticText(result?.stdout || "", verificationDiagnosticTailMaxBytes),
+    stderr_tail: sanitizeVerificationDiagnosticText(result?.stderr || "", verificationDiagnosticTailMaxBytes),
+  };
+}
+
+function sanitizeVerificationDiagnosticText(value, maxBytes) {
+  const source = String(value || "");
+  const sourceBytes = Buffer.byteLength(source);
+  let sanitized = source.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  let redactionCount = sanitized === source ? 0 : 1;
+  const redact = (pattern, replacement) => {
+    sanitized = sanitized.replace(pattern, () => {
+      redactionCount += 1;
+      return replacement;
+    });
+  };
+  redact(/(?:github_pat_|sk-|gh[pousr]_)[A-Za-z0-9_-]+/gi, "[redacted-token]");
+  redact(/(?:["']?(?:authorization|proxy-authorization|x-api-key)["']?)\s*[:=]\s*(?:"(?:basic|bearer)\s+[^"]*"|'(?:basic|bearer)\s+[^']*'|(?:basic|bearer)\s+\S+|\S+)/gi, "[redacted-credential]");
+  redact(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted-credential]");
+  redact(/(?:["']?[A-Za-z0-9._-]*(?:secret|token|password|credential|api[_-]?key)[A-Za-z0-9._-]*["']?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[redacted-credential]");
+  redact(/\b[A-Za-z0-9._-]*(?:secret|token|password|credential|api[_-]?key)[A-Za-z0-9._-]*\b/gi, "[redacted-sensitive]");
+  const rawTail = Buffer.byteLength(sanitized) > maxBytes
+    ? Buffer.from(sanitized).subarray(-maxBytes).toString("utf8")
+    : sanitized;
+  const retained = boundedUtf8Tail(rawTail, maxBytes);
+  return {
+    bytes: sourceBytes,
+    retained_bytes: Buffer.byteLength(retained),
+    truncated: sourceBytes > maxBytes,
+    redacted: redactionCount > 0,
+    redaction_count: redactionCount,
+    value: retained,
+  };
+}
+
+function boundedUtf8Tail(value, maxBytes) {
+  let retained = String(value || "");
+  while (Buffer.byteLength(retained) > maxBytes) retained = retained.slice(1);
+  return retained;
 }
 
 function boundedCheckProjection(profile, result) {
@@ -12343,6 +12654,7 @@ function boundedCheckProjection(profile, result) {
 function verificationOutcome(result) {
   if (!result || typeof result !== "object") return "ambiguous-result";
   if (result.errorCode === "ETIMEDOUT") return "timeout";
+  if (result.errorCode === "ENOBUFS") return "output-limit";
   if (result.signal) return "signal";
   if (result.errorCode) return "launch-error";
   if (!Number.isInteger(result.status)) return "ambiguous-result";
@@ -17415,6 +17727,9 @@ function run(commandName, commandArguments, options = {}) {
   if (options.killSignal) {
     spawnOptions.killSignal = options.killSignal;
   }
+  if (Number.isSafeInteger(options.maxBuffer) && options.maxBuffer > 0) {
+    spawnOptions.maxBuffer = options.maxBuffer;
+  }
   const leaseContext = activeTaskLeaseWriteContext;
   const intent = leaseContext ? taskLeaseExternalIntent(leaseContext, resolved.command, resolved.args) : null;
   let result;
@@ -17436,8 +17751,8 @@ function run(commandName, commandArguments, options = {}) {
     signal: result.signal || null,
     errorCode: result.error?.code || null,
     errorMessage: result.error?.message || "",
-    stdout: options.preserveStdout ? (result.stdout || "") : (result.stdout || "").trim(),
-    stderr: (result.stderr || result.error?.message || "").trim(),
+    stdout: options.preserveStdout || options.preserveChildOutput ? (result.stdout || "") : (result.stdout || "").trim(),
+    stderr: options.preserveChildOutput ? (result.stderr || result.error?.message || "") : (result.stderr || result.error?.message || "").trim(),
   };
 }
 

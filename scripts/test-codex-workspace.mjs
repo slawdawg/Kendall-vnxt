@@ -1558,6 +1558,46 @@ try {
     assert(packetBlock[0].includes("outdated_thread_resolution_outcomes"), "lane packet must retain review-thread resolver outcomes");
   });
 
+  test("review-resolution evidence hardening rejects shorthand, unbounded recovery, and malformed policy fences", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const mapping = source.match(/function shapeOutdatedThreadMappingEvidence[\s\S]*?function hasRecordedStandardDeliveryPrState/);
+    assert(mapping, "thread mapping evidence helper not found");
+    assert(mapping[0].includes("evidenceText(options.verification"), "thread mapping verification evidence must reject bare flags");
+    assert(mapping[0].includes("evidenceText(options.verificationCommand"), "thread mapping verification command must reject bare flags");
+
+    const diffRisk = source.match(/function shapeDiffRiskEvidence[\s\S]*?function fetchPrChangedPaths/);
+    assert(diffRisk, "diff-risk evidence helper not found");
+    assert(diffRisk[0].includes("evidenceText(options.diffRiskVerification"), "diff-risk verification evidence must reject bare flags");
+    assert(diffRisk[0].includes("evidenceText(options.diffRiskVerificationCommand"), "diff-risk verification command must reject bare flags");
+
+    const recovery = source.match(/function appendResolutionOutcome[\s\S]*?function reviewThreadResolutionPreMutationBlockers/);
+    assert(recovery, "resolution recovery helpers not found");
+    assert(recovery[0].includes("isUnrecoveredResolutionAttemptSameKind"), "only unresolved recovery holds may bypass terminal history truncation");
+    assert(source.includes("maxResolutionRecoveryHops"), "supersession traversal must have a bounded hop budget");
+
+    const refresh = source.match(/function buildPrHeadRefreshEvidence[\s\S]*?function shapePr723NonAncestralRefreshRecoveryEvidence/);
+    assert(refresh, "PR-head refresh evidence builder not found");
+    assert(refresh[0].includes("Unrecovered review-thread mutation outcomes block delivery-head refresh"), "delivery-head refresh must stop on unrecovered thread mutation attempts");
+
+    const policy = source.match(/function sourceOwnedSkipPolicySection[\s\S]*?function shapeDiffRiskEvidence/);
+    assert(policy, "source-owned skip policy parser not found");
+    assert(policy[0].includes("marker.length >= fence.length"), "a closing policy fence must be at least as long as its opener");
+    assert(policy[0].includes("[ \\t]*$"), "a closing policy fence must contain no trailing content");
+
+    const audit = source.match(/function fetchReviewThreadState[\s\S]*?function hydrateReviewThreadComments/);
+    assert(audit, "review-thread audit helper not found");
+    assert(audit[0].includes("fetchCompleteReviewRequestSnapshot"), "review-request evidence must be collected independently of review-thread pagination");
+    assert(audit[0].includes("graphqlErrorsOrThrow"), "review-thread and review-request responses must reject malformed GraphQL errors fields");
+    const requests = source.match(/function fetchCompleteReviewRequestSnapshot[\s\S]*?function hydrateReviewThreadComments/);
+    assert(requests, "review-request pagination helper not found");
+    assert(requests[0].includes("reviewRequests(first:100,after:$after)"), "review-request snapshot must request every page");
+    assert(requests[0].includes("Review-request pagination omitted a next-page cursor"), "review-request pagination must fail closed on a missing cursor");
+    const mutation = source.match(/function reviewThreadMutationBlocker[\s\S]*?function postResolutionExactStateBlockers/);
+    assert(mutation, "review-thread mutation response guard not found");
+    assert(mutation[0].includes("graphqlErrorsOrThrow"), "review-thread mutations must reject malformed GraphQL errors fields");
+    assert(!mutation[0].includes("mutation.stderr") && !mutation[0].includes("mutation.stdout ||"), "mutation recovery evidence must not retain raw provider output");
+  });
+
   test("manager gate packets record metadata-only authority decisions", () => {
     const source = readFileSync(scriptPath, "utf8");
     const helperBlock = source.match(/function shapeAuthorityDecisionEvidence[\s\S]*?function appendAuthorityDecision/);
@@ -7888,7 +7928,7 @@ try {
       assert(!boundedRunner[0].includes("options.timeout"), "finish-pr verification must not expose a user-controlled timeout override");
       assert(boundedRunner[0].includes('killSignal: "SIGKILL"'), "bounded verification must force-kill only its timed-out direct child");
       assert(source.includes('if (!Number.isInteger(result.status)) return "ambiguous-result";'), "bounded verification must fail closed on an ambiguous child result");
-      assert(!source.includes("CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT"), "production source must not contain the fixture-only ambiguous-result seam");
+      assert(!source.includes("CODEX_WORKSPACE_FIXTURE_RESULT"), "production source must not contain the fixture-only result seam");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -7902,14 +7942,15 @@ try {
       { mode: "signal", expected: "Verification signal" },
       { mode: "launch-error", expected: "Verification launch-error" },
       { mode: "ambiguous-result", expected: "Verification ambiguous-result" },
+      { mode: "output-limit", expected: "Verification output-limit" },
     ]) {
       const fixture = createFinishPrExistingCommitFixture();
       try {
         if (scenario.budgetMs) setFixtureCodexWorkspaceVerificationTimeout(fixture, scenario.budgetMs);
         installFixtureVerificationCommand(fixture, scenario.mode);
         installFixtureDeliveryProbes(fixture);
-        if (scenario.mode === "ambiguous-result") {
-          fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT: "1" };
+        if (scenario.mode === "ambiguous-result" || scenario.mode === "output-limit") {
+          fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_RESULT: scenario.mode };
         }
         const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
         const lockPath = join(fixture.stateRoot, "tasks", "resumed-task.lock");
@@ -7930,9 +7971,113 @@ try {
         assert(!existsSync(lockPath), `${scenario.mode} verification retained the task lock`);
         assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.mode} verification reached git push`);
         assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.mode} verification reached gh pr create`);
+        if (scenario.mode === "output-limit") {
+          const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+          const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+          assert(names.length === 1, "output-limit fixture did not persist one diagnostic");
+          const diagnostic = readJson(join(diagnosticsDir, names[0]));
+          assert(diagnostic.outcome === "output-limit", JSON.stringify(diagnostic));
+          assert(diagnostic.child?.process?.error_code === "ENOBUFS" && diagnostic.child.process.output_capture_limited === true, JSON.stringify(diagnostic));
+        }
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+  });
+
+  test("finish-pr codex-workspace diagnostics retain bounded sanitized wrapper failure tails without delivery evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      writeFileSync(
+        join(fixture.root, "scripts", "test-codex-workspace.mjs"),
+        'console.log("direct-codex-workspace-fixture-success");\n',
+      );
+      runGit(fixture.root, ["add", "scripts/test-codex-workspace.mjs"]);
+      runGit(fixture.root, ["commit", "-q", "-m", "fixture direct codex-workspace success"]);
+      const direct = spawnSync(process.execPath, ["./scripts/test-codex-workspace.mjs"], {
+        cwd: fixture.root,
+        encoding: "utf8",
+        env: fixture.env,
+        stdio: "pipe",
+      });
+      assert(direct.status === 0, direct.stderr || direct.stdout);
+      assert(direct.stdout.includes("direct-codex-workspace-fixture-success"), direct.stdout || direct.stderr);
+
+      installFixtureVerificationCommand(fixture, "diagnostic-nonzero");
+      installFixtureDeliveryProbes(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "wrapper verification unexpectedly passed");
+      assert(result.stderr.includes("diagnostic=recorded"), result.stderr || result.stdout);
+      assert(!result.stderr.includes("wrapper-stdout-tail"), "CLI error retained wrapper stdout");
+      assert(!result.stderr.includes("wrapper-stderr-tail"), "CLI error retained wrapper stderr");
+      assert(!result.stderr.includes("fixture-secret-token-123"), "CLI error retained secret output");
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "wrapper failure did not persist exactly one diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, names[0]));
+      assert(diagnostic.schema_version === 2, JSON.stringify(diagnostic));
+      assert(diagnostic.profile === "codex-workspace", JSON.stringify(diagnostic));
+      assert(diagnostic.outcome === "nonzero-exit", JSON.stringify(diagnostic));
+      assert(diagnostic.execution?.timeout_ms === 600_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
+      assert(diagnostic.child?.output === "sanitized-tail-v1", JSON.stringify(diagnostic));
+      assert(diagnostic.child?.stdout_tail?.bytes > 2_048 && diagnostic.child.stdout_tail.truncated === true, JSON.stringify(diagnostic));
+      assert(diagnostic.child.stdout_tail.retained_bytes <= 2_048, JSON.stringify(diagnostic));
+      assert(diagnostic.child.stdout_tail.value.includes("wrapper-stdout-tail"), JSON.stringify(diagnostic));
+      assert(diagnostic.child?.stderr_tail?.redacted === true && diagnostic.child.stderr_tail.redaction_count > 0, JSON.stringify(diagnostic));
+      assert(diagnostic.child.stderr_tail.value.includes("wrapper-stderr-tail"), JSON.stringify(diagnostic));
+      assert(
+        diagnostic.child?.process?.status === 23
+          && diagnostic.child.process.signal === null
+          && diagnostic.child.process.error_code === null
+          && diagnostic.child.process.output_capture_limited === false
+          && diagnostic.child.process.max_buffer_bytes === 4 * 1024 * 1024,
+        JSON.stringify(diagnostic),
+      );
+      assert(!JSON.stringify(diagnostic).includes("fixture-secret-token-123"), "local diagnostic retained unredacted secret output");
+      assert(!JSON.stringify(diagnostic).includes("correct-horse-battery-staple"), "local diagnostic retained password value");
+      assert(!JSON.stringify(diagnostic).includes("github_pat_fixture_token_123"), "local diagnostic retained GitHub token");
+      assert(!JSON.stringify(diagnostic).includes("quoted-header-token"), "local diagnostic retained quoted authorization value");
+      assert(!JSON.stringify(diagnostic).includes("quoted-api-key"), "local diagnostic retained quoted API-key value");
+      assert(!JSON.stringify(diagnostic).includes("quoted-password"), "local diagnostic retained quoted password value");
+      assert(!JSON.stringify(diagnostic).includes("basic-credential"), "local diagnostic retained Basic authorization value");
+      assert(!JSON.stringify(diagnostic).includes("control-basic"), "local diagnostic retained control-byte-obscured authorization value");
+      assert(!JSON.stringify(diagnostic).includes("direct-codex-workspace-fixture-success"), "local diagnostic confused direct success with wrapper failure");
+      assert(readFileSync(manifestPath, "utf8") === before, "wrapper failure changed the manifest");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", "resumed-task.lock")), "wrapper failure retained the task lock");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "wrapper failure reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "wrapper failure reached gh pr create");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr codex-workspace diagnostics sanitize a credential split across the retained-tail boundary", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "boundary-secret-nonzero");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "boundary credential verification unexpectedly passed");
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "boundary credential failure did not persist exactly one diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, names[0]));
+      const tail = diagnostic.child?.stdout_tail;
+      assert(tail?.bytes > 2_048 && tail.truncated === true && tail.redacted === true, JSON.stringify(diagnostic));
+      assert(tail.redaction_count > 0 && tail.retained_bytes <= 2_048, JSON.stringify(diagnostic));
+      assert(!tail.value.includes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "split credential content survived the tail boundary");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
@@ -10146,7 +10291,7 @@ try {
     const gateArgs = (fixture) => {
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       return [
-        "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
         "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready", "--delivery-audit-summary", "Exact-head delivery audit passed.",
         "--merge-method", `gh pr merge 456 --merge --match-head-commit ${manifest.pr_delivery_head_sha}`,
         "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
@@ -10155,13 +10300,40 @@ try {
       ];
     };
     const recoveryAttempt = {
-      attemptId: "attempt-1", threadId: "PRRT_recovery", expectedHeadSha: "fixture-head", repository: { fullName: "slawdawg/Kendall-vnxt" },
+      attemptId: "attempt-1", threadId: "PRRT_recovery", expectedHeadSha: "1111111111111111111111111111111111111111", repository: { fullName: "slawdawg/Kendall-vnxt" },
+      targetRequestFingerprint: "a".repeat(64),
       attemptedAt: "2026-08-04T10:00:00.000Z", completedAt: "2026-08-04T10:01:00.000Z", status: "needs-recovery", mutation: { status: "attempt-recorded" },
     };
     const successfulSuperseder = {
-      attemptId: "attempt-2", threadId: "PRRT_recovery", expectedHeadSha: "fixture-head", repository: { fullName: "slawdawg/Kendall-vnxt" },
+      attemptId: "attempt-2", threadId: "PRRT_recovery", expectedHeadSha: "1111111111111111111111111111111111111111", repository: { fullName: "slawdawg/Kendall-vnxt" },
+      targetRequestFingerprint: "a".repeat(64),
       attemptedAt: "2026-08-04T10:02:00.000Z", completedAt: "2026-08-04T10:03:00.000Z", status: "resolved", supersedesAttemptId: "attempt-1", mutation: { status: "confirmed-by-mutation-response" },
     };
+    const malformedNeedsRecoveryMissingCompletedAt = {
+      ...successfulSuperseder,
+      status: "needs-recovery",
+      mutation: { status: "ambiguous-or-failed" },
+    };
+    delete malformedNeedsRecoveryMissingCompletedAt.completedAt;
+    const overBoundedRecoveryChain = [recoveryAttempt];
+    for (let index = 2; index <= 21; index += 1) {
+      overBoundedRecoveryChain.push({
+        ...successfulSuperseder,
+        attemptId: `attempt-${index}`,
+        supersedesAttemptId: `attempt-${index - 1}`,
+        attemptedAt: `2026-08-04T10:${String(index).padStart(2, "0")}:00.000Z`,
+        completedAt: `2026-08-04T10:${String(index).padStart(2, "0")}:30.000Z`,
+        status: "needs-recovery",
+        mutation: { status: "ambiguous-or-failed" },
+      });
+    }
+    overBoundedRecoveryChain.push({
+      ...successfulSuperseder,
+      attemptId: "attempt-22",
+      supersedesAttemptId: "attempt-21",
+      attemptedAt: "2026-08-04T10:22:00.000Z",
+      completedAt: "2026-08-04T10:22:30.000Z",
+    });
     for (const scenario of [
       { name: "unrecovered", outcomes: [recoveryAttempt], expectedCode: 1 },
       {
@@ -10178,10 +10350,39 @@ try {
         ],
         expectedCode: 0,
       },
+      { name: "over-bounded-supersession-chain", outcomes: overBoundedRecoveryChain, expectedCode: 1 },
       { name: "failed-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, status: "needs-recovery", mutation: { status: "ambiguous-or-failed" } }], expectedCode: 1 },
+      {
+        name: "unknown-needs-recovery-cannot-bridge-to-terminal",
+        outcomes: [
+          recoveryAttempt,
+          { ...successfulSuperseder, attemptId: "attempt-2", status: "needs-recovery", mutation: { status: "unrecognized-needs-recovery" } },
+          { ...successfulSuperseder, attemptId: "attempt-3", supersedesAttemptId: "attempt-2", attemptedAt: "2026-08-04T10:04:00.000Z", completedAt: "2026-08-04T10:05:00.000Z" },
+        ],
+        expectedCode: 1,
+      },
+      { name: "malformed-terminal-mutation", outcomes: [recoveryAttempt, { ...successfulSuperseder, mutation: { status: "unrecognized-terminal" } }], expectedCode: 1 },
+      { name: "incomplete-terminal-identity", outcomes: [recoveryAttempt, { ...successfulSuperseder, repository: {} }], expectedCode: 1 },
+      { name: "noncanonical-terminal-head", outcomes: [recoveryAttempt, { ...successfulSuperseder, expectedHeadSha: "fixture-head" }], expectedCode: 1 },
+      { name: "noncanonical-terminal-repository", outcomes: [recoveryAttempt, { ...successfulSuperseder, repository: { fullName: "slawdawg/not canonical" } }], expectedCode: 1 },
+      { name: "missing-supersedes-identity", outcomes: [recoveryAttempt, { ...successfulSuperseder, supersedesAttemptId: "" }], expectedCode: 1 },
+      { name: "missing-attempt-identity", outcomes: [recoveryAttempt, { ...successfulSuperseder, attemptId: "" }], expectedCode: 1 },
+      { name: "terminal-before-attempt", outcomes: [recoveryAttempt, { ...successfulSuperseder, completedAt: "2026-08-04T10:01:00.000Z" }], expectedCode: 1 },
+      { name: "malformed-needs-recovery-identity", outcomes: [{ ...recoveryAttempt, repository: {} }, successfulSuperseder], expectedCode: 1 },
+      { name: "malformed-needs-recovery-chronology", outcomes: [{ ...recoveryAttempt, completedAt: "2026-08-04T09:59:00.000Z" }, successfulSuperseder], expectedCode: 1 },
+      {
+        name: "malformed-needs-recovery-missing-completed-at-cannot-bridge-to-terminal",
+        outcomes: [
+          recoveryAttempt,
+          malformedNeedsRecoveryMissingCompletedAt,
+          { ...successfulSuperseder, attemptId: "attempt-3", supersedesAttemptId: "attempt-2", attemptedAt: "2026-08-04T10:04:00.000Z", completedAt: "2026-08-04T10:05:00.000Z" },
+        ],
+        expectedCode: 1,
+      },
       { name: "self-superseder", outcomes: [{ ...recoveryAttempt, supersedesAttemptId: "attempt-1" }], expectedCode: 1 },
       { name: "cross-thread-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, threadId: "PRRT_other" }], expectedCode: 1 },
       { name: "cross-head-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, expectedHeadSha: "other-head" }], expectedCode: 1 },
+      { name: "cross-target-fingerprint-superseder", outcomes: [recoveryAttempt, { ...successfulSuperseder, targetRequestFingerprint: "b".repeat(64) }], expectedCode: 1 },
     ]) {
       const fixture = scenario.expectedCode === 0
         ? createCanonicalManagedPrFixture({ existingPr: true })
@@ -10451,6 +10652,216 @@ try {
     }
   });
 
+  test("verify-pr-gates keeps headings inside CommonMark tilde fences out of the skipped-check policy", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      // A tilde-fence info string may begin with backticks or tildes. An
+      // over-indented closer, a short fence, and a fence with trailing text
+      // all remain literal, so the policy heading cannot authorize `full`.
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "~~~`~fixture-info\n    ~~~\n\t~~~\n## Documented Non-Required Checks\n\n- `full`\n~~\n~~~~ trailing text\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture malformed tilde fence policy"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates treats over-indented root fence openers as literal text", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "    ```not-a-root-fence\n\t~~~also-not-a-root-fence\n## Documented Non-Required Checks\n\n- `full`\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture over-indented root pseudo fences"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${exactHead}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+        "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, "read-only gate preview unexpectedly satisfied unrelated delivery gates");
+      assert(!result.stderr.includes("Non-required skipped checks do not match the source-owned policy"), result.stdout || result.stderr);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects a four-column root closer after a three-column root opener", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "   ~~~fixture-root-three-columns\n    ~~~\n## Documented Non-Required Checks\n\n- `full`\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture root closer indentation"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates treats over-indented and tab-indented list fence openers as literal text", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "    - ```not-a-list-fence\n\t- ~~~also-not-a-list-fence\n## Documented Non-Required Checks\n\n- `full`\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture over-indented list pseudo fences"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, "read-only gate preview unexpectedly satisfied unrelated delivery gates");
+      assert(!result.stderr.includes("Non-required skipped checks do not match the source-owned policy"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates keeps headings inside nested list-item fences out of the skipped-check policy", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "- ```fixture-example\n```\n  ## Documented Non-Required Checks\n\n  - `full`\n  - ```\n  ```\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture nested list fence policy"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates ignores an uncommitted skipped-check policy edit", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
@@ -10549,6 +10960,92 @@ try {
       assert(manifest.pr_gate_evidence?.status === "stale" && manifest.pr_gate_evidence.lowRiskReady === false, "refresh did not invalidate stale PR-gate evidence");
       assert(manifest.delivery_subagent_audit?.status === "stale", "refresh did not invalidate the stale delivery audit");
       assert(manifest.lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "refresh-pr-head"), "lane evidence missed refresh authority evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head refuses to rebind while a review-thread mutation outcome is unrecovered or malformed", () => {
+    for (const outcome of [
+      {
+        attemptId: "interrupted-current", threadId: "PRRT_interrupted", attemptedAt: "2026-08-06T00:00:00.000Z",
+        status: "needs-recovery", mutation: { status: "attempt-recorded" },
+      },
+      {
+        attemptId: "malformed-terminal", threadId: "PRRT_malformed", attemptedAt: "2026-08-06T00:00:00.000Z",
+        completedAt: "2026-08-06T00:01:00.000Z", status: "resolved", mutation: { status: "unrecognized-terminal" },
+      },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture({
+        existingPr: true,
+        repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      });
+      try {
+        const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+        const manifest = readJson(manifestPath);
+        manifest.current_thread_resolution_outcomes = [{
+          ...outcome, expectedHeadSha: manifest.pr_delivery_head_sha,
+          repository: { fullName: "slawdawg/Kendall-vnxt" },
+        }];
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runFixtureScript(
+          fixture,
+          [
+            "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+            "--reason", "A retained interrupted mutation must block head rebinding.",
+            "--state-root", fixture.stateRoot,
+          ],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, "refresh-pr-head unexpectedly ignored an unrecovered review-thread mutation");
+        assert(result.stderr.includes("Unrecovered review-thread mutation outcomes block delivery-head refresh"), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, "blocked delivery-head refresh mutated the manifest");
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("refresh-pr-head permits a transitively confirmed review-thread recovery", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+    });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      const manifest = readJson(manifestPath);
+      const baseAttempt = {
+        threadId: "PRRT_recovered", expectedHeadSha: manifest.pr_delivery_head_sha,
+        repository: { fullName: "slawdawg/Kendall-vnxt" },
+        targetRequestFingerprint: "a".repeat(64),
+      };
+      manifest.current_thread_resolution_outcomes = [
+        {
+          ...baseAttempt, attemptId: "interrupted-current", attemptedAt: "2026-08-06T00:00:00.000Z",
+          completedAt: "2026-08-06T00:01:00.000Z", status: "needs-recovery", mutation: { status: "attempt-recorded" },
+        },
+        {
+          ...baseAttempt, attemptId: "recovery-retry", supersedesAttemptId: "interrupted-current", attemptedAt: "2026-08-06T00:02:00.000Z",
+          completedAt: "2026-08-06T00:03:00.000Z", status: "needs-recovery", mutation: { status: "ambiguous-or-failed" },
+        },
+        {
+          ...baseAttempt, attemptId: "confirmed-recovery", supersedesAttemptId: "recovery-retry", attemptedAt: "2026-08-06T00:04:00.000Z",
+          completedAt: "2026-08-06T00:05:00.000Z", status: "resolved", mutation: { status: "confirmed-by-post-audit-recovery" },
+        },
+      ];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+          "--reason", "A terminal exact-head recovery permits the delivery head refresh.",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readJson(manifestPath).pr_head_rebinds?.length === 1, "confirmed recovery unexpectedly blocked head rebinding");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10746,6 +11243,18 @@ try {
         args: ["--reviewer-id"],
         expected: "Outdated-thread reviewer identity must be a non-empty string value",
       },
+      {
+        name: "bare-verification-evidence",
+        options: { existingPr: true, reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }] },
+        args: ["--verification"],
+        expected: "Outdated-thread local verification evidence missing",
+      },
+      {
+        name: "bare-verification-command",
+        options: { existingPr: true, reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }] },
+        args: ["--verification-command"],
+        expected: "Outdated-thread verification command missing",
+      },
     ]) {
       const fixture = createFinishPrExistingCommitFixture(scenario.options);
       try {
@@ -10887,6 +11396,129 @@ try {
       assert(outcome.postResolutionAudit, "ambiguous mutation did not retain a post-resolution audit");
       assert(outcome.recoveryPath.includes("Do not retry blindly"), outcome.recoveryPath);
       assert(manifest.events.some((event) => event.type === "outdated_review_thread_resolution_needs_recovery"), "recovery event missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("thread resolvers fail closed on malformed mutation GraphQL errors without retaining provider text", () => {
+    const providerOnlyText = "provider-only-mutation-diagnostic-DO-NOT-RETAIN";
+    for (const scenario of [
+      {
+        kind: "outdated",
+        threadId: "PRRT_outdated",
+        thread: { id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } },
+        adjudication: [
+          "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+          "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+          "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a",
+        ],
+        resolve: "resolve-adjudicated-thread",
+        outcomes: "outdated_thread_resolution_outcomes",
+      },
+      {
+        kind: "current",
+        threadId: "PRRT_current",
+        thread: { id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } },
+        adjudication: [
+          "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
+          "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+          "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a",
+        ],
+        resolve: "resolve-adjudicated-current-thread",
+        outcomes: "current_thread_resolution_outcomes",
+      },
+    ]) {
+      const fixture = createCanonicalManagedPrFixture({
+        existingPr: true,
+        mutationGraphqlErrors: providerOnlyText,
+        reviewThreads: [scenario.thread],
+      });
+      try {
+        const adjudication = runFixtureScript(fixture, [...scenario.adjudication, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+        assert(adjudication.code === 0, `${scenario.kind}: ${adjudication.stderr || adjudication.stdout}`);
+        const resolution = runFixtureScript(fixture, [scenario.resolve, "resumed-task", "--owner", "runner-a", "--thread-id", scenario.threadId, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+        assert(resolution.code !== 0, `${scenario.kind} accepted a malformed mutation errors field`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        const [outcome] = manifest[scenario.outcomes];
+        assert(outcome.status === "needs-recovery", `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.mutation.status === "ambiguous-or-failed", `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.mutation.result === "GitHub resolution mutation did not return a valid confirmed response", `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.mutation.metadataOnly === true && outcome.rawPayloadRetained === false, `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(!JSON.stringify(outcome).includes(providerOnlyText), `${scenario.kind}: raw mutation provider text was retained`);
+        const state = readJson(join(fixture.root, "review-threads-state.json"));
+        assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === scenario.threadId).isResolved === true, `${scenario.kind}: fake mutation did not execute`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("post-resolution GraphQL errors retain only bounded categories and fail both audit completeness gates", () => {
+    const providerOnlyText = "post-resolution-provider-only-diagnostic-DO-NOT-RETAIN";
+    for (const scenario of [
+      {
+        kind: "outdated-thread-errors",
+        threadId: "PRRT_outdated",
+        outcomes: "outdated_thread_resolution_outcomes",
+        resolve: "resolve-adjudicated-thread",
+        reviewThreadComplete: false,
+        reviewRequestComplete: true,
+        options: { postResolutionReviewThreadErrors: [{ message: providerOnlyText, type: "FORBIDDEN" }] },
+        adjudication: ["adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt", "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a"],
+        thread: { id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } },
+      },
+      {
+        kind: "current-request-errors",
+        threadId: "PRRT_current",
+        outcomes: "current_thread_resolution_outcomes",
+        resolve: "resolve-adjudicated-current-thread",
+        reviewThreadComplete: true,
+        reviewRequestComplete: false,
+        options: { postResolutionReviewRequestErrors: [{ message: providerOnlyText, extensions: { code: "FORBIDDEN" } }] },
+        adjudication: ["adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current", "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt", "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a"],
+        thread: { id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } },
+      },
+    ]) {
+      const fixture = createCanonicalManagedPrFixture({ existingPr: true, ...scenario.options, reviewThreads: [scenario.thread] });
+      try {
+        const adjudication = runFixtureScript(fixture, [...scenario.adjudication, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+        assert(adjudication.code === 0, `${scenario.kind}: ${adjudication.stderr || adjudication.stdout}`);
+        const resolution = runFixtureScript(fixture, [scenario.resolve, "resumed-task", "--owner", "runner-a", "--thread-id", scenario.threadId, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+        assert(resolution.code !== 0, `${scenario.kind}: resolution unexpectedly passed`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        const [outcome] = manifest[scenario.outcomes];
+        assert(outcome.status === "needs-recovery", `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.postResolutionAudit.querySucceeded === false, `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.postResolutionAudit.reviewThreadComplete === scenario.reviewThreadComplete, `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.postResolutionAudit.reviewRequestComplete === scenario.reviewRequestComplete, `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(JSON.stringify(outcome.postResolutionAudit.errorCategories) === JSON.stringify(["forbidden"]), `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(outcome.postResolutionHolds.mergeReady === false, `${scenario.kind}: ${JSON.stringify(outcome)}`);
+        assert(!JSON.stringify(manifest).includes(providerOnlyText), `${scenario.kind}: raw GraphQL provider text was retained`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("post-resolution audit process failures retain a category without provider output", () => {
+    const providerOnlyText = "post-resolution-process-provider-only-diagnostic-DO-NOT-RETAIN";
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      postResolutionAuditFailure: providerOnlyText,
+      reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+    });
+    try {
+      const adjudication = runFixtureScript(fixture, ["adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current", "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt", "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code !== 0, "post-resolution process failure unexpectedly passed");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const [outcome] = manifest.current_thread_resolution_outcomes;
+      assert(outcome.postResolutionAudit === null, JSON.stringify(outcome));
+      assert(outcome.postAuditFailure?.category === "post-resolution-audit-unavailable", JSON.stringify(outcome));
+      assert(outcome.postAuditFailure.rawPayloadRetained === false, JSON.stringify(outcome));
+      assert(!JSON.stringify(manifest).includes(providerOnlyText), "raw post-resolution provider output was retained");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -11469,6 +12101,35 @@ try {
         expected: "Review-thread query returned 1 GraphQL error(s)",
       },
       {
+        name: "malformed-review-thread-graphql-errors",
+        options: { existingPr: true, reviewThreadErrors: "provider-error-do-not-coerce" },
+        expected: "Review-thread state returned a malformed errors field",
+      },
+      {
+        name: "review-request-graphql-errors",
+        options: { existingPr: true, reviewRequestErrors: [{ message: "partial review request timeout" }] },
+        expected: "Review-thread query returned 1 GraphQL error(s)",
+      },
+      {
+        name: "malformed-review-request-graphql-errors",
+        options: { existingPr: true, reviewRequestErrors: "provider-error-do-not-coerce" },
+        expected: "Review-request state returned a malformed errors field",
+      },
+      {
+        name: "malformed-review-comment-page-graphql-errors",
+        options: {
+          existingPr: true,
+          reviewThreadCommentErrors: "provider-error-do-not-coerce",
+          reviewThreads: [{
+            id: "PRRT_comment_page",
+            isResolved: true,
+            isOutdated: false,
+            comments: { nodes: [{ url: "https://example.test/pull/456#discussion_comment_page", body: "First page." }], pageInfo: { hasNextPage: true, endCursor: "comment-cursor" } },
+          }],
+        },
+        expected: "Review-thread comment pagination returned a malformed errors field",
+      },
+      {
         name: "thread-pagination",
         options: { existingPr: true, reviewThreadsHasNextPage: true },
         expected: "Review-thread query returned additional pages",
@@ -11536,6 +12197,36 @@ try {
     }
   });
 
+  test("current-thread adjudication fails closed on a non-array review-thread errors envelope", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewThreadErrors: { message: "provider-error-do-not-coerce" },
+      reviewThreads: [{
+        id: "PRRT_current",
+        isResolved: false,
+        isOutdated: false,
+        path: "feature.txt",
+        comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] },
+      }],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "adjudicate-current-thread", "resumed-task", "--owner", "runner-a",
+          "--thread-id", "PRRT_current", "--summary-json", "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "current-thread adjudication unexpectedly accepted a malformed errors envelope");
+      assert(result.stderr.includes("Review-thread state returned a malformed errors field"), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.current_thread_adjudications?.length, "malformed review-thread evidence must not be recorded as an adjudication");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates aggregates finite top-level review-thread pages", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
@@ -11556,6 +12247,31 @@ try {
       assert(packet.reviewThreads.hasNextPage === false, result.stdout);
       assert(packet.reviewThreads.totalCount === 2, result.stdout);
       assert(packet.reviewThreads.unresolvedNonOutdatedCount === 1, result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates paginates the complete review-request snapshot independently of review threads", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      reviewRequestPages: [
+        [],
+        [{ id: "PRRQ_second_page" }],
+      ],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--owner", "runner-a", "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.reviewThreads.querySucceeded === true, result.stdout);
+      assert(packet.reviewThreads.reviewRequestHasNextPage === false, result.stdout);
+      assert(packet.reviewThreads.pendingReviewRequestCount === 1, result.stdout);
+      assert(packet.blockers.includes("Pending review requests: 1"), result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -11603,6 +12319,28 @@ try {
       assert(result.code !== 0, "verify-pr-gates unexpectedly accepted an unstructured verification claim");
       assert(result.stderr.includes("Diff-risk focused verification command missing"), result.stderr || result.stdout);
       assert(result.stderr.includes("Diff-risk focused verification exit code must be 0"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects bare diff-risk verification evidence flags", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head delivery audit passed.",
+          "--diff-risk-summary", "Focused fixture.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "--diff-risk-verification-command", "pnpm run check:runbooks",
+          "--diff-risk-verification-exit-code", "0", "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "verify-pr-gates unexpectedly accepted a bare verification flag");
+      assert(result.stderr.includes("Diff-risk focused verification evidence missing"), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -15305,6 +16043,9 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const reviewThreadPages = Array.isArray(options.reviewThreadPages) && options.reviewThreadPages.length > 0
     ? options.reviewThreadPages.map((page) => normalizeReviewThreads(page))
     : [normalizedReviewThreads];
+  const reviewRequestPages = Array.isArray(options.reviewRequestPages) && options.reviewRequestPages.length > 0
+    ? options.reviewRequestPages
+    : [options.reviewRequests || []];
   const reviewThreadsPayload = {
     data: {
       repository: {
@@ -15317,18 +16058,16 @@ function createFinishPrExistingCommitFixture(options = {}) {
             },
           },
           reviewRequests: {
-            nodes: options.reviewRequests || [],
+            nodes: reviewRequestPages[0],
             pageInfo: {
-              hasNextPage: Boolean(options.reviewRequestsHasNextPage),
+              hasNextPage: reviewRequestPages.length > 1 || Boolean(options.reviewRequestsHasNextPage),
+              endCursor: reviewRequestPages.length > 1 || options.reviewRequestsHasNextPage ? "request-cursor-1" : null,
             },
           },
         },
       },
     },
   };
-  if (options.reviewThreadErrors) {
-    reviewThreadsPayload.errors = options.reviewThreadErrors;
-  }
   if (options.omitReviewRequests) {
     delete reviewThreadsPayload.data.repository.pullRequest.reviewRequests;
   }
@@ -15347,6 +16086,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const graphqlQueryCountPath = join(fixtureRoot, "review-threads-query-count");
   const prStatePath = join(fixtureRoot, "pr-state.json");
   const postResolutionPrUnavailablePath = join(fixtureRoot, "post-resolution-pr-unavailable");
+  const postResolutionAuditPath = join(fixtureRoot, "post-resolution-audit");
   const postResolutionMutationDrift = [
     options.postResolutionCurrentThreadDrift ? "payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_post_current', isResolved: false, isOutdated: false, comments: { nodes: [{ id: 'PRRC_post_current', url: 'https://example.test/pull/456#discussion_post_current', body: 'New post-resolution review request.' }], pageInfo: { hasNextPage: false } } });" : "",
     options.postResolutionTargetOutdated ? "if (target) target.isOutdated = true;" : "",
@@ -15365,6 +16105,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       "const args = process.argv.slice(2);",
       `const prStatePath = ${JSON.stringify(prStatePath)};`,
       `const postResolutionPrUnavailablePath = ${JSON.stringify(postResolutionPrUnavailablePath)};`,
+      `const postResolutionAuditPath = ${JSON.stringify(postResolutionAuditPath)};`,
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
@@ -15381,25 +16122,40 @@ function createFinishPrExistingCommitFixture(options = {}) {
       `  const statePath = ${JSON.stringify(reviewThreadsStatePath)};`,
       `  const countPath = ${JSON.stringify(graphqlQueryCountPath)};`,
       `  const reviewThreadPages = ${JSON.stringify(reviewThreadPages)};`,
+      `  const reviewRequestPages = ${JSON.stringify(reviewRequestPages)};`,
+      `  const reviewThreadErrors = ${JSON.stringify(options.reviewThreadErrors)};`,
+      `  const reviewRequestErrors = ${JSON.stringify(options.reviewRequestErrors)};`,
+      `  const postResolutionReviewThreadErrors = ${JSON.stringify(options.postResolutionReviewThreadErrors)};`,
+      `  const postResolutionReviewRequestErrors = ${JSON.stringify(options.postResolutionReviewRequestErrors)};`,
+      `  const postResolutionAuditFailure = ${JSON.stringify(options.postResolutionAuditFailure || "")};`,
+      `  const reviewThreadCommentErrors = ${JSON.stringify(options.reviewThreadCommentErrors)};`,
+      `  const mutationResponseErrors = ${JSON.stringify(options.mutationGraphqlErrors)};`,
       "  const payload = JSON.parse(fs.readFileSync(statePath, 'utf8'));",
       "  const query = args.find((arg) => arg.startsWith('query=')) || '';",
+      "  if (query.includes('node(id:$id)')) { const response = { data: { node: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }; if (reviewThreadCommentErrors !== undefined) response.errors = reviewThreadCommentErrors; console.log(JSON.stringify(response)); process.exit(0); }",
       "  if (reviewThreadPages.length > 1 && query.includes('reviewThreads(first:100,after:$after)')) {",
       "    const after = args.find((arg) => arg.startsWith('after='));",
       "    const pageIndex = after ? Number(after.slice('after='.length).replace('cursor-', '')) : 0;",
       "    const page = reviewThreadPages[pageIndex] || [];",
       "    payload.data.repository.pullRequest.reviewThreads = { nodes: page, pageInfo: { hasNextPage: pageIndex < reviewThreadPages.length - 1, endCursor: pageIndex < reviewThreadPages.length - 1 ? `cursor-${pageIndex + 1}` : null } };",
       "  }",
+      "  if (reviewRequestPages.length > 1 && query.includes('reviewRequests(first:100,after:$after)')) {",
+      "    const after = args.find((arg) => arg.startsWith('after='));",
+      "    const pageIndex = after ? Number(after.slice('after='.length).replace('request-cursor-', '')) : 0;",
+      "    const page = reviewRequestPages[pageIndex] || [];",
+      "    payload.data.repository.pullRequest.reviewRequests = { nodes: page, pageInfo: { hasNextPage: pageIndex < reviewRequestPages.length - 1, endCursor: pageIndex < reviewRequestPages.length - 1 ? `request-cursor-${pageIndex + 1}` : null } };",
+      "  }",
       "  if (query.includes('resolveReviewThread')) {",
       "    const threadArg = args.find((arg) => arg.startsWith('threadId=')) || ''; const threadId = threadArg.slice('threadId='.length);",
       options.resolveMutationFailure
-        ? `    if (${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved")}) { const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === threadId); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload)); }`
-        : `    const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === threadId); if (target) target.isResolved = true; ${postResolutionMutationDrift} fs.writeFileSync(statePath, JSON.stringify(payload));`,
+        ? `    if (${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved")}) { const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === threadId); if (target) target.isResolved = true; fs.writeFileSync(statePath, JSON.stringify(payload)); fs.writeFileSync(postResolutionAuditPath, '1'); }`
+        : `    const target = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === threadId); if (target) target.isResolved = true; ${postResolutionMutationDrift} fs.writeFileSync(statePath, JSON.stringify(payload)); fs.writeFileSync(postResolutionAuditPath, '1');`,
       options.resolveMutationFailure
         ? `    console.error(${JSON.stringify(options.resolveMutationFailure === "ambiguous-resolved" ? "simulated ambiguous resolver failure after mutation" : "simulated resolver mutation failure")}); process.exit(1);`
-        : "    console.log(JSON.stringify({ data: { resolveReviewThread: { thread: target ? { id: target.id, isResolved: target.isResolved } : null } } })); process.exit(0);",
+        : "    const response = { data: { resolveReviewThread: { thread: target ? { id: target.id, isResolved: target.isResolved } : null } } }; if (mutationResponseErrors !== undefined) response.errors = mutationResponseErrors; console.log(JSON.stringify(response)); process.exit(0);",
       "  }",
       "  if (query.includes('pullRequest(number:$number){number baseRefOid}')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(JSON.stringify({ data: { repository: { pullRequest: { number: pr.number, baseRefOid: pr.baseRefOid } } } })); process.exit(0); }",
-      "  let count = 0; try { count = Number(fs.readFileSync(countPath, 'utf8')) || 0; } catch {} count += 1; fs.writeFileSync(countPath, String(count));",
+      "  let count = 0; if (query.includes('reviewThreads(first:100,after:$after)')) { try { count = Number(fs.readFileSync(countPath, 'utf8')) || 0; } catch {} count += 1; fs.writeFileSync(countPath, String(count)); }",
       options.preMutationCheckDrift
         ? "  if (count === 3) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.statusCheckRollup.push({ name: 'raced-check', status: 'IN_PROGRESS', conclusion: null }); fs.writeFileSync(prStatePath, JSON.stringify(pr)); }"
         : "",
@@ -15421,6 +16177,12 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.preMutationOutdatedThreadDrift
         ? "  if (count === 4) { payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_raced_outdated', isResolved: false, isOutdated: true, path: 'feature.txt', comments: { nodes: [{ id: 'PRRC_raced_outdated', url: 'https://example.test/pull/456#discussion_raced_outdated', body: 'New outdated request.' }], pageInfo: { hasNextPage: false } } }); fs.writeFileSync(statePath, JSON.stringify(payload)); }"
         : "",
+      "  if (fs.existsSync(postResolutionAuditPath) && postResolutionAuditFailure && query.includes('reviewThreads(first:100,after:$after)')) { console.error(postResolutionAuditFailure); process.exit(1); }",
+      "  if (query.includes('reviewThreads(first:100,after:$after)') && reviewThreadErrors !== undefined) payload.errors = reviewThreadErrors;",
+      "  else if (query.includes('reviewRequests(first:100,after:$after)') && reviewRequestErrors !== undefined) payload.errors = reviewRequestErrors;",
+      "  else if (fs.existsSync(postResolutionAuditPath) && query.includes('reviewThreads(first:100,after:$after)') && postResolutionReviewThreadErrors !== undefined) payload.errors = postResolutionReviewThreadErrors;",
+      "  else if (fs.existsSync(postResolutionAuditPath) && query.includes('reviewRequests(first:100,after:$after)') && postResolutionReviewRequestErrors !== undefined) payload.errors = postResolutionReviewRequestErrors;",
+      "  else delete payload.errors;",
       "  console.log(JSON.stringify(payload)); process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
@@ -15611,15 +16373,17 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
   assert(fixtureSource.includes(original), `fixture did not contain the ${profile} verification command`);
   const fixtureScript = profile === "dashboard" ? "./scripts/dashboard-delivery.mjs" : "./scripts/test-codex-workspace.mjs";
   let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", ${JSON.stringify(fixtureScript)}],`);
-  if (mode === "ambiguous-result") {
+  if (mode === "ambiguous-result" || mode === "output-limit") {
     const spawnLine = "    result = spawnSync(resolved.command, resolved.args, spawnOptions);";
     assert(patchedSource.includes(spawnLine), "fixture did not contain the verification spawn boundary");
     patchedSource = patchedSource.replace(
       spawnLine,
       [
-        '    result = process.env.CODEX_WORKSPACE_FIXTURE_AMBIGUOUS_RESULT === "1" && resolved.command === "fixture-verification"',
+        '    result = process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "ambiguous-result" && resolved.command === "fixture-verification"',
         '      ? { status: null, signal: null, error: null, stdout: "", stderr: "" }',
-        "      : spawnSync(resolved.command, resolved.args, spawnOptions);",
+        '      : process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "output-limit" && resolved.command === "fixture-verification"',
+        '        ? { status: null, signal: "SIGKILL", error: { code: "ENOBUFS", message: "fixture output capture limit" }, stdout: "", stderr: "" }',
+        "        : spawnSync(resolved.command, resolved.args, spawnOptions);",
       ].join("\n"),
     );
   }
@@ -15633,12 +16397,14 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     timeout: "sleep 1\nexit 0",
     nonzero: "echo 'fixture verification failed' >&2\nexit 23",
     "secret-nonzero": "echo 'fixture-secret-token-123' >&2\nexit 23",
+    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" ' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
+    "boundary-secret-nonzero": "printf 'xxxxxxxxxxsk-'\ni=0\nwhile [ \"$i\" -lt 2100 ]; do printf 'a'; i=$((i + 1)); done\nprintf '\\n'\nexit 23",
     "later-stage-nonzero": "echo '> pnpm run check:later-stage'\necho 'fixture-later-stage-secret' >&2\nexit 23",
     signal: "kill -TERM $$",
   }[mode];
   if (mode === "launch-error") {
     writeFileSync(verificationCommand, "#!/definitely-missing-codex-workspace-fixture-command\n");
-  } else if (mode === "ambiguous-result") {
+  } else if (mode === "ambiguous-result" || mode === "output-limit") {
     return;
   } else {
     assert(selected, `unknown fixture verification mode ${mode}`);
