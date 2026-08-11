@@ -6,6 +6,14 @@ engineStrict: true
 allowBuilds:
   sharp: true
   unrs-resolver: true
+# Security floors for transitive packages until upstream ranges catch up.
+overrides:
+  brace-expansion@<2: 1.1.18
+  brace-expansion@>=5 <6: 5.0.9
+  js-yaml: 4.3.1
+  nanoid: 3.3.18
+  postcss: 8.5.26
+  sharp: 0.35.3
 minimumReleaseAgeExclude:
   - '@playwright/test@1.61.0'
   - playwright-core@1.61.0
