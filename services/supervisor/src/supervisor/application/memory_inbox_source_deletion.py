@@ -104,6 +104,11 @@ async def _start_source_deletion(
     actor_ref: str, initiator: DeletionInitiator, require_expired: bool,
 ) -> SourceDeletionResult:
     digest = _digest(source_id, expected_revision, initiator)
+    # API authentication and retention scans may have opened a SQLite read
+    # transaction before this command. End it before waiting on the per-source
+    # gate so it cannot block the current gate holder's barrier commit.
+    if session.in_transaction():
+        await session.rollback()
     async with serialize_memory_inbox_source_use(session, source_id):
         recorded = (await session.execute(select(MemoryInboxCommandResult).where(
             MemoryInboxCommandResult.aggregate_id == source_id,
