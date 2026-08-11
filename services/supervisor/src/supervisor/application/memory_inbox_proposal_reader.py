@@ -32,20 +32,31 @@ async def read_authorized_proposal(
     """Return a body only for one Ready revision with a live private grant."""
     if settings.memory_inbox_proposal_reader_configuration_error():
         raise ValueError("proposal_reader_unavailable")
+    # Discover the source key first, then end this preliminary read before the
+    # SQLite source gate. Holding a SQLite read transaction while waiting for a
+    # deleting writer would invert the commit/reader lock order.
     proposal = (await session.execute(select(MemoryInboxProposalAggregate).where(
         MemoryInboxProposalAggregate.id == proposal_id
     ))).scalar_one_or_none()
-    if proposal is None or proposal.lifecycle_state != "Ready" or proposal.current_revision != revision:
+    if proposal is None:
         raise ValueError("proposal_reader_revision_unavailable")
-    proposal_revision = (await session.execute(select(MemoryInboxProposalRevision).where(
-        MemoryInboxProposalRevision.proposal_id == proposal_id,
-        MemoryInboxProposalRevision.revision == revision,
-        MemoryInboxProposalRevision.lifecycle_state == "Ready",
-    ))).scalar_one_or_none()
-    source = await session.get(MemoryInboxSource, proposal.source_id)
-    if proposal_revision is None or source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or retention_expired(source.retention_deadline_at):
-        raise ValueError("proposal_reader_revision_unavailable")
-    async with serialize_memory_inbox_source_use(session, source.id):
+    source_id = proposal.source_id
+    if getattr(session, "in_transaction", lambda: False)():
+        await session.rollback()
+    async with serialize_memory_inbox_source_use(session, source_id):
+        proposal = (await session.execute(select(MemoryInboxProposalAggregate).where(
+            MemoryInboxProposalAggregate.id == proposal_id
+        ))).scalar_one_or_none()
+        if proposal is None or proposal.lifecycle_state != "Ready" or proposal.current_revision != revision:
+            raise ValueError("proposal_reader_revision_unavailable")
+        proposal_revision = (await session.execute(select(MemoryInboxProposalRevision).where(
+            MemoryInboxProposalRevision.proposal_id == proposal_id,
+            MemoryInboxProposalRevision.revision == revision,
+            MemoryInboxProposalRevision.lifecycle_state == "Ready",
+        ))).scalar_one_or_none()
+        source = await session.get(MemoryInboxSource, proposal.source_id)
+        if proposal_revision is None or source is None or source.lifecycle_state != "Review" or source.deletion_state != "None" or retention_expired(source.retention_deadline_at):
+            raise ValueError("proposal_reader_revision_unavailable")
         grant = (await session.execute(select(MemoryInboxProposalReaderGrant).where(
             MemoryInboxProposalReaderGrant.proposal_revision_id == proposal_revision.id,
             MemoryInboxProposalReaderGrant.capability_ref == settings.memory_inbox_proposal_reader_capability_ref,

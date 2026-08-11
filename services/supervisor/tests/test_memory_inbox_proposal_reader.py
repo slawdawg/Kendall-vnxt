@@ -33,7 +33,7 @@ class _ScalarResult:
 
 class _RecordingReaderSession:
     def __init__(self, *, proposal, proposal_revision, source, grant, manifest) -> None:
-        self._values = iter((proposal, proposal_revision, grant, manifest))
+        self._values = iter((proposal, proposal, proposal_revision, grant, manifest))
         self.source = source
         self.statements = []
 
@@ -131,7 +131,7 @@ async def test_reader_locks_the_live_grant_until_private_content_is_read(tmp_pat
     result = await read_authorized_proposal(session, settings=settings, proposal_id=proposal.id, revision=1)
 
     assert result.body == "Reader lock regression body."
-    assert "FOR UPDATE" in str(session.statements[2].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" in str(session.statements[3].compile(dialect=postgresql.dialect()))
 
 
 @pytest.mark.asyncio
