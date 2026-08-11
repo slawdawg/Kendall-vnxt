@@ -7019,7 +7019,7 @@ try {
 
       assert(result.code === 0, JSON.stringify(result));
       const evidence = readFixtureDirtyTakeoverManifest(fixture).takeover_decisions.at(-1).dirty_in_lane_evidence;
-      assert(evidence.after.fixture_capture_sequence === 4, JSON.stringify(evidence));
+      assert(evidence.after.fixture_capture_sequence === 5, JSON.stringify(evidence));
     } finally {
       cleanupDirtyTakeoverFixture(fixture);
     }
