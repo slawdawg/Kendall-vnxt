@@ -23,7 +23,7 @@ async def test_claimed_clean_result_advances_only_its_current_quarantine_revisio
     async with session_factory() as session:
         source = MemoryInboxSource(id="inbox-source:worker", current_revision=2, lifecycle_state="Quarantined", retention_deadline_at=now + timedelta(hours=24), deletion_state="None", policy_ref="memory-inbox-retention-v1")
         revision = MemoryInboxSourceRevision(id="inbox-source-revision:worker", source_id=source.id, revision=2, lifecycle_state="Quarantined", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
-        manifest = MemoryInboxManifest(id="inbox-manifest:worker", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:worker", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="inbox-manifest:worker", source_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:worker", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
         job = MemoryInboxJob(id="inbox-job:worker", source_revision_id=revision.id, capability_ref="inspection-v1", lifecycle_state="Planned", lease_expires_at=now + timedelta(seconds=60), timeout_at=now + timedelta(seconds=60))
         session.add_all((source, revision, manifest, job))
         await session.commit()
@@ -49,7 +49,7 @@ async def test_unsafe_result_rejects_the_exact_quarantined_source(tmp_path) -> N
     async with session_factory() as session:
         source = MemoryInboxSource(id="inbox-source:unsafe", current_revision=2, lifecycle_state="Quarantined", retention_deadline_at=now + timedelta(hours=24), deletion_state="None", policy_ref="memory-inbox-retention-v1")
         revision = MemoryInboxSourceRevision(id="inbox-source-revision:unsafe", source_id=source.id, revision=2, lifecycle_state="Quarantined", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
-        manifest = MemoryInboxManifest(id="inbox-manifest:unsafe", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:unsafe", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="inbox-manifest:unsafe", source_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:unsafe", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
         job = MemoryInboxJob(id="inbox-job:unsafe", source_revision_id=revision.id, capability_ref="inspection-v1", lifecycle_state="Planned", lease_expires_at=now + timedelta(seconds=60), timeout_at=now + timedelta(seconds=60))
         session.add_all((source, revision, manifest, job))
         await session.commit()
@@ -130,7 +130,7 @@ async def test_cancellation_after_claim_fences_the_result_without_transitioning_
     async with session_factory() as session:
         source = MemoryInboxSource(id="inbox-source:cancel-after", current_revision=2, lifecycle_state="Quarantined", retention_deadline_at=now + timedelta(hours=24), deletion_state="None", policy_ref="memory-inbox-retention-v1")
         revision = MemoryInboxSourceRevision(id="inbox-source-revision:cancel-after", source_id=source.id, revision=2, lifecycle_state="Quarantined", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
-        manifest = MemoryInboxManifest(id="inbox-manifest:cancel-after", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:cancel-after", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="inbox-manifest:cancel-after", source_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:cancel-after", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
         job = MemoryInboxJob(id="inbox-job:cancel-after", source_revision_id=revision.id, capability_ref="inspection-v1", lifecycle_state="Planned", lease_expires_at=now + timedelta(seconds=60), timeout_at=now + timedelta(seconds=60))
         session.add_all((source, revision, manifest, job))
         await session.commit()
@@ -171,7 +171,7 @@ async def test_execute_runs_private_scanner_and_extractor_before_safe_transition
     async with session_factory() as session:
         source = MemoryInboxSource(id="inbox-source:executed", current_revision=2, lifecycle_state="Quarantined", retention_deadline_at=now + timedelta(hours=24), deletion_state="None", policy_ref="memory-inbox-retention-v1")
         revision = MemoryInboxSourceRevision(id="inbox-source-revision:executed", source_id=source.id, revision=2, lifecycle_state="Quarantined", actor_ref="operator:seed", audit_ref="audit:seed", policy_ref=source.policy_ref)
-        manifest = MemoryInboxManifest(id="inbox-manifest:executed", owner_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:executed", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="inbox-manifest:executed", source_revision_id=revision.id, copy_class="quarantine", store_ref="inbox-store:executed", declared_media_type="application/pdf", creation_state="Created", retention_class="source_retention", deletion_state="None")
         job = MemoryInboxJob(id="inbox-job:executed", source_revision_id=revision.id, capability_ref="inspection-v1", lifecycle_state="Planned", lease_expires_at=now + timedelta(seconds=60), timeout_at=now + timedelta(seconds=60))
         session.add_all((source, revision, manifest, job))
         await session.commit()

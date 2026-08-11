@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.infrastructure.db.models import (
@@ -93,8 +93,8 @@ async def plan_pending_deletion_operations(
     if source.lifecycle_state != "DeletePending" or source.deletion_state not in {"Pending", "RetryNeeded"}:
         return 0
     now = now or datetime.now(timezone.utc)
-    source_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
-    if not source_revision_ids:
+    source_revision_ids, proposal_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
+    if not source_revision_ids and not proposal_revision_ids:
         return 0
     active_claim = await session.scalar(select(MemoryInboxJob.id).where(
         MemoryInboxJob.source_revision_id.in_(source_revision_ids),
@@ -105,7 +105,7 @@ async def plan_pending_deletion_operations(
     if active_claim is not None:
         return 0
     manifests = list((await session.scalars(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id.in_(source_revision_ids),
+        manifest_owner_clause(source_revision_ids, proposal_revision_ids),
         MemoryInboxManifest.deletion_state != "Proven",
     ).with_for_update())).all())
     if not manifests:
@@ -126,8 +126,17 @@ async def plan_pending_deletion_operations(
     return created
 
 
-async def source_copy_owner_revision_ids(session: AsyncSession, *, source_id: str) -> list[str]:
-    """Return every revision owner that can hold a Kendall-controlled source copy."""
+def manifest_owner_clause(source_revision_ids: list[str], proposal_revision_ids: list[str]):
+    """Select manifests owned by exactly one revision in a source lineage."""
+
+    return or_(
+        MemoryInboxManifest.source_revision_id.in_(source_revision_ids),
+        MemoryInboxManifest.proposal_revision_id.in_(proposal_revision_ids),
+    )
+
+
+async def source_copy_owner_revision_ids(session: AsyncSession, *, source_id: str) -> tuple[list[str], list[str]]:
+    """Return source and proposal revision owners without a polymorphic reference."""
     source_revision_ids = list((await session.scalars(select(MemoryInboxSourceRevision.id).where(
         MemoryInboxSourceRevision.source_id == source_id,
     ))).all())
@@ -135,4 +144,4 @@ async def source_copy_owner_revision_ids(session: AsyncSession, *, source_id: st
         MemoryInboxProposalAggregate,
         MemoryInboxProposalAggregate.id == MemoryInboxProposalRevision.proposal_id,
     ).where(MemoryInboxProposalAggregate.source_id == source_id))).all())
-    return [*source_revision_ids, *proposal_revision_ids]
+    return source_revision_ids, proposal_revision_ids

@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from supervisor.application.memory_inbox_deletion_barrier import manifest_owner_clause, source_copy_owner_revision_ids
 from supervisor.infrastructure.db.models import (
     MemoryInboxCommandResult, MemoryInboxDeletionOperation, MemoryInboxDeletionProof,
     MemoryInboxManifest, MemoryInboxProposalAggregate, MemoryInboxSource,
-    MemoryInboxSourceRevision,
 )
 
 
@@ -35,10 +35,10 @@ async def read_deletion_receipt(session: AsyncSession, *, source_id: str) -> Del
         )
     if source.lifecycle_state != "Deleted" or source.deletion_state != "Proven":
         raise ValueError("deletion_receipt_unavailable")
-    revision_ids = select(MemoryInboxSourceRevision.id).where(MemoryInboxSourceRevision.source_id == source.id)
+    source_revision_ids, proposal_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
     operation_ids = select(MemoryInboxDeletionOperation.id).join(
         MemoryInboxManifest, MemoryInboxManifest.id == MemoryInboxDeletionOperation.manifest_id,
-    ).where(MemoryInboxManifest.owner_revision_id.in_(revision_ids))
+    ).where(manifest_owner_clause(source_revision_ids, proposal_revision_ids))
     proof_count = len((await session.scalars(select(MemoryInboxDeletionProof.id).where(
         MemoryInboxDeletionProof.deletion_operation_id.in_(operation_ids),
         MemoryInboxDeletionProof.lifecycle_state == "Proven",

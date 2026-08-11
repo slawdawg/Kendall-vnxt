@@ -31,7 +31,7 @@ async def receive_quarantined_upload(session: AsyncSession, *, settings: Setting
     deadline = datetime.now(timezone.utc) + timedelta(hours=settings.memory_inbox_retention_hours or 0)
     repository = MemoryInboxLifecycleRepository()
     await repository.create_inert_source(session, source_id=source_id, revision_id=revision_id, retention_deadline_at=deadline, actor_ref=actor_ref, audit_ref=f"audit:{uuid.uuid4().hex}", policy_ref="memory-inbox-retention-v1", lifecycle_state=MemoryInboxSourceState.SCANNING)
-    manifest = MemoryInboxManifest(id=f"inbox-manifest:{uuid.uuid4().hex}", owner_revision_id=revision_id, copy_class="quarantine", store_ref=store_ref, declared_media_type=declared_media_type, creation_state="Planned", retention_class="source_retention", deletion_state="None")
+    manifest = MemoryInboxManifest(id=f"inbox-manifest:{uuid.uuid4().hex}", legacy_owner_revision_id=revision_id, source_revision_id=revision_id, copy_class="quarantine", store_ref=store_ref, declared_media_type=declared_media_type, creation_state="Planned", retention_class="source_retention", deletion_state="None")
     session.add(manifest)
     await session.flush()
     written = False

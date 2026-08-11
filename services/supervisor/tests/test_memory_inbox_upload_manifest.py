@@ -51,6 +51,7 @@ async def test_quarantine_manifest_binds_the_declared_content_type_before_writin
 
     manifest = next(item for item in session.items if isinstance(item, MemoryInboxManifest))
     assert session.committed
+    assert manifest.legacy_owner_revision_id == manifest.source_revision_id
     assert manifest.declared_media_type == "application/pdf"
     assert manifest.inspected_media_type is None
     assert manifest.creation_state == "Created"
