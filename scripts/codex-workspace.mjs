@@ -127,6 +127,14 @@ const resumableCheckTrailingWorkspaceDuplicates = new Set([
 const externalCheckStageEvidenceStage = "test:codex-workspace";
 const externalCheckStageEvidenceCommand = Object.freeze(["pnpm", "run", externalCheckStageEvidenceStage]);
 const resumableCheckLongLeafBudgetMs = codexWorkspaceVerificationTimeoutMs;
+// These two leaves have independently exceeded the ordinary 180s invocation
+// budget in governed delivery. They remain explicit fixed commands; only their
+// invocation budget is extended. The external-evidence handoff stays limited
+// to test:codex-workspace below.
+const resumableCheckLongLeafStages = new Set([
+  externalCheckStageEvidenceStage,
+  "test:manager-control-plane",
+]);
 const taskLockSchemaVersion = 1;
 const taskLeaseSchemaVersion = 1;
 const legacyRecoveryAdoptionTaskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
@@ -8418,7 +8426,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
   }
   for (let index = packet.stages.length; index < plan.stages.length; index += 1) {
     const stage = plan.stages[index];
-    const invocationBudgetMs = stage === externalCheckStageEvidenceStage ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
+    const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
     const remainingMs = invocationBudgetMs - (Date.now() - started);
     const needsSupervisorLeafReserve = resumableCheckSupervisorLeafSet.has(stage);
     const executionReserveMs = needsSupervisorLeafReserve

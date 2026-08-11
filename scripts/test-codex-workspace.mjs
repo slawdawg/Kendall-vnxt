@@ -13292,7 +13292,7 @@ function readFixtureStageLog(path) {
 function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const invocationBudget = "    const invocationBudgetMs = stage === externalCheckStageEvidenceStage ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;";
+  const invocationBudget = "    const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;";
   const remaining = "    const remainingMs = invocationBudgetMs - (Date.now() - started);";
   assert(source.includes(started) && source.includes(invocationBudget) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
   const patched = source
