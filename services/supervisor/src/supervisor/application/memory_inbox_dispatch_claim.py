@@ -68,11 +68,16 @@ async def claim_processing_dispatch(
         provider_code="unselected", attempt_sequence=1, lifecycle_state="Claimed",
     )
     proposal_manifest = MemoryInboxManifest(
-        id=f"inbox-manifest:{uuid.uuid4().hex}", owner_revision_id=proposal_revision_id,
+        id=f"inbox-manifest:{uuid.uuid4().hex}", legacy_owner_revision_id=proposal_revision_id, proposal_revision_id=proposal_revision_id,
         copy_class="proposal_body", store_ref=f"inbox-store:{uuid.uuid4().hex}",
         creation_state="Planned", retention_class="proposal_retention", deletion_state="None",
     )
-    session.add_all((proposal, proposal_revision, attempt, proposal_manifest))
+    # These are scalar FK fields, not ORM relationships.  Flush the referenced
+    # proposal revision before the manifest so SQLite's migration trigger and
+    # PostgreSQL's FK see a durable parent row.
+    session.add_all((proposal, proposal_revision))
+    await session.flush()
+    session.add_all((attempt, proposal_manifest))
     source.current_revision += 1
     source.lifecycle_state = MemoryInboxSourceState.PROCESSING.value
     session.add(MemoryInboxSourceRevision(

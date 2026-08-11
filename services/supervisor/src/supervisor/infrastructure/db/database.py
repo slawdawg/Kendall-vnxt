@@ -133,11 +133,15 @@ SUPERVISOR_CONTROL_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
 MEMORY_INBOX_MANIFEST_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
     ("declared_media_type", "VARCHAR(128)"),
     ("inspected_media_type", "VARCHAR(128)"),
+    ("source_revision_id", "VARCHAR(80)"),
+    ("proposal_revision_id", "VARCHAR(80)"),
 )
 
 MEMORY_INBOX_MANIFEST_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("declared_media_type", "VARCHAR(128)"),
     ("inspected_media_type", "VARCHAR(128)"),
+    ("source_revision_id", "VARCHAR(80)"),
+    ("proposal_revision_id", "VARCHAR(80)"),
 )
 
 MEMORY_INBOX_COST_POLICY_RECEIPT_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -248,6 +252,259 @@ async def _sqlite_unique_index_exists(connection, table_name: str, columns: tupl
     return False
 
 
+async def _sqlite_drop_legacy_manifest_owner_uniqueness(connection) -> None:
+    """Rebuild the SQLite manifest table when its old owner/copy key remains."""
+
+    if not await _sqlite_unique_index_exists(
+        connection, "memory_inbox_manifests", ("owner_revision_id", "copy_class")
+    ):
+        return
+    # SQLite cannot drop the autoindex backing a table UNIQUE constraint.  The
+    # replacement is created from the current declarative shape, which retains
+    # the store-ref uniqueness and adds the explicit-owner constraints.
+    from supervisor.infrastructure.db.models import MemoryInboxManifest
+
+    legacy_table = "memory_inbox_manifests_legacy_owner_unique"
+    await connection.execute(text(f"ALTER TABLE memory_inbox_manifests RENAME TO {legacy_table}"))
+    await connection.run_sync(lambda sync_connection: MemoryInboxManifest.__table__.create(sync_connection))
+    columns = await _sqlite_table_columns(connection, legacy_table)
+    target_columns = [column.name for column in MemoryInboxManifest.__table__.columns if column.name in columns]
+    joined_columns = ", ".join(target_columns)
+    await connection.execute(text(
+        f"INSERT INTO memory_inbox_manifests ({joined_columns}) "
+        f"SELECT {joined_columns} FROM {legacy_table}"
+    ))
+    await connection.execute(text(f"DROP TABLE {legacy_table}"))
+
+
+async def _ensure_sqlite_memory_inbox_manifest_ownership(connection) -> None:
+    """Backfill explicit owners and enforce them for legacy SQLite databases."""
+
+    await _sqlite_add_columns(connection, "memory_inbox_manifests", MEMORY_INBOX_MANIFEST_SQLITE_COLUMNS)
+    columns = await _sqlite_table_columns(connection, "memory_inbox_manifests")
+    if "owner_revision_id" in columns:
+        collisions = await connection.scalar(text(
+            "SELECT COUNT(*) FROM memory_inbox_manifests AS manifest "
+            "WHERE manifest.source_revision_id IS NULL AND manifest.proposal_revision_id IS NULL "
+            "AND EXISTS (SELECT 1 FROM memory_inbox_source_revisions AS revision "
+            "WHERE revision.id = manifest.owner_revision_id) "
+            "AND EXISTS (SELECT 1 FROM memory_inbox_proposal_revisions AS revision "
+            "WHERE revision.id = manifest.owner_revision_id)"
+        ))
+        if collisions:
+            raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+        divergent = await connection.scalar(text(
+            "SELECT COUNT(*) FROM memory_inbox_manifests WHERE "
+            "(source_revision_id IS NOT NULL AND source_revision_id <> owner_revision_id) "
+            "OR (proposal_revision_id IS NOT NULL AND proposal_revision_id <> owner_revision_id)"
+        ))
+        if divergent:
+            raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+        await connection.execute(text(
+            "UPDATE memory_inbox_manifests SET source_revision_id = owner_revision_id "
+            "WHERE source_revision_id IS NULL AND proposal_revision_id IS NULL AND EXISTS ("
+            "SELECT 1 FROM memory_inbox_source_revisions WHERE id = owner_revision_id)"
+        ))
+        await connection.execute(text(
+            "UPDATE memory_inbox_manifests SET proposal_revision_id = owner_revision_id "
+            "WHERE source_revision_id IS NULL AND proposal_revision_id IS NULL AND EXISTS ("
+            "SELECT 1 FROM memory_inbox_proposal_revisions WHERE id = owner_revision_id)"
+        ))
+    unresolved = await connection.scalar(text(
+        "SELECT COUNT(*) FROM memory_inbox_manifests "
+        "WHERE (source_revision_id IS NULL AND proposal_revision_id IS NULL) "
+        "OR (source_revision_id IS NOT NULL AND proposal_revision_id IS NOT NULL)"
+    ))
+    if unresolved:
+        raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+    invalid_reference = await connection.scalar(text(
+        "SELECT COUNT(*) FROM memory_inbox_manifests AS manifest WHERE "
+        "(manifest.source_revision_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM memory_inbox_source_revisions AS revision WHERE revision.id = manifest.source_revision_id)) "
+        "OR (manifest.proposal_revision_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM memory_inbox_proposal_revisions AS revision WHERE revision.id = manifest.proposal_revision_id))"
+    ))
+    if invalid_reference:
+        raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+    await _sqlite_drop_legacy_manifest_owner_uniqueness(connection)
+    await connection.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_inbox_source_manifest_copy "
+        "ON memory_inbox_manifests(source_revision_id, copy_class)"
+    ))
+    await connection.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_inbox_proposal_manifest_copy "
+        "ON memory_inbox_manifests(proposal_revision_id, copy_class)"
+    ))
+    for event in ("INSERT", "UPDATE"):
+        await connection.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_memory_inbox_manifest_owner_{event.lower()} "
+            f"BEFORE {event} ON memory_inbox_manifests "
+            "WHEN NOT ((NEW.source_revision_id IS NOT NULL AND NEW.proposal_revision_id IS NULL) "
+            "OR (NEW.source_revision_id IS NULL AND NEW.proposal_revision_id IS NOT NULL)) "
+            "BEGIN SELECT RAISE(ABORT, 'memory_inbox_manifest_single_owner'); END"
+        ))
+        await connection.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_memory_inbox_manifest_source_fk_{event.lower()} "
+            f"BEFORE {event} ON memory_inbox_manifests "
+            "WHEN NEW.source_revision_id IS NOT NULL AND NOT EXISTS ("
+            "SELECT 1 FROM memory_inbox_source_revisions WHERE id = NEW.source_revision_id) "
+            "BEGIN SELECT RAISE(ABORT, 'memory_inbox_manifest_source_reference'); END"
+        ))
+        await connection.execute(text(
+            f"CREATE TRIGGER IF NOT EXISTS trg_memory_inbox_manifest_proposal_fk_{event.lower()} "
+            f"BEFORE {event} ON memory_inbox_manifests "
+            "WHEN NEW.proposal_revision_id IS NOT NULL AND NOT EXISTS ("
+            "SELECT 1 FROM memory_inbox_proposal_revisions WHERE id = NEW.proposal_revision_id) "
+            "BEGIN SELECT RAISE(ABORT, 'memory_inbox_manifest_proposal_reference'); END"
+        ))
+    for table, owner_column, message in (
+        ("memory_inbox_source_revisions", "source_revision_id", "memory_inbox_manifest_source_reference_in_use"),
+        ("memory_inbox_proposal_revisions", "proposal_revision_id", "memory_inbox_manifest_proposal_reference_in_use"),
+    ):
+        for event, clause, timing in (("DELETE", "OLD.id", "BEFORE DELETE"), ("UPDATE", "OLD.id", "BEFORE UPDATE OF id")):
+            await connection.execute(text(
+                f"CREATE TRIGGER IF NOT EXISTS trg_{table}_manifest_restrict_{event.lower()} "
+                f"{timing} ON {table} "
+                f"WHEN EXISTS (SELECT 1 FROM memory_inbox_manifests WHERE {owner_column} = {clause}) "
+                f"BEGIN SELECT RAISE(ABORT, '{message}'); END"
+            ))
+
+
+async def _ensure_sqlite_memory_inbox_revision_states(connection) -> None:
+    """Apply closed revision-state vocabulary to legacy SQLite tables."""
+
+    revision_states = {
+        "source": "'Scanning','Quarantined','Unprocessed','Draft','AwaitingAuthorization','Processing','Review','Returned','DeniedRetained','DeletePending','Deleted','RejectedUnsafe'",
+        "proposal": "'Absent','Draft','Ready','Returned','Denied','Approved'",
+    }
+    for kind, states in revision_states.items():
+        table = f"memory_inbox_{kind}_revisions"
+        invalid = await connection.scalar(text(
+            f"SELECT COUNT(*) FROM {table} WHERE lifecycle_state NOT IN ({states})"
+        ))
+        if invalid:
+            raise RuntimeError(f"Memory Inbox {kind} revision migration found an invalid lifecycle state.")
+        for event in ("INSERT", "UPDATE"):
+            await connection.execute(text(
+                f"CREATE TRIGGER IF NOT EXISTS trg_{table}_state_{event.lower()} "
+                f"BEFORE {event} ON {table} "
+                f"WHEN NEW.lifecycle_state NOT IN ({states}) "
+                f"BEGIN SELECT RAISE(ABORT, '{table}_state'); END"
+            ))
+
+
+async def _ensure_postgres_memory_inbox_manifest_ownership(connection) -> None:
+    """Backfill and constrain explicit manifest owners on existing PostgreSQL tables."""
+
+    manifest_columns = set((await connection.execute(text(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'memory_inbox_manifests'"
+    ))).scalars())
+    # A legacy owner ID that resolves to both revision kinds is not safe to
+    # backfill. Detect that condition while the manifest is still in its
+    # pre-patch shape: adding the target columns first would turn a rejected
+    # migration into an avoidable schema mutation (even if its transaction
+    # subsequently rolls back).
+    if "owner_revision_id" in manifest_columns:
+        unresolved_owner_predicates = {
+            (False, False): "TRUE",
+            (True, False): "manifest.source_revision_id IS NULL",
+            (False, True): "manifest.proposal_revision_id IS NULL",
+            (True, True): "manifest.source_revision_id IS NULL "
+            "AND manifest.proposal_revision_id IS NULL",
+        }
+        unresolved_owner_predicate = unresolved_owner_predicates[(
+            "source_revision_id" in manifest_columns,
+            "proposal_revision_id" in manifest_columns,
+        )]
+        collisions = await connection.scalar(text(
+            "SELECT COUNT(*) FROM memory_inbox_manifests AS manifest "
+            f"WHERE {unresolved_owner_predicate} "
+            "AND EXISTS (SELECT 1 FROM memory_inbox_source_revisions AS revision "
+            "WHERE revision.id = manifest.owner_revision_id) "
+            "AND EXISTS (SELECT 1 FROM memory_inbox_proposal_revisions AS revision "
+            "WHERE revision.id = manifest.owner_revision_id)"
+        ))
+        if collisions:
+            raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+    for column_name, column_type in MEMORY_INBOX_MANIFEST_POSTGRES_COLUMNS:
+        await connection.execute(
+            text(f"ALTER TABLE memory_inbox_manifests ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+        )
+    await connection.execute(text(
+        "UPDATE memory_inbox_manifests AS manifest SET source_revision_id = manifest.owner_revision_id "
+        "FROM memory_inbox_source_revisions AS revision "
+        "WHERE manifest.source_revision_id IS NULL AND manifest.proposal_revision_id IS NULL "
+        "AND revision.id = manifest.owner_revision_id"
+    ))
+    divergent = await connection.scalar(text(
+        "SELECT COUNT(*) FROM memory_inbox_manifests WHERE "
+        "(source_revision_id IS NOT NULL AND source_revision_id <> owner_revision_id) "
+        "OR (proposal_revision_id IS NOT NULL AND proposal_revision_id <> owner_revision_id)"
+    ))
+    if divergent:
+        raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+    await connection.execute(text(
+        "UPDATE memory_inbox_manifests AS manifest SET proposal_revision_id = manifest.owner_revision_id "
+        "FROM memory_inbox_proposal_revisions AS revision "
+        "WHERE manifest.source_revision_id IS NULL AND manifest.proposal_revision_id IS NULL "
+        "AND revision.id = manifest.owner_revision_id"
+    ))
+    unresolved = await connection.scalar(text(
+        "SELECT COUNT(*) FROM memory_inbox_manifests "
+        "WHERE (source_revision_id IS NULL AND proposal_revision_id IS NULL) "
+        "OR (source_revision_id IS NOT NULL AND proposal_revision_id IS NOT NULL)"
+    ))
+    if unresolved:
+        raise RuntimeError("Memory Inbox manifest ownership migration found unresolved references.")
+    await connection.execute(text(
+        "ALTER TABLE memory_inbox_manifests DROP CONSTRAINT IF EXISTS uq_memory_inbox_manifest_copy"
+    ))
+    await connection.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_inbox_source_manifest_copy "
+        "ON memory_inbox_manifests(source_revision_id, copy_class)"
+    ))
+    await connection.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_inbox_proposal_manifest_copy "
+        "ON memory_inbox_manifests(proposal_revision_id, copy_class)"
+    ))
+    await connection.execute(text(
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'memory_inbox_manifests'::regclass AND conname = 'ck_memory_inbox_manifest_single_owner') THEN
+            ALTER TABLE memory_inbox_manifests ADD CONSTRAINT ck_memory_inbox_manifest_single_owner
+            CHECK ((source_revision_id IS NOT NULL AND proposal_revision_id IS NULL) OR (source_revision_id IS NULL AND proposal_revision_id IS NOT NULL));
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'memory_inbox_manifests'::regclass AND conname = 'fk_memory_inbox_manifest_source_revision') THEN
+            ALTER TABLE memory_inbox_manifests ADD CONSTRAINT fk_memory_inbox_manifest_source_revision
+            FOREIGN KEY (source_revision_id) REFERENCES memory_inbox_source_revisions(id);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'memory_inbox_manifests'::regclass AND conname = 'fk_memory_inbox_manifest_proposal_revision') THEN
+            ALTER TABLE memory_inbox_manifests ADD CONSTRAINT fk_memory_inbox_manifest_proposal_revision
+            FOREIGN KEY (proposal_revision_id) REFERENCES memory_inbox_proposal_revisions(id);
+          END IF;
+        END $$;
+        """
+    ))
+
+
+async def _ensure_postgres_memory_inbox_revision_states(connection) -> None:
+    """Install closed revision-state constraints on existing PostgreSQL tables."""
+
+    await connection.execute(text(
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'memory_inbox_source_revisions'::regclass AND conname = 'ck_memory_inbox_source_revision_state') THEN
+            ALTER TABLE memory_inbox_source_revisions ADD CONSTRAINT ck_memory_inbox_source_revision_state
+            CHECK (lifecycle_state IN ('Scanning','Quarantined','Unprocessed','Draft','AwaitingAuthorization','Processing','Review','Returned','DeniedRetained','DeletePending','Deleted','RejectedUnsafe'));
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'memory_inbox_proposal_revisions'::regclass AND conname = 'ck_memory_inbox_proposal_revision_state') THEN
+            ALTER TABLE memory_inbox_proposal_revisions ADD CONSTRAINT ck_memory_inbox_proposal_revision_state
+            CHECK (lifecycle_state IN ('Absent','Draft','Ready','Returned','Denied','Approved'));
+          END IF;
+        END $$;
+        """
+    ))
+
+
 async def _ensure_postgres_memory_proposals_schema(connection) -> None:
     for column_name, column_type in MEMORY_PROPOSAL_POSTGRES_COLUMNS:
         await connection.execute(text(f"ALTER TABLE memory_proposals ADD COLUMN IF NOT EXISTS {column_name} {column_type}"))
@@ -329,13 +586,12 @@ async def init_db() -> None:
             await _begin_sqlite_schema_migration(connection)
         await connection.run_sync(Base.metadata.create_all)
         if dialect == "sqlite":
-            await _sqlite_add_columns(connection, "memory_inbox_manifests", MEMORY_INBOX_MANIFEST_SQLITE_COLUMNS)
+            await _ensure_sqlite_memory_inbox_manifest_ownership(connection)
+            await _ensure_sqlite_memory_inbox_revision_states(connection)
             await _sqlite_add_columns(connection, "memory_inbox_cost_policy_receipts", MEMORY_INBOX_COST_POLICY_RECEIPT_SQLITE_COLUMNS)
         elif dialect == "postgresql":
-            for column_name, column_type in MEMORY_INBOX_MANIFEST_POSTGRES_COLUMNS:
-                await connection.execute(
-                    text(f"ALTER TABLE memory_inbox_manifests ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
-                )
+            await _ensure_postgres_memory_inbox_manifest_ownership(connection)
+            await _ensure_postgres_memory_inbox_revision_states(connection)
             for column_name, column_type in MEMORY_INBOX_COST_POLICY_RECEIPT_POSTGRES_COLUMNS:
                 await connection.execute(
                     text(f"ALTER TABLE memory_inbox_cost_policy_receipts ADD COLUMN IF NOT EXISTS {column_name} {column_type}")

@@ -56,6 +56,7 @@ async def test_acknowledged_text_capture_records_only_private_reference_and_unpr
     source = next(item for item in session.items if isinstance(item, MemoryInboxSource))
     revision = next(item for item in session.items if isinstance(item, MemoryInboxSourceRevision))
     manifest = next(item for item in session.items if isinstance(item, MemoryInboxManifest))
+    assert manifest.legacy_owner_revision_id == manifest.source_revision_id
     assert source.id == source_id and source.lifecycle_state == "Unprocessed"
     assert revision.lifecycle_state == "Unprocessed"
     assert revision.actor_ref == "operator:verified-operator"

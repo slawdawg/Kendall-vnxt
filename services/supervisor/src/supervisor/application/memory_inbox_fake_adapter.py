@@ -48,7 +48,7 @@ async def materialize_fake_local_proposal(
     ):
         raise ValueError("fake_adapter_attempt_stale")
     manifest = (await session.execute(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id == proposal_revision.id,
+        MemoryInboxManifest.proposal_revision_id == proposal_revision.id,
         MemoryInboxManifest.copy_class == "proposal_body",
         MemoryInboxManifest.creation_state == "Planned",
         MemoryInboxManifest.deletion_state == "None",

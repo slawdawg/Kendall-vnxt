@@ -4,7 +4,7 @@ import os
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -92,7 +92,7 @@ async def test_reader_requires_an_enabled_exact_revision_grant_and_proposal_mani
         proposal = MemoryInboxProposalAggregate(id="proposal:reader", source_id=source.id, current_revision=1, lifecycle_state="Ready")
         revision = MemoryInboxProposalRevision(id="proposal-revision:reader", proposal_id=proposal.id, revision=1, lifecycle_state="Ready", actor_ref="operator:test", audit_ref="audit:test")
         grant = MemoryInboxProposalReaderGrant(id="reader-grant:reader", proposal_revision_id=revision.id, capability_ref="capability:reader", lifecycle_state="Approved", actor_ref="operator:test")
-        manifest = MemoryInboxManifest(id="manifest:proposal-reader", owner_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="manifest:proposal-reader", proposal_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
         session.add_all((source, proposal, revision, grant, manifest))
         await session.commit()
         disabled = Settings(SUPERVISOR_MEMORY_INBOX_CONTENT_STORE_ROOT=str(root), SUPERVISOR_MEMORY_INBOX_RETENTION_HOURS=24)
@@ -123,7 +123,7 @@ async def test_reader_locks_the_live_grant_until_private_content_is_read(tmp_pat
     proposal = MemoryInboxProposalAggregate(id="proposal:reader-lock", source_id=source.id, current_revision=1, lifecycle_state="Ready")
     revision = MemoryInboxProposalRevision(id="proposal-revision:reader-lock", proposal_id=proposal.id, revision=1, lifecycle_state="Ready", actor_ref="operator:test", audit_ref="audit:test")
     grant = MemoryInboxProposalReaderGrant(id="reader-grant:reader-lock", proposal_revision_id=revision.id, capability_ref="capability:reader", lifecycle_state="Approved", actor_ref="operator:test")
-    manifest = MemoryInboxManifest(id="manifest:proposal-reader-lock", owner_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader-lock", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
+    manifest = MemoryInboxManifest(id="manifest:proposal-reader-lock", legacy_owner_revision_id=revision.id, proposal_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader-lock", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
     session = _RecordingReaderSession(
         proposal=proposal, proposal_revision=revision, source=source, grant=grant, manifest=manifest,
     )
@@ -157,7 +157,7 @@ async def test_sqlite_reader_waits_for_deletion_commit_before_rechecking_its_gra
         proposal = MemoryInboxProposalAggregate(id="proposal:reader-revoked", source_id=source.id, current_revision=1, lifecycle_state="Ready")
         revision = MemoryInboxProposalRevision(id="proposal-revision:reader-revoked", proposal_id=proposal.id, revision=1, lifecycle_state="Ready", actor_ref="operator:test", audit_ref="audit:test")
         grant = MemoryInboxProposalReaderGrant(id="reader-grant:reader-revoked", proposal_revision_id=revision.id, capability_ref="capability:reader", lifecycle_state="Approved", actor_ref="operator:test")
-        manifest = MemoryInboxManifest(id="manifest:proposal-reader-revoked", owner_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader-revoked", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
+        manifest = MemoryInboxManifest(id="manifest:proposal-reader-revoked", legacy_owner_revision_id=revision.id, proposal_revision_id=revision.id, copy_class="proposal_body", store_ref="inbox-store:proposal-reader-revoked", creation_state="Created", retention_class="proposal_retention", deletion_state="None")
         session.add_all((source, proposal, revision, grant, manifest))
         await session.commit()
 
@@ -210,8 +210,15 @@ def test_postgres_reader_grant_lock_blocks_deletion_until_reader_finishes_when_a
             SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_ENABLED=True,
             SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_CAPABILITY_REF="capability:reader",
         )
-        engine = create_async_engine(database_url, future=True)
+        schema_name = f"memory_inbox_reader_lock_{uuid4().hex}"
+        schema_engine = create_async_engine(database_url, future=True)
+        engine = create_async_engine(
+            database_url, future=True,
+            connect_args={"server_settings": {"search_path": schema_name}},
+        )
         try:
+            async with schema_engine.begin() as connection:
+                await connection.execute(text(f"CREATE SCHEMA {schema_name}"))
             async with engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
             sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -234,7 +241,7 @@ def test_postgres_reader_grant_lock_blocks_deletion_until_reader_finishes_when_a
                 capability_ref="capability:reader", lifecycle_state="Approved", actor_ref="operator:test",
             )
             manifest = MemoryInboxManifest(
-                id=f"manifest:reader-postgres-lock:{suffix}", owner_revision_id=revision.id,
+                id=f"manifest:reader-postgres-lock:{suffix}", legacy_owner_revision_id=revision.id, proposal_revision_id=revision.id,
                 copy_class="proposal_body", store_ref=store_ref, creation_state="Created",
                 retention_class="proposal_retention", deletion_state="None",
             )
@@ -310,5 +317,8 @@ def test_postgres_reader_grant_lock_blocks_deletion_until_reader_finishes_when_a
                     await read_authorized_proposal(session, settings=settings, proposal_id=proposal_id, revision=1)
         finally:
             await engine.dispose()
+            async with schema_engine.begin() as connection:
+                await connection.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+            await schema_engine.dispose()
 
     asyncio.run(run_probe())

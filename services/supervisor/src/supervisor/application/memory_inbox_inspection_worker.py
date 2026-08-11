@@ -110,7 +110,7 @@ async def claim_inspection_job(session: AsyncSession, *, job_id: str) -> Inspect
         await session.commit()
         raise ValueError("inspection_source_unavailable")
     manifest = (await session.execute(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id == revision.id,
+        MemoryInboxManifest.source_revision_id == revision.id,
         MemoryInboxManifest.copy_class == "quarantine",
         MemoryInboxManifest.creation_state == "Created",
         MemoryInboxManifest.deletion_state == "None",
@@ -158,7 +158,7 @@ async def complete_inspection_job(
         await session.commit()
         raise ValueError(decision.reason_code)
     manifest = (await session.execute(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id == claim.source_revision_id,
+        MemoryInboxManifest.source_revision_id == claim.source_revision_id,
         MemoryInboxManifest.copy_class == "quarantine",
     ).with_for_update())).scalar_one_or_none()
     if manifest is None or manifest.store_ref != claim.store_ref or manifest.declared_media_type != claim.declared_media_type:
