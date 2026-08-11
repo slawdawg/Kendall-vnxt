@@ -13,7 +13,7 @@ function request(port, path, options = {}) {
     const req = http.request({ hostname: "127.0.0.1", port, path, method: options.method || "GET", headers: options.headers }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
-      res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) }));
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) }));
     });
     req.on("error", reject);
     if (options.body) req.write(options.body);
@@ -304,7 +304,7 @@ test("Memory Inbox text capture is an exact operator-only CSRF capability", asyn
   }
 });
 
-test("the disabled Memory Inbox upload path rejects raw bytes before proxy buffering or supervisor forwarding", async () => {
+test("the disabled Memory Inbox upload path rejects queried and bodied attempts before proxy buffering or supervisor forwarding", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kendall-memory-inbox-upload-gate-"));
   const socketPath = join(directory, "supervisor.sock");
   const forwarded = [];
@@ -326,6 +326,13 @@ test("the disabled Memory Inbox upload path rejects raw bytes before proxy buffe
       headers: { cookie: "operator=ok", origin: "https://dashboard.test", "content-type": "application/octet-stream" },
     });
     assert.equal(response.status, 404);
+    assert.equal(response.headers.connection, "close");
+    const queriedResponse = await request(port, "/api/supervisor/memory-inbox/upload?enabled=false", {
+      method: "POST", body: rawDocument,
+      headers: { cookie: "operator=ok", origin: "https://dashboard.test", "content-type": "application/octet-stream" },
+    });
+    assert.equal(queriedResponse.status, 404);
+    assert.equal(queriedResponse.headers.connection, "close");
     assert.deepEqual(forwarded, []);
   } finally {
     if (dashboard?.listening) await close(dashboard);

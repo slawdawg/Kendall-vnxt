@@ -1,6 +1,7 @@
 import http from "node:http";
 
 const PREFIX = "/api/supervisor/";
+const DISABLED_MEMORY_INBOX_UPLOAD_PATH = `${PREFIX}memory-inbox/upload`;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
@@ -72,6 +73,16 @@ function sendJson(response, statusCode, payload) {
   response.end(body);
 }
 
+function rejectDisabledUpload(request, response) {
+  // This route is intentionally not a dashboard capability. Close after the
+  // denial so bytes supplied on a query-bearing or bodied attempt cannot be
+  // treated as a later request on a reusable connection.
+  request.resume();
+  response.shouldKeepAlive = false;
+  response.setHeader("connection", "close");
+  sendJson(response, 404, { state: "unavailable" });
+}
+
 function readBody(request) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -114,6 +125,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
   return async function proxy(request, response) {
     let url;
     try { url = new URL(request.url || "/", "https://dashboard.invalid"); } catch { return false; }
+    if (url.pathname === DISABLED_MEMORY_INBOX_UPLOAD_PATH) {
+      rejectDisabledUpload(request, response);
+      return true;
+    }
     if (!url.pathname.startsWith(PREFIX) || !allowedReadQuery(url, request.method)) return false;
     let targetPath;
     try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
