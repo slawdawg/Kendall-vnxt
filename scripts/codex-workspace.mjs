@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -95,6 +97,17 @@ const resumableCheckTrailingWorkspaceDuplicates = new Set([
 const externalCheckStageEvidenceStage = "test:codex-workspace";
 const externalCheckStageEvidenceCommand = Object.freeze(["pnpm", "run", externalCheckStageEvidenceStage]);
 const taskLockSchemaVersion = 1;
+const taskLeaseSchemaVersion = 1;
+const legacyRecoveryAdoptionTaskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
+const taskLeaseMaximumHistoryRecords = 4_096;
+const taskLeaseMaximumHeartbeatHistoryRecords = 1_024;
+// Every lease inspection walks immutable predecessor records from root through
+// the current generation.  Acquiring a successor at this bound would make the
+// successor impossible to inspect and therefore impossible to release.  Keep
+// the bound explicit and reserve the final inspectable slot before a callback
+// or durable manifest write can run.
+const taskLeaseMaximumGenerationChainLength = 64;
+let activeTaskLeaseWriteContext = null;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
@@ -158,6 +171,9 @@ try {
     case "inspect-task-lock":
       inspectTaskLockCommand(commandArgs);
       break;
+    case "adopt-legacy-recovery":
+      adoptLegacyRecovery(commandArgs);
+      break;
     case "finish-epic":
       finishEpic(commandArgs);
       break;
@@ -219,6 +235,7 @@ Commands:
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
+  adopt-legacy-recovery  Preview or apply the one governed v1-to-v2 recovery adoption.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
   reconcile-merged-pr <query> Record verified merged-PR metadata before cleanup.
@@ -347,6 +364,12 @@ record-check-stage-evidence options:
 inspect-task-lock options:
   <task-id>                 Exact managed task id to inspect.
   --summary-json            Print a redacted, read-only lock inspection packet.
+
+adopt-legacy-recovery options:
+  --dry-run                 Print exact dead-owner and inode/hash evidence without mutation.
+  --apply                   Publish only the bounded adoption evidence for the named recovery task.
+  --approval <text>         Required with --apply; recorded as bounded operator evidence.
+  --summary-json            Print a compact adoption packet.
 
 finish-epic options:
   --summary-json            Print a bounded closeout plan without mutation.
@@ -2119,7 +2142,21 @@ function takeover(argv) {
   const currentOwner = currentLaneOwner(options);
   const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
   const generatedAt = new Date();
-  const target = resolveTakeoverTarget(state, query);
+  let target = resolveTakeoverTarget(state, query);
+  // An interrupted dirty takeover cannot pass the ordinary no-retained-lock
+  // preflight until its digest-bound staging record has been restored.  Apply
+  // only: dry runs remain strictly read-only.
+  const interruptedRecovery = options.apply && options.allowDirtyInLane === true && target.kind === "workspace"
+    ? recoverInterruptedDirtyTakeover(state, target)
+    : null;
+  // Final-owner crash recovery can restore a different on-disk owner than the
+  // target snapshot resolved before the recovery.  Never build authorization
+  // evidence from that stale in-memory record.
+  if (interruptedRecovery?.recovered && target.kind === "workspace") {
+    const manifest = readManifest(target.path);
+    validateManifest(manifest, target.path);
+    target = { ...target, record: manifest };
+  }
   const preflightLockInspection = target.kind === "workspace" ? inspectTaskLock(state, target.record.task_id) : null;
   const packet = takeoverPacket(target, {
     state,
@@ -2131,6 +2168,7 @@ function takeover(argv) {
     allowDirtyInLane: options.allowDirtyInLane === true,
     dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
     preflightLockInspection,
+    recoveredDirtyTakeoverLease: interruptedRecovery,
   });
 
   if (options.dryRun) {
@@ -2144,7 +2182,7 @@ function takeover(argv) {
 
   if (!packet.allowed) {
     printTakeoverPacket("BLOCKED", packet);
-    throw new Error(`Takeover blocked for ${packet.target_id}.`);
+    throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
   }
 
   const applied = applyTakeover(state, target, {
@@ -2152,6 +2190,7 @@ function takeover(argv) {
     options,
     staleAfterSeconds,
     preflightLockInspection,
+    interruptedRecovery,
   });
   printTakeoverPacket("APPLY", applied.packet);
   console.log(`Wrote: ${applied.path}`);
@@ -2585,6 +2624,36 @@ function inspectTaskLockCommand(argv) {
     `heartbeat_at=${packet.heartbeatAt || "unknown"}`,
     "mutation=none; read-only lock inspection",
   ]);
+}
+
+function adoptLegacyRecovery(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length > 0) throw new Error("adopt-legacy-recovery does not accept a task selector.");
+  if (Boolean(options.dryRun) === Boolean(options.apply)) {
+    throw new Error("adopt-legacy-recovery requires exactly one of --dry-run or --apply.");
+  }
+  if (options.apply && !validTakeoverReason(options.approval)) {
+    throw new Error("adopt-legacy-recovery --apply requires an explicit approval of at least 10 non-whitespace characters.");
+  }
+  const state = workspaceState(options);
+  const manifestPath = join(state.tasksDir, `${legacyRecoveryAdoptionTaskId}.json`);
+  const manifest = readManifest(manifestPath);
+  validateManifest(manifest, manifestPath);
+  if (manifest.task_id !== legacyRecoveryAdoptionTaskId) throw new Error("legacy recovery adoption target does not exactly match its governed manifest.");
+  if (manifest.owner !== currentLaneOwner(options)) throw new Error("legacy recovery adoption requires the current governed manifest owner.");
+
+  const packet = legacyRecoveryAdoptionPacket(state, legacyRecoveryAdoptionTaskId);
+  if (options.dryRun) {
+    const output = { ...packet, mutation: "none; dry-run only" };
+    if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+    else printPlan("adopt-legacy-recovery", [JSON.stringify(output)]);
+    return;
+  }
+  if (!packet.allowed) throw new Error(`legacy recovery adoption blocked: ${packet.blockers.join("; ")}`);
+  const applied = applyLegacyRecoveryAdoption(state, packet, String(options.approval).trim());
+  const output = { ...applied, mutation: "immutable adoption evidence published; legacy pathname retained" };
+  if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+  else printPlan("adopt-legacy-recovery", [JSON.stringify(output)]);
 }
 
 function recordCheckStageEvidence(argv) {
@@ -7844,9 +7913,82 @@ function findManifestByExactTaskId(state, taskId) {
   throw new Error(`Strict exact-tree closeout found multiple manifests with task_id ${taskId}.`);
 }
 
-function writeManifest(path, manifest) {
+function writeManifest(path, manifest, options = {}) {
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  const context = activeTaskLeaseWriteContext;
+  let intent = null;
+  if (context && manifest?.task_id === context.taskId) {
+    assertActiveTaskLeaseWriteOwnership(context);
+    // Reserve both immutable sides before the manifest rename.  A completion
+    // record is required to make this write releasable after the callback.
+    assertTaskLeaseIntentPairCapacity(context, "manifest");
+    intent = {
+      schema_version: taskLeaseSchemaVersion,
+      task_id: context.taskId,
+      generation: context.generation,
+      token_digest: taskLeaseTokenDigest(context.token),
+      intent_id: randomUUID(),
+      manifest_path_digest: createHash("sha256").update(resolve(path)).digest("hex"),
+      manifest_digest: createHash("sha256").update(serialized).digest("hex"),
+      started_at: new Date().toISOString(),
+    };
+    writeNewJson(taskLeasePath(context.state, context.taskId, "manifest-intents", intent.intent_id), intent);
+  }
+  atomicDurableWrite(path, serialized);
+  if (options.testHardCrashAfterRename && process.env[options.testHardCrashAfterRename] === "1") {
+    // Test-only process termination models the window where no JavaScript
+    // catch/finally handler can roll back the durable staging rename.
+    process.exit(86);
+  }
+  if (options.testCrashAfterRename && process.env[options.testCrashAfterRename] === "1") {
+    const error = new Error(`injected crash after durable manifest rename before ${options.testCrashAfterRename}`);
+    error.taskLeaseManifestIntent = intent;
+    throw error;
+  }
+  if (process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_MANIFEST_RENAME === "1") {
+    const error = new Error("injected crash after durable manifest rename before commit evidence");
+    error.taskLeaseManifestIntent = intent;
+    throw error;
+  }
+  if (intent) {
+    completeTaskLeaseManifestIntent(context, intent);
+  }
+}
+
+function completeTaskLeaseManifestIntent(context, intent) {
+  assertActiveTaskLeaseWriteOwnership(context);
+  writeNewJson(taskLeasePath(context.state, context.taskId, "manifest-commits", intent.intent_id), {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: context.taskId,
+    generation: context.generation,
+    token_digest: taskLeaseTokenDigest(context.token),
+    intent_id: intent.intent_id,
+    committed_at: new Date().toISOString(),
+  });
+}
+
+function atomicDurableWrite(path, content) {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let fd;
+  try {
+    fd = openSync(tempPath, "wx", 0o600);
+    writeFileSync(fd, content);
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  if (process.env.CODEX_WORKSPACE_TEST_CRASH_BEFORE_MANIFEST_RENAME === "1") {
+    throw new Error("injected crash before durable manifest rename");
+  }
+  renameSync(tempPath, path);
+  let directoryFd;
+  try {
+    directoryFd = openSync(dirname(path), "r");
+    fsyncSync(directoryFd);
+  } finally {
+    if (directoryFd !== undefined) closeSync(directoryFd);
+  }
 }
 
 function writeAssignment(path, assignment) {
@@ -11032,10 +11174,12 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
     result.errors.push("live GitHub no-PR proof requires an existing branch worktree");
   }
   const malformedLockRecovery = malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, lock, result.live_no_pr_evidence);
+  const interruptedTakeoverRecovery = interruptedDirtyTakeoverLeaseEvidence(context, lock);
   if (lock?.status !== "absent") {
     result.malformed_lock_recovery = malformedLockRecovery;
+    result.interrupted_takeover_recovery = interruptedTakeoverRecovery;
   }
-  if (!lock || (lock.status !== "absent" && malformedLockRecovery.status !== "eligible")) {
+  if (!lock || (lock.status !== "absent" && malformedLockRecovery.status !== "eligible" && interruptedTakeoverRecovery.status !== "eligible")) {
     result.errors.push(malformedLockRecovery.reason || "dirty in-lane takeover requires proof that no task lock is active or retained");
   }
   if (target.kind === "workspace" && evidence.worktree.exists) {
@@ -11046,6 +11190,32 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
     }
   }
   return result;
+}
+
+function interruptedDirtyTakeoverLeaseEvidence(context, lock) {
+  const recovered = context.recoveredDirtyTakeoverLease;
+  if (lock?.protocol === "versioned_lease" && lock.status === "released" && lock.generation) {
+    return {
+      status: "eligible",
+      reason: "released versioned lease is an immutable safe predecessor for a dirty takeover handoff",
+      generation: lock.generation,
+      transaction_id: null,
+    };
+  }
+  if (
+    recovered?.recovered === true &&
+    lock?.protocol === "versioned_lease" &&
+    lock.status === "stale" &&
+    lock.generation === recovered.generation
+  ) {
+    return {
+      status: "eligible",
+      reason: "stale versioned lease was recovered from a digest-bound pending dirty takeover before handoff",
+      generation: recovered.generation,
+      transaction_id: recovered.transactionId,
+    };
+  }
+  return { status: "not_needed", reason: null };
 }
 
 function malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, lock, liveNoPr) {
@@ -11061,37 +11231,11 @@ function malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, l
     reason: null,
   };
   if (!context.allowDirtyInLane || !lock || lock.status === "absent") return result;
-  if (lock.status !== "malformed_zero_byte") {
-    result.status = "blocked";
-    result.reason = "dirty in-lane takeover requires proof that no task lock is active or retained";
-    return result;
-  }
-  const expectedLockPath = target.kind === "workspace" && context.state
-    ? taskLockPath(context.state, String(target.record.task_id || ""))
-    : null;
-  if (!expectedLockPath || resolve(lock.lockPath) !== resolve(expectedLockPath) || dirname(resolve(lock.lockPath)) !== resolve(context.state.tasksDir)) {
-    result.status = "blocked";
-    result.reason = "zero-byte lock recovery requires the exact contained task lock path";
-    return result;
-  }
-  if (!evidence.stale.is_stale || !target.record.owner || target.record.owner === context.currentOwner) {
-    result.status = "blocked";
-    result.reason = "zero-byte lock recovery requires a stale foreign manifest owner";
-    return result;
-  }
-  if (
-    evidence.worktree.registration?.status !== "matched" ||
-    evidence.branch.status !== "matched" ||
-    evidence.pr.status !== "none" ||
-    liveNoPr?.status !== "matched" ||
-    !validTakeoverReason(context.approval)
-  ) {
-    result.status = "blocked";
-    result.reason = "zero-byte lock recovery requires matching worktree/branch, no PR, and explicit approval";
-    return result;
-  }
-  result.status = "eligible";
-  result.reason = "exact contained zero-byte lock has no recorded live owner or descendant identity";
+  void target;
+  void evidence;
+  void liveNoPr;
+  result.status = "blocked";
+  result.reason = "legacy task locks are inspection-only; dirty in-lane takeover requires a task with no retained legacy lock";
   return result;
 }
 
@@ -11155,7 +11299,7 @@ function takeoverBlockers(target, context, evidence) {
   return blockers;
 }
 
-function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds, preflightLockInspection = null }) {
+function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds, preflightLockInspection = null, interruptedRecovery = null }) {
   if (target.kind === "assignment") {
     const assignmentId = String(target.record.assignment_id || "");
     return withAssignmentLock(state, assignmentId, () => {
@@ -11189,13 +11333,9 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
   }
 
   const taskId = String(target.record.task_id || "");
-  const recovery = preflightLockInspection?.status === "malformed_zero_byte"
-    ? recoverApprovedZeroByteDirtyTaskLock(state, target, {
-        currentOwner,
-        options,
-        staleAfterSeconds,
-      })
-    : null;
+  const recoveredDirtyTakeoverLease = interruptedRecovery || (options.allowDirtyInLane === true
+    ? recoverInterruptedDirtyTakeover(state, target)
+    : null);
   const postRecoveryLockInspection = inspectTaskLock(state, taskId);
   return withManifestLock(state, taskId, () => {
     const path = target.path;
@@ -11213,59 +11353,151 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
         generatedAt: new Date(),
         staleAfterSeconds,
         reason: String(options.takeoverReason || "").trim(),
-        approval: String(options.approval || "").trim(),
-        allowDirtyInLane: options.allowDirtyInLane === true,
-        dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
-        preflightLockInspection: postRecoveryLockInspection,
-      },
-    );
+          approval: String(options.approval || "").trim(),
+          allowDirtyInLane: options.allowDirtyInLane === true,
+          dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
+          preflightLockInspection: postRecoveryLockInspection,
+          recoveredDirtyTakeoverLease,
+        },
+      );
     if (!packet.allowed) {
       throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
     }
-    if (recovery) {
-      packet.dirty_in_lane_evidence.malformed_lock_recovery = recovery;
-    }
     finalizeDirtyInLaneTakeover(packet);
-    const manifestBeforeTakeover = JSON.stringify(manifest);
-    applyManifestTakeover(manifest, packet);
-    writeManifest(path, manifest);
+    // The first durable write is a transaction staging record: it retains the
+    // prior visible owner until the final in-lane snapshot passes.  A crash at
+    // this point therefore cannot publish a new owner with an unresolved
+    // takeover intent.  The record contains enough digests for a later stale
+    // generation recovery to prove and remove the stage before retrying.
+    const manifestBeforeTakeover = JSON.parse(JSON.stringify(manifest));
+    const pendingTakeover = pendingDirtyTakeover(manifestBeforeTakeover, packet);
     try {
+      manifest.pending_dirty_takeover = pendingTakeover;
+      writeManifest(path, manifest, {
+        testCrashAfterRename: "CODEX_WORKSPACE_TEST_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME",
+        testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME",
+      });
       finalizeDirtyInLaneTakeover(packet);
+      // Keep the immutable, digest-bound transaction state on the owner write.
+      // A hard crash after this rename can therefore prove exactly which prior
+      // manifest to restore; clearing this state before final revalidation
+      // would strand a newly published owner with no recoverable rollback.
+      applyManifestTakeover(manifest, packet, { dirtyTakeoverTransactionId: pendingTakeover.transaction_id });
+      writeManifest(path, manifest, {
+        testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_FINAL_OWNER_RENAME",
+      });
+      // The owner change is now durable, so re-read the exact dirty-path
+      // fingerprints once more before treating the transaction as complete.
+      // If the worktree drifted during that final manifest write, the catch
+      // block restores the prior owner and records the compensating manifest
+      // write under this same lease generation.
+      finalizeDirtyInLaneTakeover(packet);
+      delete manifest.pending_dirty_takeover;
       writeManifest(path, manifest);
     } catch (error) {
-      writeFileSync(path, `${manifestBeforeTakeover}\n`);
+      for (const key of Object.keys(manifest)) delete manifest[key];
+      Object.assign(manifest, manifestBeforeTakeover);
+      writeManifest(path, manifest);
+      // An injected post-rename interruption has already published and fsynced
+      // the staged bytes.  Once the prior manifest is durably restored, record
+      // that exact staged write as observed so it cannot strand this generation.
+      if (error?.taskLeaseManifestIntent) {
+        completeTaskLeaseManifestIntent(activeTaskLeaseWriteContext, error.taskLeaseManifestIntent);
+      }
       throw error;
     }
     return { path, packet };
-  }, { recoverStale: options.allowDirtyInLane !== true });
+  }, { recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true });
 }
 
-function recoverApprovedZeroByteDirtyTaskLock(state, target, { currentOwner, options, staleAfterSeconds }) {
-  if (target.kind !== "workspace" || options.allowDirtyInLane !== true) return null;
-  const taskId = String(target.record.task_id || "");
-  const path = target.path;
-  const manifest = readManifest(path);
-  validateManifest(manifest, path);
-  const packet = takeoverPacket(
-    { kind: "workspace", path, record: manifest },
-    {
-      state,
-      currentOwner,
-      generatedAt: new Date(),
-      staleAfterSeconds,
-      reason: String(options.takeoverReason || "").trim(),
-      approval: String(options.approval || "").trim(),
-      allowDirtyInLane: true,
-      dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
-      preflightLockInspection: inspectTaskLock(state, taskId),
-    },
+function canonicalManifestBytes(manifest) {
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+function pendingDirtyTakeover(manifest, packet) {
+  const priorBytes = canonicalManifestBytes(manifest);
+  return {
+    schema_version: taskLeaseSchemaVersion,
+    transaction_id: randomUUID(),
+    previous_owner: manifest.owner,
+    requesting_owner: packet.requesting_owner,
+    prior_manifest_digest: createHash("sha256").update(priorBytes).digest("hex"),
+    // This exact JSON value is deliberately retained through the final owner
+    // write.  Its digest binds a later crash recovery to the old owner state
+    // without relying on a mutable filename or a best-effort inverse patch.
+    prior_manifest: manifest,
+    staged_at: new Date().toISOString(),
+  };
+}
+
+function validPendingDirtyTakeover(record) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      isUuid(record.transaction_id) &&
+      typeof record.previous_owner === "string" && record.previous_owner.trim() &&
+      typeof record.requesting_owner === "string" && record.requesting_owner.trim() &&
+      typeof record.prior_manifest_digest === "string" && /^[a-f0-9]{64}$/i.test(record.prior_manifest_digest) &&
+      record.prior_manifest && typeof record.prior_manifest === "object" && !Array.isArray(record.prior_manifest) &&
+      isIsoTimestamp(record.staged_at),
   );
-  const eligibility = packet.dirty_in_lane_evidence?.malformed_lock_recovery;
-  if (eligibility?.status !== "eligible") return null;
-  if (!packet.allowed) {
-    throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
+}
+
+function recoverInterruptedDirtyTakeover(state, target) {
+  if (target.kind !== "workspace") return null;
+  const taskId = String(target.record.task_id || "");
+  const inspection = inspectTaskLease(state, taskId);
+  if (inspection.status !== "ambiguous" || inspection.reason !== "manifest_write_intent_unresolved") return null;
+  if (!inspection.metadata || !inspection.generation) {
+    throw new Error("Interrupted dirty takeover recovery lacks an inspectable stale generation.");
   }
-  return archiveApprovedZeroByteTaskLock(state, taskId, eligibility);
+  const tokenDigest = taskLeaseTokenDigest(inspection.metadata.token);
+  const intent = unresolvedTaskLeaseManifestIntent(state, taskId, inspection.metadata, tokenDigest);
+  const manifest = readManifest(target.path);
+  validateManifest(manifest, target.path);
+  const pending = manifest.pending_dirty_takeover;
+  if (
+    !intent ||
+    !validPendingDirtyTakeover(pending) ||
+    (manifest.owner !== pending.previous_owner && manifest.owner !== pending.requesting_owner)
+  ) {
+    throw new Error("Interrupted dirty takeover is ambiguous; preserving the stale lease and manifest without mutation.");
+  }
+  const stagedBytes = canonicalManifestBytes(manifest);
+  const stagedDigest = createHash("sha256").update(stagedBytes).digest("hex");
+  if (intent.manifest_digest !== stagedDigest) {
+    throw new Error("Interrupted dirty takeover staged manifest does not match its immutable write intent.");
+  }
+  const restored = JSON.parse(JSON.stringify(pending.prior_manifest));
+  const restoredBytes = canonicalManifestBytes(restored);
+  if (createHash("sha256").update(restoredBytes).digest("hex") !== pending.prior_manifest_digest) {
+    throw new Error("Interrupted dirty takeover rollback manifest does not match its recorded prior digest.");
+  }
+  if (restored.task_id !== taskId || restored.owner !== pending.previous_owner) {
+    throw new Error("Interrupted dirty takeover prior manifest is not bound to its recorded task and owner.");
+  }
+  if (manifest.owner === pending.requesting_owner) {
+    const decision = Array.isArray(manifest.takeover_decisions)
+      ? manifest.takeover_decisions.find((entry) => entry?.dirty_takeover_transaction_id === pending.transaction_id)
+      : null;
+    if (!decision || decision.requesting_owner !== pending.requesting_owner || decision.previous_owner !== pending.previous_owner) {
+      throw new Error("Interrupted final-owner dirty takeover lacks its exact transaction-bound decision.");
+    }
+    // Do not roll back a post-owner-write crash if the preserved dirty input
+    // changed.  The recovery must stay fail-closed rather than erasing either
+    // owner evidence or a concurrent lane edit.
+    finalizeDirtyInLaneTakeover(decision);
+  }
+  atomicDurableWrite(target.path, restoredBytes);
+  writeNewJson(taskLeasePath(state, taskId, "manifest-commits", intent.intent_id), {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: taskId,
+    generation: inspection.generation,
+    token_digest: tokenDigest,
+    intent_id: intent.intent_id,
+    committed_at: new Date().toISOString(),
+  });
+  return { recovered: true, generation: inspection.generation, transactionId: pending.transaction_id };
 }
 
 function applyAssignmentTakeover(assignment, packet) {
@@ -11293,7 +11525,7 @@ function applyAssignmentTakeover(assignment, packet) {
   ];
 }
 
-function applyManifestTakeover(manifest, packet) {
+function applyManifestTakeover(manifest, packet, { dirtyTakeoverTransactionId = null } = {}) {
   const now = new Date().toISOString();
   manifest.owner = packet.requesting_owner;
   manifest.owner_thread_id = process.env.CODEX_THREAD_ID || null;
@@ -11309,7 +11541,13 @@ function applyManifestTakeover(manifest, packet) {
     recordedAt: now,
     nextSafeAction: "Continue with the newly owned lane under normal gates.",
   });
-  manifest.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now, authority_decision: appliedAuthorityDecision });
+  manifest.takeover_decisions.push({
+    ...packet,
+    decision: "applied",
+    applied_at: now,
+    authority_decision: appliedAuthorityDecision,
+    ...(dirtyTakeoverTransactionId ? { dirty_takeover_transaction_id: dirtyTakeoverTransactionId } : {}),
+  });
   appendAuthorityDecision(manifest, appliedAuthorityDecision);
   if (!Array.isArray(manifest.ownership_takeovers)) {
     manifest.ownership_takeovers = [];
@@ -11808,6 +12046,686 @@ function taskLockPath(state, taskId) {
   return join(state.tasksDir, `${taskId}.lock`);
 }
 
+/*
+ * Task leases deliberately do not replace or remove a pathname owned by a
+ * previous runner.  Every generation, heartbeat, release, and handoff is an
+ * append-only record.  The only contended write is a handoff record named for
+ * the immutable predecessor generation, published with link(2) no-replace
+ * compare-and-set.  A second contender cannot replace either the predecessor
+ * or the first successor after inspecting them.
+ *
+ * The old <task>.lock shape remains inspection-only.  It has no generation in
+ * its name, so a check-then-rename recovery cannot be made safe against a
+ * replacement between those operations.
+ */
+function taskLeaseRoot(state, taskId) {
+  assertSafeTaskId(taskId);
+  return join(state.tasksDir, ".leases", taskId);
+}
+
+function taskLeasePath(state, taskId, kind, name = null) {
+  const root = taskLeaseRoot(state, taskId);
+  const directory = join(root, kind);
+  return name ? join(directory, `${name}.json`) : directory;
+}
+
+function taskLeaseRootRecordPath(state, taskId) {
+  return join(taskLeaseRoot(state, taskId), "root.json");
+}
+
+function taskLeaseTokenDigest(token) {
+  return createHash("sha256").update(String(token)).digest("hex");
+}
+
+function isUuid(value) {
+  return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value);
+}
+
+function writeNewJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  let fd;
+  try {
+    fd = openSync(path, "wx", 0o600);
+    writeFileSync(fd, `${JSON.stringify(value)}\n`);
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  fsyncDirectory(dirname(path));
+}
+
+function fsyncDirectory(path) {
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function ensureDurableDirectory(path, durableAncestor) {
+  const ancestor = resolve(durableAncestor);
+  const target = resolve(path);
+  const suffix = relative(ancestor, target);
+  if (!suffix || suffix === ".." || suffix.startsWith(`..${sep}`) || resolve(join(ancestor, suffix)) !== target) {
+    throw new Error(`Task lease directory escapes its durable tasks boundary: ${path}`);
+  }
+  // Do not use recursive mkdir here: it follows a symlink in an intermediate
+  // path before lstat can inspect the final directory.  Every component below
+  // tasksDir is created and verified one at a time, so .leases (or any child)
+  // cannot redirect immutable lease records outside the managed state root.
+  const parts = suffix.split(sep).filter(Boolean);
+  let current = ancestor;
+  for (const part of parts) {
+    const next = join(current, part);
+    if (!existsSync(next)) mkdirSync(next, { mode: 0o700 });
+    const stats = lstatSync(next);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`Task lease directory is not a regular directory: ${next}`);
+    }
+    current = next;
+  }
+  for (;;) {
+    const stats = lstatSync(current);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`Task lease directory is not a regular directory: ${current}`);
+    }
+    fsyncDirectory(current);
+    if (current === ancestor) break;
+    const parent = dirname(current);
+    if (parent === current) throw new Error(`Task lease directory durability boundary is unavailable: ${path}`);
+    current = parent;
+  }
+}
+
+function readRegularJson(path, maximumSize = 16_384) {
+  const stats = lstatSync(path);
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0 || stats.size > maximumSize) {
+    throw new Error("record_not_regular_bounded_json");
+  }
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function validTaskLeaseRecord(record, taskId) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      isUuid(record.generation) &&
+      typeof record.owner === "string" && record.owner.trim() &&
+      Number.isInteger(record.pid) && record.pid > 0 &&
+      typeof record.process_start_identity === "string" && record.process_start_identity &&
+      isIsoTimestamp(record.acquired_at) &&
+      isUuid(record.token),
+  );
+}
+
+function validTaskLeaseRootRecord(record, taskId) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      isUuid(record.initial_generation) &&
+      isIsoTimestamp(record.created_at),
+  );
+}
+
+function validTaskLeaseHeartbeat(record, taskId, generation, tokenDigest) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      isIsoTimestamp(record.heartbeat_at),
+  );
+}
+
+function validTaskLeaseRelease(record, taskId, generation, tokenDigest) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      isIsoTimestamp(record.released_at),
+  );
+}
+
+function validTaskLeaseHandoff(record, taskId, generation, tokenDigest) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.from_generation === generation &&
+      isUuid(record.to_generation) &&
+      record.to_generation !== generation &&
+      record.from_token_digest === tokenDigest &&
+      (record.reason === "released" || record.reason === "stale_owner_process_absent") &&
+      isIsoTimestamp(record.handed_off_at),
+  );
+}
+
+function validTaskLeaseExternalIntent(record, taskId, generation, tokenDigest) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      isUuid(record.intent_id) &&
+      Number.isInteger(record.runner_pid) && record.runner_pid > 0 &&
+      typeof record.runner_process_start_identity === "string" && record.runner_process_start_identity &&
+      typeof record.command_digest === "string" && /^[a-f0-9]{64}$/i.test(record.command_digest) &&
+      isIsoTimestamp(record.started_at),
+  );
+}
+
+function validTaskLeaseExternalCompletion(record, taskId, generation, tokenDigest, intentId) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      record.intent_id === intentId &&
+      isIsoTimestamp(record.completed_at) &&
+      Number.isInteger(record.status),
+  );
+}
+
+function validTaskLeaseManifestIntent(record, taskId, generation, tokenDigest) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      isUuid(record.intent_id) &&
+      typeof record.manifest_path_digest === "string" && /^[a-f0-9]{64}$/i.test(record.manifest_path_digest) &&
+      typeof record.manifest_digest === "string" && /^[a-f0-9]{64}$/i.test(record.manifest_digest) &&
+      isIsoTimestamp(record.started_at),
+  );
+}
+
+function validTaskLeaseManifestCommit(record, taskId, generation, tokenDigest, intentId) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      record.intent_id === intentId &&
+      isIsoTimestamp(record.committed_at),
+  );
+}
+
+function ensureTaskLeaseDirectories(state, taskId) {
+  const root = taskLeaseRoot(state, taskId);
+  const directories = [
+    root,
+    taskLeasePath(state, taskId, "generations"),
+    taskLeasePath(state, taskId, "heartbeats"),
+    taskLeasePath(state, taskId, "releases"),
+    taskLeasePath(state, taskId, "handoffs"),
+    taskLeasePath(state, taskId, "handoff-candidates"),
+    taskLeasePath(state, taskId, "root-candidates"),
+    taskLeasePath(state, taskId, "external-intents"),
+    taskLeasePath(state, taskId, "external-completions"),
+    taskLeasePath(state, taskId, "manifest-intents"),
+    taskLeasePath(state, taskId, "manifest-commits"),
+    taskLeasePath(state, taskId, "legacy-adoptions"),
+    taskLeasePath(state, taskId, "legacy-adoption-candidates"),
+  ];
+  for (const directory of directories) {
+    ensureDurableDirectory(directory, state.tasksDir);
+  }
+  return root;
+}
+
+function publishImmutableLeaseRecord(candidatePath, fixedPath, value) {
+  writeNewJson(candidatePath, value);
+  // link(2) is an atomic no-replace compare-and-swap when fixedPath is absent.
+  // The fixed record and its candidate are the same inode, so inspection never
+  // follows a mutable current pointer or a renamed predecessor pathname.
+  linkSync(candidatePath, fixedPath);
+  // The candidate was synced before link(2).  The fixed pathname is only a
+  // durable publication after its containing directory has been synced too.
+  fsyncDirectory(dirname(fixedPath));
+  return { candidatePath, fixedPath };
+}
+
+function publishTaskLeaseRoot(state, taskId, record) {
+  return publishImmutableLeaseRecord(
+    taskLeasePath(state, taskId, "root-candidates", `${record.initial_generation}-${randomUUID()}`),
+    taskLeaseRootRecordPath(state, taskId),
+    record,
+  );
+}
+
+function publishTaskLeaseHandoff(state, taskId, record) {
+  return publishImmutableLeaseRecord(
+    taskLeasePath(state, taskId, "handoff-candidates", `${record.from_generation}-${record.to_generation}`),
+    taskLeasePath(state, taskId, "handoffs", record.from_generation),
+    record,
+  );
+}
+
+function leaseRecord(state, taskId, generation) {
+  return readRegularJson(taskLeasePath(state, taskId, "generations", generation));
+}
+
+function latestLeaseHeartbeat(state, taskId, generation, tokenDigest) {
+  const heartbeatDir = join(taskLeasePath(state, taskId, "heartbeats"), generation);
+  if (!existsSync(heartbeatDir)) return null;
+  const stats = lstatSync(heartbeatDir);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("heartbeat_directory_invalid");
+  const names = readdirSync(heartbeatDir).filter((name) => name.endsWith(".json")).sort();
+  if (names.length === 0 || names.length > taskLeaseMaximumHeartbeatHistoryRecords) throw new Error("heartbeat_history_invalid");
+  let latest = null;
+  for (const name of names) {
+    const record = readRegularJson(join(heartbeatDir, name));
+    if (!validTaskLeaseHeartbeat(record, taskId, generation, tokenDigest)) throw new Error("heartbeat_record_invalid");
+    if (!latest || record.heartbeat_at > latest.heartbeat_at) latest = record;
+  }
+  return latest;
+}
+
+function appendTaskLeaseHeartbeat(state, taskId, record) {
+  const directory = join(taskLeasePath(state, taskId, "heartbeats"), record.generation);
+  // A generation directory can be newly created by this first heartbeat.  Its
+  // name must be durable before the heartbeat record makes the generation
+  // inspectable; otherwise a power loss can retain the record while dropping
+  // an ancestor entry.  This also validates every lease ancestor to tasksDir.
+  ensureDurableDirectory(directory, state.tasksDir);
+  // Heartbeats are immutable inspection evidence.  Refuse the next append
+  // before publication so the final release inspection remains bounded.
+  const heartbeatCount = readdirSync(directory).filter((name) => name.endsWith(".json")).length;
+  if (heartbeatCount >= taskLeaseMaximumHeartbeatHistoryRecords) {
+    throw new Error(
+      `Task lease heartbeat history capacity is exhausted: task_id=${taskId}; generation=${record.generation}; ` +
+      `maximum_heartbeat_records=${taskLeaseMaximumHeartbeatHistoryRecords}; mutation=none.`,
+    );
+  }
+  if (process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_HEARTBEAT_DIRECTORY_DURABLE === "1") {
+    throw new Error("injected crash after durable heartbeat directory creation before heartbeat publication");
+  }
+  const heartbeat = {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: taskId,
+    generation: record.generation,
+    token_digest: taskLeaseTokenDigest(record.token),
+    heartbeat_at: new Date().toISOString(),
+  };
+  writeNewJson(join(directory, `${heartbeat.heartbeat_at.replace(/[:.]/g, "-")}-${randomUUID()}.json`), heartbeat);
+  return heartbeat;
+}
+
+function leaseJsonRecords(directory) {
+  if (!existsSync(directory)) return [];
+  const stats = lstatSync(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("lease_record_directory_invalid");
+  const names = readdirSync(directory).filter((name) => name.endsWith(".json")).sort();
+  if (names.length > taskLeaseMaximumHistoryRecords) throw new Error("lease_history_depth_exceeded");
+  return names.map((name) => ({ name, path: join(directory, name), record: readRegularJson(join(directory, name)) }));
+}
+
+function leaseJsonRecordCount(directory, label) {
+  if (!existsSync(directory)) return 0;
+  const stats = lstatSync(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error(`${label}_directory_invalid`);
+  const count = readdirSync(directory).filter((name) => name.endsWith(".json")).length;
+  if (count > taskLeaseMaximumHistoryRecords) {
+    throw new Error(`${label}_history_capacity_exhausted`);
+  }
+  return count;
+}
+
+function assertTaskLeaseIntentPairCapacity(context, kind) {
+  const pair = kind === "external"
+    ? ["external-intents", "external-completions", "external_intent"]
+    : ["manifest-intents", "manifest-commits", "manifest_intent"];
+  const [intentKind, completionKind, label] = pair;
+  const intentCount = leaseJsonRecordCount(taskLeasePath(context.state, context.taskId, intentKind), label);
+  const completionCount = leaseJsonRecordCount(taskLeasePath(context.state, context.taskId, completionKind), `${label}_completion`);
+  if (intentCount >= taskLeaseMaximumHistoryRecords || completionCount >= taskLeaseMaximumHistoryRecords) {
+    throw new Error(
+      `Task lease ${label} capacity is exhausted: task_id=${context.taskId}; generation=${context.generation}; ` +
+      `maximum_history_records=${taskLeaseMaximumHistoryRecords}; mutation=none.`,
+    );
+  }
+}
+
+function assertTaskLeaseReleaseCapacity(state, taskId, metadata) {
+  const tokenDigest = taskLeaseTokenDigest(metadata.token);
+  // Validate the current generation's complete heartbeat history before its
+  // callback is admitted.  A release record itself does not consume either
+  // history budget, so a bounded snapshot is a durable release reservation.
+  const heartbeat = latestLeaseHeartbeat(state, taskId, metadata.generation, tokenDigest);
+  if (!heartbeat) throw new Error("Task lease release capacity is not provable: heartbeat evidence is missing.");
+  for (const [kind, label] of [
+    ["external-intents", "external_intent"],
+    ["external-completions", "external_completion"],
+    ["manifest-intents", "manifest_intent"],
+    ["manifest-commits", "manifest_commit"],
+  ]) {
+    leaseJsonRecordCount(taskLeasePath(state, taskId, kind), label);
+  }
+  const fence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
+  if (fence) {
+    throw new Error(`Task lease release capacity is blocked by unresolved ${fence.kind} intent; refusing callback execution.`);
+  }
+}
+
+function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
+  const tokenDigest = taskLeaseTokenDigest(metadata.token);
+  // The initial heartbeat has already been published when this guard runs.
+  // Keep one further heartbeat slot available for the protected callback to
+  // prove liveness before its mandatory release.  Release itself is a single
+  // generation-addressed immutable record, so validate that its exact slot is
+  // still unclaimed rather than relying on an unrelated global count.
+  const heartbeat = latestLeaseHeartbeat(state, taskId, metadata.generation, tokenDigest);
+  if (!heartbeat) throw new Error("Task lease callback admission is not provable: heartbeat evidence is missing.");
+  const heartbeatCount = leaseJsonRecordCount(
+    join(taskLeasePath(state, taskId, "heartbeats"), metadata.generation),
+    "heartbeat",
+  );
+  if (heartbeatCount >= taskLeaseMaximumHeartbeatHistoryRecords) {
+    throw new Error(
+      `Task lease heartbeat callback reservation capacity is exhausted: task_id=${taskId}; generation=${metadata.generation}; ` +
+      `maximum_heartbeat_records=${taskLeaseMaximumHeartbeatHistoryRecords}; mutation=none.`,
+    );
+  }
+  if (existsSync(taskLeasePath(state, taskId, "releases", metadata.generation))) {
+    throw new Error("Task lease callback admission is not provable: release record already exists.");
+  }
+
+  // Every callback can persist a durable manifest update and can begin an
+  // external action.  Reserve both sides of each immutable intent/completion
+  // pair before publishing root.json: once root is visible, rejecting a full
+  // ledger would otherwise enter the callback and strand an active lease.
+  for (const [kind, label] of [
+    ["external-intents", "external_intent"],
+    ["external-completions", "external_completion"],
+    ["manifest-intents", "manifest_intent"],
+    ["manifest-commits", "manifest_commit"],
+  ]) {
+    const count = leaseJsonRecordCount(taskLeasePath(state, taskId, kind), label);
+    if (count >= taskLeaseMaximumHistoryRecords) {
+      throw new Error(
+        `Task lease ${label} callback reservation capacity is exhausted: task_id=${taskId}; generation=${metadata.generation}; ` +
+        `maximum_history_records=${taskLeaseMaximumHistoryRecords}; mutation=none.`,
+      );
+    }
+  }
+  assertTaskLeaseReleaseCapacity(state, taskId, metadata);
+}
+
+function unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest) {
+  const intents = leaseJsonRecords(taskLeasePath(state, taskId, "external-intents"));
+  const completions = new Map(
+    leaseJsonRecords(taskLeasePath(state, taskId, "external-completions"))
+      .filter(({ record }) => record?.generation === metadata.generation)
+      .map(({ record }) => [record?.intent_id, record]),
+  );
+  for (const { record } of intents) {
+    if (record?.generation !== metadata.generation) continue;
+    if (!validTaskLeaseExternalIntent(record, taskId, metadata.generation, tokenDigest)) {
+      throw new Error("external_intent_record_invalid");
+    }
+    const completion = completions.get(record.intent_id);
+    if (!completion) return record;
+    if (!validTaskLeaseExternalCompletion(completion, taskId, metadata.generation, tokenDigest, record.intent_id)) {
+      throw new Error("external_completion_record_invalid");
+    }
+  }
+  return null;
+}
+
+function unresolvedTaskLeaseManifestIntent(state, taskId, metadata, tokenDigest) {
+  const intents = leaseJsonRecords(taskLeasePath(state, taskId, "manifest-intents"));
+  const commits = new Map(
+    leaseJsonRecords(taskLeasePath(state, taskId, "manifest-commits"))
+      .filter(({ record }) => record?.generation === metadata.generation)
+      .map(({ record }) => [record?.intent_id, record]),
+  );
+  for (const { record } of intents) {
+    if (record?.generation !== metadata.generation) continue;
+    if (!validTaskLeaseManifestIntent(record, taskId, metadata.generation, tokenDigest)) {
+      throw new Error("manifest_intent_record_invalid");
+    }
+    const commit = commits.get(record.intent_id);
+    if (!commit) return record;
+    if (!validTaskLeaseManifestCommit(commit, taskId, metadata.generation, tokenDigest, record.intent_id)) {
+      throw new Error("manifest_commit_record_invalid");
+    }
+  }
+  return null;
+}
+
+function leaseGenerationFence(state, taskId, metadata, tokenDigest) {
+  const external = unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest);
+  if (external) return { kind: "external", intent: external };
+  const manifest = unresolvedTaskLeaseManifestIntent(state, taskId, metadata, tokenDigest);
+  if (manifest) return { kind: "manifest", intent: manifest };
+  return null;
+}
+
+function taskLeaseExternalIntent(context, commandName, commandArguments) {
+  // Reserve both immutable sides before publishing an intent.  Otherwise a
+  // full completion history could strand a protected callback at release.
+  assertTaskLeaseIntentPairCapacity(context, "external");
+  const intent = {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: context.taskId,
+    generation: context.generation,
+    token_digest: taskLeaseTokenDigest(context.token),
+    intent_id: randomUUID(),
+    runner_pid: process.pid,
+    runner_process_start_identity: context.processStart,
+    command_digest: createHash("sha256").update(JSON.stringify([commandName, ...commandArguments])).digest("hex"),
+    started_at: new Date().toISOString(),
+  };
+  writeNewJson(taskLeasePath(context.state, context.taskId, "external-intents", intent.intent_id), intent);
+  return intent;
+}
+
+function completeTaskLeaseExternalIntent(context, intent, result) {
+  writeNewJson(taskLeasePath(context.state, context.taskId, "external-completions", intent.intent_id), {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: context.taskId,
+    generation: context.generation,
+    token_digest: taskLeaseTokenDigest(context.token),
+    intent_id: intent.intent_id,
+    completed_at: new Date().toISOString(),
+    status: Number.isInteger(result.status) ? result.status : 1,
+  });
+}
+
+function inspectLegacyTaskLock(state, taskId) {
+  const lockPath = taskLockPath(state, taskId);
+  if (!existsSync(lockPath)) return null;
+  let metadata = null;
+  let legacyReason = "legacy_lock_metadata_unreadable";
+  try {
+    const stats = lstatSync(lockPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) legacyReason = "legacy_lock_not_regular_file";
+    else if (stats.size === 0) legacyReason = "legacy_lock_zero_bytes";
+    else if (stats.size > 16_384) legacyReason = "legacy_lock_metadata_too_large";
+    else {
+      const candidate = JSON.parse(readFileSync(lockPath, "utf8"));
+      if (validTaskLockMetadata(candidate, taskId)) {
+        metadata = candidate;
+        legacyReason = "legacy_lock_inspection_only";
+      } else {
+        legacyReason = "legacy_lock_metadata_invalid";
+      }
+    }
+  } catch {
+    // The legacy pathname is intentionally never reopened for recovery.
+  }
+  return { taskId, lockPath, status: "legacy_retained", reason: legacyReason, metadata, protocol: "legacy_lock" };
+}
+
+function legacyLockSnapshot(lockPath) {
+  const stats = lstatSync(lockPath);
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0 || stats.size > 16_384) {
+    throw new Error("legacy_snapshot_requires_regular_bounded_file");
+  }
+  const raw = readFileSync(lockPath);
+  return {
+    device: String(stats.dev),
+    inode: String(stats.ino),
+    size: stats.size,
+    sha256: createHash("sha256").update(raw).digest("hex"),
+  };
+}
+
+function sameLegacyLockSnapshot(left, right) {
+  return Boolean(
+    left && right &&
+      left.device === right.device &&
+      left.inode === right.inode &&
+      left.size === right.size &&
+      left.sha256 === right.sha256,
+  );
+}
+
+function validLegacyAdoption(record, taskId) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.protocol === "legacy-v1-to-v2-adoption" &&
+      typeof record.legacy_lock_path === "string" && record.legacy_lock_path &&
+      record.snapshot && typeof record.snapshot.device === "string" && typeof record.snapshot.inode === "string" &&
+      Number.isInteger(record.snapshot.size) && record.snapshot.size > 0 &&
+      typeof record.snapshot.sha256 === "string" && /^[a-f0-9]{64}$/i.test(record.snapshot.sha256) &&
+      Number.isInteger(record.dead_pid) && record.dead_pid > 0 &&
+      typeof record.dead_process_start_identity === "string" && record.dead_process_start_identity &&
+      isIsoTimestamp(record.adopted_at),
+  );
+}
+
+function legacyAdoptionRecordPath(state, taskId) {
+  return taskLeasePath(state, taskId, "legacy-adoptions", "adoption");
+}
+
+function inspectLegacyAdoption(state, taskId) {
+  const path = legacyAdoptionRecordPath(state, taskId);
+  if (!existsSync(path)) return null;
+  const record = readRegularJson(path);
+  if (!validLegacyAdoption(record, taskId)) throw new Error("legacy_adoption_record_invalid");
+  if (resolve(record.legacy_lock_path) !== resolve(taskLockPath(state, taskId))) throw new Error("legacy_adoption_lock_path_invalid");
+  const candidatePath = taskLeasePath(state, taskId, "legacy-adoption-candidates", record.snapshot.sha256);
+  const current = legacyLockSnapshot(taskLockPath(state, taskId));
+  const candidate = legacyLockSnapshot(candidatePath);
+  if (!sameLegacyLockSnapshot(record.snapshot, current) || !sameLegacyLockSnapshot(record.snapshot, candidate)) {
+    throw new Error("legacy_adoption_snapshot_mismatch");
+  }
+  return record;
+}
+
+function legacyRecoveryAdoptionPacket(state, taskId) {
+  const blockers = [];
+  const lockPath = taskLockPath(state, taskId);
+  let metadata = null;
+  let snapshot = null;
+  let candidateMatches = false;
+  if (taskId !== legacyRecoveryAdoptionTaskId) blockers.push("task is not the exact governed recovery target");
+  try {
+    metadata = readRegularJson(lockPath);
+    if (!validTaskLockMetadata(metadata, taskId)) blockers.push("legacy lock metadata is invalid");
+  } catch {
+    blockers.push("legacy lock is not a readable regular bounded record");
+  }
+  try {
+    snapshot = legacyLockSnapshot(lockPath);
+  } catch {
+    blockers.push("legacy lock has no safe inode/hash snapshot");
+  }
+  if (metadata && validTaskLockMetadata(metadata, taskId)) {
+    const observed = processStartIdentity(metadata.pid);
+    if (observed !== null) blockers.push("legacy owner PID/start identity is still observable or reused");
+    try {
+      process.kill(metadata.pid, 0);
+      blockers.push("legacy owner PID is still live or not probeable as absent");
+    } catch (error) {
+      if (error?.code !== "ESRCH") blockers.push("legacy owner PID absence could not be proven");
+    }
+  }
+  if (snapshot) {
+    const candidatePath = taskLeasePath(state, taskId, "legacy-adoption-candidates", snapshot.sha256);
+    if (existsSync(candidatePath)) {
+      try { candidateMatches = sameLegacyLockSnapshot(snapshot, legacyLockSnapshot(candidatePath)); } catch { candidateMatches = false; }
+      if (!candidateMatches) blockers.push("existing adoption candidate inode/hash does not match legacy lock");
+    }
+  }
+  try {
+    const existing = inspectLegacyAdoption(state, taskId);
+    if (existing) candidateMatches = true;
+  } catch {
+    blockers.push("existing adoption evidence no longer exactly matches the retained legacy lock");
+  }
+  return {
+    taskId,
+    protocol: "legacy-v1-to-v2-adoption",
+    lockPath,
+    owner: metadata?.owner || null,
+    deadPid: metadata?.pid || null,
+    deadProcessStartIdentity: metadata?.process_start_identity || null,
+    snapshot,
+    candidateMatches,
+    allowed: blockers.length === 0,
+    blockers,
+  };
+}
+
+function applyLegacyRecoveryAdoption(state, packet, approval) {
+  const taskId = packet.taskId;
+  ensureTaskLeaseDirectories(state, taskId);
+  const fresh = legacyRecoveryAdoptionPacket(state, taskId);
+  if (!fresh.allowed || !sameLegacyLockSnapshot(packet.snapshot, fresh.snapshot)) {
+    throw new Error("legacy recovery adoption evidence drifted; rerun dry-run.");
+  }
+  const candidatePath = taskLeasePath(state, taskId, "legacy-adoption-candidates", fresh.snapshot.sha256);
+  const candidateWasAbsent = !existsSync(candidatePath);
+  if (candidateWasAbsent) {
+    linkSync(taskLockPath(state, taskId), candidatePath);
+  }
+  // A hard link is not durable until its parent directory is synced.  Sync on
+  // replay too: a candidate that survived an earlier interrupted publication
+  // must be made durable before an adoption record is allowed to reference it.
+  fsyncDirectory(dirname(candidatePath));
+  if (candidateWasAbsent && process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_DURABLE_LEGACY_ADOPTION_CANDIDATE === "1") {
+    throw new Error("injected crash after durable legacy adoption candidate publication before adoption record");
+  }
+  const afterLink = legacyRecoveryAdoptionPacket(state, taskId);
+  if (!afterLink.allowed || !sameLegacyLockSnapshot(fresh.snapshot, afterLink.snapshot)) {
+    throw new Error("legacy recovery adoption lost its exact inode/hash proof after candidate publication.");
+  }
+  const record = {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: taskId,
+    protocol: "legacy-v1-to-v2-adoption",
+    legacy_lock_path: taskLockPath(state, taskId),
+    dead_pid: afterLink.deadPid,
+    dead_process_start_identity: afterLink.deadProcessStartIdentity,
+    snapshot: afterLink.snapshot,
+    approval_digest: createHash("sha256").update(approval).digest("hex"),
+    adopted_at: new Date().toISOString(),
+  };
+  try {
+    writeNewJson(legacyAdoptionRecordPath(state, taskId), record);
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    const existing = inspectLegacyAdoption(state, taskId);
+    if (!existing || !sameLegacyLockSnapshot(existing.snapshot, record.snapshot)) throw new Error("legacy adoption record conflicts with current proof.");
+  }
+  return { ...legacyRecoveryAdoptionPacket(state, taskId), adoptionPath: legacyAdoptionRecordPath(state, taskId) };
+}
+
 function processStartIdentity(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
@@ -11840,45 +12758,156 @@ function validTaskLockMetadata(metadata, taskId) {
   );
 }
 
-function inspectTaskLock(state, taskId) {
-  const lockPath = taskLockPath(state, taskId);
-  if (!existsSync(lockPath)) {
-    return { taskId, lockPath, status: "absent", reason: "lock_not_present", metadata: null };
-  }
+function inspectTaskLease(state, taskId) {
+  const root = taskLeaseRoot(state, taskId);
+  if (!existsSync(root)) return { taskId, lockPath: root, status: "absent", reason: "lease_not_present", metadata: null, protocol: "versioned_lease" };
   try {
-    const stats = lstatSync(lockPath);
-    if (!stats.isFile() || stats.isSymbolicLink()) {
-      return { taskId, lockPath, status: "ambiguous", reason: "lock_not_regular_file", metadata: null };
+    const rootStats = lstatSync(root);
+    if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+      return { taskId, lockPath: root, status: "ambiguous", reason: "lease_root_invalid", metadata: null, protocol: "versioned_lease" };
     }
-    if (stats.size > 16_384) {
-      return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_too_large", metadata: null };
+    // A crash before root publication can leave durable candidate generation
+    // directories behind.  They own no lease until root.json exists; treat the
+    // tree as absent so acquisition can inspect their bounded ledgers before
+    // publishing a new root.
+    if (!existsSync(taskLeaseRootRecordPath(state, taskId))) {
+      return { taskId, lockPath: root, status: "absent", reason: "lease_root_record_absent", metadata: null, protocol: "versioned_lease" };
     }
-    if (stats.size === 0) {
-      return { taskId, lockPath, status: "malformed_zero_byte", reason: "lock_file_zero_bytes", metadata: null };
+    const rootRecord = readRegularJson(taskLeaseRootRecordPath(state, taskId));
+    if (!validTaskLeaseRootRecord(rootRecord, taskId)) {
+      return { taskId, lockPath: root, status: "ambiguous", reason: "lease_root_record_invalid", metadata: null, protocol: "versioned_lease" };
     }
-    const metadata = JSON.parse(readFileSync(lockPath, "utf8"));
-    if (!validTaskLockMetadata(metadata, taskId)) {
-      return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_invalid", metadata: null };
-    }
-    const observedStart = processStartIdentity(metadata.pid);
-    if (observedStart === metadata.process_start_identity) {
-      return { taskId, lockPath, status: "active", reason: "owner_process_identity_matches", metadata };
-    }
-    if (observedStart) {
-      return { taskId, lockPath, status: "ambiguous", reason: "pid_start_identity_mismatch", metadata };
-    }
-    try {
-      process.kill(metadata.pid, 0);
-      return { taskId, lockPath, status: "ambiguous", reason: "owner_process_identity_unavailable", metadata };
-    } catch (error) {
-      if (error?.code === "ESRCH") {
-        return { taskId, lockPath, status: "stale", reason: "owner_process_not_present", metadata };
+    let generation = rootRecord.initial_generation;
+    const seen = new Set();
+    for (let depth = 0; depth < taskLeaseMaximumGenerationChainLength; depth += 1) {
+      if (seen.has(generation)) return { taskId, lockPath: root, status: "ambiguous", reason: "lease_handoff_cycle", metadata: null, protocol: "versioned_lease" };
+      seen.add(generation);
+      const metadata = leaseRecord(state, taskId, generation);
+      if (!validTaskLeaseRecord(metadata, taskId) || metadata.generation !== generation) {
+        return { taskId, lockPath: root, status: "ambiguous", reason: "lease_generation_record_invalid", metadata: null, protocol: "versioned_lease" };
       }
-      return { taskId, lockPath, status: "ambiguous", reason: "owner_process_probe_denied", metadata };
+      const tokenDigest = taskLeaseTokenDigest(metadata.token);
+      const handoffPath = taskLeasePath(state, taskId, "handoffs", generation);
+      const releasePath = taskLeasePath(state, taskId, "releases", generation);
+      const handoff = existsSync(handoffPath) ? readRegularJson(handoffPath) : null;
+      const release = existsSync(releasePath) ? readRegularJson(releasePath) : null;
+      if (handoff && !validTaskLeaseHandoff(handoff, taskId, generation, tokenDigest)) {
+        return { taskId, lockPath: root, status: "ambiguous", reason: "lease_handoff_record_invalid", metadata: null, protocol: "versioned_lease" };
+      }
+      if (release && !validTaskLeaseRelease(release, taskId, generation, tokenDigest)) {
+        return { taskId, lockPath: root, status: "ambiguous", reason: "lease_release_record_invalid", metadata: null, protocol: "versioned_lease" };
+      }
+      if (handoff) {
+        if ((release && handoff.reason !== "released") || (!release && handoff.reason !== "stale_owner_process_absent")) {
+          return { taskId, lockPath: root, status: "ambiguous", reason: "lease_handoff_predecessor_state_invalid", metadata: null, protocol: "versioned_lease" };
+        }
+        generation = handoff.to_generation;
+        continue;
+      }
+      if (release) {
+        return {
+          taskId,
+          lockPath: root,
+          status: "released",
+          reason: "owner_released_generation",
+          metadata,
+          generation,
+          release,
+          chainDepth: depth + 1,
+          protocol: "versioned_lease",
+        };
+      }
+      const heartbeat = latestLeaseHeartbeat(state, taskId, generation, tokenDigest);
+      if (!heartbeat) {
+        return { taskId, lockPath: root, status: "ambiguous", reason: "lease_heartbeat_missing", metadata: null, protocol: "versioned_lease" };
+      }
+      const observedStart = processStartIdentity(metadata.pid);
+      if (observedStart === metadata.process_start_identity) {
+        return {
+          taskId,
+          lockPath: root,
+          status: "active",
+          reason: "owner_process_identity_matches",
+          metadata,
+          generation,
+          heartbeat,
+          chainDepth: depth + 1,
+          protocol: "versioned_lease",
+        };
+      }
+      if (observedStart) {
+        return { taskId, lockPath: root, status: "ambiguous", reason: "pid_start_identity_mismatch", metadata, generation, heartbeat, protocol: "versioned_lease" };
+      }
+      try {
+        process.kill(metadata.pid, 0);
+        return { taskId, lockPath: root, status: "ambiguous", reason: "owner_process_identity_unavailable", metadata, generation, heartbeat, protocol: "versioned_lease" };
+      } catch (error) {
+        if (error?.code === "ESRCH") {
+          const fence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
+          if (fence) {
+            return {
+              taskId,
+              lockPath: root,
+              status: "ambiguous",
+              reason: fence.kind === "external" ? "external_command_fence_unresolved" : "manifest_write_intent_unresolved",
+              metadata,
+              generation,
+              heartbeat,
+              protocol: "versioned_lease",
+            };
+          }
+          return {
+            taskId,
+            lockPath: root,
+            status: "stale",
+            reason: "owner_process_not_present",
+            metadata,
+            generation,
+            heartbeat,
+            chainDepth: depth + 1,
+            protocol: "versioned_lease",
+          };
+        }
+        return { taskId, lockPath: root, status: "ambiguous", reason: "owner_process_probe_denied", metadata, generation, heartbeat, protocol: "versioned_lease" };
+      }
+    }
+    return {
+      taskId,
+      lockPath: root,
+      status: "ambiguous",
+      reason: "lease_handoff_depth_exceeded",
+      metadata: null,
+      chainDepth: taskLeaseMaximumGenerationChainLength,
+      protocol: "versioned_lease",
+    };
+  } catch {
+    return { taskId, lockPath: root, status: "ambiguous", reason: "lease_record_unreadable", metadata: null, protocol: "versioned_lease" };
+  }
+}
+
+function inspectTaskLock(state, taskId) {
+  // A retained v1 pathname blocks the task even if a partial v2 lease tree is
+  // also present.  Returning it first keeps read-only inspection aligned with
+  // the acquire path's fail-closed compatibility rule.
+  const legacy = inspectLegacyTaskLock(state, taskId);
+  if (!legacy) return inspectTaskLease(state, taskId);
+  try {
+    const adoption = inspectLegacyAdoption(state, taskId);
+    if (adoption) {
+      const v2 = inspectTaskLease(state, taskId);
+      return {
+        ...v2,
+        legacyAdoption: {
+          protocol: adoption.protocol,
+          snapshot: adoption.snapshot,
+          adoptedAt: adoption.adopted_at,
+        },
+      };
     }
   } catch {
-    return { taskId, lockPath, status: "ambiguous", reason: "lock_metadata_unreadable", metadata: null };
+    return { ...legacy, status: "legacy_retained", reason: "legacy_adoption_evidence_invalid", protocol: "legacy_lock" };
   }
+  return legacy;
 }
 
 function redactTaskLockInspection(inspection) {
@@ -11892,140 +12921,173 @@ function redactTaskLockInspection(inspection) {
     pid: metadata?.pid ?? null,
     processStartIdentityPresent: Boolean(metadata?.process_start_identity),
     acquiredAt: metadata?.acquired_at || null,
-    heartbeatAt: metadata?.heartbeat_at || null,
+    heartbeatAt: inspection?.heartbeat?.heartbeat_at || metadata?.heartbeat_at || null,
     tokenPresent: Boolean(metadata?.token),
+    protocol: inspection?.protocol || "unknown",
+    generation: inspection?.generation || null,
     mutation: "none; read-only lock inspection",
   };
 }
 
-function recoverStaleTaskLock(state, taskId) {
-  const before = inspectTaskLock(state, taskId);
-  if (before.status !== "stale" || !before.metadata?.token) {
-    return { recovered: false, inspection: before };
+function assertTaskLeaseAcquisitionCapacity(inspection, taskId, options = {}) {
+  const mayRecoverStale = inspection.status === "stale" && options.recoverStale !== false;
+  if (inspection.status === "absent") return;
+  if (inspection.status !== "released" && !mayRecoverStale) {
+    const inspected = redactTaskLockInspection(inspection);
+    throw new Error(`Task lease cannot be handed off: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
   }
-  const reread = inspectTaskLock(state, taskId);
-  if (reread.status !== "stale" || reread.metadata?.token !== before.metadata.token) {
-    return { recovered: false, inspection: reread };
+  if (!Number.isInteger(inspection.chainDepth) || inspection.chainDepth < 1) {
+    throw new Error(`Task lease chain depth is not provable: task_id=${taskId}; mutation=none.`);
   }
-  const historyDir = join(state.tasksDir, ".lock-history");
-  mkdirSync(historyDir, { recursive: true });
-  const archivePath = join(historyDir, `${taskId}-${before.metadata.token}.stale-lock`);
-  try {
-    renameSync(before.lockPath, archivePath);
-    return { recovered: true, inspection: before, archivePath };
-  } catch {
-    return { recovered: false, inspection: inspectTaskLock(state, taskId) };
+  if (inspection.chainDepth >= taskLeaseMaximumGenerationChainLength) {
+    throw new Error(
+      `Task lease handoff capacity is exhausted: task_id=${taskId}; chain_depth=${inspection.chainDepth}; ` +
+      `maximum_chain_length=${taskLeaseMaximumGenerationChainLength}; mutation=none.`,
+    );
   }
-}
-
-function archiveApprovedZeroByteTaskLock(state, taskId, eligibility) {
-  const expectedLockPath = taskLockPath(state, taskId);
-  const containedTasksDir = resolve(state.tasksDir);
-  if (
-    eligibility?.status !== "eligible" ||
-    resolve(eligibility.lock_path || "") !== resolve(expectedLockPath) ||
-    dirname(resolve(expectedLockPath)) !== containedTasksDir
-  ) {
-    throw new Error("Zero-byte lock recovery proof is incomplete; mutation refused.");
-  }
-  const before = inspectTaskLock(state, taskId);
-  if (before.status !== "malformed_zero_byte" || resolve(before.lockPath) !== resolve(expectedLockPath)) {
-    throw new Error("Zero-byte lock changed before approved recovery; mutation refused.");
-  }
-  const stats = lstatSync(expectedLockPath);
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.size !== 0) {
-    throw new Error("Zero-byte lock file changed shape before approved recovery; mutation refused.");
-  }
-  const reread = inspectTaskLock(state, taskId);
-  if (reread.status !== "malformed_zero_byte" || resolve(reread.lockPath) !== resolve(expectedLockPath)) {
-    throw new Error("Zero-byte lock changed during approved recovery proof; mutation refused.");
-  }
-  const historyDir = join(state.tasksDir, ".lock-history");
-  mkdirSync(historyDir, { recursive: true });
-  const archivePath = join(historyDir, `${taskId}-${randomUUID()}.zero-byte-lock`);
-  try {
-    renameSync(expectedLockPath, archivePath);
-  } catch (error) {
-    throw new Error(`Zero-byte lock archival failed without ownership mutation: ${error?.code || "unknown"}.`);
-  }
-  return {
-    status: "recovered",
-    classification: "zero_byte",
-    lock_path: expectedLockPath,
-    archive_name: basename(archivePath),
-    recovered_at: new Date().toISOString(),
-    owner_process_identity: {
-      status: "absent_from_malformed_lock",
-      matching_live_process: false,
-      matching_descendant_process: false,
-    },
-    reason: "approved exact-task zero-byte lock archived before dirty in-lane takeover",
-  };
 }
 
 function withManifestLock(state, taskId, fn, options = {}) {
   mkdirSync(state.tasksDir, { recursive: true });
-  const lockPath = taskLockPath(state, taskId);
+  const lockInspection = inspectTaskLock(state, taskId);
+  if (lockInspection.protocol === "legacy_lock") {
+    const inspected = redactTaskLockInspection(lockInspection);
+    throw new Error(`Legacy task lock is retained: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
+  }
+  // Validate both eligibility and capacity before publishing a generation.  A
+  // generation that cannot later be traversed must never own a callback.
+  assertTaskLeaseAcquisitionCapacity(lockInspection, taskId, options);
   const processStart = processStartIdentity(process.pid);
   if (!processStart) {
-    throw new Error("Task lock ownership cannot be established because the current process start identity is unavailable.");
+    throw new Error("Task lease ownership cannot be established because the current process start identity is unavailable.");
   }
   const metadata = {
-    schema_version: taskLockSchemaVersion,
+    schema_version: taskLeaseSchemaVersion,
     task_id: taskId,
+    generation: randomUUID(),
     owner: String(options.owner || currentLaneOwner(options)),
     pid: process.pid,
     process_start_identity: processStart,
     acquired_at: new Date().toISOString(),
-    heartbeat_at: new Date().toISOString(),
     token: randomUUID(),
   };
-  let fd;
+  ensureTaskLeaseDirectories(state, taskId);
+  writeNewJson(taskLeasePath(state, taskId, "generations", metadata.generation), metadata);
+  appendTaskLeaseHeartbeat(state, taskId, metadata);
+  // Check immediately after the initial heartbeat but before publishing this
+  // generation as a root or successor.  A full history therefore leaves no
+  // active lease behind and cannot enter the protected callback.
+  assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata);
+  const rootRecord = {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: taskId,
+    initial_generation: metadata.generation,
+    created_at: new Date().toISOString(),
+  };
+  let inspection;
   try {
-    fd = openSync(lockPath, "wx");
+    publishTaskLeaseRoot(state, taskId, rootRecord);
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
-    if (options.recoverStale === false) {
-      const inspected = redactTaskLockInspection(inspectTaskLock(state, taskId));
-      throw new Error(`Task lock is retained during dirty in-lane takeover: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
-    }
-    const recovery = recoverStaleTaskLock(state, taskId);
-    if (!recovery.recovered) {
-      const inspected = redactTaskLockInspection(recovery.inspection);
-      throw new Error(`Task lock cannot be recovered: task_id=${taskId}; status=${inspected.status}; reason=${inspected.reason}; mutation=none.`);
-    }
+    inspection = inspectTaskLease(state, taskId);
+    // A competing immutable handoff can consume the final safe slot after our
+    // first inspection.  Re-reserve capacity before linking our successor.
+    assertTaskLeaseAcquisitionCapacity(inspection, taskId, options);
+    const handoff = {
+      schema_version: taskLeaseSchemaVersion,
+      task_id: taskId,
+      from_generation: inspection.generation,
+      to_generation: metadata.generation,
+      from_token_digest: taskLeaseTokenDigest(inspection.metadata.token),
+      reason: inspection.status === "released" ? "released" : "stale_owner_process_absent",
+      handed_off_at: new Date().toISOString(),
+    };
     try {
-      fd = openSync(lockPath, "wx");
+      publishTaskLeaseHandoff(state, taskId, handoff);
     } catch (retryError) {
-      throw new Error(`Task lock could not be acquired after exact-task stale recovery: ${retryError?.code || "unknown"}.`);
+      const current = redactTaskLockInspection(inspectTaskLease(state, taskId));
+      throw new Error(`Task lease handoff could not acquire immutable predecessor generation: status=${current.status}; reason=${current.reason}; mutation=none; error=${retryError?.code || "unknown"}.`);
     }
   }
 
-  try {
-    writeFileSync(fd, `${JSON.stringify(metadata)}\n`);
-  } catch (error) {
-    closeSync(fd);
-    rmSync(lockPath, { force: true });
-    throw error;
+  const acquired = inspectTaskLease(state, taskId);
+  if (
+    acquired.status !== "active" ||
+    acquired.generation !== metadata.generation ||
+    acquired.metadata?.token !== metadata.token ||
+    acquired.chainDepth > taskLeaseMaximumGenerationChainLength
+  ) {
+    throw new Error("Task lease acquisition could not prove a releasable active generation; refusing callback execution.");
   }
 
   const heartbeat = () => {
-    const current = inspectTaskLock(state, taskId);
-    if (current.status !== "active" || current.metadata?.token !== metadata.token) {
-      throw new Error("Task lock ownership changed before heartbeat; refusing to continue.");
+    const current = inspectTaskLease(state, taskId);
+    if (
+      current.status !== "active" ||
+      current.generation !== metadata.generation ||
+      current.metadata?.token !== metadata.token ||
+      current.metadata?.pid !== process.pid ||
+      current.metadata?.process_start_identity !== processStart
+    ) {
+      throw new Error("Task lease ownership changed before heartbeat; refusing to continue.");
     }
-    metadata.heartbeat_at = new Date().toISOString();
-    writeFileSync(lockPath, `${JSON.stringify(metadata)}\n`);
+    appendTaskLeaseHeartbeat(state, taskId, metadata);
   };
 
-  try {
-    return fn({ token: metadata.token, heartbeat });
-  } finally {
-    closeSync(fd);
-    const current = inspectTaskLock(state, taskId);
-    if (current.metadata?.token === metadata.token) {
-      rmSync(lockPath, { force: true });
+  const release = () => {
+    const current = inspectTaskLease(state, taskId);
+    if (
+      current.status !== "active" ||
+      current.generation !== metadata.generation ||
+      current.metadata?.token !== metadata.token ||
+      current.metadata?.owner !== metadata.owner ||
+      current.metadata?.pid !== process.pid ||
+      current.metadata?.process_start_identity !== processStart
+    ) {
+      throw new Error("Task lease owner identity changed before release; refusing to release another generation.");
     }
+    assertTaskLeaseReleaseCapacity(state, taskId, metadata);
+    try {
+      writeNewJson(taskLeasePath(state, taskId, "releases", metadata.generation), {
+        schema_version: taskLeaseSchemaVersion,
+        task_id: taskId,
+        generation: metadata.generation,
+        token_digest: taskLeaseTokenDigest(metadata.token),
+        released_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      throw new Error("Task lease release record already exists; refusing to overwrite immutable release evidence.");
+    }
+  };
+
+  const priorWriteContext = activeTaskLeaseWriteContext;
+  const writeContext = {
+    state,
+    taskId,
+    generation: metadata.generation,
+    token: metadata.token,
+    processStart,
+  };
+  try {
+    activeTaskLeaseWriteContext = writeContext;
+    return fn({ token: metadata.token, generation: metadata.generation, heartbeat, release });
+  } finally {
+    activeTaskLeaseWriteContext = priorWriteContext;
+    release();
+  }
+}
+
+function assertActiveTaskLeaseWriteOwnership(context) {
+  const current = inspectTaskLease(context.state, context.taskId);
+  if (
+    current.status !== "active" ||
+    current.generation !== context.generation ||
+    current.metadata?.token !== context.token ||
+    current.metadata?.pid !== process.pid ||
+    current.metadata?.process_start_identity !== context.processStart
+  ) {
+    throw new Error("Task lease ownership changed before durable manifest write; refusing to publish an unbound manifest.");
   }
 }
 
@@ -12565,7 +13627,17 @@ function run(commandName, commandArguments, options = {}) {
   if (options.killSignal) {
     spawnOptions.killSignal = options.killSignal;
   }
-  const result = spawnSync(resolved.command, resolved.args, spawnOptions);
+  const leaseContext = activeTaskLeaseWriteContext;
+  const intent = leaseContext ? taskLeaseExternalIntent(leaseContext, resolved.command, resolved.args) : null;
+  let result;
+  try {
+    result = spawnSync(resolved.command, resolved.args, spawnOptions);
+  } finally {
+    // Completion is intentionally appended even for a launch error.  If this
+    // process disappears before here, the immutable intent fences stale
+    // takeover until an operator can prove the external command is gone.
+    if (intent) completeTaskLeaseExternalIntent(leaseContext, intent, result || { status: 1 });
+  }
 
   return {
     code: result.status ?? 1,
