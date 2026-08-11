@@ -268,6 +268,20 @@ publisher.
    scoped tree entries, then repeats that proof under lock before a local-only
    apply. This path never deletes the remote source branch and never applies to
    a held workspace or a source lane with PR evidence.
+   A clean lane with a retained, non-open PR can instead use the narrowly
+   approved closed-PR form only for one exact task:
+   `cleanup-integrated <task> --allow-closed-pr-integrated --approval "<recorded operator approval>" --base origin/<base> --summary-json`.
+   It requires a retained PR number and URL, no live open PR for the source
+   branch, a registered clean worktree, and a local source branch. The source
+   must either be an ancestor of the declared base or have the exact same tree.
+   The exact-tree alternative additionally proves that local `origin/<base>`
+   equals the live remote ref; fetch explicitly and rerun if it differs. Review
+   the one-task dry-run packet, then repeat the same command with `--apply`.
+   The locked apply repeats every proof, records the retained PR, integration
+   mode, tree SHAs, live-base evidence, and approval in the manifest, removes
+   only the local worktree and local branch, and deliberately retains the
+   remote source branch. If interrupted, inspect `cleanup_partial` evidence and
+   rerun the same governed command—do not delete resources manually.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface. Use
    `cleanup-orphans --summary-json` to inspect matched orphan directories before

@@ -5955,6 +5955,7 @@ function cleanupIntegratedPlan(record, state, context) {
   }
 
   let closedPrProof = null;
+  let liveBaseProof = null;
   if (closedPrIntegrated) {
     closedPrProof = closedPrIntegratedProof(manifest, cleanupCwd);
     if (closedPrProof.status !== "matched") {
@@ -5968,6 +5969,23 @@ function cleanupIntegratedPlan(record, state, context) {
         proof: { closedPr: closedPrProof },
       };
     }
+    if (exactTreeIntegrated && integrated.code !== 0) {
+      liveBaseProof = closedPrIntegratedLiveBaseProof(context.baseRef, cleanupCwd);
+      if (liveBaseProof.status !== "matched") {
+        return {
+          ...base,
+          cleanupCwd,
+          worktree: cleanupWorktreeSummary(worktreeStatus),
+          localBranchSha,
+          expectedHeadSha: localBranchSha,
+          reason: liveBaseProof.reason,
+          proof: {
+            closedPr: closedPrProof,
+            integration: { mode: "exact-tree", sourceTree, baseTree, liveBase: liveBaseProof },
+          },
+        };
+      }
+    }
   }
 
   return {
@@ -5979,7 +5997,75 @@ function cleanupIntegratedPlan(record, state, context) {
     localBranchSha,
     expectedHeadSha: localBranchSha,
     remoteBranchSha: branchSha(`origin/${manifest.branch}`, cleanupCwd) || null,
-    proof: closedPrIntegrated ? { closedPr: closedPrProof, integration: { mode: exactTreeIntegrated && integrated.code !== 0 ? "exact-tree" : "ancestry", sourceTree, baseTree }, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
+    proof: closedPrIntegrated ? { closedPr: closedPrProof, integration: { mode: exactTreeIntegrated && integrated.code !== 0 ? "exact-tree" : "ancestry", sourceTree, baseTree, liveBase: liveBaseProof }, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
+  };
+}
+
+function closedPrIntegratedLiveBaseProof(baseRef, cleanupCwd) {
+  const baseBranch = String(baseRef || "").startsWith("origin/") ? String(baseRef).slice("origin/".length) : "";
+  try {
+    assertSafeBaseBranch(baseBranch);
+  } catch {
+    return {
+      status: "unavailable",
+      localSha: null,
+      liveSha: null,
+      reason: "exact-tree closed-PR cleanup requires a safe origin/* base ref",
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  const localSha = branchSha(baseRef, cleanupCwd) || null;
+  if (!localSha) {
+    return {
+      status: "unavailable",
+      localSha: null,
+      liveSha: null,
+      reason: `exact-tree closed-PR cleanup requires local ${baseRef} evidence`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  let liveSha;
+  try {
+    liveSha = originBranchSha(baseBranch, cleanupCwd) || null;
+  } catch {
+    return {
+      status: "unavailable",
+      localSha,
+      liveSha: null,
+      reason: `exact-tree closed-PR cleanup could not read live ${baseRef}`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (!liveSha) {
+    return {
+      status: "unavailable",
+      localSha,
+      liveSha: null,
+      reason: `exact-tree closed-PR cleanup requires live ${baseRef} evidence`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (liveSha !== localSha) {
+    return {
+      status: "mismatch",
+      localSha,
+      liveSha,
+      reason: `live ${baseRef} differs from local ${baseRef}; fetch explicitly and rerun the proof`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  return {
+    status: "matched",
+    localSha,
+    liveSha,
+    checkedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
   };
 }
 
