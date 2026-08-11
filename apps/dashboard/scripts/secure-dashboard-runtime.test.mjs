@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, isAllowedDashboardHost, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, isTestViewerDashboardRoute, parseNumericLanBind, resolveCanonicalDashboardIdentity, resolveDashboardRuntime, runtimeHealthPayload, signInPageSafe } from "./secure-dashboard-runtime.mjs";
+import { applyLanAuthSecurityHeaders, LanAuthConfigurationError, assertSupervisorStartupGate, createDashboardRequestDispatcher, isAllowedDashboardHost, isDashboardEntryRoute, isDashboardStaticAsset, isProtectedNextRoute, isTestViewerDashboardRoute, parseNumericLanBind, resolveCanonicalDashboardIdentity, resolveDashboardRuntime, runtimeHealthPayload, signInPageSafe } from "./secure-dashboard-runtime.mjs";
+import { createMemoryInboxUploadProxy, MEMORY_INBOX_UPLOAD_PATH } from "./memory-inbox-upload-proxy.mjs";
 
 test("LAN auth responses include HSTS while local HTTP stays unchanged", () => {
   const headers = new Map();
@@ -137,4 +138,61 @@ test("LAN auth requires the supervisor-owned bootstrap startup gate over the fix
   await new Promise((resolve) => server.listen(socketPath, resolve));
   await assertSupervisorStartupGate({ lanAuthEnabled: true, supervisorUdsPath: socketPath });
   await new Promise((resolve) => server.close(resolve));
+});
+
+test("runtime restores 100-continue for ordinary traffic without pre-authorizing the protected upload path", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-runtime-check-continue-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const supervisor = http.createServer((request, response) => {
+    if (request.url === "/auth/session") {
+      response.writeHead(401).end(JSON.stringify({ authenticated: false }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise((resolve) => supervisor.listen(socketPath, resolve));
+  const uploadProxy = createMemoryInboxUploadProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+  const dispatch = createDashboardRequestDispatcher({
+    config: { lanAuthEnabled: true, supervisorUdsPath: socketPath },
+    identity: null,
+    mediator: null,
+    authProxy: null,
+    supervisorProxy: null,
+    memoryInboxUploadProxy: uploadProxy,
+    nextHandler: (request, response) => {
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => response.end(Buffer.concat(chunks)));
+    },
+  });
+  const dashboard = http.createServer(dispatch);
+  dashboard.on("checkContinue", (request, response) => dispatch(request, response, { checkContinue: true }));
+  await new Promise((resolve) => dashboard.listen(0, resolve));
+  const port = dashboard.address().port;
+  const expectRequest = (path, headers = {}) => new Promise((resolve, reject) => {
+    const req = http.request({ hostname: "127.0.0.1", port, path, method: "POST", headers: { ...headers, expect: "100-continue", "content-length": 4 } });
+    let continued = false;
+    req.once("continue", () => { continued = true; req.end("body"); });
+    req.once("response", (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.once("end", () => resolve({ status: response.statusCode, continued, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.once("error", reject);
+    req.flushHeaders();
+  });
+  try {
+    assert.deepEqual(await expectRequest("/_next/static/runtime-check-continue.js"), { status: 200, continued: true, body: "body" });
+    const rejected = await expectRequest(MEMORY_INBOX_UPLOAD_PATH, {
+      cookie: "session=invalid; kendall_operator_csrf=csrf-ok",
+      origin: "https://dashboard.test",
+      "x-csrf-token": "csrf-ok",
+      "content-type": "text/plain",
+    });
+    assert.equal(rejected.status, 401);
+    assert.equal(rejected.continued, false);
+  } finally {
+    await new Promise((resolve) => dashboard.close(resolve));
+    await new Promise((resolve) => supervisor.close(resolve));
+  }
 });

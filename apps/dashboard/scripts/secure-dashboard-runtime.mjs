@@ -5,12 +5,11 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
-import next from "next";
 import { fileURLToPath } from "node:url";
 import { createPacketDetailMediator } from "./packet-detail-mediator.mjs";
 import { createAuthProxy, safeReturnPath, supervisorSessionRole } from "./dashboard-auth-proxy.mjs";
 import { createSupervisorProxy } from "./dashboard-supervisor-proxy.mjs";
-import { createMemoryInboxUploadProxy } from "./memory-inbox-upload-proxy.mjs";
+import { createMemoryInboxUploadProxy, MEMORY_INBOX_UPLOAD_PATH } from "./memory-inbox-upload-proxy.mjs";
 
 export class LanAuthConfigurationError extends Error {}
 
@@ -346,41 +345,22 @@ export function assertSupervisorStartupGate(config) {
   });
 }
 
-async function main() {
-  const config = resolveDashboardRuntime(process.env);
-  await assertSupervisorStartupGate(config);
-  const rawPort = process.env.KENDALL_DASHBOARD_PORT || "3000";
-  if (!/^\d+$/.test(rawPort)) fail("Dashboard port is invalid.");
-  const port = Number(rawPort);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) fail("Dashboard port is invalid.");
-  const identity = config.lanAuthEnabled ? resolveCanonicalDashboardIdentity(process.env, port) : null;
-  const { server } = createDashboardServer(() => {}, process.env);
-  const dashboard = next({ dev: process.argv.includes("--dev") });
-  await dashboard.prepare();
-  const mediator = config.lanAuthEnabled
-    ? createPacketDetailMediator({
-      supervisorUdsPath: config.supervisorUdsPath,
-      expectedHost: process.env.KENDALL_DASHBOARD_ALLOWED_HOST || formatDashboardHost(config.host, port),
-      expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN,
-    })
-    : null;
-  const authProxy = config.lanAuthEnabled
-    ? createAuthProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
-    : null;
-  const supervisorProxy = config.lanAuthEnabled
-    ? createSupervisorProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
-    : null;
-  const memoryInboxUploadProxy = config.lanAuthEnabled
-    ? createMemoryInboxUploadProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
-    : null;
-  server.removeAllListeners("request");
-  const nextHandler = dashboard.getRequestHandler();
-  server.on("request", async (request, response) => {
+export function createDashboardRequestDispatcher({ config, identity, mediator, authProxy, supervisorProxy, memoryInboxUploadProxy, nextHandler }) {
+  // HTTP emits checkContinue instead of request for Expect: 100-continue.
+  // Keep both entry points on this dispatcher so an upload never bypasses its
+  // host, authentication, or exact-capability checks before receiving 100.
+  return async function dispatch(request, response, { checkContinue = false } = {}) {
     applyLanAuthSecurityHeaders(response, config);
     if (identity && !isAllowedDashboardHost(request, identity)) {
       sendJson(response, 421, { state: "unavailable" });
       return;
     }
+    // Node suppresses its automatic 100 response when this runtime installs a
+    // `checkContinue` listener. Restore that behavior for ordinary dashboard
+    // traffic, but leave the exact upload route to its authenticated proxy.
+    let isUploadRequest = false;
+    try { isUploadRequest = new URL(request.url || "/", "https://dashboard.invalid").pathname === MEMORY_INBOX_UPLOAD_PATH; } catch { /* normal request handling will deny malformed input */ }
+    if (checkContinue && !isUploadRequest) response.writeContinue();
     if (identity && request.method === "GET" && request.url === "/_kendall/runtime-health") {
       sendJson(response, 200, runtimeHealthPayload(identity));
       return;
@@ -406,7 +386,44 @@ async function main() {
       return;
     }
     nextHandler(request, response);
-  });
+  };
+}
+
+async function main() {
+  const config = resolveDashboardRuntime(process.env);
+  await assertSupervisorStartupGate(config);
+  const rawPort = process.env.KENDALL_DASHBOARD_PORT || "3000";
+  if (!/^\d+$/.test(rawPort)) fail("Dashboard port is invalid.");
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) fail("Dashboard port is invalid.");
+  const identity = config.lanAuthEnabled ? resolveCanonicalDashboardIdentity(process.env, port) : null;
+  const { server } = createDashboardServer(() => {}, process.env);
+  // Keep the request dispatcher importable for its socket-level coverage in a
+  // minimal worker environment; Next is required only when starting the app.
+  const { default: next } = await import("next");
+  const dashboard = next({ dev: process.argv.includes("--dev") });
+  await dashboard.prepare();
+  const mediator = config.lanAuthEnabled
+    ? createPacketDetailMediator({
+      supervisorUdsPath: config.supervisorUdsPath,
+      expectedHost: process.env.KENDALL_DASHBOARD_ALLOWED_HOST || formatDashboardHost(config.host, port),
+      expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN,
+    })
+    : null;
+  const authProxy = config.lanAuthEnabled
+    ? createAuthProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
+    : null;
+  const supervisorProxy = config.lanAuthEnabled
+    ? createSupervisorProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
+    : null;
+  const memoryInboxUploadProxy = config.lanAuthEnabled
+    ? createMemoryInboxUploadProxy({ supervisorUdsPath: config.supervisorUdsPath, expectedOrigin: process.env.KENDALL_DASHBOARD_ORIGIN })
+    : null;
+  server.removeAllListeners("request");
+  const nextHandler = dashboard.getRequestHandler();
+  const dispatch = createDashboardRequestDispatcher({ config, identity, mediator, authProxy, supervisorProxy, memoryInboxUploadProxy, nextHandler });
+  server.on("request", dispatch);
+  server.on("checkContinue", (request, response) => dispatch(request, response, { checkContinue: true }));
   server.listen(port, config.host, () => {
     process.stdout.write(`Kendall dashboard listening on ${config.protocol}://${config.host}:${port}\n`);
   });
