@@ -7973,6 +7973,33 @@ try {
     }
   });
 
+  test("finish-pr pauses before an under-reserved ordinary leaf instead of timing out a healthy command", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckDefaultReserveSeam(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "under-reserved ordinary packet unexpectedly completed");
+      assert(first.stderr.includes("packet paused before check:packet-one"), first.stderr || first.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "under-reserved ordinary leaf was launched");
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_DEFAULT_RESERVE: "0" } },
+      );
+      assert(second.code === 0, second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "ordinary reserve resume reran or skipped a stage");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr rejects a stale aggregate supervisor packet before launching check-profile leaves", () => {
     const fixture = createFinishPrExistingCommitFixture();
     const supervisorLeaves = supervisorCheckLeaves;
@@ -9425,6 +9452,9 @@ try {
       assert(source.includes("immutable predecessor generation"), "versioned handoff gate missing");
       assert(source.includes("fsyncSync(fd);"), "immutable lease records must fsync their file data before publication");
       assert(source.includes("fsyncDirectory(dirname(fixedPath));"), "immutable lease publication must fsync its fixed-record directory");
+      assert(source.includes(".pending`"), "incomplete immutable JSON records must remain outside the readable .json namespace");
+      assert(source.includes("linkSync(candidatePath, path);"), "immutable JSON records must publish through an atomic no-replace hard link");
+      assert(source.includes("fsyncDirectory(directory);"), "immutable JSON record publication must fsync its containing directory");
       assert(!source.includes("recoverStaleTaskLock"), "legacy stale lock recovery remained enabled");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
@@ -13299,6 +13329,21 @@ function installFixtureResumableCheckSupervisorReserveSeam(fixture) {
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable supervisor reserve clock"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "1" };
+}
+
+function installFixtureResumableCheckDefaultReserveSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const started = "  const started = Date.now();";
+  assert(source.includes(started), "fixture did not contain the resumable check start clock seam");
+  const replacement = [
+    '  const started = process.env.CODEX_WORKSPACE_FIXTURE_DEFAULT_RESERVE === "1"',
+    "    ? Date.now() - (resumableCheckInvocationBudgetMs - resumableCheckDefaultLeafExecutionReserveMs + 1)",
+    "    : Date.now();",
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(started, replacement));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable ordinary reserve clock"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_DEFAULT_RESERVE: "1" };
 }
 
 function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
