@@ -23,3 +23,7 @@ Use `pnpm run test:supervisor -- <pytest args>` for focused checks. The wrapper 
 
 For the default-disabled local attestation issuer, observer, and private-socket
 setup, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).
+
+The Memory Inbox proposal reader is a separate default-disabled,
+content-bearing capability; its enablement, recovery, and handling constraints
+are in the [Memory Inbox lifecycle runbook](../../docs/workflows/memory-inbox-lifecycle-migration.md#proposal-reader-capability).
