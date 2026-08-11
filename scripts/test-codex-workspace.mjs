@@ -11733,6 +11733,327 @@ try {
     }
   });
 
+  test("close-missing-worktree previews an exact no-PR absent-worktree record without mutation", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260724-synchronize-dev-recovery" });
+    try {
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      assert(packet.proof.github.kind === "no-pr", result.stdout || result.stderr);
+      assert(packet.proof.github.status === "matched", result.stdout || result.stderr);
+      assert(packet.proof.worktree.status === "absent_unregistered", result.stdout || result.stderr);
+      assert(packet.proof.localBranch.status === "absent", result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.status === "absent", result.stdout || result.stderr);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "dry run changed the manifest");
+      assert(!existsSync(fixture.worktree), "dry run recreated the missing worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "dry run recreated the local branch");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "dry run recreated the remote branch");
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree accepts a deliberately named immutable historical PR head", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "dashboard-delivery-profile" });
+    try {
+      const manifest = readJson(fixture.manifestPath);
+      delete manifest.pr_delivery_head_sha;
+      manifest.historical_pr_head_sha = "0123456789012345678901234567890123456789";
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      assert(packet.proof.github.recordedHead === manifest.historical_pr_head_sha, result.stdout || result.stderr);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree applies only bounded manifest closeout evidence for every approved task", () => {
+    for (const taskId of ["20260724-synchronize-dev-recovery", "dashboard-delivery-profile", "dashboard-lan-navigation"]) {
+      const fixture = createMissingWorktreeCloseoutFixture({ taskId });
+      try {
+        const beforeRefs = refSnapshot(fixture.root);
+        const result = runFixtureScript(fixture, [
+          "close-missing-worktree", taskId, "--apply", "--approval", "operator approved exact stale-workspace recovery", "--state-root", fixture.stateRoot,
+        ], { env: fixture.env });
+        assert(result.code === 0, `${taskId}: ${result.stderr || result.stdout}`);
+        const manifest = readJson(fixture.manifestPath);
+        assert(manifest.status === "closed", `${taskId}: manifest status is ${manifest.status}`);
+        assert(manifest.missing_worktree_closeout?.proof?.worktree?.status === "absent_unregistered", `${taskId}: missing worktree proof absent`);
+        assert(manifest.missing_worktree_closeout?.authorityDecision?.operation === "close-missing-worktree", `${taskId}: authority evidence absent`);
+        assert(manifest.events.some((event) => event.type === "missing_worktree_closeout_verified"), `${taskId}: recovery event absent`);
+        assert(refSnapshot(fixture.root) === beforeRefs, `${taskId}: closeout changed a branch ref`);
+        assert(!existsSync(fixture.worktree), `${taskId}: worktree changed`);
+      } finally {
+        cleanupMissingWorktreeCloseoutFixture(fixture);
+      }
+    }
+  });
+
+  test("close-missing-worktree refuses invocation from an isolated worktree before inspecting state", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260724-synchronize-dev-recovery" });
+    const isolatedWorktree = `${fixture.root}-isolated`;
+    try {
+      runGit(fixture.root, ["worktree", "add", "-q", "-b", "codex/missing-worktree-closeout-isolated", isolatedWorktree, "dev"]);
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--state-root", fixture.stateRoot,
+      ], { cwd: isolatedWorktree, env: fixture.env });
+      assert(result.code !== 0, "isolated worktree invocation unexpectedly succeeded");
+      assert(result.stderr.includes("must be invoked from the repository main checkout"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "isolated worktree invocation changed the manifest");
+    } finally {
+      if (existsSync(isolatedWorktree)) runGit(fixture.root, ["worktree", "remove", "--force", isolatedWorktree]);
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree rejects unsafe inputs and absence-proof residues before writing", () => {
+    const invalidFixture = createMissingWorktreeCloseoutFixture({ taskId: "20260724-synchronize-dev-recovery" });
+    try {
+      const invalid = runFixtureScript(invalidFixture, ["close-missing-worktree", "unapproved-task", "--summary-json", "--state-root", invalidFixture.stateRoot], { env: invalidFixture.env });
+      assert(invalid.code !== 0, "unallowlisted task unexpectedly reached state inspection");
+      assert(invalid.stderr.includes("only permits the approved exact task ids"), invalid.stderr || invalid.stdout);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(invalidFixture);
+    }
+
+    const scenarios = [
+      {
+        name: "missing approval",
+        taskId: "20260724-synchronize-dev-recovery",
+        args: ["--apply"],
+        expected: "requires --approval",
+      },
+      {
+        name: "assignment residue",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          mkdirSync(join(fixture.stateRoot, "assignments"), { recursive: true });
+          writeFileSync(join(fixture.stateRoot, "assignments", "linked.json"), `${JSON.stringify({ assignment_id: "linked", branch: fixture.branch, status: "claimed", task_id: fixture.taskId })}\n`);
+        },
+        expected: "linked assignment metadata exists",
+      },
+      {
+        name: "assignment matching missing worktree path",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          mkdirSync(join(fixture.stateRoot, "assignments"), { recursive: true });
+          writeFileSync(join(fixture.stateRoot, "assignments", "linked-worktree.json"), `${JSON.stringify({
+            schema_version: 1,
+            assignment_id: "linked-worktree",
+            task_id: "different-task",
+            lane_slug: "different-task",
+            branch: "codex/different-task",
+            worktree_path: fixture.worktree,
+            status: "claimed",
+            owner: "runner-a",
+            phase: "handoff",
+            runner_kind: "codex-cli",
+            events: [],
+          })}\n`);
+        },
+        expected: "linked assignment metadata exists",
+      },
+      {
+        name: "task lock residue",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          writeFileSync(join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`), "{}\n");
+        },
+        expected: "lock_metadata_invalid",
+      },
+      {
+        name: "local branch residue",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          runGit(fixture.root, ["branch", fixture.branch, "dev"]);
+        },
+        expected: "local branch is still present",
+      },
+      {
+        name: "remote branch residue",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          runGit(fixture.root, ["push", "-q", "origin", `dev:refs/heads/${fixture.branch}`]);
+        },
+        expected: "remote branch is still present",
+      },
+      {
+        name: "present worktree residue",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          mkdirSync(fixture.worktree, { recursive: true });
+        },
+        expected: "managed worktree path still exists",
+      },
+      {
+        name: "registered worktree residue",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          runGit(fixture.root, ["worktree", "add", "--detach", fixture.worktree, "dev"]);
+          rmSync(fixture.worktree, { recursive: true, force: true });
+        },
+        expected: "managed worktree path is still registered",
+      },
+      {
+        name: "fresh owner heartbeat",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.last_heartbeat_at = new Date().toISOString();
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "manifest owner heartbeat is not stale",
+      },
+      {
+        name: "whitespace-only owner",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.owner = " \t ";
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "manifest owner is missing",
+      },
+      {
+        name: "foreign manifest repository",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.repo_root = fixture.stateRoot;
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "manifest repo_root does not match the current repository root",
+      },
+      {
+        name: "no-PR retained PR number",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.pr_number = 999;
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "no-PR manifest retains PR number metadata",
+      },
+      {
+        name: "no-PR missing historical source head",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          delete manifest.historical_source_head_sha;
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "historical source head is missing or invalid",
+      },
+      {
+        name: "no-PR GitHub head mismatch",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const ghPath = join(fixture.fakeBin, "gh");
+          const source = readFileSync(ghPath, "utf8").replace("console.log('[]'); process.exit(0);", "console.log(JSON.stringify([{ headRefOid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }])); process.exit(0);");
+          writeFileSync(ghPath, source);
+        },
+        expected: "head that does not match the immutable historical source head",
+      },
+      {
+        name: "no-PR GitHub historical head match still proves a retained PR",
+        taskId: "20260724-synchronize-dev-recovery",
+        mutate(fixture) {
+          const ghPath = join(fixture.fakeBin, "gh");
+          const source = readFileSync(ghPath, "utf8").replace("console.log('[]'); process.exit(0);", "console.log(JSON.stringify([{ headRefOid: '0123456789012345678901234567890123456789' }])); process.exit(0);");
+          writeFileSync(ghPath, source);
+        },
+        expected: "found PR evidence matching the immutable historical source head",
+      },
+      {
+        name: "unmerged PR proof",
+        taskId: "dashboard-delivery-profile",
+        mutate(fixture) {
+          writeMissingWorktreeGhFixture(fixture, { state: "OPEN", mergedAt: null });
+        },
+        expected: "PR is not merged",
+      },
+      {
+        name: "mismatched recorded PR head",
+        taskId: "dashboard-lan-navigation",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          manifest.pr_delivery_head_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "recorded delivery head does not match live PR head",
+      },
+      {
+        name: "missing immutable recorded PR head",
+        taskId: "dashboard-lan-navigation",
+        mutate(fixture) {
+          const manifest = readJson(fixture.manifestPath);
+          delete manifest.pr_delivery_head_sha;
+          delete manifest.historical_pr_head_sha;
+          writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        expected: "immutable recorded PR head is missing or invalid",
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createMissingWorktreeCloseoutFixture({ taskId: scenario.taskId });
+      try {
+        scenario.mutate?.(fixture);
+        const before = readFileSync(fixture.manifestPath, "utf8");
+        const args = scenario.args || ["--summary-json"];
+        const result = runFixtureScript(fixture, ["close-missing-worktree", scenario.taskId, ...args, "--state-root", fixture.stateRoot], { env: fixture.env });
+        if (scenario.args) {
+          assert(result.code !== 0, `${scenario.name}: unexpectedly applied`);
+          assert(result.stderr.includes(scenario.expected), `${scenario.name}: ${result.stderr || result.stdout}`);
+        } else {
+          assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+          const packet = JSON.parse(result.stdout);
+          assert(packet.ready === false, `${scenario.name}: unexpectedly ready`);
+          assert(packet.blockers.some((blocker) => blocker.includes(scenario.expected)), `${scenario.name}: ${packet.blockers.join("; ")}`);
+        }
+        assert(readFileSync(fixture.manifestPath, "utf8") === before, `${scenario.name}: manifest changed despite blocker`);
+      } finally {
+        cleanupMissingWorktreeCloseoutFixture(fixture);
+      }
+    }
+  });
+
+  test("close-missing-worktree refuses a retained lock introduced after the unlocked preview proof", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260724-synchronize-dev-recovery" });
+    try {
+      const result = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--apply", "--approval", "operator approved exact stale-workspace recovery", "--state-root", fixture.stateRoot,
+      ], {
+        env: {
+          ...fixture.env,
+          CODEX_WORKSPACE_TEST_LOCK_ON_GH_PROOF_PATH: join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`),
+        },
+      });
+      assert(result.code !== 0, result.stderr || result.stdout);
+      assert(result.stderr.includes("Legacy task lock is retained"), result.stderr || result.stdout);
+      assert(readJson(fixture.manifestPath).status === "active", "late lock unexpectedly closed the manifest");
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree source holds the assignment index and disables stale lock recovery", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function closeMissingWorktree[\s\S]*?function assertMissingWorktreeCloseoutOptionSyntax/);
+    assert(match, "close-missing-worktree source not found");
+    assert(match[0].includes("withAssignmentsIndexLock(state, () => withManifestLock"), match[0]);
+    assert(match[0].includes("{ recoverStale: false }"), match[0]);
+  });
+
   test("cleanup-superseded source keeps a separate, fail-closed supersession proof path", () => {
     const source = readFileSync(scriptPath, "utf8");
     const match = source.match(/function cleanupSuperseded[\s\S]*?function cleanupRepositoryRoot/);
@@ -13797,6 +14118,120 @@ function cleanupMergedCleanupFixture(fixture) {
     stdio: "pipe",
   });
   rmSync(fixture.worktree, { recursive: true, force: true });
+  rmSync(fixture.remoteRoot, { recursive: true, force: true });
+  rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function createMissingWorktreeCloseoutFixture(options = {}) {
+  const taskId = options.taskId || "20260724-synchronize-dev-recovery";
+  const expectedPrNumbers = {
+    "20260724-synchronize-dev-recovery": null,
+    "dashboard-delivery-profile": 751,
+    "dashboard-lan-navigation": 753,
+  };
+  const prNumber = expectedPrNumbers[taskId];
+  assert(Object.hasOwn(expectedPrNumbers, taskId), `unexpected missing-worktree fixture task ${taskId}`);
+  const root = mkdtempSync(join(tmpdir(), "codex-missing-worktree-closeout-"));
+  const remoteRoot = `${root}-remote.git`;
+  const stateRootFixture = join(root, "state");
+  const fakeBin = join(root, "bin");
+  const expectedBranches = {
+    "20260724-synchronize-dev-recovery": "codex/synchronize-dev-recovery",
+    "dashboard-delivery-profile": "codex/dashboard-delivery-profile",
+    "dashboard-lan-navigation": "codex/dashboard-lan-navigation",
+  };
+  const branch = expectedBranches[taskId];
+  const worktree = join(stateRootFixture, "worktrees", taskId);
+  const manifestPath = join(stateRootFixture, "tasks", `${taskId}.json`);
+  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
+
+  copyWorkspaceScriptFixture(root);
+  mkdirSync(fakeBin, { recursive: true });
+  runGit(root, ["init", "-q"]);
+  runGit(root, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(root, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(root, "base.txt", "base\n", "base");
+  runGit(root, ["branch", "-M", "dev"]);
+  mkdirSync(remoteRoot, { recursive: true });
+  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(root, ["remote", "add", "origin", remoteRoot]);
+  runGit(root, ["push", "-q", "-u", "origin", "dev"]);
+  runGit(root, ["branch", branch, "dev"]);
+  runGit(root, ["push", "-q", "-u", "origin", branch]);
+  mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
+  runGit(root, ["worktree", "add", "-q", worktree, branch]);
+  runGit(root, ["worktree", "remove", worktree]);
+  runGit(root, ["branch", "-D", branch]);
+  runGit(root, ["push", "-q", "origin", "--delete", branch]);
+  mkdirSync(join(stateRootFixture, "tasks"), { recursive: true });
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify({
+      schema_version: 1,
+      task_id: taskId,
+      title: "Missing worktree recovery fixture",
+      description: "missing managed worktree recovery fixture",
+      repo_name: "fixture",
+      repo_root: root,
+      state_root: stateRootFixture,
+      base_branch: "dev",
+      base_ref: "origin/dev",
+      branch,
+      worktree_path: worktree,
+      status: "active",
+      mode: "pr",
+      owner: "stale-runner",
+      last_heartbeat_at: "2020-01-01T00:00:00.000Z",
+      ...(prNumber ? {
+        pr_number: prNumber,
+        pr_url: `https://example.test/pull/${prNumber}`,
+        pr_delivery_head_sha: "0123456789012345678901234567890123456789",
+      } : {
+        historical_source_head_sha: "0123456789012345678901234567890123456789",
+      }),
+      events: [],
+    }, null, 2)}\n`,
+  );
+  const fixture = { root, remoteRoot, stateRoot: stateRootFixture, fakeBin, taskId, prNumber, branch, worktree, manifestPath, script: join(root, "scripts", "codex-workspace.mjs"), env };
+  writeMissingWorktreeGhFixture(fixture);
+  return fixture;
+}
+
+function writeMissingWorktreeGhFixture(fixture, overrides = {}) {
+  const payload = fixture.prNumber
+    ? {
+        number: fixture.prNumber,
+        url: `https://example.test/pull/${fixture.prNumber}`,
+        mergedAt: "2026-07-31T00:00:00Z",
+        state: "MERGED",
+        baseRefName: "dev",
+        headRefName: fixture.branch,
+        headRefOid: "0123456789012345678901234567890123456789",
+        ...overrides,
+      }
+    : null;
+  writeFileSync(
+    join(fixture.fakeBin, "gh"),
+    [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (process.env.CODEX_WORKSPACE_TEST_LOCK_ON_GH_PROOF_PATH && args[0] === 'pr') writeFileSync(process.env.CODEX_WORKSPACE_TEST_LOCK_ON_GH_PROOF_PATH, '{}\\n');",
+      "if (args[0] === 'pr' && args[1] === 'list') { console.log('[]'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'view') {",
+      payload ? `  console.log(JSON.stringify(${JSON.stringify(payload)})); process.exit(0);` : "  process.exit(1);",
+      "}",
+      "console.error(`unexpected gh args: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+}
+
+function cleanupMissingWorktreeCloseoutFixture(fixture) {
+  if (!fixture) return;
   rmSync(fixture.remoteRoot, { recursive: true, force: true });
   rmSync(fixture.root, { recursive: true, force: true });
 }
