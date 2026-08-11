@@ -11,6 +11,30 @@ store, provider, job dispatch, or deletion execution.
 Legacy `memory_proposals`, `memory-captures`, work-packet, queue, and execution
 tables remain segregated and are not read, linked, or migrated by this change.
 
+## Proposal reader capability
+
+The private proposal reader is disabled by default. To enable it for an
+operator-controlled dashboard, set both
+`SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_ENABLED=true` and a non-empty,
+operator-approved `SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_CAPABILITY_REF`.
+The dashboard forwards the exact revision reader route and three proposal
+decisions (`return`, `deny`, and `approve`) for operator sessions only. Those
+decision requests require a same-origin `POST` and the operator CSRF token;
+viewers, queries, other methods, and every other proposal subresource are
+denied. `approve` starts the audited deletion barrier, which revokes reader
+grants and schedules deletion work—it does not itself prove content deletion.
+Keep the content-store root private and set
+`SUPERVISOR_MEMORY_INBOX_PROPOSAL_READER_MAX_BYTES` to the smallest useful
+bound.
+
+Before enabling, verify that the capability reference identifies the approved
+reader grant and that the private-content store has the expected owner-only
+permissions. To disable or recover from a suspected disclosure, unset the
+enabled flag, restart the supervisor, use the audited decision/deletion
+workflow to revoke affected reader grants, and preserve its audit evidence. Do
+not expose the supervisor's private UDS directly or copy proposal bodies into
+dashboard logs, browser storage, or public monitoring.
+
 ## Rollback
 
 Rollback is a capability rollback: restore the prior supervisor binary and

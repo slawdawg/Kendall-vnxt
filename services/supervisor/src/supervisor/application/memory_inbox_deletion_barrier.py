@@ -24,7 +24,15 @@ async def establish_deletion_barrier(
     none of those entry points may bypass cancellation, disclosure invalidation,
     reader-grant revocation, or the bounded active-job lease fence.
     """
-    now = now or datetime.now(timezone.utc)
+    return await _establish_deletion_barrier(
+        session, source=source, actor_ref=actor_ref,
+        now=now or datetime.now(timezone.utc),
+    )
+
+
+async def _establish_deletion_barrier(
+    session: AsyncSession, *, source: MemoryInboxSource, actor_ref: str, now: datetime,
+) -> int:
     revisions = list((await session.scalars(select(MemoryInboxSourceRevision).where(
         MemoryInboxSourceRevision.source_id == source.id,
     ).with_for_update())).all())
