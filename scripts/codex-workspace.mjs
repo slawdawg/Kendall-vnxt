@@ -152,8 +152,18 @@ const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": { prNumber: null, branch: "codex/synchronize-dev-recovery", worktreeName: "20260724-synchronize-dev-recovery" },
-  "dashboard-delivery-profile": { prNumber: 751, branch: "codex/dashboard-delivery-profile", worktreeName: "dashboard-delivery-profile" },
-  "dashboard-lan-navigation": { prNumber: 753, branch: "codex/dashboard-lan-navigation", worktreeName: "dashboard-lan-navigation" },
+  "dashboard-delivery-profile": { prNumber: 751, branch: "codex/dashboard-delivery-profile", worktreeName: "dashboard-delivery-profile", legacyWorktreeRelativePath: ".codex-workspaces/dashboard-delivery-profile" },
+  // This is a one-time legacy recovery exception.  The recorded delivery head
+  // was later amended on the same merged PR; accept no other ancestor pair.
+  "dashboard-lan-navigation": {
+    prNumber: 753,
+    branch: "codex/dashboard-lan-navigation",
+    worktreeName: "dashboard-lan-navigation",
+    approvedAncestorDeliveryHeadPair: Object.freeze({
+      recordedHead: "63c138fdca01d6af5bd234c861f64a5779c6f58e",
+      livePrHead: "4499822c180fb6d5d85d7109d9f0fec78dc1bed6",
+    }),
+  },
 });
 const rebuildIndexBaseBranch = "main";
 const protectedBranches = new Set(branchFoundationProtectedBranches);
@@ -4514,7 +4524,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
   if (owner.status !== "stale") blockers.push(owner.reason);
   const taskLock = missingWorktreeLockEvidence(state, manifest.task_id, context);
   if (taskLock.status !== "absent" && taskLock.status !== "self_held_after_absent_precheck") blockers.push(taskLock.reason);
-  const worktree = missingWorktreeRegistrationEvidence(manifest, state);
+  const worktree = missingWorktreeRegistrationEvidence(manifest, state, target);
   if (worktree.status !== "absent_unregistered") blockers.push(worktree.reason);
   const localBranch = missingWorktreeLocalBranchEvidence(manifest);
   if (localBranch.status !== "absent") blockers.push(localBranch.reason);
@@ -4525,7 +4535,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
 
   const github = target?.prNumber === null
     ? missingWorktreeNoPrEvidence(manifest)
-    : missingWorktreeMergedPrEvidence(manifest, target?.prNumber);
+    : missingWorktreeMergedPrEvidence(manifest, target?.prNumber, target);
   if (github.status !== "matched") blockers.push(github.reason);
 
   const requiredGates = [
@@ -4634,10 +4644,12 @@ function missingWorktreeLockEvidence(state, taskId, context) {
   };
 }
 
-function missingWorktreeRegistrationEvidence(manifest, state) {
+function missingWorktreeRegistrationEvidence(manifest, state, target) {
   const path = manifest.worktree_path;
   try {
-    const absentTarget = assertManagedAbsentWorktreePath(path, state);
+    const absentTarget = target?.legacyWorktreeRelativePath
+      ? assertExactLegacyAbsentWorktreePath(manifest, target)
+      : assertManagedAbsentWorktreePath(path, state);
     const registered = managedWorktreeRegistry(manifest, state)
       .some((entry) => resolve(entry.path) === absentTarget.target);
     return registered
@@ -4647,6 +4659,41 @@ function missingWorktreeRegistrationEvidence(manifest, state) {
     const message = safeMetadataText(error.message || error, 500);
     return { status: "blocked", path, exists: null, listed: null, reason: message.includes("is present") ? "managed worktree path still exists" : `managed worktree absence or registration evidence is unavailable: ${message}` };
   }
+}
+
+function assertExactLegacyAbsentWorktreePath(manifest, target) {
+  const repository = canonicalExistingPath(manifest.repo_root);
+  const configuredRelativePath = target?.legacyWorktreeRelativePath;
+  if (!repository || typeof configuredRelativePath !== "string" || !configuredRelativePath.trim()) {
+    throw new Error("legacy managed worktree configuration is invalid");
+  }
+  const expected = resolve(repository, configuredRelativePath);
+  const actual = resolve(manifest.worktree_path || "");
+  if (actual !== expected) {
+    throw new Error(`legacy managed worktree path does not match the exact approved target: ${manifest.worktree_path}`);
+  }
+  const rel = relative(repository, actual);
+  if (!rel || rel.startsWith("..") || resolve(repository, rel) !== actual) {
+    throw new Error(`legacy managed worktree path escapes the repository root: ${manifest.worktree_path}`);
+  }
+  let inspected = repository;
+  for (const segment of rel.split(sep)) {
+    inspected = join(inspected, segment);
+    try {
+      const stat = lstatSync(inspected);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`legacy managed worktree path traverses a symlink: ${manifest.worktree_path}`);
+      }
+      const canonical = canonicalExistingPath(inspected);
+      if (!canonical || (canonical !== repository && !canonical.startsWith(`${repository}${sep}`))) {
+        throw new Error(`legacy managed worktree path is outside the repository root: ${manifest.worktree_path}`);
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT") return { target: actual, managedRoot: repository, legacy: true };
+      throw error;
+    }
+  }
+  throw new Error(`legacy managed worktree path is present: ${manifest.worktree_path}`);
 }
 
 function missingWorktreeLocalBranchEvidence(manifest) {
@@ -4726,7 +4773,7 @@ function missingWorktreeNoPrEvidence(manifest) {
   }
 }
 
-function missingWorktreeMergedPrEvidence(manifest, expectedNumber) {
+function missingWorktreeMergedPrEvidence(manifest, expectedNumber, target) {
   if (manifest.pr_number !== expectedNumber) {
     return { status: "blocked", kind: "merged-pr", expectedNumber, reason: `manifest PR number must exactly equal ${expectedNumber}` };
   }
@@ -4746,7 +4793,25 @@ function missingWorktreeMergedPrEvidence(manifest, expectedNumber) {
     if (!recordedHead) throw new Error("immutable recorded PR head is missing or invalid");
     const headSha = exactGitObjectIdOrNull(pr.headRefOid);
     if (!headSha) throw new Error("PR head is not an exact Git object id");
-    if (recordedHead !== headSha) throw new Error("recorded delivery head does not match live PR head");
+    if (recordedHead !== headSha) {
+      const approvedPair = target?.approvedAncestorDeliveryHeadPair;
+      if (!approvedPair || recordedHead !== approvedPair.recordedHead || headSha !== approvedPair.livePrHead) {
+        throw new Error("recorded delivery head does not match the approved immutable ancestor delivery pair");
+      }
+      return {
+        status: "matched",
+        kind: "merged-pr",
+        number: pr.number,
+        url: safeMetadataText(pr.url || "", 500) || null,
+        mergedAt: pr.mergedAt,
+        baseRefName: pr.baseRefName,
+        headRefName: pr.headRefName,
+        headRefOid: headSha,
+        recordedHead,
+        headRelation: "approved_recorded_head_is_known_ancestor_of_live_pr_head",
+        reason: "live merged PR proof matched the approved immutable recorded ancestor pair",
+      };
+    }
     return {
       status: "matched",
       kind: "merged-pr",
