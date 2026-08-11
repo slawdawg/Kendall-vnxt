@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.application.memory_inbox_deletion_barrier import source_copy_owner_revision_ids
+from supervisor.application.memory_inbox_deletion_barrier import manifest_owner_clause, source_copy_owner_revision_ids
 from supervisor.config.settings import Settings
 from supervisor.infrastructure.db.models import (
     MemoryInboxDeletionOperation, MemoryInboxDeletionProof, MemoryInboxManifest,
@@ -30,11 +30,11 @@ async def execute_deletion_operation(session: AsyncSession, *, settings: Setting
     ).with_for_update())).scalar_one_or_none()
     if manifest is None:
         raise ValueError("deletion_manifest_unavailable")
-    source_revision = await session.get(MemoryInboxSourceRevision, manifest.owner_revision_id)
-    if source_revision is not None:
-        source_id = source_revision.source_id
+    if manifest.source_revision_id is not None:
+        source_revision = await session.get(MemoryInboxSourceRevision, manifest.source_revision_id)
+        source_id = source_revision.source_id if source_revision else None
     else:
-        proposal_revision = await session.get(MemoryInboxProposalRevision, manifest.owner_revision_id)
+        proposal_revision = await session.get(MemoryInboxProposalRevision, manifest.proposal_revision_id)
         proposal = await session.get(MemoryInboxProposalAggregate, proposal_revision.proposal_id) if proposal_revision else None
         source_id = proposal.source_id if proposal else None
     source = (await session.execute(select(MemoryInboxSource).where(
@@ -57,9 +57,9 @@ async def execute_deletion_operation(session: AsyncSession, *, settings: Setting
     proof = await session.scalar(select(MemoryInboxDeletionProof).where(MemoryInboxDeletionProof.deletion_operation_id == operation.id))
     if proof is None:
         session.add(MemoryInboxDeletionProof(id=f"inbox-deletion-proof:{uuid.uuid4().hex}", deletion_operation_id=operation.id, proof_ref=f"receipt:inbox-deletion:{uuid.uuid4().hex}", lifecycle_state="Proven"))
-    owner_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
+    source_revision_ids, proposal_revision_ids = await source_copy_owner_revision_ids(session, source_id=source.id)
     remaining = (await session.scalars(select(MemoryInboxManifest).where(
-        MemoryInboxManifest.owner_revision_id.in_(owner_revision_ids),
+        manifest_owner_clause(source_revision_ids, proposal_revision_ids),
         MemoryInboxManifest.deletion_state != "Proven",
     ))).all()
     if not remaining:

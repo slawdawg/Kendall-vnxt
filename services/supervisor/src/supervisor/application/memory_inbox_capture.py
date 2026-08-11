@@ -73,7 +73,7 @@ async def capture_acknowledged_text(
             return replayed_source_id
         raise ValueError("text_capture_conflict")
     manifest = MemoryInboxManifest(
-        id=manifest_id, owner_revision_id=revision_id, copy_class="text_source", store_ref=store_ref,
+        id=manifest_id, legacy_owner_revision_id=revision_id, source_revision_id=revision_id, copy_class="text_source", store_ref=store_ref,
         creation_state="Planned", retention_class="source_retention", deletion_state="None",
     )
     session.add(manifest)
