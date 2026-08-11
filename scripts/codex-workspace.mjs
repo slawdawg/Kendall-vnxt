@@ -314,7 +314,7 @@ Commands:
   reconcile-merged-pr <query> Record verified merged-PR metadata before cleanup.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
-  cleanup-integrated [query] Remove clean no-PR worktrees already integrated into a base ref.
+  cleanup-integrated [query] Remove clean integrated worktrees with no PR, or one explicitly approved non-open PR record.
   close-missing-worktree <task-id> Close one allowlisted stale manifest whose managed worktree and branch refs are proven absent.
   cleanup-superseded <task> Remove one clean no-PR worktree carried forward by a named merged PR.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
@@ -491,6 +491,9 @@ cleanup-current options:
 cleanup-integrated options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --base <ref>              Ref to compare against. Defaults to origin/dev.
+  --allow-closed-pr-integrated
+                            Allow one explicitly approved non-open PR manifest only when its current branch is integrated into --base.
+  --approval <text>         Required with --allow-closed-pr-integrated; recorded as closeout evidence.
   --summary-json            Without --apply, print a compact JSON cleanup summary.
 
 cleanup-superseded options:
@@ -5770,13 +5773,14 @@ function cleanupIntegrated(argv) {
   const apply = Boolean(options.apply);
   const baseRef = String(options.base || cleanupIntegratedDefaultBaseRef);
   const exactTreeCloseout = exactTreeCloseoutInput({ positional, options, baseRef });
+  const closedPrIntegrated = closedPrIntegratedInput({ positional, options, baseRef, exactTreeCloseout });
   if (!refExists(baseRef)) {
     throw new Error(`Base ref not found locally: ${baseRef}`);
   }
 
   const records = query ? [exactTreeCloseout ? findCleanupManifestByExactTaskId(state, query) : findCleanupManifest(state, query)] : readCleanupManifests(state);
   const currentOwner = currentLaneOwner(options);
-  const results = records.map((record) => cleanupIntegratedPlan(record, state, { baseRef, currentOwner, options, exactTreeCloseout }));
+  const results = records.map((record) => cleanupIntegratedPlan(record, state, { baseRef, currentOwner, options, exactTreeCloseout, closedPrIntegrated }));
 
   if (options.summaryJson) {
     console.log(JSON.stringify(buildCleanupIntegratedSummary({ state, currentOwner, baseRef, query, results }), null, 2));
@@ -5822,9 +5826,21 @@ function exactTreeCloseoutInput({ positional, options, baseRef }) {
   return { provenance, closeoutReason };
 }
 
+function closedPrIntegratedInput({ positional, options, baseRef, exactTreeCloseout }) {
+  if (!options.allowClosedPrIntegrated) return null;
+  if (exactTreeCloseout) throw new Error("cleanup-integrated --allow-closed-pr-integrated cannot be combined with --exact-tree-closeout.");
+  if (positional.length !== 1) throw new Error("cleanup-integrated --allow-closed-pr-integrated requires exactly one explicit task id.");
+  if (!String(baseRef || "").startsWith("origin/")) throw new Error("cleanup-integrated --allow-closed-pr-integrated requires an origin/* base ref.");
+  const approval = String(options.approval || "").trim();
+  if (!validSupersessionApplyEvidence(approval)) throw new Error("cleanup-integrated --allow-closed-pr-integrated requires --approval with at least 10 non-whitespace characters.");
+  if (options.deleteRemote) throw new Error("cleanup-integrated --allow-closed-pr-integrated forbids remote deletion.");
+  return { approval };
+}
+
 function cleanupIntegratedPlan(record, state, context) {
   const { manifest } = record;
   const strict = context.exactTreeCloseout;
+  const closedPrIntegrated = context.closedPrIntegrated;
   const strictResume = strict && strictPartialCloseoutMatches(manifest, strict, context.baseRef);
   const base = {
     taskId: manifest.task_id,
@@ -5842,6 +5858,7 @@ function cleanupIntegratedPlan(record, state, context) {
     worktree: null,
     manifestPath: record.path,
     exactTreeCloseout: Boolean(strict),
+    closedPrIntegrated: Boolean(closedPrIntegrated),
     proof: strict ? { tree: { status: "unverified", source: null, base: null }, originDev: { status: "unverified" }, remoteBranch: { status: "unverified", state: null }, githubNoPr: { status: "unverified" }, assignmentCloseout: { status: "unverified" }, evidence: { status: "unverified" } } : null,
   };
 
@@ -5851,7 +5868,7 @@ function cleanupIntegratedPlan(record, state, context) {
   if (manifest.mode === "epic-batch") {
     return { ...base, reason: "epic-batch workspace requires finish-epic closeout; integrated cleanup is disabled" };
   }
-  if (strict ? supersededSourceHasPrEvidence(manifest) || (hasStrictCloseoutEvidence(manifest) && !strictResume) : manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || ""))) {
+  if (strict ? supersededSourceHasPrEvidence(manifest) || (hasStrictCloseoutEvidence(manifest) && !strictResume) : !closedPrIntegrated && (manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || "")))) {
     return { ...base, reason: strict ? "source workspace has PR or cleanup evidence" : "workspace has PR/merged cleanup evidence; use cleanup-merged" };
   }
   const ownerWarning = laneOwnerWarning(manifest, context.options);
@@ -5934,15 +5951,60 @@ function cleanupIntegratedPlan(record, state, context) {
     };
   }
 
+  let closedPrProof = null;
+  if (closedPrIntegrated) {
+    closedPrProof = closedPrIntegratedProof(manifest, cleanupCwd);
+    if (closedPrProof.status !== "matched") {
+      return {
+        ...base,
+        cleanupCwd,
+        worktree: cleanupWorktreeSummary(worktreeStatus),
+        localBranchSha,
+        expectedHeadSha: localBranchSha,
+        reason: closedPrProof.reason,
+        proof: { closedPr: closedPrProof },
+      };
+    }
+  }
+
   return {
     ...base,
     status: "ready",
-    reason: `clean no-PR workspace already integrated into ${context.baseRef}`,
+    reason: closedPrIntegrated ? `clean non-open PR workspace already integrated into ${context.baseRef}` : `clean no-PR workspace already integrated into ${context.baseRef}`,
     cleanupCwd,
     worktree: cleanupWorktreeSummary(worktreeStatus),
     localBranchSha,
     expectedHeadSha: localBranchSha,
     remoteBranchSha: branchSha(`origin/${manifest.branch}`, cleanupCwd) || null,
+    proof: closedPrIntegrated ? { closedPr: closedPrProof, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
+  };
+}
+
+function closedPrIntegratedProof(manifest, cleanupCwd) {
+  if (!Number.isInteger(manifest.pr_number) || manifest.pr_number < 1 || typeof manifest.pr_url !== "string" || !manifest.pr_url) {
+    return { status: "blocked", reason: "closed-PR integrated cleanup requires a retained PR number and URL", metadataOnly: true };
+  }
+  const result = run("gh", ["pr", "list", "--head", manifest.branch, "--state", "all", "--json", "number,state,mergedAt,closedAt,headRefName,headRefOid,baseRefName"], { cwd: cleanupCwd });
+  if (result.code !== 0) return { status: "unavailable", reason: `live GitHub PR proof is unavailable: gh pr list exited ${result.code}`, metadataOnly: true, rawPayloadRetained: false };
+  let pullRequests;
+  try {
+    pullRequests = parseGhJson(result.stdout, "closed-PR integrated cleanup proof");
+  } catch (error) {
+    return { status: "unavailable", reason: `live GitHub PR proof is unavailable: ${error.message}`, metadataOnly: true, rawPayloadRetained: false };
+  }
+  if (!Array.isArray(pullRequests) || pullRequests.some((pr) => !pr || typeof pr !== "object" || pr.headRefName !== manifest.branch || !Number.isInteger(pr.number) || typeof pr.state !== "string")) {
+    return { status: "unavailable", reason: "live GitHub PR proof is unavailable: malformed or non-exact source branch record", metadataOnly: true, rawPayloadRetained: false };
+  }
+  if (pullRequests.some((pr) => pr.state === "OPEN")) return { status: "blocked", reason: "live GitHub PR proof found an open PR for the source branch", metadataOnly: true, rawPayloadRetained: false };
+  const retained = pullRequests.find((pr) => pr.number === manifest.pr_number);
+  if (!retained) return { status: "blocked", reason: `live GitHub PR proof did not return retained PR #${manifest.pr_number} for the source branch`, metadataOnly: true, rawPayloadRetained: false };
+  if (!["CLOSED", "MERGED"].includes(retained.state)) return { status: "blocked", reason: `retained PR #${manifest.pr_number} is not closed`, metadataOnly: true, rawPayloadRetained: false };
+  return {
+    status: "matched",
+    retainedPr: { number: retained.number, state: retained.state, headRefName: retained.headRefName, headRefOid: typeof retained.headRefOid === "string" ? retained.headRefOid : null, baseRefName: typeof retained.baseRefName === "string" ? retained.baseRefName : null, mergedAt: typeof retained.mergedAt === "string" ? retained.mergedAt : null, closedAt: typeof retained.closedAt === "string" ? retained.closedAt : null },
+    checkedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
   };
 }
 
@@ -6175,6 +6237,7 @@ function applyCleanupIntegrated(state, plan, options) {
       currentOwner: currentLaneOwner(options),
       options,
       exactTreeCloseout: plan.exactTreeCloseout ? exactTreeCloseoutInput({ positional: [plan.taskId], options, baseRef: plan.baseRef }) : null,
+      closedPrIntegrated: plan.closedPrIntegrated ? closedPrIntegratedInput({ positional: [plan.taskId], options, baseRef: plan.baseRef, exactTreeCloseout: null }) : null,
     });
     if (freshPlan.status !== "ready") {
       throw new Error(`${plan.taskId} is no longer cleanup-ready: ${freshPlan.reason}`);
@@ -6199,6 +6262,20 @@ function applyCleanupIntegrated(state, plan, options) {
       manifest.cleanup_remote_branch_sha = freshPlan.remoteBranchSha || null;
       manifest.cleanup_remote_branch_deleted_at = null;
       manifest.cleanup_remote_branch_policy = "not-deleted-no-pr-integrated-cleanup";
+      if (freshPlan.closedPrIntegrated) {
+        manifest.closed_pr_integrated_cleanup = {
+          mode: "closed-pr-integrated-cleanup/v1",
+          appliedAt: cleanupStartedAt,
+          baseRef: freshPlan.baseRef,
+          expectedHeadSha: freshPlan.expectedHeadSha,
+          retainedPr: freshPlan.proof.closedPr.retainedPr,
+          approval: freshPlan.proof.approval,
+          metadataOnly: true,
+          rawPayloadRetained: false,
+        };
+        manifest.cleanup_remote_branch_policy = "not-deleted-closed-pr-integrated-cleanup";
+        appendTaskEvent(manifest, "closed_pr_integrated_cleanup_started", `non-open PR #${freshPlan.proof.closedPr.retainedPr.number} rechecked against ${freshPlan.baseRef}`);
+      }
       if (freshPlan.exactTreeCloseout) {
         manifest.supersession_closeout_evidence = {
           mode: "exact-tree-closeout/v1",
@@ -6281,7 +6358,7 @@ function applyCleanupIntegrated(state, plan, options) {
         manifest.source_assignment_closed_at = assignmentClosure.closedAt;
         appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
       }
-      appendTaskEvent(manifest, "closed", `cleaned no-PR integrated workspace against ${plan.baseRef}`);
+      appendTaskEvent(manifest, "closed", freshPlan.closedPrIntegrated ? `cleaned non-open PR integrated workspace against ${plan.baseRef}` : `cleaned no-PR integrated workspace against ${plan.baseRef}`);
     } catch (error) {
       manifest.status = "cleanup_partial";
       manifest.cleanup_error = error.message;
