@@ -5991,7 +5991,7 @@ function prGateBlockers(manifest, pr, context) {
   }
   if (!pr.headRefName) {
     blockers.push("PR headRefName missing");
-  } else if (pr.headRefName !== manifest.branch) {
+  } else if (context.managedGate !== false && pr.headRefName !== manifest.branch) {
     blockers.push(`PR head branch ${pr.headRefName} does not match managed branch ${manifest.branch}`);
   }
   if (!exactGitObjectIdOrNull(context.initialBaseRefOid) || pr.baseRefOid !== context.initialBaseRefOid) {

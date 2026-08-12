@@ -1597,6 +1597,8 @@ try {
     assert(refresh[0].includes("Live PR or status checks changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration PR/check drift");
     assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
 
+    assert(source.includes("context.managedGate !== false && pr.headRefName !== manifest.branch"), "managed branch identity must not be imposed on detached unmanaged PR evidence");
+
     const policy = source.match(/function sourceOwnedSkipPolicySection[\s\S]*?function shapeDiffRiskEvidence/);
     assert(policy, "source-owned skip policy parser not found");
     assert(policy[0].includes("marker.length >= fence.length"), "a closing policy fence must be at least as long as its opener");
@@ -11705,6 +11707,7 @@ try {
       assert(parsed.authorityDecision.authorityProfile === "unmanaged-pr-evidence", JSON.stringify(parsed.authorityDecision));
       assert(parsed.authorityDecision.authorityFamily === "unmanaged-pr-evidence", JSON.stringify(parsed.authorityDecision));
       assert(!parsed.blockers.includes("Managed PR gate requires recorded standard-delivery pr_open evidence"), JSON.stringify(parsed.blockers));
+      assert(!parsed.blockers.some((blocker) => blocker.includes("does not match managed branch")), JSON.stringify(parsed.blockers));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
