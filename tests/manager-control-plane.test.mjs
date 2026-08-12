@@ -18855,7 +18855,7 @@ test("assignment resume derives stale-owner targets from detailed assignment row
           ],
           workspaceAssignments: [
             {
-              taskId: "task-workspace-old",
+              taskId: "task-workspace-completion-journal-old",
               status: "blocked_stale_owner_needs_takeover",
               owner: "old-owner",
               branch: "codex/task-workspace-old",
@@ -18874,7 +18874,7 @@ test("assignment resume derives stale-owner targets from detailed assignment row
   assert.equal(assignment.summary.blockedLaneAssignments[0].assignmentId, "lane-old");
   assert.equal(assignment.summary.blockedLaneAssignments[0].status, "blocked_stale_owner_needs_takeover");
   assert.equal(assignment.summary.blockedWorkspaceAssignments.length, 1);
-  assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "task-workspace-old");
+  assert.equal(assignment.summary.blockedWorkspaceAssignments[0].taskId, "task-workspace-completion-journal-old");
   assert.equal(assignment.warnings.length, 0);
 });
 

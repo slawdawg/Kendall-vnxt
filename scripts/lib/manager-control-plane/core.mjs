@@ -23058,8 +23058,11 @@ function normalizeAssignmentResumeRow(row = {}, report = {}, kind = "assignment"
   const next = {
     ...row,
     kind,
-    assignmentId: sanitizeLedgerField(row.assignmentId || row.assignment_id || (kind === "lane_assignment" ? fallbackId : ""), "", 140),
-    taskId: sanitizeLedgerField(row.taskId || row.task_id || (kind === "workspace_assignment" ? fallbackId : ""), "", 140),
+    // Assignment and task identifiers are later passed to the workspace CLI.
+    // Preserve safe identifier text instead of applying display-only retention
+    // redaction, which would make historical names impossible to resolve.
+    assignmentId: sanitizeIdentifierField(row.assignmentId || row.assignment_id || (kind === "lane_assignment" ? fallbackId : ""), "", 140),
+    taskId: sanitizeIdentifierField(row.taskId || row.task_id || (kind === "workspace_assignment" ? fallbackId : ""), "", 140),
     status,
     owner: sanitizeLedgerField(row.owner || "", "", 160),
     branch: sanitizeLedgerField(row.branch || "", "", 160),
