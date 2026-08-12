@@ -3434,7 +3434,9 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   );
   const blockers = [];
   if (manifest.status !== "pr_open") blockers.push(`Manifest status is ${manifest.status || "missing"}; only pr_open lanes may refresh a delivery head`);
-  const releasedByCurrentOwner = lockInspection.status === "released" && lockInspection.owner === currentLaneOwner(options);
+  const releasedByCurrentOwner = lockInspection.status === "released"
+    && lockInspection.metadata?.owner === manifest.owner
+    && manifest.owner === currentLaneOwner(options);
   if (lockInspection.status !== "absent" && lockInspection.status !== "owned" && !releasedByCurrentOwner) blockers.push(`Task lock is ${lockInspection.status || "ambiguous"}; explicit refresh requires an idle or owned lane lock`);
   if (!priorHeadSha) blockers.push("Recorded delivery head is missing or invalid; refresh cannot silently establish an initial delivery binding");
   if (!reason) blockers.push("Explicit stale-head refresh reason is missing");
