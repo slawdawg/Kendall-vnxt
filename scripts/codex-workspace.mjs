@@ -477,6 +477,8 @@ reconcile-merged-pr options:
   --delivery-audit-status <status> Cleanup audit recommendation. Must be cleanup-ready.
   --delivery-audit-summary <text> Metadata-only cleanup audit summary for the exact PR head.
   --delivery-audit-head-sha <sha> Optional exact head override; must match the merged PR head.
+  --allow-audited-descendant-head Permit one explicit, audit-bound update when the merged PR head is a clean descendant of the recorded delivery head.
+  --approval <text>         Required with --allow-audited-descendant-head; records the operator authorization.
 
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -3189,6 +3191,7 @@ function reconcileMergedPr(argv) {
     throw new Error("reconcile-merged-pr accepts either --dry-run or --apply, not both.");
   }
   assertReconciliationAuditOptionValues(options);
+  assertAuditedDescendantHeadOptionValues(options);
   if (options.takeOwnership) {
     throw new Error("reconcile-merged-pr does not support --take-ownership; the recorded lane owner must run this metadata-only operation.");
   }
@@ -3238,6 +3241,10 @@ function reconcileMergedPr(argv) {
     lockedManifest.pr_url = lockedPacket.pr.url;
     lockedManifest.pr_number = lockedPacket.pr.number;
     lockedManifest.pr_delivery_head_sha = lockedPacket.expectedHeadSha;
+    if (lockedPacket.auditedDescendantHead) {
+      lockedManifest.audited_descendant_delivery_reconciliation = lockedPacket.auditedDescendantHead;
+      appendTaskEvent(lockedManifest, "audited_descendant_delivery_head_reconciled", `${lockedPacket.auditedDescendantHead.recordedHeadSha} -> ${lockedPacket.auditedDescendantHead.liveHeadSha}`);
+    }
     lockedManifest.merged_at = lockedPacket.pr.mergedAt;
     lockedManifest.delivery_subagent_audit = lockedPacket.deliverySubagentAudit;
     lockedManifest.delivery_subagent_audit_checked_at = lockedPacket.checkedAt;
@@ -3298,6 +3305,15 @@ function assertReconciliationAuditOptionValues(options) {
   }
 }
 
+function assertAuditedDescendantHeadOptionValues(options) {
+  if (options.allowAuditedDescendantHead !== undefined && options.allowAuditedDescendantHead !== true) {
+    throw new Error("reconcile-merged-pr --allow-audited-descendant-head must be a bare flag without a value.");
+  }
+  if (options.allowAuditedDescendantHead && !validTakeoverReason(options.approval)) {
+    throw new Error("reconcile-merged-pr --allow-audited-descendant-head requires --approval with at least 10 non-whitespace characters.");
+  }
+}
+
 function buildMergedPrReconciliationEvidence(manifest, context = {}) {
   const checkedAt = new Date().toISOString();
   const blockers = [];
@@ -3308,6 +3324,9 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
   let remoteHeadSha = null;
   let remoteInspectionError = null;
   let rawRemoteHeadSha = "";
+  const allowAuditedDescendantHead = context.options?.allowAuditedDescendantHead === true;
+  const recordedHeadSha = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha);
+  let auditedDescendantHead = null;
 
   if (!pr) {
     addReconciliationBlocker(blockers, "Could not load live PR state for merged-PR reconciliation.");
@@ -3334,7 +3353,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
     if (manifest.pr_url && manifest.pr_url !== pr.url) {
       addReconciliationBlocker(blockers, "Manifest PR URL does not match the live PR URL.");
     }
-    if (manifest.pr_delivery_head_sha && manifest.pr_delivery_head_sha !== pr.headRefOid) {
+    if (manifest.pr_delivery_head_sha && manifest.pr_delivery_head_sha !== pr.headRefOid && !allowAuditedDescendantHead) {
       addReconciliationBlocker(blockers, `Recorded delivery head ${safeMetadataText(manifest.pr_delivery_head_sha, 80)} does not match live PR head ${pr.headRefOid || "missing"}.`);
     }
     if (manifest.merged_at && manifest.merged_at !== pr.mergedAt) {
@@ -3352,6 +3371,26 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
     addReconciliationBlocker(blockers, `Local branch ${safeMetadataText(manifest.branch, 250)} is missing or does not resolve to an exact Git object id.`);
   } else if (pr?.headRefOid && localHeadSha !== pr.headRefOid) {
     addReconciliationBlocker(blockers, `Local branch ${safeMetadataText(manifest.branch, 250)} head ${localHeadSha} does not match live PR head ${pr.headRefOid}.`);
+  }
+
+  if (allowAuditedDescendantHead) {
+    if (!recordedHeadSha || !pr?.headRefOid || recordedHeadSha === pr.headRefOid) {
+      addReconciliationBlocker(blockers, "Audited descendant reconciliation requires distinct exact recorded and live PR delivery heads.");
+    } else if (git(["merge-base", "--is-ancestor", recordedHeadSha, pr.headRefOid], { cwd: manifest.worktree_path }).code !== 0) {
+      addReconciliationBlocker(blockers, "Live PR head is not a descendant of the recorded delivery head.");
+    } else if (parseStatus(manifest.worktree_path).any) {
+      addReconciliationBlocker(blockers, "Audited descendant reconciliation requires a clean managed worktree.");
+    } else {
+      auditedDescendantHead = {
+        schemaVersion: 1,
+        recordedHeadSha,
+        liveHeadSha: pr.headRefOid,
+        approval: String(context.options.approval).trim(),
+        checkedAt,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      };
+    }
   }
 
   try {
@@ -3383,6 +3422,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
     "live remote lane branch is absent or exactly matches the merged PR head",
     "retained PR identity and delivery metadata do not conflict",
     "independent cleanup audit recommends cleanup-ready for the exact merged head",
+    ...(allowAuditedDescendantHead ? ["live merged head is a clean descendant of the recorded delivery head", "explicit audited-descendant approval is recorded"] : []),
   ];
   const status = blockers.length === 0 ? "ready" : "blocked";
   const authorityDecision = shapeAuthorityDecisionEvidence({
@@ -3421,6 +3461,7 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
     branch: manifest.branch,
     baseBranch: manifest.base_branch,
     expectedHeadSha: expectedHeadSha || null,
+    auditedDescendantHead,
     localHeadSha: localHeadSha || null,
     remoteBranch: {
       branch: manifest.branch,
