@@ -522,6 +522,9 @@ cleanup-superseded options:
   --successor-hardening-commits <shas> Comma-separated commits in the named PR lineage.
   --successor-hardening-scope <paths> Exact scoped paths changed by those successor commits.
   --successor-hardening-evidence <text> Explicit bounded hardening rationale (metadata only).
+  --closed-source-pr <id> Closed-unmerged source PR allowed only with exact patch-equivalent commit lists.
+  --source-patch-commits <shas> Exact non-merge source commits in closed source PR order.
+  --carry-forward-patch-commits <shas> Exact equivalent commits in the named merged successor PR order.
   --apply                   Apply local-only cleanup after a fresh locked re-proof.
   --approval <text>         Required with --apply; records operator approval evidence.
   --reason <text>           Required with --apply; records the reviewed cleanup reason.
@@ -6732,6 +6735,30 @@ function cleanupSupersessionInput(options) {
   if (!/^\d+$/.test(carryForwardPr) || !Number.isSafeInteger(carryForwardPrNumber) || carryForwardPrNumber <= 0) {
     throw new Error("cleanup-superseded --carry-forward-pr must be a positive safe integer PR number.");
   }
+  const closedSourcePr = options.closedSourcePr === undefined
+    ? null
+    : parsePositiveSafePrNumber(options.closedSourcePr, "--closed-source-pr");
+  if (closedSourcePr !== null) {
+    if (options.firstUseRepair || options.scope !== undefined || options.canonicalBase !== undefined || options.supersessionProvenance !== undefined || options.sourceRemote !== undefined || options.legacyUnassigned !== undefined || options.successorHardeningCommits !== undefined || options.successorHardeningScope !== undefined || options.successorHardeningEvidence !== undefined) {
+      throw new Error("cleanup-superseded closed-source PR patch-equivalence mode cannot be combined with scope or legacy repair options.");
+    }
+    const sourceCommits = parseSupersessionCommitList(options.sourcePatchCommits, "--source-patch-commits");
+    const carryForwardCommits = parseSupersessionCommitList(options.carryForwardPatchCommits, "--carry-forward-patch-commits");
+    if (sourceCommits.length !== carryForwardCommits.length) {
+      throw new Error("cleanup-superseded closed-source PR patch-equivalence mode requires equally sized source and carry-forward commit lists.");
+    }
+    return {
+      sourceHead,
+      carryForwardPr: carryForwardPrNumber,
+      carryForwardCommit,
+      scope: [],
+      repair: null,
+      closedSourcePr: { number: closedSourcePr, sourceCommits, carryForwardCommits },
+    };
+  }
+  if (options.sourcePatchCommits !== undefined || options.carryForwardPatchCommits !== undefined) {
+    throw new Error("cleanup-superseded --source-patch-commits and --carry-forward-patch-commits require --closed-source-pr.");
+  }
   const scope = parseSupersessionScope(options.scope);
   const firstUseRepair = options.firstUseRepair === true;
   const firstUseOptionsPresent = [
@@ -6784,6 +6811,15 @@ function cleanupSupersessionInput(options) {
       hardeningEvidence,
     },
   };
+}
+
+function parsePositiveSafePrNumber(value, optionName) {
+  const raw = String(value || "").trim();
+  const number = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(number) || number <= 0) {
+    throw new Error(`cleanup-superseded ${optionName} must be a positive safe integer PR number.`);
+  }
+  return number;
 }
 
 function requireExactGitObjectId(value, optionName) {
@@ -6875,7 +6911,7 @@ function cleanupSupersededPlan(record, state, context) {
   if (manifest.status === "closed") return { ...base, reason: "workspace manifest is already closed" };
   if (/(?:hold|held)/i.test(String(manifest.status || ""))) return { ...base, reason: "held workspace deletion is forbidden" };
   if (manifest.mode === "epic-batch") return { ...base, reason: "epic-batch workspace requires finish-epic closeout" };
-  if (supersededSourceHasPrEvidence(manifest)) {
+  if (supersededSourceHasPrEvidence(manifest) && !proofInput.closedSourcePr) {
     return { ...base, reason: "source workspace has PR or prior cleanup evidence; cleanup-superseded accepts only no-PR source lanes" };
   }
   const ownerGate = supersededManifestOwnerGate(manifest, options);
@@ -6931,14 +6967,40 @@ function cleanupSupersededPlan(record, state, context) {
     requestedHead: proofInput.sourceHead,
     localBranchHead,
     remoteBranchHead,
-    expectedRemoteState: proofInput.repair?.sourceRemote || "present",
-    status: supersededSourceHeadMatches({ partialResume, localBranchHead, remoteBranchHead, sourceHead: proofInput.sourceHead, expectedRemoteState: proofInput.repair?.sourceRemote || "present" }) ? "matched" : "mismatch",
+    expectedRemoteState: proofInput.repair?.sourceRemote === "absent" ? "absent" : "present",
+    status: supersededSourceHeadMatches({ partialResume, localBranchHead, remoteBranchHead, sourceHead: proofInput.sourceHead, expectedRemoteState: proofInput.repair?.sourceRemote === "absent" ? "absent" : "present" }) ? "matched" : "mismatch",
   };
-  if (base.proof.source.status !== "matched") return { ...base, cleanupCwd, reason: supersededSourceMismatchReason({ partialResume, expectedRemoteState: proofInput.repair?.sourceRemote || "present" }) };
+  if (base.proof.source.status !== "matched") return { ...base, cleanupCwd, reason: supersededSourceMismatchReason({ partialResume, expectedRemoteState: proofInput.repair?.sourceRemote === "absent" ? "absent" : "present" }) };
 
-  const sourcePullRequests = sourceBranchPullRequestProof(manifest.branch, cleanupCwd);
+  const sourcePullRequests = proofInput.closedSourcePr
+    ? { status: "not_queried", count: null, reason: "exact closed source PR identity is proved separately" }
+    : sourceBranchPullRequestProof(manifest.branch, cleanupCwd);
   base.proof.sourcePullRequests = sourcePullRequests;
-  if (sourcePullRequests.status !== "matched") return { ...base, cleanupCwd, reason: sourcePullRequests.reason };
+  if (!proofInput.closedSourcePr && sourcePullRequests.status !== "matched") return { ...base, cleanupCwd, reason: sourcePullRequests.reason };
+
+  if (proofInput.closedSourcePr) {
+    const closedSource = closedUnmergedSourcePr(proofInput.closedSourcePr.number, cleanupCwd);
+    base.proof.closedSourcePr = closedSource;
+    const patchProof = closedPrPatchEquivalenceProof(manifest, proofInput, carryForward, closedSource, cleanupCwd);
+    base.proof.patchEquivalence = patchProof;
+    if (patchProof.status !== "matched") return { ...base, cleanupCwd, reason: patchProof.reason };
+    const currentBase = closedPrPatchEquivalentCurrentBaseProof(manifest, carryForward, cleanupCwd);
+    base.proof.currentBase = currentBase;
+    if (currentBase.status !== "matched") return { ...base, cleanupCwd, reason: currentBase.reason };
+    if (partialResume && !sameSupersessionPartialResume(manifest, proofInput, { carryForward, currentBase })) {
+      return { ...base, cleanupCwd, reason: "partial supersession resume requires the recorded closed-PR patch-equivalence proof to exactly match current evidence" };
+    }
+    return {
+      ...base,
+      status: "ready",
+      cleanupCwd,
+      expectedHeadSha: proofInput.sourceHead,
+      localBranchSha: localBranchHead,
+      remoteBranchSha: remoteBranchHead,
+      partialResume,
+      reason: partialResume ? "same-proof closed-PR patch-equivalent partial is safe to resume" : "closed source PR is exactly patch-equivalent to the named merged successor",
+    };
+  }
 
   const assignmentGate = supersededAssignmentGate(state, manifest, options, proofInput);
   base.proof.assignment = assignmentGate;
@@ -7002,6 +7064,16 @@ function supersededSourceMismatchReason({ partialResume, expectedRemoteState }) 
 
 function sameSupersessionPartialResume(manifest, proofInput, liveEvidence = null) {
   const proof = manifest.cleanup_supersession_evidence?.proof;
+  const requestedClosedSourcePr = proofInput.closedSourcePr ? {
+    number: proofInput.closedSourcePr.number,
+    sourceCommits: proofInput.closedSourcePr.sourceCommits,
+    carryForwardCommits: proofInput.closedSourcePr.carryForwardCommits,
+  } : null;
+  const recordedClosedSourcePr = proof?.patchEquivalence?.status === "matched" ? {
+    number: proof.patchEquivalence.sourcePr,
+    sourceCommits: proof.patchEquivalence.sourceCommits,
+    carryForwardCommits: proof.patchEquivalence.carryForwardCommits,
+  } : null;
   const recordedRepair = proof?.repair ? {
     mode: proof.repair.mode,
     canonicalBase: proof.repair.canonicalBase,
@@ -7023,7 +7095,12 @@ function sameSupersessionPartialResume(manifest, proofInput, liveEvidence = null
     hardeningScope: proofInput.repair.hardeningScope,
   } : null;
   const expectedRemotePolicy = proofInput.repair ? "absent" : "retained";
-  const sameRecordedInput = manifest.status === "cleanup_partial" && manifest.cleanup_supersession_evidence?.remoteBranchPolicy === expectedRemotePolicy && proof?.source?.requestedHead === proofInput.sourceHead && proof?.carryForward?.prNumber === proofInput.carryForwardPr && proof?.carryForward?.requestedCommit === proofInput.carryForwardCommit && Array.isArray(proof?.scope?.paths) && JSON.stringify(proof.scope.paths) === JSON.stringify(proofInput.scope) && JSON.stringify(recordedRepair) === JSON.stringify(requestedRepair);
+  const sameRecordedInput = manifest.status === "cleanup_partial" && manifest.cleanup_supersession_evidence?.remoteBranchPolicy === expectedRemotePolicy && proof?.source?.requestedHead === proofInput.sourceHead && proof?.carryForward?.prNumber === proofInput.carryForwardPr && proof?.carryForward?.requestedCommit === proofInput.carryForwardCommit && Array.isArray(proof?.scope?.paths) && JSON.stringify(proof.scope.paths) === JSON.stringify(proofInput.scope) && JSON.stringify(recordedRepair) === JSON.stringify(requestedRepair) && JSON.stringify(recordedClosedSourcePr) === JSON.stringify(requestedClosedSourcePr);
+  if (proofInput.closedSourcePr) {
+    if (!sameRecordedInput) return false;
+    if (!liveEvidence) return true;
+    return liveEvidence.carryForward?.mergeCommit?.oid === proofInput.carryForwardCommit && liveEvidence.currentBase?.status === "matched";
+  }
   if (!sameRecordedInput || !proofInput.repair) return sameRecordedInput;
 
   // A first-use resume has no local targets left to bind it to the original
@@ -7201,6 +7278,126 @@ function sourceBranchPullRequestProof(branch, cwd) {
     return { status: "blocked", count: pullRequests.length, reason: "source branch has GitHub PR evidence; cleanup-superseded accepts only no-PR source lanes" };
   }
   return { status: "matched", count: 0 };
+}
+
+function closedUnmergedSourcePr(prNumber, cwd) {
+  const fields = "number,url,state,mergedAt,baseRefName,headRefName,headRefOid";
+  const result = run("gh", ["pr", "view", String(prNumber), "--json", fields], { cwd });
+  if (result.code !== 0) return { status: "blocked", reason: "closed source PR metadata is unavailable" };
+  let parsed;
+  try {
+    parsed = parseGhJson(result.stdout, `closed source PR ${prNumber}`);
+  } catch (error) {
+    return { status: "blocked", reason: error.message };
+  }
+  const baseProof = carryForwardPrBaseRefOidFromGraphql(prNumber, cwd);
+  const number = positiveSafePrNumberOrNull(parsed?.number);
+  const headRefOid = exactGitObjectIdOrNull(parsed?.headRefOid);
+  const baseRefOid = exactGitObjectIdOrNull(baseProof.baseRefOid);
+  const status = number === prNumber && String(parsed?.state || "").toUpperCase() === "CLOSED" && !parsed?.mergedAt && headRefOid && baseRefOid && !baseProof.error
+    ? "matched"
+    : "mismatch";
+  return {
+    status,
+    number,
+    url: typeof parsed?.url === "string" ? parsed.url : null,
+    state: typeof parsed?.state === "string" ? parsed.state : null,
+    mergedAt: parsed?.mergedAt || null,
+    baseRefName: typeof parsed?.baseRefName === "string" ? parsed.baseRefName : null,
+    baseRefOid,
+    headRefName: typeof parsed?.headRefName === "string" ? parsed.headRefName : null,
+    headRefOid,
+    reason: status === "matched" ? null : baseProof.error || "source PR must be the exact closed-unmerged PR with valid base and head identities",
+  };
+}
+
+function closedPrPatchEquivalenceProof(manifest, proofInput, carryForward, sourcePr, cwd) {
+  const requested = proofInput.closedSourcePr;
+  const sourcePrNumber = positiveSafePrNumberOrNull(manifest.pr_number);
+  if (sourcePrNumber !== requested.number) return { status: "mismatch", reason: "source manifest PR number does not exactly match --closed-source-pr" };
+  if (sourcePr.status !== "matched") return { status: sourcePr.status === "blocked" ? "blocked" : "mismatch", reason: sourcePr.reason || "source PR closed-unmerged evidence did not match" };
+  if (sourcePr.headRefName !== manifest.branch) return { status: "mismatch", reason: "source PR head branch does not exactly match the source manifest branch" };
+  if (sourcePr.baseRefName !== manifest.base_branch) return { status: "mismatch", reason: "source PR base branch does not exactly match the source manifest base branch" };
+  if (!carryForward?.mergedAt || String(carryForward.state || "").toUpperCase() !== "MERGED" || carryForward.mergeCommit?.oid !== proofInput.carryForwardCommit) {
+    return { status: "mismatch", reason: "named carry-forward PR is not merged at the exact requested merge commit" };
+  }
+  if (String(carryForward.baseRefName || "") !== String(manifest.base_branch || "")) return { status: "mismatch", reason: "named carry-forward PR base does not exactly match the source base branch" };
+  if (!sourcePr.baseRefOid || !sourcePr.headRefOid || !carryForward.baseRefOid || !carryForward.headRefOid || !gitCommitExists(sourcePr.baseRefOid, cwd) || !gitCommitExists(sourcePr.headRefOid, cwd) || !gitCommitExists(carryForward.baseRefOid, cwd) || !gitCommitExists(carryForward.headRefOid, cwd)) {
+    return { status: "blocked", reason: "closed source or merged successor PR commit evidence is unavailable locally" };
+  }
+  if (!gitCommitIsAncestor(sourcePr.headRefOid, proofInput.sourceHead, cwd)) return { status: "mismatch", reason: "closed source PR head is not retained by the recorded source branch head" };
+  const sourceCommits = gitFirstParentNonMergeCommitList(sourcePr.baseRefOid, sourcePr.headRefOid, cwd);
+  const successorCommits = gitFirstParentNonMergeCommitList(carryForward.baseRefOid, carryForward.headRefOid, cwd);
+  if (sourceCommits.error || successorCommits.error) return { status: "blocked", reason: sourceCommits.error || successorCommits.error };
+  if (!sameStringList(sourceCommits.commits, requested.sourceCommits)) return { status: "mismatch", reason: "named source patch commits do not exactly match the closed source PR first-parent lineage", sourceCommits: sourceCommits.commits };
+  if (!orderedCommitSubsequence(requested.carryForwardCommits, successorCommits.commits)) return { status: "mismatch", reason: "named carry-forward patch commits are not an ordered exact subset of the merged successor PR first-parent lineage", carryForwardCommits: successorCommits.commits };
+  const tail = gitFirstParentCommits(sourcePr.headRefOid, proofInput.sourceHead, cwd);
+  if (tail.error) return { status: "blocked", reason: tail.error };
+  if (!tail.commits.every((commit) => gitMergeCommitHasNoResolutionDelta(commit, cwd))) return { status: "mismatch", reason: "source branch has a post-PR merge commit with an unproven resolution delta" };
+  const patchIds = [];
+  for (let index = 0; index < requested.sourceCommits.length; index += 1) {
+    const sourcePatch = gitStablePatchId(requested.sourceCommits[index], cwd);
+    const successorPatch = gitStablePatchId(requested.carryForwardCommits[index], cwd);
+    if (sourcePatch.error || successorPatch.error) return { status: "blocked", reason: sourcePatch.error || successorPatch.error };
+    if (sourcePatch.patchId !== successorPatch.patchId) return { status: "mismatch", reason: "source and successor patch IDs differ", pair: { source: requested.sourceCommits[index], carryForward: requested.carryForwardCommits[index] } };
+    patchIds.push({ source: requested.sourceCommits[index], carryForward: requested.carryForwardCommits[index], patchId: sourcePatch.patchId });
+  }
+  return { status: "matched", sourcePr: requested.number, sourceCommits: requested.sourceCommits, carryForwardCommits: requested.carryForwardCommits, patchIds, sourceTailMergeCommits: tail.commits };
+}
+
+function orderedCommitSubsequence(expected, actual) {
+  let next = 0;
+  for (const commit of actual) {
+    if (commit === expected[next]) next += 1;
+  }
+  return next === expected.length;
+}
+
+function closedPrPatchEquivalentCurrentBaseProof(manifest, carryForward, cwd) {
+  const baseBranch = String(manifest.base_branch || "").trim();
+  const canonicalRef = baseBranch ? `origin/${baseBranch}` : "";
+  const localHeadSha = canonicalRef ? branchSha(canonicalRef, cwd) : null;
+  if (!baseBranch || !localHeadSha) return { status: "blocked", canonicalRef: canonicalRef || null, reason: "current canonical base ref is unavailable locally" };
+  let remoteHeadSha;
+  try {
+    remoteHeadSha = originBranchSha(baseBranch, cwd) || null;
+  } catch (error) {
+    return { status: "blocked", canonicalRef, headSha: localHeadSha, reason: `current canonical base remote evidence is unavailable: ${error.message}` };
+  }
+  if (remoteHeadSha !== localHeadSha) return { status: "mismatch", canonicalRef, headSha: localHeadSha, remoteHeadSha, reason: "local canonical base does not exactly match live origin evidence" };
+  if (!carryForward?.mergeCommit?.oid || !gitCommitIsAncestor(carryForward.mergeCommit.oid, canonicalRef, cwd)) return { status: "mismatch", canonicalRef, headSha: localHeadSha, remoteHeadSha, reason: "named merged successor is not retained by the current canonical base" };
+  return { status: "matched", canonicalRef, headSha: localHeadSha, remoteHeadSha, reason: "current canonical base retains the named merged successor" };
+}
+
+function gitFirstParentNonMergeCommitList(base, head, cwd) {
+  const result = git(["rev-list", "--first-parent", "--reverse", "--no-merges", `${base}..${head}`], { cwd });
+  if (result.code !== 0) return { commits: [], error: result.stderr || result.stdout || "cannot inspect first-parent non-merge lineage" };
+  const commits = String(result.stdout || "").split(/\r?\n/).filter(Boolean);
+  return commits.every((commit) => exactGitObjectIdOrNull(commit)) ? { commits } : { commits: [], error: "first-parent non-merge lineage contains an invalid object id" };
+}
+
+function gitFirstParentCommits(base, head, cwd) {
+  const result = git(["rev-list", "--first-parent", "--reverse", `${base}..${head}`], { cwd });
+  if (result.code !== 0) return { commits: [], error: result.stderr || result.stdout || "cannot inspect source post-PR lineage" };
+  const commits = String(result.stdout || "").split(/\r?\n/).filter(Boolean);
+  if (!commits.every((commit) => exactGitObjectIdOrNull(commit))) return { commits: [], error: "source post-PR lineage contains an invalid object id" };
+  return { commits };
+}
+
+function gitMergeCommitHasNoResolutionDelta(commit, cwd) {
+  const parents = gitCommitParents(commit, cwd);
+  if (parents.length < 2) return false;
+  const result = git(["diff-tree", "--cc", "--quiet", commit], { cwd });
+  return result.code === 0;
+}
+
+function gitStablePatchId(commit, cwd) {
+  const patch = git(["show", "--format=", "--binary", commit], { cwd, preserveStdout: true });
+  if (patch.code !== 0) return { patchId: null, error: patch.stderr || patch.stdout || `cannot render patch for ${commit}` };
+  const result = spawnSync("git", ["patch-id", "--stable"], { cwd, input: patch.stdout, encoding: "utf8", stdio: "pipe", timeout: defaultVerificationTimeoutMs });
+  if (result.status !== 0) return { patchId: null, error: result.stderr || result.stdout || `cannot calculate stable patch ID for ${commit}` };
+  const patchId = String(result.stdout || "").trim().split(/\s+/)[0] || "";
+  return /^[a-f0-9]{40}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `stable patch ID for ${commit} is malformed` };
 }
 
 function supersededAssignmentGate(state, manifest, options, proofInput) {
@@ -7550,7 +7747,7 @@ function buildCleanupSupersededSummary({ state, plan, proofInput, currentOwner }
     counts: { total: 1, cleanupReady: plan.status === "ready" ? 1 : 0, blocked: plan.status === "ready" ? 0 : 1 },
     results: [plan],
     mutation: "none; preview proof only",
-    remoteBranchPolicy: plan.proof.source.expectedRemoteState === "absent" ? "first-use repair verified source remote absence; no remote mutation" : "remote branches are retained by cleanup-superseded",
+    remoteBranchPolicy: plan.proof.source.expectedRemoteState === "absent" ? "source remote absence was verified; no remote mutation" : "remote branches are retained by cleanup-superseded",
   };
 }
 
@@ -7563,7 +7760,7 @@ function applyCleanupSuperseded(state, plan, context) {
     const assignmentId = String(manifest.source_assignment_id || "").trim();
     const runWithAssignmentLock = assignmentId
       ? (callback) => withAssignmentLock(state, assignmentId, callback)
-      : plan.proof.assignment.mode === "legacy-unassigned"
+      : plan.proof.assignment.mode === "legacy-unassigned" || context.proofInput.closedSourcePr
         ? (callback) => withAssignmentsIndexLock(state, callback)
         : (callback) => callback();
     return runWithAssignmentLock(() => {
@@ -7573,7 +7770,7 @@ function applyCleanupSuperseded(state, plan, context) {
       currentOwner: currentLaneOwner(context.options),
     });
     if (freshPlan.status !== "ready") throw new Error(`${plan.taskId} supersession proof changed under lock: ${freshPlan.reason}`);
-    if (!assignmentId && freshPlan.proof.assignment.mode !== "legacy-unassigned") throw new Error("cleanup-superseded requires a linked assignment unless the locked proof is explicit legacy-unassigned repair.");
+    if (!assignmentId && freshPlan.proof.assignment.mode !== "legacy-unassigned" && !context.proofInput.closedSourcePr) throw new Error("cleanup-superseded requires a linked assignment unless the locked proof is explicit legacy-unassigned repair or closed-PR patch-equivalence cleanup.");
     assertSupersededRemoteState(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha, freshPlan.proof.source.expectedRemoteState);
     if (assignmentId) {
       preflightAssignmentClosureForCleanedManifest(state, manifest, {
@@ -7593,7 +7790,9 @@ function applyCleanupSuperseded(state, plan, context) {
       manifest.cleanup_local_branch_sha = freshPlan.localBranchSha;
       manifest.cleanup_remote_branch_sha = freshPlan.remoteBranchSha;
       manifest.cleanup_remote_branch_deleted_at = null;
-      manifest.cleanup_remote_branch_policy = freshPlan.proof.source.expectedRemoteState === "absent" ? "absent-first-use-superseded-cleanup" : "retained-superseded-cleanup";
+      manifest.cleanup_remote_branch_policy = freshPlan.proof.source.expectedRemoteState === "absent"
+        ? (context.proofInput.closedSourcePr ? "absent-closed-pr-patch-equivalent-cleanup" : "absent-first-use-superseded-cleanup")
+        : "retained-superseded-cleanup";
       manifest.cleanup_supersession_evidence = {
         schemaVersion: 1,
         appliedAt,
@@ -7641,14 +7840,14 @@ function applyCleanupSuperseded(state, plan, context) {
         ...context.options,
         assignmentLockHeld: true,
         lastResult: `closed after superseded cleanup of ${manifest.task_id}`,
-        eventMessage: `cleaned superseded no-PR workspace ${manifest.task_id}`,
+        eventMessage: `cleaned superseded workspace ${manifest.task_id}`,
       }) : null;
       if (assignmentClosure?.closed) {
         manifest.source_assignment_closed_at = assignmentClosure.closedAt;
         appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
       }
       appendTaskEvent(manifest, "cleanup_supersession_applied", freshPlan.proof.source.expectedRemoteState === "absent" ? "local worktree and branch removed; source remote was proven absent and untouched" : "local worktree and branch removed; remote branch retained");
-      appendTaskEvent(manifest, "closed", `cleaned superseded no-PR workspace carried by PR #${freshPlan.proof.carryForward.prNumber}`);
+      appendTaskEvent(manifest, "closed", `cleaned superseded ${context.proofInput.closedSourcePr ? "closed-PR patch-equivalent" : "no-PR"} workspace carried by PR #${freshPlan.proof.carryForward.prNumber}`);
     } catch (error) {
       manifest.status = "cleanup_partial";
       manifest.cleanup_error = error.message;
