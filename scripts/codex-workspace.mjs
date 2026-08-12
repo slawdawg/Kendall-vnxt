@@ -4741,7 +4741,15 @@ function buildMergedPrReconciliationEvidence(manifest, context = {}) {
   }
 
   const expectedHeadSha = pr?.headRefOid || "";
-  const preMergeGate = shapeRetainedPreMergeGateEvidence(manifest, pr);
+  // A pre-merge gate necessarily predates the merge.  The narrow
+  // audited-descendant recovery path proves the live merged head is a clean
+  // descendant of that recorded delivery head, so retain the original exact
+  // gate binding while the independent cleanup audit stays bound to the live
+  // merged head below.
+  const preMergeGatePr = auditedDescendantHead
+    ? { ...pr, headRefOid: recordedHeadSha }
+    : pr;
+  const preMergeGate = shapeRetainedPreMergeGateEvidence(manifest, preMergeGatePr);
   blockers.push(...preMergeGate.blockers);
   const deliverySubagentAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr || {}, context.options || {}, {
     expectedHeadSha,
