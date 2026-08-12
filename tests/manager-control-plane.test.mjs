@@ -19805,6 +19805,16 @@ test("takeover inspection projects the complete bounded stale-owner set and fail
   assert.equal(complete.targets.length, 19);
   assert.ok(complete.targets.every((target) => target.mutationMode === "dry_run_only"));
 
+  const completionNamed = buildTakeoverInspectionPlan({
+    blockedWorkspaceAssignments: [{
+      taskId: "repair-v2-external-completion-journal-durability",
+      owner: "old-owner",
+      status: "blocked_stale_owner_needs_takeover",
+    }],
+  });
+  assert.equal(completionNamed.targets[0].id, "repair-v2-external-completion-journal-durability");
+  assert.match(completionNamed.targets[0].dryRunCommand, /completion-journal-durability/);
+
   const overCapacity = buildTakeoverInspectionPlan({
     blockedWorkspaceAssignments: Array.from({ length: 25 }, (_, index) => ({
       taskId: `over-capacity-${index + 1}`,

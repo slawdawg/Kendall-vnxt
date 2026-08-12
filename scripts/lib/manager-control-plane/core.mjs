@@ -23166,8 +23166,11 @@ function takeoverInspectionNextActions(takeoverInspection = {}) {
 }
 
 function buildTakeoverInspectionTarget(kind, rawId, assignment = {}) {
-  const id = sanitizeLedgerField(rawId || "", "", 140);
-  if (!id) return null;
+  // This identifier is passed back to the workspace CLI.  Keep identifier
+  // sanitization separate from display/ledger redaction so safe historical
+  // task names such as "completion-journal" continue to resolve exactly.
+  const id = sanitizeIdentifierField(rawId || "", "", 140);
+  if (!isSafeCommandIdentifier(id)) return null;
   const reason = `manager dogfood stale owner inspection for ${id}`;
   return {
     kind,
