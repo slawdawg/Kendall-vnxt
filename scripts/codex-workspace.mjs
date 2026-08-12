@@ -3717,7 +3717,10 @@ function adjudicateOutdatedThread(argv) {
       throw new Error(`Outdated review-thread adjudication changed under lock: ${lockedPacket.blockers.join("; ")}`);
     }
     const prior = Array.isArray(lockedManifest.outdated_thread_adjudications) ? lockedManifest.outdated_thread_adjudications : [];
-    lockedManifest.outdated_thread_adjudications = [...prior.filter((entry) => entry?.threadId !== threadId), lockedPacket].slice(-20);
+    lockedManifest.outdated_thread_adjudications = retainThreadAdjudicationsForRecovery(
+      [...prior.filter((entry) => entry?.threadId !== threadId), lockedPacket],
+      lockedManifest.outdated_thread_resolution_outcomes,
+    );
     appendAuthorityDecision(lockedManifest, lockedPacket.authorityDecision);
     lockedManifest.lane_evidence_packet = buildLaneEvidencePacket(lockedManifest, lockedManifest.anti_churn_finalization || {});
     lockedManifest.updated_at = lockedPacket.checkedAt;
@@ -3888,7 +3891,8 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
   if (!prior.targetRequestFingerprint || prior.targetRequestFingerprint !== retained?.targetRequestFingerprint) blockers.push("Interrupted outdated-thread attempt fingerprint does not match retained adjudication provenance");
   if (!/^[a-f0-9]{64}$/.test(prior.targetRequestFingerprint || "") || !/^[a-f0-9]{64}$/.test(retained?.targetRequestFingerprint || "")) blockers.push("Interrupted outdated-thread attempt has malformed adjudication provenance");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted outdated-thread attempt lacks a complete post-interruption thread audit");
-  if (!target || !target.isResolved || !target.isOutdated || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted outdated-thread target is not proven resolved by the live thread audit");
+  if (target && !target.isResolved && target.isOutdated && target.commentsComplete && target.requestFingerprint) return null;
+  if (!target.isOutdated || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted outdated-thread target is not proven resolved by the live thread audit");
   if (expectedFingerprint && target?.requestFingerprint !== expectedFingerprint) blockers.push("Interrupted outdated-thread target fingerprint changed before recovery");
   if (checks.total === 0 || checks.pending.length || checks.failing.length) blockers.push("Interrupted outdated-thread attempt checks are not terminal-successful");
   blockers.push(...nonRequiredCheckPolicy.blockers);
@@ -3946,7 +3950,10 @@ function adjudicateCurrentThread(argv) {
       throw new Error(`Current review-thread adjudication changed under lock: ${lockedPacket.blockers.join("; ")}`);
     }
     const prior = Array.isArray(locked.current_thread_adjudications) ? locked.current_thread_adjudications : [];
-    locked.current_thread_adjudications = [...prior.filter((entry) => entry?.threadId !== threadId), lockedPacket].slice(-20);
+    locked.current_thread_adjudications = retainThreadAdjudicationsForRecovery(
+      [...prior.filter((entry) => entry?.threadId !== threadId), lockedPacket],
+      locked.current_thread_resolution_outcomes,
+    );
     appendAuthorityDecision(locked, lockedPacket.authorityDecision);
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     locked.updated_at = lockedPacket.checkedAt;
@@ -4143,6 +4150,7 @@ function currentThreadResolutionPostMutationBlockers(audit, target, fresh) {
     blockers.push(`New unresolved current review threads after resolution: ${unexpectedCurrent.map((thread) => thread.url || thread.id).join(", ")}`);
   }
   blockers.push(...nonTargetThreadPostMutationBlockers(audit, fresh, fresh?.threadId));
+  blockers.push(...nonTargetThreadPostMutationBlockers(audit, fresh, fresh?.threadId));
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   if (target?.isOutdated) blockers.push("Target review thread became outdated during resolution and requires recovery");
   if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
@@ -4298,6 +4306,15 @@ function appendResolutionOutcome(existing, attempt) {
 
 function retainedResolutionOutcomes(outcomes) {
   return boundedResolutionOutcomes(outcomes);
+}
+
+function retainThreadAdjudicationsForRecovery(entries, resolutionOutcomes) {
+  const required = new Set((Array.isArray(resolutionOutcomes) ? resolutionOutcomes : [])
+    .filter((outcome) => outcome?.threadId && outcome?.expectedHeadSha && (outcome?.status === "needs-recovery" || outcome?.mutation?.status === "attempt-recorded"))
+    .map((outcome) => `${outcome.threadId}\u0000${outcome.expectedHeadSha}`));
+  const protectedEntries = entries.filter((entry) => required.has(`${entry?.threadId}\u0000${entry?.expectedHeadSha}`));
+  const newestUnprotected = entries.filter((entry) => !required.has(`${entry?.threadId}\u0000${entry?.expectedHeadSha}`)).slice(-20);
+  return [...protectedEntries, ...newestUnprotected];
 }
 
 function isResolutionRetentionOverflow(entry) {
@@ -5092,6 +5109,10 @@ function buildPrGateEvidence(manifest, context = {}) {
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
+  const postEvidencePr = prViewForGates(manifest);
+  if (!postEvidencePr) throw new Error("Could not reload PR state after collecting gate evidence.");
+  const postEvidenceChecks = normalizeStatusCheckRollup(postEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
+  const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(postEvidenceChecks);
   const diffRiskEvidence = shapeDiffRiskEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
     expectedPrNumber: pr.number,
@@ -5116,11 +5137,12 @@ function buildPrGateEvidence(manifest, context = {}) {
     expectedHeadSha: headState.expectedHeadSha,
     prNumber: pr.number,
   });
-  const blockers = prGateBlockers(manifest, pr, {
+  const blockers = prGateBlockers(manifest, postEvidencePr, {
     repository,
     headState,
     worktreeStatus,
-    checks,
+    checks: postEvidenceChecks,
+    checkSnapshotChanged,
     nonRequiredCheckPolicy,
     reviewThreadState,
     deliverySubagentAudit,
@@ -5163,17 +5185,18 @@ function buildPrGateEvidence(manifest, context = {}) {
     localHeadSha: headState.localHeadSha,
     worktree: { clean: !worktreeStatus.any, status: worktreeStatus },
     pr: {
-      number: pr.number || manifest.pr_number || null,
-      url: pr.url || manifest.pr_url || null,
-      state: pr.state || null,
-      isDraft: Boolean(pr.isDraft),
-      mergedAt: pr.mergedAt || null,
-      baseRefName: pr.baseRefName || null,
-      headRefOid: pr.headRefOid || null,
-      mergeStateStatus: pr.mergeStateStatus || null,
-      reviewDecision: pr.reviewDecision || null,
+      number: postEvidencePr.number || manifest.pr_number || null,
+      url: postEvidencePr.url || manifest.pr_url || null,
+      state: postEvidencePr.state || null,
+      isDraft: Boolean(postEvidencePr.isDraft),
+      mergedAt: postEvidencePr.mergedAt || null,
+      baseRefName: postEvidencePr.baseRefName || null,
+      headRefOid: postEvidencePr.headRefOid || null,
+      mergeStateStatus: postEvidencePr.mergeStateStatus || null,
+      reviewDecision: postEvidencePr.reviewDecision || null,
     },
-    checks,
+    checks: postEvidenceChecks,
+    checkSnapshotChanged,
     nonRequiredCheckPolicy,
     reviewThreads: reviewThreadState,
     deliverySubagentAudit,
@@ -5888,6 +5911,9 @@ function prGateBlockers(manifest, pr, context) {
   }
   if (context.checks.failing.length) {
     blockers.push(`Failing checks: ${context.checks.failing.map((check) => check.name).join(", ")}`);
+  }
+  if (context.checkSnapshotChanged) {
+    blockers.push("Status checks changed while collecting the remaining gate evidence");
   }
   blockers.push(...(context.nonRequiredCheckPolicy?.blockers || []));
   if (!context.reviewThreadState.querySucceeded) {
@@ -12747,6 +12773,8 @@ function sanitizeVerificationDiagnosticText(value, maxBytes) {
   };
   redact(/(?:github_pat_|sk-|gh[pousr]_)[A-Za-z0-9_-]+/gi, "[redacted-token]");
   redact(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s\/@]*@/g, "[redacted-url-userinfo]@");
+  redact(/-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9_-]+)? PRIVATE KEY-----/gi, "[redacted-private-key]");
+  redact(/(?:["']?[A-Za-z0-9._-]*(?:private[_-]?key|ssh[_-]?private[_-]?key)[A-Za-z0-9._-]*["']?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[redacted-private-key]");
   redact(/(?:["']?(?:authorization|proxy-authorization|x-api-key)["']?)\s*[:=]\s*(?:"(?:basic|bearer)\s+[^"]*"|'(?:basic|bearer)\s+[^']*'|(?:basic|bearer)\s+\S+|\S+)/gi, "[redacted-credential]");
   redact(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted-credential]");
   redact(/(?:["']?[A-Za-z0-9._-]*(?:secret|token|password|credential|api[_-]?key)[A-Za-z0-9._-]*["']?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[redacted-credential]");

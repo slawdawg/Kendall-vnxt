@@ -8049,6 +8049,7 @@ try {
       assert(!JSON.stringify(diagnostic).includes("basic-credential"), "local diagnostic retained Basic authorization value");
       assert(!JSON.stringify(diagnostic).includes("control-basic"), "local diagnostic retained control-byte-obscured authorization value");
       assert(!JSON.stringify(diagnostic).includes("diagnostic-url-password"), "local diagnostic retained URL credential value");
+      assert(!JSON.stringify(diagnostic).includes("fixture-private-key-material"), "local diagnostic retained PEM private-key material");
       assert(!JSON.stringify(diagnostic).includes("direct-codex-workspace-fixture-success"), "local diagnostic confused direct success with wrapper failure");
       assert(readFileSync(manifestPath, "utf8") === before, "wrapper failure changed the manifest");
       assert(!existsSync(join(fixture.stateRoot, "tasks", "resumed-task.lock")), "wrapper failure retained the task lock");
@@ -16432,7 +16433,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     timeout: "sleep 1\nexit 0",
     nonzero: "echo 'fixture verification failed' >&2\nexit 23",
     "secret-nonzero": "echo 'fixture-secret-token-123' >&2\nexit 23",
-    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" DATABASE_URL=postgres://fixture:diagnostic-url-password@example.test/db ' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
+    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" DATABASE_URL=postgres://fixture:diagnostic-url-password@example.test/db ' >&2\nprintf '%s\\n' '-----BEGIN PRIVATE KEY-----' 'fixture-private-key-material' '-----END PRIVATE KEY-----' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
     "boundary-secret-nonzero": "printf 'xxxxxxxxxxsk-'\ni=0\nwhile [ \"$i\" -lt 2100 ]; do printf 'a'; i=$((i + 1)); done\nprintf '\\n'\nexit 23",
     "later-stage-nonzero": "echo '> pnpm run check:later-stage'\necho 'fixture-later-stage-secret' >&2\nexit 23",
     signal: "kill -TERM $$",
