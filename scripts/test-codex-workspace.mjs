@@ -11062,8 +11062,10 @@ try {
     });
     try {
       const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
-      const lockPath = join(fixture.stateRoot, "tasks", "resumed-task.lock");
-      writeFileSync(lockPath, `${JSON.stringify(activeFixtureTaskLock("resumed-task"))}\n`);
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        owner: "runner-other",
+      }));
       const activeLock = runFixtureScript(
         fixture,
         ["refresh-pr-head", "resumed-task", "--owner", "runner-a", "--reason", "Attempt while another worker has the lane lock.", "--state-root", fixture.stateRoot],
@@ -11071,7 +11073,7 @@ try {
       );
       assert(activeLock.code !== 0, "active lock unexpectedly allowed refresh");
       assert(activeLock.stderr.includes("Task lock is active"), activeLock.stderr || activeLock.stdout);
-      rmSync(lockPath, { force: true });
+      rmSync(leaseRoot, { recursive: true, force: true });
 
       const prStatePath = join(fixture.root, "pr-state.json");
       const mismatchedPr = readJson(prStatePath);
