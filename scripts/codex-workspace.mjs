@@ -5292,6 +5292,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
   const renamedPathInspection = fetchPrRenamedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const target = reviewThreadState.threadRefs.find((thread) => thread.id === threadId) || null;
   const mapping = shapeOutdatedThreadMappingEvidence(options, {
+    requireOutdatedResolutionAuthorization: true,
     laneOwner: manifest.owner,
     currentOwner: currentLaneOwner(options),
     expectedHeadSha: headState.expectedHeadSha,
@@ -5559,10 +5560,20 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     expectedHeadSha: context.expectedHeadSha,
     highRiskPaths,
   });
-  const outdatedResolutionAuthorization = shapeOutdatedResolutionAuthorizationEvidence(options, {
-    threadId: context.threadId,
-    expectedHeadSha: context.expectedHeadSha,
-  });
+  const outdatedResolutionAuthorization = context.requireOutdatedResolutionAuthorization === true
+    ? shapeOutdatedResolutionAuthorizationEvidence(options, {
+      threadId: context.threadId,
+      expectedHeadSha: context.expectedHeadSha,
+    })
+    : {
+      schemaVersion: 1,
+      status: "not-applicable",
+      evidence: null,
+      threadId: safeMetadataText(context.threadId, 160) || null,
+      expectedHeadSha: exactGitObjectIdOrNull(context.expectedHeadSha) || null,
+      blockers: [],
+      metadataOnly: true,
+    };
   const changedPathError = safeMetadataText(context.changedPathError, 500);
   const renamedPathError = safeMetadataText(context.renamedPathError, 500);
   const uncoveredFiles = files.filter((path) => !changedPaths.includes(path));
@@ -5591,7 +5602,9 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   if (uncoveredFiles.length) blockers.push(`Outdated-thread mapping names paths absent from the current PR diff: ${uncoveredFiles.join(", ")}`);
   blockers.push(...renamedPaths.blockers);
   blockers.push(...highRiskAuthorization.blockers);
-  blockers.push(...outdatedResolutionAuthorization.blockers);
+  if (context.requireOutdatedResolutionAuthorization === true) {
+    blockers.push(...outdatedResolutionAuthorization.blockers);
+  }
   return {
     schemaVersion: 1,
     status: blockers.length ? "missing" : "recorded",
