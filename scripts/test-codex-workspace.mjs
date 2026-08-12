@@ -18015,6 +18015,16 @@ function cleanupBranchCleanupFixture(fixture) {
 
 function runFixtureScript(fixture, args, options = {}) {
   const fixtureArgs = [...args];
+  if (!options.omitOutdatedResolutionAuthorization
+    && fixtureArgs[0] === "adjudicate-outdated-thread"
+    && !fixtureArgs.includes("--outdated-resolution-authorization")) {
+    const threadIndex = fixtureArgs.indexOf("--thread-id");
+    const threadId = threadIndex >= 0 ? fixtureArgs[threadIndex + 1] : "";
+    const head = threadId && fixture?.worktree ? runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout : "";
+    if (threadId && head) {
+      fixtureArgs.push("--outdated-resolution-authorization", `operator-authorized outdated-thread=${threadId} head=${head}`);
+    }
+  }
   if (!options.keepDiffRiskVerificationUnstructured
     && fixtureArgs.includes("--diff-risk-verification")
     && !fixtureArgs.includes("--diff-risk-verification-command")) {

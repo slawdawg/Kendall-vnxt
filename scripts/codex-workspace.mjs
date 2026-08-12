@@ -3762,15 +3762,19 @@ function resolveAdjudicatedThread(argv) {
     const retained = (locked.outdated_thread_adjudications || []).find((entry) => entry?.threadId === threadId && entry?.ready === true);
     if (!retained) throw new Error("No ready retained adjudication exists for the target thread.");
     const mapping = retained.mapping || {};
+    if (mapping.outdatedResolutionAuthorization?.status !== "authorized") {
+      throw new Error("Outdated review-thread resolution requires retained exact operator authorization for this thread and head.");
+    }
     const fresh = buildOutdatedThreadAdjudicationEvidence(locked, { threadId, options: {
       requestFingerprint: mapping.requestFingerprint, requestSummary: mapping.requestSummary, diffSummary: mapping.diffSummary,
       mappedFiles: JSON.stringify(mapping.files || []), verification: mapping.verification, verificationCommand: mapping.verificationCommand,
       verificationExitCode: mapping.verificationExitCode, reviewSummary: mapping.reviewSummary, reviewerId: mapping.reviewerId,
       renamedPaths: JSON.stringify(mapping.renamedPaths || []),
       highRiskAuthorization: mapping.highRiskAuthorization?.evidence,
+      outdatedResolutionAuthorization: mapping.outdatedResolutionAuthorization?.evidence,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
-    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
+    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.outdatedResolutionAuthorization?.evidence !== mapping.outdatedResolutionAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
     // A second audit immediately before the write is deliberate.  The persisted
@@ -4185,12 +4189,18 @@ function nonTargetThreadPostMutationBlockers(audit, fresh, targetThreadId) {
 function loadPostResolutionExactState(manifest, fresh) {
   const repositoryRef = githubRepository(manifest);
   const repository = { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` };
-  const pr = prViewForGates(manifest);
-  if (!pr) throw new Error("Could not reload PR state after review-thread resolution mutation.");
-  const headState = prGateHeadState(manifest);
+  const preAuditPr = prViewForGates(manifest);
+  if (!preAuditPr) throw new Error("Could not reload PR state after review-thread resolution mutation.");
+  const preAuditHeadState = prGateHeadState(manifest);
   const reviewThreads = fetchReviewThreadState(manifest, repositoryRef, fresh.pr.number);
+  // Review-thread hydration can span multiple provider calls. Re-read mutable
+  // PR and check state after it completes so the resolution cannot be recorded
+  // against a head/check snapshot that changed during the audit.
+  const pr = prViewForGates(manifest);
+  if (!pr) throw new Error("Could not reload PR state after post-resolution thread audit.");
+  const headState = prGateHeadState(manifest);
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, fresh.nonRequiredCheckPolicy);
-  return { repository, pr, headState, reviewThreads, checks };
+  return { repository, pr, headState, reviewThreads, checks, preAuditPr, preAuditHeadState };
 }
 
 function graphqlErrorsOrThrow(parsed, label) {
@@ -4260,6 +4270,8 @@ function postResolutionExactStateBlockers(post, fresh = {}) {
   if (!post.pr?.baseRefName || post.pr.baseRefName !== fresh.pr?.baseRefName) blockers.push("PR base changed during review-thread resolution and requires recovery");
   if (!exactGitObjectIdOrNull(post.pr?.baseRefOid) || post.pr.baseRefOid !== fresh.pr?.baseRefOid) blockers.push("PR base commit changed during review-thread resolution and requires recovery");
   if (!post.pr?.headRefOid || post.pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head changed during review-thread resolution and requires recovery");
+  if (post.preAuditPr?.headRefOid !== post.pr?.headRefOid || post.preAuditPr?.baseRefOid !== post.pr?.baseRefOid || post.preAuditPr?.baseRefName !== post.pr?.baseRefName) blockers.push("PR state changed while collecting the post-resolution thread audit and requires recovery");
+  if (!post.preAuditHeadState?.localMatchesExpected || post.preAuditHeadState?.localHeadSha !== post.headState?.localHeadSha) blockers.push("Local worktree head changed while collecting the post-resolution thread audit and requires recovery");
   if (!post.headState?.localMatchesExpected || post.headState?.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head changed during review-thread resolution and requires recovery");
   if (post.pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${post.pr.reviewDecision} after review-thread resolution`);
   if (post.checks?.total === 0) blockers.push("No status checks reported for exact head after review-thread resolution");
@@ -5547,6 +5559,10 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     expectedHeadSha: context.expectedHeadSha,
     highRiskPaths,
   });
+  const outdatedResolutionAuthorization = shapeOutdatedResolutionAuthorizationEvidence(options, {
+    threadId: context.threadId,
+    expectedHeadSha: context.expectedHeadSha,
+  });
   const changedPathError = safeMetadataText(context.changedPathError, 500);
   const renamedPathError = safeMetadataText(context.renamedPathError, 500);
   const uncoveredFiles = files.filter((path) => !changedPaths.includes(path));
@@ -5575,6 +5591,7 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
   if (uncoveredFiles.length) blockers.push(`Outdated-thread mapping names paths absent from the current PR diff: ${uncoveredFiles.join(", ")}`);
   blockers.push(...renamedPaths.blockers);
   blockers.push(...highRiskAuthorization.blockers);
+  blockers.push(...outdatedResolutionAuthorization.blockers);
   return {
     schemaVersion: 1,
     status: blockers.length ? "missing" : "recorded",
@@ -5589,6 +5606,7 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     requestFingerprint: requestFingerprint || null,
     highRiskPaths,
     highRiskAuthorization,
+    outdatedResolutionAuthorization,
     expectedHeadSha: safeMetadataText(context.expectedHeadSha, 80) || null,
     expectedPrNumber: Number.isSafeInteger(context.expectedPrNumber) ? context.expectedPrNumber : null,
     expectedBaseRefName: safeMetadataText(context.expectedBaseRefName, 300) || null,
@@ -5604,6 +5622,25 @@ function shapeOutdatedThreadMappingEvidence(options = {}, context = {}) {
     changedPaths,
     renamedPaths: renamedPaths.entries,
     blockers,
+    metadataOnly: true,
+  };
+}
+
+function shapeOutdatedResolutionAuthorizationEvidence(options = {}, context = {}) {
+  const evidence = typeof options.outdatedResolutionAuthorization === "string" && options.outdatedResolutionAuthorization.length <= 500
+    ? options.outdatedResolutionAuthorization
+    : "";
+  const threadId = safeMetadataText(context.threadId, 160);
+  const expectedHeadSha = exactGitObjectIdOrNull(context.expectedHeadSha) || null;
+  const expected = threadId && expectedHeadSha ? `operator-authorized outdated-thread=${threadId} head=${expectedHeadSha}` : "";
+  const authorized = Boolean(expected) && evidence === expected;
+  return {
+    schemaVersion: 1,
+    status: authorized ? "authorized" : "blocked",
+    evidence: evidence || null,
+    threadId: threadId || null,
+    expectedHeadSha,
+    blockers: authorized ? [] : ["Outdated review-thread resolution requires exact operator evidence: operator-authorized outdated-thread=<id> head=<sha>"],
     metadataOnly: true,
   };
 }
@@ -6118,7 +6155,8 @@ function normalizeStatusCheckRollup(rollup, nonRequiredCheckPolicy = {}) {
       conclusion,
       detailsUrl: node.detailsUrl || node.targetUrl || null,
     };
-  });
+  }).sort((left, right) => JSON.stringify([left.name, left.status, left.conclusion, left.detailsUrl])
+    .localeCompare(JSON.stringify([right.name, right.status, right.conclusion, right.detailsUrl])));
   const terminal = (check) => terminalCheckStatus(check.status);
   const acceptedSkipped = (check) => terminal(check) && check.conclusion === "SKIPPED"
     && nonRequiredCheckPolicy.names?.includes(check.name)
