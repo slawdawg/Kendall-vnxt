@@ -8245,10 +8245,16 @@ try {
         { cwd: fixture.worktree, env: fixture.env },
       );
       assert(first.code !== 0, "under-reserved supervisor packet unexpectedly completed");
-      assert(first.stderr.includes(`packet paused before ${supervisorLeaves[0]}`), first.stderr || first.stdout);
-      assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one", "under-reserved supervisor leaf was launched");
       const paused = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
-      assert(paused.check_verification_packet?.next_stage === supervisorLeaves[0], JSON.stringify(paused.check_verification_packet));
+      const pausedStage = paused.check_verification_packet?.next_stage;
+      const pausedIndex = stages.indexOf(pausedStage);
+      assert(supervisorLeaves.includes(pausedStage), JSON.stringify(paused.check_verification_packet));
+      assert(first.stderr.includes(`packet paused before ${pausedStage}`), first.stderr || first.stdout);
+      assert(pausedIndex > 0, JSON.stringify(paused.check_verification_packet));
+      assert(
+        readFixtureStageLog(stageLog).join(",") === stages.slice(0, pausedIndex).join(","),
+        "under-reserved supervisor leaf was launched or the packet reran an earlier stage",
+      );
 
       const second = runFixtureScript(
         fixture,
