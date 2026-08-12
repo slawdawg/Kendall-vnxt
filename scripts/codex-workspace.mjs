@@ -198,6 +198,7 @@ const recognizedResolutionRecoveryMutations = new Set([
   "retry-authorized-after-live-unresolved-audit",
   "confirmed-by-mutation-response",
   "confirmed-by-post-audit-recovery",
+  "retry-authorized-after-kind-change",
 ]);
 // This is deliberately not a general non-ancestral recovery mechanism. It is
 // the one operator-authorized historical rewrite recorded for PR #723. A
@@ -680,6 +681,13 @@ doctor options:
 function parseOptions(argv) {
   const positional = [];
   const options = {};
+  const occurrences = new Map();
+
+  const record = (key, value) => {
+    const values = occurrences.get(key) || [];
+    values.push(value);
+    occurrences.set(key, values);
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -692,25 +700,30 @@ function parseOptions(argv) {
     const inlineValue = inlineParts.length > 0 ? inlineParts.join("=") : undefined;
     const key = rawKey.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     if (inlineValue !== undefined) {
+      record(key, inlineValue);
       options[key] = key === "dirtyPaths" ? [...(options[key] || []), inlineValue] : inlineValue;
       continue;
     }
 
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
+      record(key, true);
       options[key] = true;
       continue;
     }
 
+    record(key, next);
     options[key] = key === "dirtyPaths" ? [...(options[key] || []), next] : next;
     index += 1;
   }
 
+  Object.defineProperty(options, "__occurrences", { value: occurrences, enumerable: false });
   return { positional, options };
 }
 
 function assertBareApplyOption(options, command) {
-  if (options.apply !== undefined && options.apply !== true) {
+  const applyValues = options?.__occurrences?.get("apply") || (options.apply === undefined ? [] : [options.apply]);
+  if (applyValues.some((value) => value !== true)) {
     throw new Error(`${command} requires a bare --apply flag without a value.`);
   }
 }
@@ -4017,7 +4030,7 @@ function resolveAdjudicatedCurrentThread(argv) {
       highRiskAuthorization: mapping.highRiskAuthorization?.evidence,
       nonRequiredChecks: (retained.nonRequiredCheckPolicy?.names || []).join(","), nonRequiredCheckPolicy: retained.nonRequiredCheckPolicy?.policyRef,
     }});
-    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
+    if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.pr?.baseRefName !== retained.pr?.baseRefName || fresh.pr?.baseRefOid !== retained.pr?.baseRefOid || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh current-thread adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
     const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
@@ -4401,9 +4414,19 @@ function isHighRiskReviewThreadPath(path) {
 
 function supersedeLiveUnresolvedResolutionAttempt(manifest, kind, fresh, audit) {
   const key = kind === "current" ? "current_thread_resolution_outcomes" : "outdated_thread_resolution_outcomes";
-  const prior = (Array.isArray(manifest?.[key]) ? manifest[key] : [])
+  const ownPrior = (Array.isArray(manifest?.[key]) ? manifest[key] : [])
     .filter((entry) => entry?.threadId === fresh.threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"))
     .at(-1);
+  // The only cross-kind recovery allowed is a current thread becoming outdated
+  // after an interrupted current-thread mutation.  It retains the old exact
+  // identity and requires a new outdated adjudication before retrying.
+  const crossKindPrior = kind === "outdated"
+    ? (Array.isArray(manifest?.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : [])
+      .filter((entry) => entry?.threadId === fresh.threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"))
+      .at(-1)
+    : null;
+  const prior = ownPrior || crossKindPrior;
+  const priorKind = ownPrior ? kind : (crossKindPrior ? "current" : null);
   // An interrupted initial `attempt-recorded` entry deliberately has no
   // completedAt.  It is still an identity-complete recovery-chain entry, and
   // a fresh exact-head audit of the still-unresolved target is the bounded
@@ -4427,9 +4450,10 @@ function supersedeLiveUnresolvedResolutionAttempt(manifest, kind, fresh, audit) 
     attemptedAt: completedAt,
     completedAt,
     status: "superseded",
-    mutation: { status: "retry-authorized-after-live-unresolved-audit", exitCode: null, result: "live target remains unresolved and exact-head retry is authorized", replyPosted: false, metadataOnly: true },
+    supersededAttemptKind: priorKind,
+    mutation: { status: priorKind === kind ? "retry-authorized-after-live-unresolved-audit" : "retry-authorized-after-kind-change", exitCode: null, result: priorKind === kind ? "live target remains unresolved and exact-head retry is authorized" : "interrupted current-thread target is now outdated and requires the retained exact outdated-thread retry", replyPosted: false, metadataOnly: true },
     preMutationAudit: compactReviewThreadAudit(audit),
-    recoveryPath: "A fresh exact-head audit proved the target remains unresolved. The prior ambiguous mutation is superseded; a new governed mutation attempt follows.",
+    recoveryPath: priorKind === kind ? "A fresh exact-head audit proved the target remains unresolved. The prior ambiguous mutation is superseded; a new governed mutation attempt follows." : "A fresh exact-head audit proved the interrupted current-thread target is now outdated. The prior current attempt is superseded; only the retained exact outdated-thread retry may follow.",
     metadataOnly: true,
     rawPayloadRetained: false,
   };
@@ -5168,6 +5192,8 @@ function buildPrGateEvidence(manifest, context = {}) {
   // for a head, base, or check set that changed during that audit.
   const finalEvidencePr = prViewForGates(manifest);
   if (!finalEvidencePr) throw new Error("Could not reload PR state after final review-thread audit.");
+  const finalHeadState = prGateHeadState(manifest);
+  const finalWorktreeStatus = parseStatus(manifest.worktree_path);
   const finalEvidenceChecks = normalizeStatusCheckRollup(finalEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
   const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(finalEvidenceChecks);
   const finalPrSnapshotChanged = postEvidencePr.number !== finalEvidencePr.number
@@ -5205,7 +5231,9 @@ function buildPrGateEvidence(manifest, context = {}) {
   const blockers = prGateBlockers(manifest, finalEvidencePr, {
     repository,
     headState,
-    worktreeStatus,
+    worktreeStatus: finalWorktreeStatus,
+    finalHeadState,
+    finalLocalStateChanged: finalHeadState.localHeadSha !== headState.localHeadSha || !finalHeadState.localMatchesExpected || JSON.stringify(finalWorktreeStatus) !== JSON.stringify(worktreeStatus),
     checks: finalEvidenceChecks,
     checkSnapshotChanged,
     finalPrSnapshotChanged,
@@ -5250,8 +5278,8 @@ function buildPrGateEvidence(manifest, context = {}) {
     branch: manifest.branch,
     baseBranch: manifest.base_branch || null,
     expectedHeadSha: headState.expectedHeadSha,
-    localHeadSha: headState.localHeadSha,
-    worktree: { clean: !worktreeStatus.any, status: worktreeStatus },
+    localHeadSha: finalHeadState.localHeadSha,
+    worktree: { clean: !finalWorktreeStatus.any, status: finalWorktreeStatus },
     pr: {
       number: finalEvidencePr.number || manifest.pr_number || null,
       url: finalEvidencePr.url || manifest.pr_url || null,
@@ -6007,6 +6035,9 @@ function prGateBlockers(manifest, pr, context) {
   if (context.managedGate !== false && !hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) {
     blockers.push("Managed PR gate requires recorded standard-delivery pr_open evidence");
   }
+  if (context.finalLocalStateChanged) {
+    blockers.push("Local HEAD or worktree state changed during the final review-thread audit");
+  }
   if (context.worktreeStatus?.any) {
     blockers.push("Managed merge gate requires a clean worktree for exact-head verification evidence");
   }
@@ -6073,7 +6104,12 @@ function prGateBlockers(manifest, pr, context) {
 function resolutionAttemptSupersedes(superseder, supersederKind, attempt, attemptKind) {
   const supersederCompletedAt = Date.parse(superseder?.completedAt || superseder?.attemptedAt || "");
   const attemptCompletedAt = Date.parse(attempt?.completedAt || attempt?.attemptedAt || "");
-  return supersederKind === attemptKind
+  const sameKind = supersederKind === attemptKind;
+  const currentToOutdated = supersederKind === "outdated"
+    && attemptKind === "current"
+    && superseder?.supersededAttemptKind === "current"
+    && superseder?.mutation?.status === "retry-authorized-after-kind-change";
+  return (sameKind || currentToOutdated)
     && isNonEmptyResolutionIdentifier(superseder?.attemptId)
     && isNonEmptyResolutionIdentifier(superseder?.supersedesAttemptId)
     && isNonEmptyResolutionIdentifier(attempt?.attemptId)
@@ -6154,7 +6190,7 @@ function isValidTerminalResolutionOutcome(attempt) {
     && hasCompleteResolutionAttemptIdentity(attempt)
   ) || (
     attempt?.status === "superseded"
-    && attempt?.mutation?.status === "retry-authorized-after-live-unresolved-audit"
+    && ["retry-authorized-after-live-unresolved-audit", "retry-authorized-after-kind-change"].includes(attempt?.mutation?.status)
     && hasCompleteResolutionAttemptIdentity(attempt)
   );
 }
@@ -16575,7 +16611,6 @@ function validTaskLeaseHandoff(record, taskId, generation, tokenDigest) {
 
 function validTaskLeaseEpoch(record, taskId, generation, tokenDigest, epoch) {
   return validTaskLeaseHandoff(record, taskId, generation, tokenDigest)
-    && record.reason === "released"
     && record.epoch === epoch + 1;
 }
 
@@ -17197,7 +17232,7 @@ function inspectTaskLease(state, taskId) {
         const epochPath = taskLeasePath(state, taskId, "epochs", generation);
         const epochRecord = existsSync(epochPath) ? readRegularJson(epochPath) : null;
         if (epochRecord) {
-          if (!validTaskLeaseEpoch(epochRecord, taskId, generation, tokenDigest, epoch)) {
+          if (!validTaskLeaseEpoch(epochRecord, taskId, generation, tokenDigest, epoch) || epochRecord.reason !== "released") {
             return { taskId, lockPath: root, status: "ambiguous", reason: "lease_epoch_record_invalid", metadata: null, protocol: "versioned_lease" };
           }
           if (epoch >= taskLeaseMaximumEpochCount) {
@@ -17260,6 +17295,21 @@ function inspectTaskLease(state, taskId) {
               heartbeat,
               protocol: "versioned_lease",
             };
+          }
+          const epochPath = taskLeasePath(state, taskId, "epochs", generation);
+          const epochRecord = existsSync(epochPath) ? readRegularJson(epochPath) : null;
+          if (epochRecord) {
+            if (!validTaskLeaseEpoch(epochRecord, taskId, generation, tokenDigest, epoch) || epochRecord.reason !== "stale_owner_process_absent") {
+              return { taskId, lockPath: root, status: "ambiguous", reason: "lease_epoch_record_invalid", metadata: null, protocol: "versioned_lease" };
+            }
+            if (epoch >= taskLeaseMaximumEpochCount) {
+              return { taskId, lockPath: root, status: "ambiguous", reason: "lease_epoch_capacity_exceeded", metadata: null, protocol: "versioned_lease" };
+            }
+            generation = epochRecord.to_generation;
+            epoch += 1;
+            seen.clear();
+            depth = -1;
+            continue;
           }
           return {
             taskId,
@@ -17411,7 +17461,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
     };
     try {
       if (inspection.chainDepth >= taskLeaseMaximumGenerationChainLength) {
-        handoff.reason = "released";
+        handoff.reason = inspection.status === "released" ? "released" : "stale_owner_process_absent";
         handoff.epoch = (inspection.epoch || 0) + 1;
         publishTaskLeaseEpoch(state, taskId, handoff);
       } else {

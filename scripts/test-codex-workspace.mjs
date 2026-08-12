@@ -11320,6 +11320,10 @@ try {
         ["refresh-pr-head", "resumed-task", "--apply", "false"],
         ["adjudicate-outdated-thread", "resumed-task", "--apply=false"],
         ["adjudicate-current-thread", "resumed-task", "--apply", "false"],
+        ["verify-pr-gates", "resumed-task", "--apply=false", "--apply"],
+        ["refresh-pr-head", "resumed-task", "--apply", "false", "--apply"],
+        ["adjudicate-outdated-thread", "resumed-task", "--apply", "false", "--apply"],
+        ["adjudicate-current-thread", "resumed-task", "--apply=false", "--apply"],
       ]) {
         const result = runFixtureScript(fixture, [...args, "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
         assert(result.code !== 0, `${args[0]} unexpectedly accepted a valued --apply flag`);
