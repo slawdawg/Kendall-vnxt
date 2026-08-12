@@ -12049,7 +12049,7 @@ try {
         expected: "Failing checks: unit",
       },
     ]) {
-      const fixture = createFinishPrExistingCommitFixture(scenario.options);
+      const fixture = createCanonicalManagedPrFixture(scenario.options);
       try {
         const result = runFixtureScript(
           fixture,
@@ -16113,7 +16113,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
       options.changedPathBaseOidDrift
-        ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
+        ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
         : "",
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
