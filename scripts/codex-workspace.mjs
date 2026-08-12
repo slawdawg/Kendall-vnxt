@@ -193,6 +193,7 @@ const resolutionRetentionOverflowStatus = "unrecovered-history-truncated";
 const recognizedResolutionRecoveryMutations = new Set([
   "attempt-recorded",
   "ambiguous-or-failed",
+  "retry-authorized-after-live-unresolved-audit",
   "confirmed-by-mutation-response",
   "confirmed-by-post-audit-recovery",
 ]);
@@ -3765,8 +3766,6 @@ function resolveAdjudicatedThread(argv) {
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
-    assertNoUnrecoveredResolutionAttempt(locked, "outdated", fresh);
-
     // A second audit immediately before the write is deliberate.  The persisted
     // adjudication is useful provenance, but it must never be treated as a
     // substitute for a mutation-time snapshot of GitHub's mutable state.
@@ -3778,13 +3777,20 @@ function resolveAdjudicatedThread(argv) {
       throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
     }
 
+    const retryRecovery = supersedeLiveUnresolvedResolutionAttempt(locked, "outdated", fresh, preMutationAudit);
+    assertNoUnrecoveredResolutionAttempt(locked, "outdated", fresh, retryRecovery?.supersedesAttemptId || null);
+    if (retryRecovery) {
+      locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(locked.outdated_thread_resolution_outcomes, retryRecovery);
+      appendTaskEvent(locked, "outdated_review_thread_resolution_retry_authorized", `${threadId} ${fresh.expectedHeadSha}`);
+    }
+
     const attempt = {
       schemaVersion: 1,
       attemptId: randomUUID(),
       threadId,
       expectedHeadSha: fresh.expectedHeadSha,
       repository: fresh.repository,
-      supersedesAttemptId: null,
+      supersedesAttemptId: retryRecovery?.attemptId || null,
       attemptedAt: new Date().toISOString(),
       targetRequestFingerprint: fresh.targetRequestFingerprint,
       mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
@@ -3983,14 +3989,19 @@ function resolveAdjudicatedCurrentThread(argv) {
     if (!fresh.ready || fresh.expectedHeadSha !== retained.expectedHeadSha || fresh.repository?.fullName !== retained.repository?.fullName || fresh.mapping?.requestFingerprint !== retained.mapping?.requestFingerprint || fresh.mapping?.highRiskAuthorization?.evidence !== mapping.highRiskAuthorization?.evidence || fresh.mapping?.highRiskAuthorization?.threadId !== threadId || fresh.mapping?.highRiskAuthorization?.expectedHeadSha !== fresh.expectedHeadSha || fresh.targetRequestFingerprint !== retained.targetRequestFingerprint) {
       throw new Error(`Fresh current-thread adjudication is not ready: ${fresh.blockers.join("; ")}`);
     }
-    assertNoUnrecoveredResolutionAttempt(locked, "current", fresh);
     const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationPr = prViewForGates(locked);
     const preMutationHead = prGateHeadState(locked);
     const preMutationBlockers = currentThreadResolutionPreMutationBlockers(preMutationPr, preMutationHead, preMutationAudit, fresh);
     if (preMutationBlockers.length) throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
+    const retryRecovery = supersedeLiveUnresolvedResolutionAttempt(locked, "current", fresh, preMutationAudit);
+    assertNoUnrecoveredResolutionAttempt(locked, "current", fresh, retryRecovery?.supersedesAttemptId || null);
+    if (retryRecovery) {
+      locked.current_thread_resolution_outcomes = appendResolutionOutcome(locked.current_thread_resolution_outcomes, retryRecovery);
+      appendTaskEvent(locked, "current_review_thread_resolution_retry_authorized", `${threadId} ${fresh.expectedHeadSha}`);
+    }
     const attempt = {
-      schemaVersion: 1, attemptId: randomUUID(), threadId, expectedHeadSha: fresh.expectedHeadSha, repository: fresh.repository, supersedesAttemptId: null,
+      schemaVersion: 1, attemptId: randomUUID(), threadId, expectedHeadSha: fresh.expectedHeadSha, repository: fresh.repository, supersedesAttemptId: retryRecovery?.attemptId || null,
       attemptedAt: new Date().toISOString(), targetRequestFingerprint: fresh.targetRequestFingerprint, mutation: { status: "attempt-recorded", replyPosted: false, metadataOnly: true },
       preMutationAudit: compactReviewThreadAudit(preMutationAudit),
       recoveryPath: "Do not retry blindly. Re-audit the exact PR head and thread state, then resume only through resolve-adjudicated-current-thread.",
@@ -4309,12 +4320,44 @@ function isHighRiskReviewThreadPath(path) {
   return value === "docs/workflows/end-to-end-lane-runner.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
 }
 
-function assertNoUnrecoveredResolutionAttempt(manifest, kind, freshAdjudication = null) {
+function supersedeLiveUnresolvedResolutionAttempt(manifest, kind, fresh, audit) {
+  const key = kind === "current" ? "current_thread_resolution_outcomes" : "outdated_thread_resolution_outcomes";
+  const prior = (Array.isArray(manifest?.[key]) ? manifest[key] : [])
+    .filter((entry) => entry?.threadId === fresh.threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"))
+    .at(-1);
+  if (!prior || !hasCompleteResolutionAttemptIdentity(prior)) return null;
+  const target = audit?.threadRefs?.find((thread) => thread.id === fresh.threadId);
+  if (prior.expectedHeadSha !== fresh.expectedHeadSha
+    || prior.repository?.fullName !== fresh.repository?.fullName
+    || prior.targetRequestFingerprint !== fresh.targetRequestFingerprint
+    || !target || target.isResolved || Boolean(target.isOutdated) !== (kind === "outdated")
+    || !target.commentsComplete || target.requestFingerprint !== fresh.targetRequestFingerprint) return null;
+  const completedAt = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    attemptId: randomUUID(),
+    supersedesAttemptId: prior.attemptId,
+    threadId: fresh.threadId,
+    expectedHeadSha: fresh.expectedHeadSha,
+    repository: fresh.repository,
+    targetRequestFingerprint: fresh.targetRequestFingerprint,
+    attemptedAt: completedAt,
+    completedAt,
+    status: "superseded",
+    mutation: { status: "retry-authorized-after-live-unresolved-audit", exitCode: null, result: "live target remains unresolved and exact-head retry is authorized", replyPosted: false, metadataOnly: true },
+    preMutationAudit: compactReviewThreadAudit(audit),
+    recoveryPath: "A fresh exact-head audit proved the target remains unresolved. The prior ambiguous mutation is superseded; a new governed mutation attempt follows.",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function assertNoUnrecoveredResolutionAttempt(manifest, kind, freshAdjudication = null, retryAttemptId = null) {
   const outcomes = [
     ...(Array.isArray(manifest?.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : []).map((outcome) => ({ kind: "current", outcome })),
     ...(Array.isArray(manifest?.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : []).map((outcome) => ({ kind: "outdated", outcome })),
   ];
-  const unrecovered = outcomes.filter(({ kind: attemptKind, outcome }) => isUnrecoveredResolutionAttempt(outcomes, attemptKind, outcome));
+  const unrecovered = outcomes.filter(({ kind: attemptKind, outcome }) => outcome?.attemptId !== retryAttemptId && isUnrecoveredResolutionAttempt(outcomes, attemptKind, outcome));
   if (!unrecovered.length) return;
   const details = unrecovered.map(({ kind: attemptKind, outcome }) => `${attemptKind}:${outcome?.threadId || "unknown"}`).join(", ");
   throw new Error(`An outstanding ${kind} review-thread resolution attempt is unrecovered; do not mutate another thread until recovery is recorded: ${details}.`);
@@ -5926,14 +5969,20 @@ function hasCompleteResolutionAttemptIdentity(attempt) {
 }
 
 function isValidTerminalResolutionOutcome(attempt) {
-  return attempt?.status === "resolved"
+  return (
+    attempt?.status === "resolved"
     && ["confirmed-by-mutation-response", "confirmed-by-post-audit-recovery"].includes(attempt?.mutation?.status)
-    && hasCompleteResolutionAttemptIdentity(attempt);
+    && hasCompleteResolutionAttemptIdentity(attempt)
+  ) || (
+    attempt?.status === "superseded"
+    && attempt?.mutation?.status === "retry-authorized-after-live-unresolved-audit"
+    && hasCompleteResolutionAttemptIdentity(attempt)
+  );
 }
 
 function isMalformedResolutionOutcome(attempt) {
   if (isResolutionRetentionOverflow(attempt)) return false;
-  if (attempt?.status === "resolved") return !isValidTerminalResolutionOutcome(attempt);
+  if (["resolved", "superseded"].includes(attempt?.status)) return !isValidTerminalResolutionOutcome(attempt);
   if (attempt?.status === "needs-recovery" || attempt?.mutation?.status === "attempt-recorded") return !hasValidResolutionRecoveryChainAttempt(attempt);
   return attempt?.status !== "needs-recovery" && attempt?.mutation?.status !== "attempt-recorded";
 }
@@ -6158,7 +6207,10 @@ function fetchCompleteReviewRequestSnapshot(manifest, repository, prNumber) {
 
 function hydrateReviewThreadComments(manifest, thread) {
   const initial = thread?.comments;
-  if (!initial?.pageInfo?.hasNextPage) return thread;
+  if (!Array.isArray(initial?.nodes) || typeof initial?.pageInfo?.hasNextPage !== "boolean") {
+    throw new Error("Review-thread comment pagination returned incomplete initial evidence");
+  }
+  if (!initial.pageInfo.hasNextPage) return thread;
   const comments = Array.isArray(initial.nodes) ? [...initial.nodes] : [];
   let cursor = initial.pageInfo.endCursor;
   if (!cursor) throw new Error("Review-thread comment pagination omitted an initial cursor");
@@ -17785,7 +17837,7 @@ function run(commandName, commandArguments, options = {}) {
   let result;
   try {
     result = spawnSync(resolved.command, resolved.args, spawnOptions);
-    if (result?.error?.code === "ETIMEDOUT" && process.platform !== "win32" && Number.isInteger(result.pid) && result.pid > 0) {
+    if (["ETIMEDOUT", "ENOBUFS"].includes(result?.error?.code) && process.platform !== "win32" && Number.isInteger(result.pid) && result.pid > 0) {
       try { process.kill(-result.pid, "SIGKILL"); } catch (error) { if (error?.code !== "ESRCH") throw error; }
     }
   } finally {
