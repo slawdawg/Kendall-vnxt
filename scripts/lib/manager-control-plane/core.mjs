@@ -23125,7 +23125,9 @@ function assignmentResumeDetailWarnings({ report = {}, blockedLaneAssignments = 
   return warnings;
 }
 
-function buildTakeoverInspectionPlan(assignmentSummary = {}) {
+export const MAX_STALE_OWNER_INSPECTION_TARGETS = 24;
+
+export function buildTakeoverInspectionPlan(assignmentSummary = {}) {
   const laneAssignments = Array.isArray(assignmentSummary?.blockedLaneAssignments) ? assignmentSummary.blockedLaneAssignments : [];
   const workspaceAssignments = Array.isArray(assignmentSummary?.blockedWorkspaceAssignments) ? assignmentSummary.blockedWorkspaceAssignments : [];
   const laneTargets = laneAssignments.map((assignment) => buildTakeoverInspectionTarget("lane_assignment", assignment.assignmentId || assignment.assignment_id, assignment));
@@ -23134,7 +23136,7 @@ function buildTakeoverInspectionPlan(assignmentSummary = {}) {
   // projection as the whole stale-owner set.  Callers must fail closed until
   // every canonical target is available for dry-run evidence.
   const allTargets = [...laneTargets, ...workspaceTargets].filter(Boolean);
-  const targets = allTargets.slice(0, 12);
+  const targets = allTargets.slice(0, MAX_STALE_OWNER_INSPECTION_TARGETS);
   const targetCount = allTargets.length;
   return {
     needed: targetCount > 0,
