@@ -229,6 +229,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Bounded-write plan runbook: [docs/workflows/bounded-write-plan-runbook.md](docs/workflows/bounded-write-plan-runbook.md)
 - Provider-routing gateway note: [docs/workflows/provider-routing-gateway-note.md](docs/workflows/provider-routing-gateway-note.md) — report-only disclosure packets only; it does not execute provider calls.
 - Managed workspace cleanup runbook: [docs/codex-workspace-cleanup-runbook.md](docs/codex-workspace-cleanup-runbook.md)
+- Closed-PR exact-tree cleanup: [docs/workflows/end-to-end-lane-runner.md#cleanup](docs/workflows/end-to-end-lane-runner.md#cleanup)
 - Base Checkout recovery: [docs/workflows/base-checkout-recovery.md](docs/workflows/base-checkout-recovery.md)
 - Restricted exact-tree closeout: [docs/codex-workspace-cleanup-runbook.md#restricted-exact-tree-closeout](docs/codex-workspace-cleanup-runbook.md#restricted-exact-tree-closeout)
 - Manager terminal-event dogfood runbook: [docs/workflows/manager-terminal-event-dogfood.md](docs/workflows/manager-terminal-event-dogfood.md)

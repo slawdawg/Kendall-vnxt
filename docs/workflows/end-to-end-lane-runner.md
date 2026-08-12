@@ -225,11 +225,13 @@ publisher.
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
    thread-aware review-thread check before merge. As part of this delivery
-   gate, the delegated worker may resolve only threads whose feedback has been
-   addressed by the current diff, test evidence, or explicit operator
-   decision. Record each resolved thread ID and its supporting evidence, then
-   rerun the thread-aware check; any unaddressed or ambiguous thread remains a
-   hold.
+   gate, the delegated worker has standing authority to automatically intake,
+   address, verify, and resolve newly appearing threads without a separate
+   operator checkpoint. Resolve a thread only after the current diff, test
+   evidence, or documentation addresses its feedback. Record each resolved
+   thread ID and supporting evidence, then rerun the thread-aware check; any
+   unaddressed or ambiguous thread remains a hold while the worker completes
+   that automatic remediation loop.
    Use exact-head merge protection for GitHub CLI merges, such as
    `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
@@ -276,7 +278,8 @@ publisher.
    must either be an ancestor of the declared base or have the exact same tree.
    The exact-tree alternative additionally proves that local `origin/<base>`
    equals the live remote ref; fetch explicitly and rerun if it differs. Review
-   the one-task dry-run packet, then repeat the same command with `--apply`.
+   the one-task dry-run packet, then repeat the same command with `--apply`
+   **after removing `--summary-json`**.
    The locked apply repeats every proof, records the retained PR, integration
    mode, tree SHAs, live-base evidence, and approval in the manifest, removes
    only the local worktree and local branch, and deliberately retains the

@@ -5842,6 +5842,8 @@ function cleanupIntegratedPlan(record, state, context) {
   const strict = context.exactTreeCloseout;
   const closedPrIntegrated = context.closedPrIntegrated;
   const strictResume = strict && strictPartialCloseoutMatches(manifest, strict, context.baseRef);
+  const closedPrResume = closedPrIntegrated && closedPrIntegratedPartialResume(manifest, closedPrIntegrated, context.baseRef);
+  const partialResume = Boolean(strictResume || closedPrResume);
   const base = {
     taskId: manifest.task_id,
     status: "skipped",
@@ -5883,7 +5885,7 @@ function cleanupIntegratedPlan(record, state, context) {
   }
 
   assertSafeBranch(manifest.branch);
-  const cleanupTarget = assertCleanupWorktreeForIntegrated(manifest, state, { strict, strictResume });
+  const cleanupTarget = assertCleanupWorktreeForIntegrated(manifest, state, { strict, strictResume: partialResume, closedPrIntegrated, baseRef: context.baseRef });
   const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, cleanupTarget);
   const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
   const strictRegistration = strict ? strictWorktreeRegistration(manifest, cleanupCwd) : null;
@@ -5893,7 +5895,7 @@ function cleanupIntegratedPlan(record, state, context) {
   if (strict && !strictResume && (!worktreeStatus.exists || !strictRegistration.listed)) {
     return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), reason: "strict exact-tree closeout requires a present registered worktree" };
   }
-  if (!strictResume && !worktreeStatus.exists && !worktreeStatus.listed) {
+  if (!partialResume && !worktreeStatus.exists && !worktreeStatus.listed) {
     return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), reason: "worktree is already absent; inspect manifest before no-PR cleanup" };
   }
   if (worktreeStatus.dirty) {
@@ -5901,9 +5903,10 @@ function cleanupIntegratedPlan(record, state, context) {
   }
 
   const localBranchSha = branchSha(manifest.branch, cleanupCwd);
-  if (!localBranchSha && !strictResume) {
+  if (!localBranchSha && !partialResume) {
     return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), reason: "local branch is absent; inspect manifest before no-PR cleanup" };
   }
+  const expectedHeadSha = localBranchSha || manifest.cleanup_expected_head_sha || null;
   if (strict) {
     if (worktreeStatus.exists && !strictWorktreeOnManifestBranch(manifest, cleanupCwd)) {
       return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha, reason: "registered worktree is not checked out on the manifest branch" };
@@ -5939,9 +5942,11 @@ function cleanupIntegratedPlan(record, state, context) {
     base.proof.evidence = { status: "matched", supersessionProvenance: strict.provenance, closeoutReason: strict.closeoutReason };
     return { ...base, status: "ready", reason: `clean no-PR workspace has an exact ${context.baseRef} tree and explicit closeout evidence`, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha || manifest.cleanup_expected_head_sha || null, remoteBranchSha: null, strictResume };
   }
-  const integrated = git(["merge-base", "--is-ancestor", manifest.branch, context.baseRef], { cwd: cleanupCwd });
-  const sourceTree = closedPrIntegrated ? gitTreeSha(manifest.branch, cleanupCwd) : null;
-  const baseTree = closedPrIntegrated ? gitTreeSha(context.baseRef, cleanupCwd) : null;
+  const sourceRef = localBranchSha ? manifest.branch : `origin/${manifest.branch}`;
+  const integrated = git(["merge-base", "--is-ancestor", sourceRef, context.baseRef], { cwd: cleanupCwd });
+  const baseSha = closedPrIntegrated ? branchSha(context.baseRef, cleanupCwd) || null : null;
+  const sourceTree = closedPrIntegrated ? (gitTreeSha(sourceRef, cleanupCwd) || manifest.closed_pr_integrated_cleanup?.integration?.sourceTree || null) : null;
+  const baseTree = closedPrIntegrated && baseSha ? gitTreeSha(baseSha, cleanupCwd) : null;
   const exactTreeIntegrated = Boolean(closedPrIntegrated && sourceTree && baseTree && sourceTree === baseTree);
   if (integrated.code !== 0 && !exactTreeIntegrated) {
     return {
@@ -5964,24 +5969,24 @@ function cleanupIntegratedPlan(record, state, context) {
         cleanupCwd,
         worktree: cleanupWorktreeSummary(worktreeStatus),
         localBranchSha,
-        expectedHeadSha: localBranchSha,
+        expectedHeadSha,
         reason: closedPrProof.reason,
         proof: { closedPr: closedPrProof },
       };
     }
     if (exactTreeIntegrated && integrated.code !== 0) {
-      liveBaseProof = closedPrIntegratedLiveBaseProof(context.baseRef, cleanupCwd);
+      liveBaseProof = closedPrIntegratedLiveBaseProof(context.baseRef, baseSha, baseTree, cleanupCwd);
       if (liveBaseProof.status !== "matched") {
         return {
           ...base,
           cleanupCwd,
           worktree: cleanupWorktreeSummary(worktreeStatus),
           localBranchSha,
-          expectedHeadSha: localBranchSha,
+          expectedHeadSha,
           reason: liveBaseProof.reason,
           proof: {
             closedPr: closedPrProof,
-            integration: { mode: "exact-tree", sourceTree, baseTree, liveBase: liveBaseProof },
+            integration: { mode: "exact-tree", sourceTree, baseSha, baseTree, liveBase: liveBaseProof },
           },
         };
       }
@@ -5995,13 +6000,13 @@ function cleanupIntegratedPlan(record, state, context) {
     cleanupCwd,
     worktree: cleanupWorktreeSummary(worktreeStatus),
     localBranchSha,
-    expectedHeadSha: localBranchSha,
+    expectedHeadSha,
     remoteBranchSha: branchSha(`origin/${manifest.branch}`, cleanupCwd) || null,
-    proof: closedPrIntegrated ? { closedPr: closedPrProof, integration: { mode: exactTreeIntegrated && integrated.code !== 0 ? "exact-tree" : "ancestry", sourceTree, baseTree, liveBase: liveBaseProof }, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
+    proof: closedPrIntegrated ? { closedPr: closedPrProof, integration: { mode: exactTreeIntegrated && integrated.code !== 0 ? "exact-tree" : "ancestry", sourceTree, baseSha, baseTree, liveBase: liveBaseProof }, approval: closedPrIntegrated.approval, metadataOnly: true } : null,
   };
 }
 
-function closedPrIntegratedLiveBaseProof(baseRef, cleanupCwd) {
+function closedPrIntegratedLiveBaseProof(baseRef, expectedLocalSha, expectedTree, cleanupCwd) {
   const baseBranch = String(baseRef || "").startsWith("origin/") ? String(baseRef).slice("origin/".length) : "";
   try {
     assertSafeBaseBranch(baseBranch);
@@ -6022,6 +6027,16 @@ function closedPrIntegratedLiveBaseProof(baseRef, cleanupCwd) {
       localSha: null,
       liveSha: null,
       reason: `exact-tree closed-PR cleanup requires local ${baseRef} evidence`,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (!expectedLocalSha || localSha !== expectedLocalSha || gitTreeSha(localSha, cleanupCwd) !== expectedTree) {
+    return {
+      status: "mismatch",
+      localSha,
+      liveSha: null,
+      reason: `local ${baseRef} changed after its exact-tree snapshot; rerun the proof`,
       metadataOnly: true,
       rawPayloadRetained: false,
     };
@@ -6063,6 +6078,7 @@ function closedPrIntegratedLiveBaseProof(baseRef, cleanupCwd) {
     status: "matched",
     localSha,
     liveSha,
+    treeSha: expectedTree,
     checkedAt: new Date().toISOString(),
     metadataOnly: true,
     rawPayloadRetained: false,
@@ -6263,6 +6279,16 @@ function strictPartialCloseoutMatches(manifest, strict, baseRef) {
   return manifest.status === "cleanup_partial" && evidence?.mode === "exact-tree-closeout/v1" && evidence.baseRef === baseRef && evidence.supersessionProvenance === strict.provenance && evidence.closeoutReason === strict.closeoutReason;
 }
 
+function closedPrIntegratedPartialResume(manifest, closedPrIntegrated, baseRef) {
+  const evidence = manifest.closed_pr_integrated_cleanup;
+  return Boolean(exactCleanupPartialJournal(manifest, manifest.cleanup_expected_head_sha) &&
+    evidence?.mode === "closed-pr-integrated-cleanup/v1" &&
+    evidence.baseRef === baseRef &&
+    evidence.approval === closedPrIntegrated.approval &&
+    evidence.retainedPr && Number.isInteger(evidence.retainedPr.number) &&
+    exactGitObjectIdOrNull(evidence.expectedHeadSha));
+}
+
 function strictWorktreeOnManifestBranch(manifest, cleanupCwd) {
   const branch = git(["-C", manifest.worktree_path, "branch", "--show-current"], { cwd: cleanupCwd });
   return branch.code === 0 && branch.stdout.trim() === manifest.branch;
@@ -6365,6 +6391,11 @@ function applyCleanupIntegrated(state, plan, options) {
         };
         manifest.cleanup_remote_branch_policy = "not-deleted-closed-pr-integrated-cleanup";
         appendTaskEvent(manifest, "closed_pr_integrated_cleanup_started", `non-open PR #${freshPlan.proof.closedPr.retainedPr.number} rechecked against ${freshPlan.baseRef}`);
+        manifest.status = "cleanup_partial";
+        manifest.cleanup_error = "closed-PR integrated cleanup journal persisted; resume only with the same locked proof after interruption";
+        manifest.updated_at = cleanupStartedAt;
+        appendTaskEvent(manifest, "cleanup_journal_started", "durable closed-PR integrated cleanup journal persisted before local target deletion");
+        writeManifest(plan.manifestPath, manifest);
       }
       if (freshPlan.exactTreeCloseout) {
         manifest.supersession_closeout_evidence = {
@@ -6412,9 +6443,9 @@ function applyCleanupIntegrated(state, plan, options) {
       }
 
       removeWorktreeIfPresent(manifest, state, freshPlan.cleanupCwd);
-      if (freshPlan.exactTreeCloseout) writeManifest(plan.manifestPath, manifest);
+      if (freshPlan.exactTreeCloseout || freshPlan.closedPrIntegrated) writeManifest(plan.manifestPath, manifest);
       deleteLocalBranchIfPresent(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha);
-      if (freshPlan.exactTreeCloseout) writeManifest(plan.manifestPath, manifest);
+      if (freshPlan.exactTreeCloseout || freshPlan.closedPrIntegrated) writeManifest(plan.manifestPath, manifest);
 
       if (freshPlan.exactTreeCloseout) {
         const finalRemoteAbsence = assertStrictExactTreeRemoteAbsent(manifest, freshPlan.cleanupCwd);
@@ -8887,14 +8918,23 @@ function branchSha(branch, cwd = repoRoot) {
 }
 
 function originBranchSha(branch, cwd = repoRoot) {
-  const result = git(["ls-remote", "--heads", "origin", branch], { cwd });
+  const exactRef = `refs/heads/${branch}`;
+  const result = git(["ls-remote", "--heads", "origin", exactRef], { cwd });
   if (result.code !== 0) {
     throw new Error(result.stderr || `Could not inspect remote branch: origin/${branch}`);
   }
   if (!result.stdout) {
     return "";
   }
-  return result.stdout.split(/\s+/)[0] || "";
+  const rows = result.stdout.trim().split("\n").filter(Boolean);
+  if (rows.length !== 1) {
+    throw new Error(`Could not uniquely inspect remote branch: origin/${branch}`);
+  }
+  const [sha, ref] = rows[0].split(/\s+/);
+  if (!exactGitObjectIdOrNull(sha) || ref !== exactRef) {
+    throw new Error(`Could not exactly inspect remote branch: origin/${branch}`);
+  }
+  return sha;
 }
 
 function refExists(ref) {
@@ -14346,7 +14386,11 @@ function assertCleanupWorktreeForMerged(manifest, state) {
 
 function assertCleanupWorktreeForIntegrated(manifest, state, context) {
   return assertCleanupWorktreeTarget(manifest, state, {
-    absentPartial: () => context.strictResume && exactIntegratedCleanupPartialResume(manifest, context.strict),
+    absentPartial: () => context.strictResume && (
+      context.strict
+        ? exactIntegratedCleanupPartialResume(manifest, context.strict)
+        : closedPrIntegratedPartialResume(manifest, context.closedPrIntegrated, context.baseRef)
+    ),
   });
 }
 
