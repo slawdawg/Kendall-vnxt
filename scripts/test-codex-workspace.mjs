@@ -9775,31 +9775,25 @@ try {
     }
   });
 
-  test("versioned lease reserves bounded traversal capacity before callbacks and leaves the final released generation reusable", () => {
+  test("versioned lease rolls a released full segment into one immutable bounded epoch before callbacks", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
-      // The protocol can inspect 64 immutable generations.  The 65th callback
-      // must be refused before heartbeatManifest can write its manifest event.
+      // The 65th callback starts a separately bounded immutable epoch only
+      // after the 64th generation was durably released.
       for (let invocation = 0; invocation <= 64; invocation += 1) {
-        const before = readFileSync(manifestPath, "utf8");
         const result = runFixtureScript(
           fixture,
           ["heartbeat", "resumed-task", "--phase", "lease-capacity-test", "--state-root", fixture.stateRoot],
           { cwd: fixture.worktree, env: fixture.env },
         );
-        if (invocation < 64) {
-          assert(result.code === 0, `invocation ${invocation + 1}: ${result.stderr || result.stdout}`);
-        } else {
-          assert(result.code !== 0, "callback beyond traversal capacity unexpectedly ran");
-          assert(result.stderr.includes("Task lease handoff capacity is exhausted"), result.stderr || result.stdout);
-          assert(readFileSync(manifestPath, "utf8") === before, "capacity rejection entered the protected callback");
-        }
+        assert(result.code === 0, `invocation ${invocation + 1}: ${result.stderr || result.stdout}`);
       }
-      assert(leaseJsonRecordsForFixture(join(leaseRoot, "generations")).length === 64, "capacity rejection published an unreachable generation");
-      assert(leaseJsonRecordsForFixture(join(leaseRoot, "releases")).length === 64, "a successful callback did not release its generation");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "generations")).length === 65, "epoch continuation did not publish its successor generation");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "releases")).length === 65, "epoch continuation did not release its successor generation");
       assert(leaseJsonRecordsForFixture(join(leaseRoot, "handoffs")).length === 63, "handoff history does not match the bounded generation chain");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "epochs")).length === 1, "full released segment did not retain one immutable epoch record");
       const inspection = runFixtureScript(
         fixture,
         ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot],

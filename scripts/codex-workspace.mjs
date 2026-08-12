@@ -149,6 +149,7 @@ const taskLeaseMaximumHeartbeatHistoryRecords = 1_024;
 // the bound explicit and reserve the final inspectable slot before a callback
 // or durable manifest write can run.
 const taskLeaseMaximumGenerationChainLength = 64;
+const taskLeaseMaximumEpochCount = 16;
 let activeTaskLeaseWriteContext = null;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
@@ -16572,6 +16573,12 @@ function validTaskLeaseHandoff(record, taskId, generation, tokenDigest) {
   );
 }
 
+function validTaskLeaseEpoch(record, taskId, generation, tokenDigest, epoch) {
+  return validTaskLeaseHandoff(record, taskId, generation, tokenDigest)
+    && record.reason === "released"
+    && record.epoch === epoch + 1;
+}
+
 function validTaskLeaseExternalIntent(record, taskId, generation, tokenDigest) {
   return Boolean(
     record &&
@@ -16634,6 +16641,8 @@ function ensureTaskLeaseDirectories(state, taskId) {
     taskLeasePath(state, taskId, "heartbeats"),
     taskLeasePath(state, taskId, "releases"),
     taskLeasePath(state, taskId, "handoffs"),
+    taskLeasePath(state, taskId, "epochs"),
+    taskLeasePath(state, taskId, "epoch-candidates"),
     taskLeasePath(state, taskId, "handoff-candidates"),
     taskLeasePath(state, taskId, "root-candidates"),
     taskLeasePath(state, taskId, "external-intents"),
@@ -16673,6 +16682,14 @@ function publishTaskLeaseHandoff(state, taskId, record) {
   return publishImmutableLeaseRecord(
     taskLeasePath(state, taskId, "handoff-candidates", `${record.from_generation}-${record.to_generation}`),
     taskLeasePath(state, taskId, "handoffs", record.from_generation),
+    record,
+  );
+}
+
+function publishTaskLeaseEpoch(state, taskId, record) {
+  return publishImmutableLeaseRecord(
+    taskLeasePath(state, taskId, "epoch-candidates", `${record.from_generation}-${record.to_generation}`),
+    taskLeasePath(state, taskId, "epochs", record.from_generation),
     record,
   );
 }
@@ -17149,6 +17166,7 @@ function inspectTaskLease(state, taskId) {
       return { taskId, lockPath: root, status: "ambiguous", reason: "lease_root_record_invalid", metadata: null, protocol: "versioned_lease" };
     }
     let generation = rootRecord.initial_generation;
+    let epoch = 0;
     const seen = new Set();
     for (let depth = 0; depth < taskLeaseMaximumGenerationChainLength; depth += 1) {
       if (seen.has(generation)) return { taskId, lockPath: root, status: "ambiguous", reason: "lease_handoff_cycle", metadata: null, protocol: "versioned_lease" };
@@ -17176,6 +17194,21 @@ function inspectTaskLease(state, taskId) {
         continue;
       }
       if (release) {
+        const epochPath = taskLeasePath(state, taskId, "epochs", generation);
+        const epochRecord = existsSync(epochPath) ? readRegularJson(epochPath) : null;
+        if (epochRecord) {
+          if (!validTaskLeaseEpoch(epochRecord, taskId, generation, tokenDigest, epoch)) {
+            return { taskId, lockPath: root, status: "ambiguous", reason: "lease_epoch_record_invalid", metadata: null, protocol: "versioned_lease" };
+          }
+          if (epoch >= taskLeaseMaximumEpochCount) {
+            return { taskId, lockPath: root, status: "ambiguous", reason: "lease_epoch_capacity_exceeded", metadata: null, protocol: "versioned_lease" };
+          }
+          generation = epochRecord.to_generation;
+          epoch += 1;
+          seen.clear();
+          depth = -1;
+          continue;
+        }
         return {
           taskId,
           lockPath: root,
@@ -17185,6 +17218,7 @@ function inspectTaskLease(state, taskId) {
           generation,
           release,
           chainDepth: depth + 1,
+          epoch,
           protocol: "versioned_lease",
         };
       }
@@ -17249,6 +17283,7 @@ function inspectTaskLease(state, taskId) {
       reason: "lease_handoff_depth_exceeded",
       metadata: null,
       chainDepth: taskLeaseMaximumGenerationChainLength,
+      epoch,
       protocol: "versioned_lease",
     };
   } catch {
@@ -17310,7 +17345,8 @@ function assertTaskLeaseAcquisitionCapacity(inspection, taskId, options = {}) {
   if (!Number.isInteger(inspection.chainDepth) || inspection.chainDepth < 1) {
     throw new Error(`Task lease chain depth is not provable: task_id=${taskId}; mutation=none.`);
   }
-  if (inspection.chainDepth >= taskLeaseMaximumGenerationChainLength) {
+  if (inspection.chainDepth >= taskLeaseMaximumGenerationChainLength
+    && (!Number.isInteger(inspection.epoch) || inspection.epoch >= taskLeaseMaximumEpochCount)) {
     throw new Error(
       `Task lease handoff capacity is exhausted: task_id=${taskId}; chain_depth=${inspection.chainDepth}; ` +
       `maximum_chain_length=${taskLeaseMaximumGenerationChainLength}; mutation=none.`,
@@ -17374,7 +17410,13 @@ function withManifestLock(state, taskId, fn, options = {}) {
       handed_off_at: new Date().toISOString(),
     };
     try {
-      publishTaskLeaseHandoff(state, taskId, handoff);
+      if (inspection.chainDepth >= taskLeaseMaximumGenerationChainLength) {
+        handoff.reason = "released";
+        handoff.epoch = (inspection.epoch || 0) + 1;
+        publishTaskLeaseEpoch(state, taskId, handoff);
+      } else {
+        publishTaskLeaseHandoff(state, taskId, handoff);
+      }
     } catch (retryError) {
       const current = redactTaskLockInspection(inspectTaskLease(state, taskId));
       throw new Error(`Task lease handoff could not acquire immutable predecessor generation: status=${current.status}; reason=${current.reason}; mutation=none; error=${retryError?.code || "unknown"}.`);
