@@ -1598,6 +1598,7 @@ try {
     assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
 
     assert(source.includes("context.managedGate !== false && pr.headRefName !== manifest.branch"), "managed branch identity must not be imposed on detached unmanaged PR evidence");
+    assert(source.includes("independently retained exact-head successor gate evidence is required"), "descendant reconciliation must fail closed without retained exact-head successor evidence");
 
     const policy = source.match(/function sourceOwnedSkipPolicySection[\s\S]*?function shapeDiffRiskEvidence/);
     assert(policy, "source-owned skip policy parser not found");
@@ -12814,7 +12815,7 @@ try {
     }
   });
 
-  test("reconcile-merged-pr permits an explicitly approved clean descendant delivery-head reconciliation", () => {
+  test("reconcile-merged-pr fails closed for an approved descendant delivery head without retained exact-head successor evidence", () => {
     const fixture = createMergedCleanupFixture();
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
@@ -12827,6 +12828,7 @@ try {
       manifest.pr_delivery_head_sha = recordedHead;
       manifest.status = "pr_open";
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
       const result = runMergedCleanupFixtureScript(fixture, [
         "reconcile-merged-pr", "cleanup-task", "--apply", "--allow-audited-descendant-head",
         "--approval", "operator approved audited descendant delivery reconciliation",
@@ -12834,14 +12836,13 @@ try {
         "--delivery-audit-status", "cleanup-ready", "--delivery-audit-summary", "Audited clean descendant delivery head.",
         "--delivery-audit-head-sha", liveHead, "--state-root", fixture.stateRoot,
       ], { env: { ...fixture.env, CODEX_WORKSPACE_TEST_MERGED_PR_HEAD: liveHead } });
-      assert(result.code === 0, result.stderr || result.stdout);
-      const updated = readJson(manifestPath);
-      assert(updated.pr_delivery_head_sha === liveHead, "live descendant head was not recorded");
-      assert(updated.audited_descendant_delivery_reconciliation?.recordedHeadSha === recordedHead, "recorded predecessor evidence missing");
+      assert(result.code !== 0, "descendant reconciliation unexpectedly accepted caller-supplied approval");
+      assert(result.stderr.includes("independently retained exact-head successor gate evidence"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "blocked descendant reconciliation mutated the manifest");
     } finally { cleanupMergedCleanupFixture(fixture); }
   });
 
-  test("reconcile-merged-pr keeps an explicitly approved descendant reconciliation blocked for a dirty worktree", () => {
+  test("reconcile-merged-pr keeps a descendant reconciliation blocked even when caller supplies approval", () => {
     const fixture = createMergedCleanupFixture();
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
@@ -12864,7 +12865,7 @@ try {
         "--delivery-audit-head-sha", liveHead, "--state-root", fixture.stateRoot,
       ], { env: { ...fixture.env, CODEX_WORKSPACE_TEST_MERGED_PR_HEAD: liveHead } });
       assert(result.code !== 0, "dirty descendant reconciliation unexpectedly applied");
-      assert(result.stderr.includes("requires a clean managed worktree"), result.stderr || result.stdout);
+      assert(result.stderr.includes("independently retained exact-head successor gate evidence"), result.stderr || result.stdout);
       assert(readFileSync(manifestPath, "utf8") === before, "dirty descendant reconciliation mutated the manifest");
     } finally { cleanupMergedCleanupFixture(fixture); }
   });

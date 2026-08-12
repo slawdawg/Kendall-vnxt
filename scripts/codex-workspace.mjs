@@ -590,8 +590,8 @@ reconcile-merged-pr options:
   --delivery-audit-status <status> Cleanup audit recommendation. Must be cleanup-ready.
   --delivery-audit-summary <text> Metadata-only cleanup audit summary for the exact PR head.
   --delivery-audit-head-sha <sha> Optional exact head override; must match the merged PR head.
-  --allow-audited-descendant-head Permit one explicit, audit-bound update when the merged PR head is a clean descendant of the recorded delivery head.
-  --approval <text>         Required with --allow-audited-descendant-head; records the operator authorization.
+  --allow-audited-descendant-head Reserved; fail-closed until independently retained exact-head successor evidence is available.
+  --approval <text>         Reserved with --allow-audited-descendant-head; does not bypass the fail-closed hold.
 
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -4776,6 +4776,9 @@ function assertAuditedDescendantHeadOptionValues(options) {
   }
   if (options.allowAuditedDescendantHead && !validTakeoverReason(options.approval)) {
     throw new Error("reconcile-merged-pr --allow-audited-descendant-head requires --approval with at least 10 non-whitespace characters.");
+  }
+  if (options.allowAuditedDescendantHead) {
+    throw new Error("reconcile-merged-pr --allow-audited-descendant-head is unavailable: independently retained exact-head successor gate evidence is required before descendant reconciliation can be enabled.");
   }
 }
 
