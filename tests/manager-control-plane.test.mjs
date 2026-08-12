@@ -62,6 +62,7 @@ import {
   buildSteeringPlan,
   buildAssignmentResume,
   buildStaleOwnerInspection,
+  buildTakeoverInspectionPlan,
   buildTmuxOrientationStatus,
   buildUsageStatus,
   buildWorkerFrictionPlan,
@@ -19787,6 +19788,34 @@ test("stale-owner inspection fails closed when its bounded projection omits cano
   assert.equal(inspection.summary.projectedTargetCount, 1);
   assert.ok(inspection.blockers.some((blocker) => blocker.sourceCode === "stale-owner-detail-truncated"));
   assert.match(inspection.nextActions[0].summary, /counted 13 stale-owner target/);
+});
+
+test("takeover inspection projects the complete bounded stale-owner set and fails closed above its cap", () => {
+  const targets = Array.from({ length: 19 }, (_, index) => ({
+    taskId: `stale-workspace-${index + 1}`,
+    owner: "old-owner",
+    branch: `codex/stale-workspace-${index + 1}`,
+    status: "blocked_stale_owner_needs_takeover",
+  }));
+  const complete = buildTakeoverInspectionPlan({ blockedWorkspaceAssignments: targets });
+
+  assert.equal(complete.targetCount, 19);
+  assert.equal(complete.projectedTargetCount, 19);
+  assert.equal(complete.complete, true);
+  assert.equal(complete.targets.length, 19);
+  assert.ok(complete.targets.every((target) => target.mutationMode === "dry_run_only"));
+
+  const overCapacity = buildTakeoverInspectionPlan({
+    blockedWorkspaceAssignments: Array.from({ length: 25 }, (_, index) => ({
+      taskId: `over-capacity-${index + 1}`,
+      owner: "old-owner",
+      status: "blocked_stale_owner_needs_takeover",
+    })),
+  });
+  assert.equal(overCapacity.targetCount, 25);
+  assert.equal(overCapacity.projectedTargetCount, 24);
+  assert.equal(overCapacity.complete, false);
+  assert.ok(overCapacity.stopLines.includes("do_not_apply_takeover_without_explicit_operator_approval"));
 });
 
 test("cleanup and dirty preservation propagate stale-owner inspection blockers", () => {
