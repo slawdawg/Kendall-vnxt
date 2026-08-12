@@ -4370,7 +4370,11 @@ function supersedeLiveUnresolvedResolutionAttempt(manifest, kind, fresh, audit) 
   const prior = (Array.isArray(manifest?.[key]) ? manifest[key] : [])
     .filter((entry) => entry?.threadId === fresh.threadId && (entry?.status === "needs-recovery" || entry?.mutation?.status === "attempt-recorded"))
     .at(-1);
-  if (!prior || !hasCompleteResolutionAttemptIdentity(prior)) return null;
+  // An interrupted initial `attempt-recorded` entry deliberately has no
+  // completedAt.  It is still an identity-complete recovery-chain entry, and
+  // a fresh exact-head audit of the still-unresolved target is the bounded
+  // evidence required to supersede it rather than leaving it unrecoverable.
+  if (!prior || !hasValidResolutionRecoveryChainAttempt(prior)) return null;
   const target = audit?.threadRefs?.find((thread) => thread.id === fresh.threadId);
   if (prior.expectedHeadSha !== fresh.expectedHeadSha
     || prior.repository?.fullName !== fresh.repository?.fullName
@@ -5111,8 +5115,14 @@ function buildPrGateEvidence(manifest, context = {}) {
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
   const postEvidencePr = prViewForGates(manifest);
   if (!postEvidencePr) throw new Error("Could not reload PR state after collecting gate evidence.");
+  // Review state is independently mutable. Re-read it after the remaining
+  // evidence calls so a newly-created request cannot be hidden by an earlier
+  // clean snapshot.
+  const postEvidenceReviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const postEvidenceChecks = normalizeStatusCheckRollup(postEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
   const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(postEvidenceChecks);
+  const reviewThreadSnapshotChanged = JSON.stringify(compactReviewThreadAudit(reviewThreadState))
+    !== JSON.stringify(compactReviewThreadAudit(postEvidenceReviewThreadState));
   const diffRiskEvidence = shapeDiffRiskEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
     expectedPrNumber: pr.number,
@@ -5144,7 +5154,8 @@ function buildPrGateEvidence(manifest, context = {}) {
     checks: postEvidenceChecks,
     checkSnapshotChanged,
     nonRequiredCheckPolicy,
-    reviewThreadState,
+    reviewThreadState: postEvidenceReviewThreadState,
+    reviewThreadSnapshotChanged,
     deliverySubagentAudit,
     diffRiskEvidence,
     mergePlan,
@@ -5198,7 +5209,8 @@ function buildPrGateEvidence(manifest, context = {}) {
     checks: postEvidenceChecks,
     checkSnapshotChanged,
     nonRequiredCheckPolicy,
-    reviewThreads: reviewThreadState,
+    reviewThreads: postEvidenceReviewThreadState,
+    reviewThreadSnapshotChanged,
     deliverySubagentAudit,
     diffRiskEvidence,
     mergePlan,
@@ -5914,6 +5926,9 @@ function prGateBlockers(manifest, pr, context) {
   }
   if (context.checkSnapshotChanged) {
     blockers.push("Status checks changed while collecting the remaining gate evidence");
+  }
+  if (context.reviewThreadSnapshotChanged) {
+    blockers.push("Review-thread state changed while collecting the remaining gate evidence");
   }
   blockers.push(...(context.nonRequiredCheckPolicy?.blockers || []));
   if (!context.reviewThreadState.querySucceeded) {

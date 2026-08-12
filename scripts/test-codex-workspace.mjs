@@ -11405,6 +11405,45 @@ try {
     }
   });
 
+  test("resolve-adjudicated-thread supersedes an interrupted recorded attempt after a fresh unresolved audit", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewThreads: [{ id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } }],
+    });
+    const adjudicationArgs = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.", "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt",
+      "--verification", "Focused test.", "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      assert(runFixtureScript(fixture, adjudicationArgs, { cwd: fixture.worktree, env: fixture.env }).code === 0);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.outdated_thread_resolution_outcomes = [{
+        schemaVersion: 1,
+        attemptId: "interrupted-recorded-attempt",
+        threadId: "PRRT_outdated",
+        expectedHeadSha: manifest.pr_delivery_head_sha,
+        repository: { fullName: "slawdawg/Kendall-vnxt" },
+        targetRequestFingerprint: manifest.outdated_thread_adjudications[0].targetRequestFingerprint,
+        attemptedAt: "2026-08-12T00:00:00.000Z",
+        status: "needs-recovery",
+        mutation: { status: "attempt-recorded", metadataOnly: true },
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      }];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code === 0, resolution.stderr || resolution.stdout);
+      const outcomes = readJson(manifestPath).outdated_thread_resolution_outcomes;
+      const superseded = outcomes.find((outcome) => outcome.status === "superseded");
+      assert(superseded?.supersedesAttemptId === "interrupted-recorded-attempt", JSON.stringify(outcomes));
+      assert(outcomes.some((outcome) => outcome.status === "resolved"), JSON.stringify(outcomes));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("thread resolvers fail closed on malformed mutation GraphQL errors without retaining provider text", () => {
     const providerOnlyText = "provider-only-mutation-diagnostic-DO-NOT-RETAIN";
     for (const scenario of [
@@ -12142,6 +12181,11 @@ try {
         name: "review-request-graphql-errors",
         options: { existingPr: true, reviewRequestErrors: [{ message: "partial review request timeout" }] },
         expected: "Review-thread query returned 1 GraphQL error(s)",
+      },
+      {
+        name: "post-gate-review-thread-drift",
+        options: { existingPr: true, postGateReviewThreadDrift: true },
+        expected: "Review-thread state changed while collecting the remaining gate evidence",
       },
       {
         name: "malformed-review-request-graphql-errors",
@@ -16148,6 +16192,9 @@ function createFinishPrExistingCommitFixture(options = {}) {
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
       options.changedPathBaseOidDrift
         ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
+        : "",
+      options.postGateReviewThreadDrift
+        ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const payload = JSON.parse(fs.readFileSync(${JSON.stringify(reviewThreadsStatePath)}, 'utf8')); if (!payload.data.repository.pullRequest.reviewThreads.nodes.some((thread) => thread.id === 'PRRT_post_gate_current')) { payload.data.repository.pullRequest.reviewThreads.nodes.push({ id: 'PRRT_post_gate_current', isResolved: false, isOutdated: false, comments: { nodes: [{ id: 'PRRC_post_gate_current', url: 'https://example.test/pull/456#discussion_post_gate_current', body: 'Concurrent gate review request.' }], pageInfo: { hasNextPage: false } } }); fs.writeFileSync(${JSON.stringify(reviewThreadsStatePath)}, JSON.stringify(payload)); } console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
         : "",
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
