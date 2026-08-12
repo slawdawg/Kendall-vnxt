@@ -3467,7 +3467,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
   }
   blockers.push(...nonAncestralRecovery.blockers);
-  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
+  if (pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (checks.total === 0) blockers.push("No status checks reported for live PR head");
   if (checks.pending.length) blockers.push(`Pending checks: ${checks.pending.map((check) => check.name).join(", ")}`);
   if (checks.failing.length) blockers.push(`Failing checks: ${checks.failing.map((check) => check.name).join(", ")}`);
@@ -3881,7 +3881,7 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
   const blockers = [];
   if (!prior.expectedHeadSha || prior.expectedHeadSha !== headState.expectedHeadSha || prior.expectedHeadSha !== pr?.headRefOid || !headState.localMatchesExpected) blockers.push("Interrupted outdated-thread attempt no longer matches the exact PR head");
   if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted outdated-thread attempt no longer matches the canonical repository");
-  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || ["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push("Interrupted outdated-thread attempt PR state is no longer safe");
+  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || pr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted outdated-thread attempt PR state is no longer safe");
   if (!retained || !retained.targetRequestFingerprint || !prior.attemptId) blockers.push("Interrupted outdated-thread attempt lacks retained exact-head adjudication provenance");
   if (!pr?.baseRefName || pr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted outdated-thread attempt PR base changed before recovery");
   if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted outdated-thread attempt PR base commit changed before recovery");
@@ -4073,7 +4073,7 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   const blockers = [];
   if (!prior.expectedHeadSha || prior.expectedHeadSha !== headState.expectedHeadSha || prior.expectedHeadSha !== pr?.headRefOid || !headState.localMatchesExpected) blockers.push("Interrupted current-thread attempt no longer matches the exact PR head");
   if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted current-thread attempt no longer matches the canonical repository");
-  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || ["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push("Interrupted current-thread attempt PR state is no longer safe");
+  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || pr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted current-thread attempt PR state is no longer safe");
   if (!pr?.baseRefName || pr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted current-thread attempt PR base changed before recovery");
   if (!retained || !retained.targetRequestFingerprint || !prior.attemptId) blockers.push("Interrupted current-thread attempt lacks retained exact-head adjudication provenance");
   if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted current-thread attempt PR base commit changed before recovery");
@@ -4114,7 +4114,7 @@ function currentThreadResolutionPreMutationBlockers(pr, headState, audit, fresh)
   if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== fresh.pr?.baseRefOid) blockers.push("PR base commit drifted immediately before the thread mutation");
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
-  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
+  if (pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, fresh.nonRequiredCheckPolicy);
   if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
   if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
@@ -4142,9 +4142,33 @@ function currentThreadResolutionPostMutationBlockers(audit, target, fresh) {
   if (unexpectedCurrent.length) {
     blockers.push(`New unresolved current review threads after resolution: ${unexpectedCurrent.map((thread) => thread.url || thread.id).join(", ")}`);
   }
+  blockers.push(...nonTargetThreadPostMutationBlockers(audit, fresh, fresh?.threadId));
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   if (target?.isOutdated) blockers.push("Target review thread became outdated during resolution and requires recovery");
   if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
+  return blockers;
+}
+
+function nonTargetThreadPostMutationBlockers(audit, fresh, targetThreadId) {
+  const blockers = [];
+  const fingerprint = (thread) => JSON.stringify({
+    id: thread?.id || null,
+    isResolved: thread?.isResolved === true,
+    isOutdated: thread?.isOutdated === true,
+    path: thread?.path || null,
+    url: thread?.url || null,
+    commentsComplete: thread?.commentsComplete === true,
+    requestFingerprint: thread?.requestFingerprint || null,
+  });
+  const pre = new Map((fresh?.reviewThreads?.threadRefs || [])
+    .filter((thread) => thread?.id && thread.id !== targetThreadId)
+    .map((thread) => [thread.id, fingerprint(thread)]));
+  const post = new Map((audit?.threadRefs || [])
+    .filter((thread) => thread?.id && thread.id !== targetThreadId)
+    .map((thread) => [thread.id, fingerprint(thread)]));
+  const changed = [...new Set([...pre.keys(), ...post.keys()])]
+    .filter((id) => pre.get(id) !== post.get(id));
+  if (changed.length) blockers.push(`Pre-existing non-target review threads changed during resolution: ${changed.join(", ")}`);
   return blockers;
 }
 
@@ -4227,7 +4251,7 @@ function postResolutionExactStateBlockers(post, fresh = {}) {
   if (!exactGitObjectIdOrNull(post.pr?.baseRefOid) || post.pr.baseRefOid !== fresh.pr?.baseRefOid) blockers.push("PR base commit changed during review-thread resolution and requires recovery");
   if (!post.pr?.headRefOid || post.pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head changed during review-thread resolution and requires recovery");
   if (!post.headState?.localMatchesExpected || post.headState?.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head changed during review-thread resolution and requires recovery");
-  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(post.pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${post.pr.reviewDecision} after review-thread resolution`);
+  if (post.pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${post.pr.reviewDecision} after review-thread resolution`);
   if (post.checks?.total === 0) blockers.push("No status checks reported for exact head after review-thread resolution");
   if (post.checks?.pending?.length) blockers.push(`Pending checks after review-thread resolution: ${post.checks.pending.map((check) => check.name).join(", ")}`);
   if (post.checks?.failing?.length) blockers.push(`Failed or ambiguous checks after review-thread resolution: ${post.checks.failing.map((check) => check.name).join(", ")}`);
@@ -4374,7 +4398,7 @@ function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) 
   if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== fresh.pr?.baseRefOid) blockers.push("PR base commit drifted immediately before the thread mutation");
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
-  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr?.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
+  if (pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, fresh.nonRequiredCheckPolicy);
   if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
   if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
@@ -5405,7 +5429,7 @@ function currentThreadAdjudicationBlockers(manifest, pr, context) {
   if (!pr.headRefOid || pr.headRefOid !== context.headState.expectedHeadSha) blockers.push("PR head does not match the exact current-thread adjudication head");
   if (!context.headState.localMatchesExpected) blockers.push("Local HEAD does not match the recorded current-thread adjudication head");
   if (!hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) blockers.push("Current-thread adjudication requires recorded standard-delivery pr_open evidence");
-  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
+  if (pr.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (context.checks.total === 0) blockers.push("No status checks reported for exact head");
   if (context.checks.pending.length) blockers.push(`Pending checks: ${context.checks.pending.map((check) => check.name).join(", ")}`);
   if (context.checks.failing.length) blockers.push(`Failing checks: ${context.checks.failing.map((check) => check.name).join(", ")}`);
@@ -5545,6 +5569,7 @@ function hasRecordedStandardDeliveryPrState(manifest, pr, expectedHeadSha) {
     && delivery?.baseBranch === manifest.base_branch
     && delivery?.headRevision === expectedHeadSha
     && delivery?.pullRequestNumber === pr?.number
+    && pr?.headRefName === manifest.branch
     && delivery?.pullRequestUrl === pr?.url;
 }
 
@@ -5657,7 +5682,7 @@ function outdatedThreadAdjudicationBlockers(manifest, pr, context) {
   if (!pr.headRefOid || pr.headRefOid !== context.headState.expectedHeadSha) blockers.push("PR head does not match the exact adjudication head");
   if (!context.headState.localMatchesExpected) blockers.push("Local HEAD does not match the recorded adjudication head");
   if (!hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) blockers.push("Outdated-thread adjudication requires recorded standard-delivery pr_open evidence");
-  if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
+  if (pr.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision}`);
   if (context.checks.total === 0) blockers.push("No status checks reported for exact head");
   if (context.checks.pending.length) blockers.push(`Pending checks: ${context.checks.pending.map((check) => check.name).join(", ")}`);
   if (context.checks.failing.length) blockers.push(`Failing checks: ${context.checks.failing.map((check) => check.name).join(", ")}`);
@@ -12721,6 +12746,7 @@ function sanitizeVerificationDiagnosticText(value, maxBytes) {
     });
   };
   redact(/(?:github_pat_|sk-|gh[pousr]_)[A-Za-z0-9_-]+/gi, "[redacted-token]");
+  redact(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s\/@]*@/g, "[redacted-url-userinfo]@");
   redact(/(?:["']?(?:authorization|proxy-authorization|x-api-key)["']?)\s*[:=]\s*(?:"(?:basic|bearer)\s+[^"]*"|'(?:basic|bearer)\s+[^']*'|(?:basic|bearer)\s+\S+|\S+)/gi, "[redacted-credential]");
   redact(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted-credential]");
   redact(/(?:["']?[A-Za-z0-9._-]*(?:secret|token|password|credential|api[_-]?key)[A-Za-z0-9._-]*["']?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[redacted-credential]");

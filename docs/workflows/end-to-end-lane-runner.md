@@ -251,7 +251,7 @@ publisher.
    thread-aware check; any unaddressed or ambiguous thread remains a hold while
    the worker completes that automatic remediation loop.
    Use exact-head merge protection for GitHub CLI merges, such as
-   `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+   `gh pr merge <number> --merge --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
    detached worktree from the PR head so dirty local work does not contaminate
    merge evidence. Retain a bounded unmanaged-PR evidence packet with every

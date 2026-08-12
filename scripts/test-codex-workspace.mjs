@@ -8048,6 +8048,7 @@ try {
       assert(!JSON.stringify(diagnostic).includes("quoted-password"), "local diagnostic retained quoted password value");
       assert(!JSON.stringify(diagnostic).includes("basic-credential"), "local diagnostic retained Basic authorization value");
       assert(!JSON.stringify(diagnostic).includes("control-basic"), "local diagnostic retained control-byte-obscured authorization value");
+      assert(!JSON.stringify(diagnostic).includes("diagnostic-url-password"), "local diagnostic retained URL credential value");
       assert(!JSON.stringify(diagnostic).includes("direct-codex-workspace-fixture-success"), "local diagnostic confused direct success with wrapper failure");
       assert(readFileSync(manifestPath, "utf8") === before, "wrapper failure changed the manifest");
       assert(!existsSync(join(fixture.stateRoot, "tasks", "resumed-task.lock")), "wrapper failure retained the task lock");
@@ -11723,6 +11724,7 @@ try {
       { name: "post-resolution-pr-head-drift", options: { postResolutionPrHeadDrift: true }, expectedCode: 1, status: "needs-recovery" },
       { name: "post-resolution-check-drift", options: { postResolutionCheckDrift: true }, expectedCode: 1, status: "needs-recovery" },
       { name: "post-resolution-review-decision-drift", options: { postResolutionReviewDecisionDrift: true }, expectedCode: 1, status: "needs-recovery" },
+      { name: "post-resolution-non-target-thread-drift", options: { postResolutionNonTargetThreadDrift: true }, expectedCode: 1, status: "needs-recovery", extraThreads: [{ id: "PRRT_known_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate known request." }] } }] },
       { name: "post-resolution-target-outdated", options: { postResolutionTargetOutdated: true }, expectedCode: 1, status: "needs-recovery" },
       { name: "post-resolution-pr-unavailable", options: { postResolutionPrUnavailable: true }, expectedCode: 1, status: "needs-recovery" },
     ]) {
@@ -11844,6 +11846,29 @@ try {
       const state = readJson(join(fixture.root, "review-threads-state.json"));
       assert(state.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === "PRRT_current").isResolved === false, "cross-thread ambiguity mutated the new target");
       assert(readJson(manifestPath).current_thread_resolution_outcomes.length === 1, "cross-thread ambiguity recorded a new mutation attempt");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("current-thread adjudication and resolution allow REVIEW_REQUIRED while merge gates remain blocked", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      reviewDecision: "REVIEW_REQUIRED",
+      reviewThreads: [{ id: "PRRT_current", isResolved: false, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_current", body: "Request." }] } }],
+    });
+    try {
+      const adjudication = runFixtureScript(fixture, [
+        "adjudicate-current-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_current",
+        "--request-fingerprint", "30410c9491d4b89ec06d96756294533b82575b1b1aba1f005137a98a98dbc52a", "--request-summary", "Request.",
+        "--diff-summary", "Current diff implements the request.", "--mapped-files", "feature.txt", "--verification", "Focused fixture passed.",
+        "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Independent review passed.", "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const resolution = runFixtureScript(fixture, ["resolve-adjudicated-current-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_current", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resolution.code === 0, resolution.stderr || resolution.stdout);
+      const gate = runFixtureScript(fixture, ["verify-pr-gates", "resumed-task", "--owner", "runner-a", "--delivery-audit-agent", "reviewer-a", "--delivery-audit-status", "merge-ready", "--delivery-audit-summary", "Exact-head review passed.", "--diff-risk-summary", "Focused fixture.", "--diff-risk-files", "feature.txt", "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(gate.code !== 0 && gate.stderr.includes("PR reviewDecision is REVIEW_REQUIRED"), gate.stderr || gate.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -12039,6 +12064,11 @@ try {
         name: "review-required",
         options: { existingPr: true, reviewDecision: "REVIEW_REQUIRED" },
         expected: "PR reviewDecision is REVIEW_REQUIRED",
+      },
+      {
+        name: "head-branch-drift",
+        options: { existingPr: true, headRefName: "codex/wrong-live-branch" },
+        expected: "Managed PR gate requires recorded standard-delivery pr_open evidence",
       },
       {
         name: "completed-without-conclusion",
@@ -16001,6 +16031,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
     baseRefOid: Object.hasOwn(options, "baseRefOid") ? options.baseRefOid : baseHead,
     changedFiles: Object.hasOwn(options, "changedFiles") ? options.changedFiles : changedPaths.length,
     headRefOid: branchHead,
+    headRefName: Object.hasOwn(options, "headRefName") ? options.headRefName : branch,
     mergeStateStatus: Object.hasOwn(options, "mergeStateStatus") ? options.mergeStateStatus : "CLEAN",
     isDraft: Boolean(options.isDraft),
     reviewDecision: options.reviewDecision || "APPROVED",
@@ -16096,6 +16127,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
     options.postResolutionPrHeadDrift ? "const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.headRefOid = 'post-resolution-drifted-head'; fs.writeFileSync(prStatePath, JSON.stringify(pr));" : "",
     options.postResolutionCheckDrift ? "const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.statusCheckRollup.push({ name: 'post-resolution-check', status: 'IN_PROGRESS', conclusion: null }); fs.writeFileSync(prStatePath, JSON.stringify(pr));" : "",
     options.postResolutionReviewDecisionDrift ? "const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.reviewDecision = 'CHANGES_REQUESTED'; fs.writeFileSync(prStatePath, JSON.stringify(pr));" : "",
+    options.postResolutionNonTargetThreadDrift ? "const existing = payload.data.repository.pullRequest.reviewThreads.nodes.find((thread) => thread.id === 'PRRT_known_current'); if (existing?.comments?.nodes?.[0]) existing.comments.nodes[0].body = 'Changed concurrent request.';" : "",
     options.postResolutionPrUnavailable ? "fs.writeFileSync(postResolutionPrUnavailablePath, '1');" : "",
   ].filter(Boolean).join(" ");
   writeFileSync(reviewThreadsStatePath, `${JSON.stringify(reviewThreadsPayload)}\n`);
@@ -16400,7 +16432,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     timeout: "sleep 1\nexit 0",
     nonzero: "echo 'fixture verification failed' >&2\nexit 23",
     "secret-nonzero": "echo 'fixture-secret-token-123' >&2\nexit 23",
-    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" ' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
+    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" DATABASE_URL=postgres://fixture:diagnostic-url-password@example.test/db ' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
     "boundary-secret-nonzero": "printf 'xxxxxxxxxxsk-'\ni=0\nwhile [ \"$i\" -lt 2100 ]; do printf 'a'; i=$((i + 1)); done\nprintf '\\n'\nexit 23",
     "later-stage-nonzero": "echo '> pnpm run check:later-stage'\necho 'fixture-later-stage-secret' >&2\nexit 23",
     signal: "kill -TERM $$",
