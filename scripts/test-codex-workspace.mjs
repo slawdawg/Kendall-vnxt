@@ -1586,8 +1586,11 @@ try {
 
     const recovery = source.match(/function appendResolutionOutcome[\s\S]*?function reviewThreadResolutionPreMutationBlockers/);
     assert(recovery, "resolution recovery helpers not found");
-    assert(recovery[0].includes("isUnrecoveredResolutionAttemptSameKind"), "only unresolved recovery holds may bypass terminal history truncation");
+    assert(recovery[0].includes("isUnrecoveredResolutionAttempt(allOutcomes, kind, entry)"), "only unresolved recovery holds may bypass terminal history truncation");
     assert(source.includes("maxResolutionRecoveryHops"), "supersession traversal must have a bounded hop budget");
+    assert(source.includes("const isAttemptRecorded = attempt?.mutation?.status === \"attempt-recorded\""), "interrupted retry attempts must remain recoverable when superseded");
+    assert(source.includes("function boundedResolutionOutcomes(outcomes, relatedOutcomes = [], kind = \"same-kind\")"), "resolution retention must accept cross-kind outcomes");
+    assert(source.includes("isUnrecoveredResolutionAttempt(allOutcomes, kind, entry)"), "resolution retention must evaluate recovery across both thread kinds");
 
     const refresh = source.match(/function buildPrHeadRefreshEvidence[\s\S]*?function shapePr723NonAncestralRefreshRecoveryEvidence/);
     assert(refresh, "PR-head refresh evidence builder not found");
@@ -1595,6 +1598,9 @@ try {
     assert(refresh[0].includes("const postAuditPr = prViewForGates(manifest);"), "delivery-head refresh must reload the live PR after thread hydration");
     assert(refresh[0].includes("const postAuditChecks = normalizeStatusCheckRollup"), "delivery-head refresh must reload exact-head checks after thread hydration");
     assert(refresh[0].includes("Live PR or status checks changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration PR/check drift");
+    assert(refresh[0].includes("const postAuditLocalHeadResult = git([\"rev-parse\", \"HEAD\"]"), "delivery-head refresh must reload the local ref after thread hydration");
+    assert(refresh[0].includes("const postAuditRemoteHeadResult = git([\"rev-parse\", `origin/${manifest.branch}`]"), "delivery-head refresh must reload the remote ref after thread hydration");
+    assert(refresh[0].includes("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration local/remote ref drift");
     assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
 
     assert(source.includes("context.managedGate !== false && pr.headRefName !== manifest.branch"), "managed branch identity must not be imposed on detached unmanaged PR evidence");
@@ -10392,6 +10398,15 @@ try {
       mutation: { status: "ambiguous-or-failed" },
     };
     delete malformedNeedsRecoveryMissingCompletedAt.completedAt;
+    const interruptedSupersededRetry = {
+      ...successfulSuperseder,
+      attemptId: "attempt-2",
+      supersedesAttemptId: "attempt-1",
+      attemptedAt: "2026-08-04T10:02:00.000Z",
+      status: "needs-recovery",
+      mutation: { status: "attempt-recorded" },
+    };
+    delete interruptedSupersededRetry.completedAt;
     const overBoundedRecoveryChain = [recoveryAttempt];
     for (let index = 2; index <= 21; index += 1) {
       overBoundedRecoveryChain.push({
@@ -10423,6 +10438,15 @@ try {
         outcomes: [
           recoveryAttempt,
           { ...successfulSuperseder, attemptId: "attempt-2", status: "needs-recovery", mutation: { status: "ambiguous-or-failed" } },
+          { ...successfulSuperseder, attemptId: "attempt-3", supersedesAttemptId: "attempt-2", attemptedAt: "2026-08-04T10:04:00.000Z", completedAt: "2026-08-04T10:05:00.000Z" },
+        ],
+        expectedCode: 0,
+      },
+      {
+        name: "interrupted-superseded-retry-is-recoverable",
+        outcomes: [
+          recoveryAttempt,
+          interruptedSupersededRetry,
           { ...successfulSuperseder, attemptId: "attempt-3", supersedesAttemptId: "attempt-2", attemptedAt: "2026-08-04T10:04:00.000Z", completedAt: "2026-08-04T10:05:00.000Z" },
         ],
         expectedCode: 0,

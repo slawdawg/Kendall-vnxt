@@ -3445,6 +3445,10 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   // cannot be persisted as a ready delivery-head rebind.
   const postAuditPr = prViewForGates(manifest);
   const postAuditChecks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const postAuditLocalHeadResult = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
+  const postAuditLocalHeadSha = postAuditLocalHeadResult.code === 0 ? exactGitObjectIdOrNull(postAuditLocalHeadResult.stdout.trim()) : null;
+  const postAuditRemoteHeadResult = git(["rev-parse", `origin/${manifest.branch}`], { cwd: manifest.worktree_path });
+  const postAuditRemoteHeadSha = postAuditRemoteHeadResult.code === 0 ? exactGitObjectIdOrNull(postAuditRemoteHeadResult.stdout.trim()) : null;
   const postAuditSnapshotChanged = !postAuditPr
     || postAuditPr.number !== pr?.number
     || postAuditPr.baseRefName !== pr?.baseRefName
@@ -3452,6 +3456,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     || postAuditPr.headRefName !== pr?.headRefName
     || postAuditPr.headRefOid !== pr?.headRefOid
     || JSON.stringify(compactStatusCheckEvidence(postAuditChecks)) !== JSON.stringify(compactStatusCheckEvidence(checks));
+  const postAuditRefsChanged = postAuditLocalHeadSha !== localHeadSha || postAuditRemoteHeadSha !== remoteHeadSha;
   const resolutionOutcomes = [
     ...(Array.isArray(manifest.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : []).map((outcome) => ({ kind: "current", outcome })),
     ...(Array.isArray(manifest.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : []).map((outcome) => ({ kind: "outdated", outcome })),
@@ -3477,6 +3482,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   if (!pr?.headRefOid || !exactGitObjectIdOrNull(pr.headRefOid)) blockers.push("Live PR head is missing or invalid");
   if (pr?.headRefName !== manifest.branch) blockers.push("Live PR head branch does not match the managed manifest branch");
   if (postAuditSnapshotChanged) blockers.push("Live PR or status checks changed while collecting the refresh review-thread audit");
+  if (postAuditRefsChanged) blockers.push("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit");
   if (!localHeadSha || localHeadSha !== pr?.headRefOid) blockers.push("Local worktree HEAD does not match the live PR head");
   if (!remoteHeadSha || remoteHeadSha !== pr?.headRefOid) blockers.push("origin branch HEAD does not match the live PR head");
   const fastForward = priorHeadSha && pr?.headRefOid
@@ -3530,6 +3536,8 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     newHeadSha: pr?.headRefOid || null,
     localHeadSha,
     remoteHeadSha,
+    postAuditLocalHeadSha,
+    postAuditRemoteHeadSha,
     repository,
     pr: {
       number: pr?.number || null,
@@ -3783,7 +3791,12 @@ function resolveAdjudicatedThread(argv) {
     reconcileManifest(locked, { refreshPr: true });
     const recovery = recoverAlreadyResolvedOutdatedThreadAttempt(locked, threadId);
     if (recovery) {
-      locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(locked.outdated_thread_resolution_outcomes, recovery);
+      locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(
+        locked.outdated_thread_resolution_outcomes,
+        recovery,
+        locked.current_thread_resolution_outcomes,
+        "outdated",
+      );
       locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
       appendTaskEvent(locked, "outdated_review_thread_resolution_recovered", `${threadId} ${recovery.expectedHeadSha}`);
       writeManifest(manifestPath, locked);
@@ -3822,7 +3835,12 @@ function resolveAdjudicatedThread(argv) {
     const retryRecovery = supersedeLiveUnresolvedResolutionAttempt(locked, "outdated", fresh, preMutationAudit);
     assertNoUnrecoveredResolutionAttempt(locked, "outdated", fresh, retryRecovery?.supersedesAttemptId || null);
     if (retryRecovery) {
-      locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(locked.outdated_thread_resolution_outcomes, retryRecovery);
+      locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(
+        locked.outdated_thread_resolution_outcomes,
+        retryRecovery,
+        locked.current_thread_resolution_outcomes,
+        "outdated",
+      );
       appendTaskEvent(locked, "outdated_review_thread_resolution_retry_authorized", `${threadId} ${fresh.expectedHeadSha}`);
     }
 
@@ -3841,7 +3859,12 @@ function resolveAdjudicatedThread(argv) {
       metadataOnly: true,
       rawPayloadRetained: false,
     };
-    locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(locked.outdated_thread_resolution_outcomes, attempt);
+    locked.outdated_thread_resolution_outcomes = appendResolutionOutcome(
+      locked.outdated_thread_resolution_outcomes,
+      attempt,
+      locked.current_thread_resolution_outcomes,
+      "outdated",
+    );
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     appendTaskEvent(locked, "outdated_review_thread_resolution_attempted", `${threadId} ${fresh.expectedHeadSha}`);
     writeManifest(manifestPath, locked);
@@ -4026,7 +4049,12 @@ function resolveAdjudicatedCurrentThread(argv) {
     reconcileManifest(locked, { refreshPr: true });
     const recovery = recoverAlreadyResolvedCurrentThreadAttempt(locked, threadId);
     if (recovery) {
-      locked.current_thread_resolution_outcomes = appendResolutionOutcome(locked.current_thread_resolution_outcomes, recovery);
+      locked.current_thread_resolution_outcomes = appendResolutionOutcome(
+        locked.current_thread_resolution_outcomes,
+        recovery,
+        locked.outdated_thread_resolution_outcomes,
+        "current",
+      );
       locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
       appendTaskEvent(locked, "current_review_thread_resolution_recovered", `${threadId} ${recovery.expectedHeadSha}`);
       writeManifest(manifestPath, locked);
@@ -4054,7 +4082,12 @@ function resolveAdjudicatedCurrentThread(argv) {
     const retryRecovery = supersedeLiveUnresolvedResolutionAttempt(locked, "current", fresh, preMutationAudit);
     assertNoUnrecoveredResolutionAttempt(locked, "current", fresh, retryRecovery?.supersedesAttemptId || null);
     if (retryRecovery) {
-      locked.current_thread_resolution_outcomes = appendResolutionOutcome(locked.current_thread_resolution_outcomes, retryRecovery);
+      locked.current_thread_resolution_outcomes = appendResolutionOutcome(
+        locked.current_thread_resolution_outcomes,
+        retryRecovery,
+        locked.outdated_thread_resolution_outcomes,
+        "current",
+      );
       appendTaskEvent(locked, "current_review_thread_resolution_retry_authorized", `${threadId} ${fresh.expectedHeadSha}`);
     }
     const attempt = {
@@ -4064,7 +4097,12 @@ function resolveAdjudicatedCurrentThread(argv) {
       recoveryPath: "Do not retry blindly. Re-audit the exact PR head and thread state, then resume only through resolve-adjudicated-current-thread.",
       metadataOnly: true, rawPayloadRetained: false,
     };
-    locked.current_thread_resolution_outcomes = appendResolutionOutcome(locked.current_thread_resolution_outcomes, attempt);
+    locked.current_thread_resolution_outcomes = appendResolutionOutcome(
+      locked.current_thread_resolution_outcomes,
+      attempt,
+      locked.outdated_thread_resolution_outcomes,
+      "current",
+    );
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     appendTaskEvent(locked, "current_review_thread_resolution_attempted", `${threadId} ${fresh.expectedHeadSha}`);
     writeManifest(manifestPath, locked);
@@ -4362,12 +4400,12 @@ function reviewThreadResolutionHolds(audit) {
   };
 }
 
-function appendResolutionOutcome(existing, attempt) {
-  return boundedResolutionOutcomes([...(Array.isArray(existing) ? existing : []), attempt]);
+function appendResolutionOutcome(existing, attempt, relatedOutcomes = [], kind = "same-kind") {
+  return boundedResolutionOutcomes([...(Array.isArray(existing) ? existing : []), attempt], relatedOutcomes, kind);
 }
 
-function retainedResolutionOutcomes(outcomes) {
-  return boundedResolutionOutcomes(outcomes);
+function retainedResolutionOutcomes(outcomes, relatedOutcomes = [], kind = "same-kind") {
+  return boundedResolutionOutcomes(outcomes, relatedOutcomes, kind);
 }
 
 function retainThreadAdjudicationsForRecovery(entries, resolutionOutcomes) {
@@ -4383,11 +4421,17 @@ function isResolutionRetentionOverflow(entry) {
   return entry?.retention?.status === resolutionRetentionOverflowStatus;
 }
 
-function boundedResolutionOutcomes(outcomes) {
+function boundedResolutionOutcomes(outcomes, relatedOutcomes = [], kind = "same-kind") {
   const entries = Array.isArray(outcomes) ? outcomes : [];
   const existingOverflow = entries.find(isResolutionRetentionOverflow) || null;
   const attempts = entries.filter((entry) => !isResolutionRetentionOverflow(entry));
-  const recovery = attempts.filter((entry) => isUnrecoveredResolutionAttemptSameKind(attempts, entry));
+  const related = Array.isArray(relatedOutcomes) ? relatedOutcomes : [];
+  const relatedKind = kind === "current" ? "outdated" : kind === "outdated" ? "current" : "same-kind";
+  const allOutcomes = [
+    ...attempts.map((outcome) => ({ kind, outcome })),
+    ...related.map((outcome) => ({ kind: relatedKind, outcome })),
+  ];
+  const recovery = attempts.filter((entry) => isUnrecoveredResolutionAttempt(allOutcomes, kind, entry));
   const terminal = attempts.filter((entry) => !recovery.includes(entry));
   // One current recovery record plus nineteen terminal records is sufficient
   // for normal operation. Once more than one recovery record would need to be
@@ -6181,8 +6225,7 @@ function hasValidResolutionRecoveryChainAttempt(attempt) {
   const attemptedAt = Date.parse(attempt?.attemptedAt || "");
   const hasCompletedAt = Object.hasOwn(attempt || {}, "completedAt");
   const completedAt = Date.parse(attempt?.completedAt || "");
-  const isInitialAttemptRecorded = attempt?.mutation?.status === "attempt-recorded"
-    && !isNonEmptyResolutionIdentifier(attempt?.supersedesAttemptId);
+  const isAttemptRecorded = attempt?.mutation?.status === "attempt-recorded";
   return isNonEmptyResolutionIdentifier(attempt?.attemptId)
     && isNonEmptyResolutionIdentifier(attempt?.threadId)
     && exactGitObjectIdOrNull(attempt?.expectedHeadSha) === attempt?.expectedHeadSha
@@ -6190,7 +6233,7 @@ function hasValidResolutionRecoveryChainAttempt(attempt) {
     && isValidResolutionTargetRequestFingerprint(attempt?.targetRequestFingerprint)
     && recognizedResolutionRecoveryMutations.has(attempt?.mutation?.status)
     && Number.isFinite(attemptedAt)
-    && (isInitialAttemptRecorded
+    && (isAttemptRecorded
       ? (!hasCompletedAt || (Number.isFinite(completedAt) && completedAt >= attemptedAt))
       : (hasCompletedAt && Number.isFinite(completedAt) && completedAt >= attemptedAt));
 }
@@ -7157,11 +7200,19 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
     outdated_thread_adjudications: Array.isArray(manifest.outdated_thread_adjudications)
       ? manifest.outdated_thread_adjudications.slice(-20)
       : [],
-    outdated_thread_resolution_outcomes: retainedResolutionOutcomes(manifest.outdated_thread_resolution_outcomes),
+    outdated_thread_resolution_outcomes: retainedResolutionOutcomes(
+      manifest.outdated_thread_resolution_outcomes,
+      manifest.current_thread_resolution_outcomes,
+      "outdated",
+    ),
     current_thread_adjudications: Array.isArray(manifest.current_thread_adjudications)
       ? manifest.current_thread_adjudications.slice(-20)
       : [],
-    current_thread_resolution_outcomes: retainedResolutionOutcomes(manifest.current_thread_resolution_outcomes),
+    current_thread_resolution_outcomes: retainedResolutionOutcomes(
+      manifest.current_thread_resolution_outcomes,
+      manifest.outdated_thread_resolution_outcomes,
+      "current",
+    ),
     delivery_subagent_audit: deliverySubagentAudit,
     cleanup: cleanupAuthorityDecision,
     authority_decisions: shapeLaneAuthorityDecisions(manifest, {
