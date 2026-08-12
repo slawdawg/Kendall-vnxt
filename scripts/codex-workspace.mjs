@@ -6634,7 +6634,11 @@ function sourceOwnedSkipPolicySection(policyText) {
   // at H2 and the lane runner at H3. Keep the accepted depths bounded. Parse
   // line-by-line so examples inside fenced code cannot become policy and a
   // later same-or-higher ATX or Setext heading cannot extend the section.
-  const lines = policyText.split(/\r?\n/);
+  // HTML comments are not visible Markdown. Strip them before looking for the
+  // policy heading itself; otherwise a commented-out heading can open a
+  // section whose comment opener is absent from the returned slice.
+  const visiblePolicyText = String(policyText || "").replace(/<!--[\s\S]*?-->/g, "");
+  const lines = visiblePolicyText.split(/\r?\n/);
   const policyHeading = /^[ ]{0,3}(#{2,3})[ \t]+Documented Non-Required Checks(?:[ \t]+#+)?[ \t]*$/;
   const atxHeading = /^[ ]{0,3}(#{1,6})[ \t]+/;
   const setextUnderline = /^[ ]{0,3}(?:=+|-+)[ \t]*$/;

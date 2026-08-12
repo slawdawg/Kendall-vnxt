@@ -1612,6 +1612,7 @@ try {
     assert(policy[0].includes("[ \\t]*$"), "a closing policy fence must contain no trailing content");
     assert(source.includes("function visibleSkipPolicyListItems"), "skip policy validation must parse visible list items");
     assert(source.includes("replace(/<!--[\\s\\S]*?-->/g, \"\")"), "skip policy validation must exclude HTML comments");
+    assert(source.includes("const visiblePolicyText = String(policyText || \"\").replace(/<!--[\\s\\S]*?-->/g, \"\")"), "skip policy heading detection must exclude HTML comments");
 
     const interruptedRecovery = source.match(/function recoverAlreadyResolvedOutdatedThreadAttempt[\s\S]*?function adjudicateCurrentThread/);
     assert(interruptedRecovery?.[0].includes("nonTargetThreadPostMutationBlockers(audit, retained, threadId)"), "outdated interrupted recovery must recheck non-target threads");
@@ -10746,6 +10747,47 @@ try {
         "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
         "--state-root", fixture.stateRoot,
       ], { cwd: fixture.root, env: fixture.env });
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates ignores a fully HTML-commented skipped-check policy section", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      writeFileSync(
+        join(fixture.worktree, "AGENTS.md"),
+        "<!--\n## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n-->\n",
+      );
+      runGit(fixture.worktree, ["add", "AGENTS.md"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture commented skipped-check policy"]);
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      const exactHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = exactHead;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = exactHead;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--non-required-checks", "full", "--non-required-check-policy", "AGENTS.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
       assert(result.code !== 0, result.stdout || result.stderr);
       assert(/Non-required skipped checks do not match the source-owned policy/.test(result.stderr), result.stderr || result.stdout);
     } finally {
