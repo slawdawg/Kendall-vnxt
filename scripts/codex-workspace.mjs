@@ -3747,7 +3747,10 @@ function adjudicateOutdatedThread(argv) {
     const prior = Array.isArray(lockedManifest.outdated_thread_adjudications) ? lockedManifest.outdated_thread_adjudications : [];
     lockedManifest.outdated_thread_adjudications = retainThreadAdjudicationsForRecovery(
       [...prior.filter((entry) => entry?.threadId !== threadId), lockedPacket],
-      lockedManifest.outdated_thread_resolution_outcomes,
+      [
+        ...(Array.isArray(lockedManifest.current_thread_resolution_outcomes) ? lockedManifest.current_thread_resolution_outcomes : []),
+        ...(Array.isArray(lockedManifest.outdated_thread_resolution_outcomes) ? lockedManifest.outdated_thread_resolution_outcomes : []),
+      ],
     );
     appendAuthorityDecision(lockedManifest, lockedPacket.authorityDecision);
     lockedManifest.lane_evidence_packet = buildLaneEvidencePacket(lockedManifest, lockedManifest.anti_churn_finalization || {});
@@ -3904,22 +3907,25 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
   const pr = prViewForGates(manifest);
   const headState = prGateHeadState(manifest);
   const audit = pr?.number ? fetchReviewThreadState(manifest, githubRepository(manifest), pr.number) : null;
+  const postAuditPr = prViewForGates(manifest);
+  const postAuditHeadState = prGateHeadState(manifest);
   const retained = (Array.isArray(manifest.outdated_thread_adjudications) ? manifest.outdated_thread_adjudications : [])
     .find((entry) => entry?.threadId === threadId && entry?.ready === true && entry?.expectedHeadSha === prior.expectedHeadSha);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
   }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
-  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const checks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
   const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
   const expectedFingerprint = retained?.targetRequestFingerprint;
   const blockers = [];
-  if (!prior.expectedHeadSha || prior.expectedHeadSha !== headState.expectedHeadSha || prior.expectedHeadSha !== pr?.headRefOid || !headState.localMatchesExpected) blockers.push("Interrupted outdated-thread attempt no longer matches the exact PR head");
+  if (!postAuditPr || postAuditPr.number !== pr?.number || postAuditPr.baseRefName !== pr?.baseRefName || postAuditPr.baseRefOid !== pr?.baseRefOid || postAuditPr.headRefName !== pr?.headRefName || postAuditPr.headRefOid !== pr?.headRefOid) blockers.push("Interrupted outdated-thread recovery PR state changed during the thread audit");
+  if (!prior.expectedHeadSha || prior.expectedHeadSha !== postAuditHeadState.expectedHeadSha || prior.expectedHeadSha !== postAuditPr?.headRefOid || !postAuditHeadState.localMatchesExpected) blockers.push("Interrupted outdated-thread attempt no longer matches the exact PR head");
   if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted outdated-thread attempt no longer matches the canonical repository");
-  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || pr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted outdated-thread attempt PR state is no longer safe");
+  if (!postAuditPr || postAuditPr.state !== "OPEN" || postAuditPr.isDraft || postAuditPr.mergedAt || postAuditPr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted outdated-thread attempt PR state is no longer safe");
   if (!retained || !retained.targetRequestFingerprint || !prior.attemptId) blockers.push("Interrupted outdated-thread attempt lacks retained exact-head adjudication provenance");
-  if (!pr?.baseRefName || pr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted outdated-thread attempt PR base changed before recovery");
-  if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted outdated-thread attempt PR base commit changed before recovery");
+  if (!postAuditPr?.baseRefName || postAuditPr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted outdated-thread attempt PR base changed before recovery");
+  if (!exactGitObjectIdOrNull(postAuditPr?.baseRefOid) || postAuditPr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted outdated-thread attempt PR base commit changed before recovery");
   if (!prior.targetRequestFingerprint || prior.targetRequestFingerprint !== retained?.targetRequestFingerprint) blockers.push("Interrupted outdated-thread attempt fingerprint does not match retained adjudication provenance");
   if (!/^[a-f0-9]{64}$/.test(prior.targetRequestFingerprint || "") || !/^[a-f0-9]{64}$/.test(retained?.targetRequestFingerprint || "")) blockers.push("Interrupted outdated-thread attempt has malformed adjudication provenance");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted outdated-thread attempt lacks a complete post-interruption thread audit");
@@ -3985,7 +3991,10 @@ function adjudicateCurrentThread(argv) {
     const prior = Array.isArray(locked.current_thread_adjudications) ? locked.current_thread_adjudications : [];
     locked.current_thread_adjudications = retainThreadAdjudicationsForRecovery(
       [...prior.filter((entry) => entry?.threadId !== threadId), lockedPacket],
-      locked.current_thread_resolution_outcomes,
+      [
+        ...(Array.isArray(locked.current_thread_resolution_outcomes) ? locked.current_thread_resolution_outcomes : []),
+        ...(Array.isArray(locked.outdated_thread_resolution_outcomes) ? locked.outdated_thread_resolution_outcomes : []),
+      ],
     );
     appendAuthorityDecision(locked, lockedPacket.authorityDecision);
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
@@ -4099,24 +4108,27 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   const pr = prViewForGates(manifest);
   const headState = prGateHeadState(manifest);
   const audit = pr?.number ? fetchReviewThreadState(manifest, githubRepository(manifest), pr.number) : null;
+  const postAuditPr = prViewForGates(manifest);
+  const postAuditHeadState = prGateHeadState(manifest);
   const retained = (Array.isArray(manifest.current_thread_adjudications) ? manifest.current_thread_adjudications : [])
     .find((entry) => entry?.threadId === threadId && entry?.ready === true && entry?.expectedHeadSha === prior.expectedHeadSha);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
   }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
-  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const checks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
   const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
   // A still-unresolved mutation attempt is not a recovery case. Leave it for a
   // fresh, later exact-head adjudication to supersede before any retry.
   if (!target?.isResolved) return null;
   const blockers = [];
-  if (!prior.expectedHeadSha || prior.expectedHeadSha !== headState.expectedHeadSha || prior.expectedHeadSha !== pr?.headRefOid || !headState.localMatchesExpected) blockers.push("Interrupted current-thread attempt no longer matches the exact PR head");
+  if (!postAuditPr || postAuditPr.number !== pr?.number || postAuditPr.baseRefName !== pr?.baseRefName || postAuditPr.baseRefOid !== pr?.baseRefOid || postAuditPr.headRefName !== pr?.headRefName || postAuditPr.headRefOid !== pr?.headRefOid) blockers.push("Interrupted current-thread recovery PR state changed during the thread audit");
+  if (!prior.expectedHeadSha || prior.expectedHeadSha !== postAuditHeadState.expectedHeadSha || prior.expectedHeadSha !== postAuditPr?.headRefOid || !postAuditHeadState.localMatchesExpected) blockers.push("Interrupted current-thread attempt no longer matches the exact PR head");
   if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted current-thread attempt no longer matches the canonical repository");
-  if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt || pr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted current-thread attempt PR state is no longer safe");
-  if (!pr?.baseRefName || pr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted current-thread attempt PR base changed before recovery");
+  if (!postAuditPr || postAuditPr.state !== "OPEN" || postAuditPr.isDraft || postAuditPr.mergedAt || postAuditPr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted current-thread attempt PR state is no longer safe");
+  if (!postAuditPr?.baseRefName || postAuditPr.baseRefName !== retained?.pr?.baseRefName) blockers.push("Interrupted current-thread attempt PR base changed before recovery");
   if (!retained || !retained.targetRequestFingerprint || !prior.attemptId) blockers.push("Interrupted current-thread attempt lacks retained exact-head adjudication provenance");
-  if (!exactGitObjectIdOrNull(pr?.baseRefOid) || pr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted current-thread attempt PR base commit changed before recovery");
+  if (!exactGitObjectIdOrNull(postAuditPr?.baseRefOid) || postAuditPr.baseRefOid !== retained?.pr?.baseRefOid) blockers.push("Interrupted current-thread attempt PR base commit changed before recovery");
   if (!prior.targetRequestFingerprint || prior.targetRequestFingerprint !== retained?.targetRequestFingerprint) blockers.push("Interrupted current-thread attempt fingerprint does not match retained adjudication provenance");
   if (!/^[a-f0-9]{64}$/.test(prior.targetRequestFingerprint || "") || !/^[a-f0-9]{64}$/.test(retained?.targetRequestFingerprint || "")) blockers.push("Interrupted current-thread attempt has malformed adjudication provenance");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted current-thread attempt lacks a complete post-interruption thread audit");
