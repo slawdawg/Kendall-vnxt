@@ -1592,6 +1592,10 @@ try {
     const refresh = source.match(/function buildPrHeadRefreshEvidence[\s\S]*?function shapePr723NonAncestralRefreshRecoveryEvidence/);
     assert(refresh, "PR-head refresh evidence builder not found");
     assert(refresh[0].includes("Unrecovered review-thread mutation outcomes block delivery-head refresh"), "delivery-head refresh must stop on unrecovered thread mutation attempts");
+    assert(refresh[0].includes("const postAuditPr = prViewForGates(manifest);"), "delivery-head refresh must reload the live PR after thread hydration");
+    assert(refresh[0].includes("const postAuditChecks = normalizeStatusCheckRollup"), "delivery-head refresh must reload exact-head checks after thread hydration");
+    assert(refresh[0].includes("Live PR or status checks changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration PR/check drift");
+    assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
 
     const policy = source.match(/function sourceOwnedSkipPolicySection[\s\S]*?function shapeDiffRiskEvidence/);
     assert(policy, "source-owned skip policy parser not found");

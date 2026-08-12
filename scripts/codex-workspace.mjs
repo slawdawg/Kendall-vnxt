@@ -3426,6 +3426,18 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   });
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : emptyReviewThreadState();
+  // Thread hydration can require multiple GraphQL pages.  Re-read the mutable
+  // PR/check snapshot afterwards so a head, branch, base, or check transition
+  // cannot be persisted as a ready delivery-head rebind.
+  const postAuditPr = prViewForGates(manifest);
+  const postAuditChecks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const postAuditSnapshotChanged = !postAuditPr
+    || postAuditPr.number !== pr?.number
+    || postAuditPr.baseRefName !== pr?.baseRefName
+    || postAuditPr.baseRefOid !== pr?.baseRefOid
+    || postAuditPr.headRefName !== pr?.headRefName
+    || postAuditPr.headRefOid !== pr?.headRefOid
+    || JSON.stringify(compactStatusCheckEvidence(postAuditChecks)) !== JSON.stringify(compactStatusCheckEvidence(checks));
   const resolutionOutcomes = [
     ...(Array.isArray(manifest.current_thread_resolution_outcomes) ? manifest.current_thread_resolution_outcomes : []).map((outcome) => ({ kind: "current", outcome })),
     ...(Array.isArray(manifest.outdated_thread_resolution_outcomes) ? manifest.outdated_thread_resolution_outcomes : []).map((outcome) => ({ kind: "outdated", outcome })),
@@ -3449,6 +3461,8 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   if (pr?.state !== "OPEN" || pr?.isDraft || pr?.mergedAt) blockers.push("Live PR must be open and non-draft for an explicit head refresh");
   if (pr?.baseRefName !== manifest.base_branch) blockers.push(`Live PR base is ${pr?.baseRefName || "missing"}, expected ${manifest.base_branch}`);
   if (!pr?.headRefOid || !exactGitObjectIdOrNull(pr.headRefOid)) blockers.push("Live PR head is missing or invalid");
+  if (pr?.headRefName !== manifest.branch) blockers.push("Live PR head branch does not match the managed manifest branch");
+  if (postAuditSnapshotChanged) blockers.push("Live PR or status checks changed while collecting the refresh review-thread audit");
   if (!localHeadSha || localHeadSha !== pr?.headRefOid) blockers.push("Local worktree HEAD does not match the live PR head");
   if (!remoteHeadSha || remoteHeadSha !== pr?.headRefOid) blockers.push("origin branch HEAD does not match the live PR head");
   const fastForward = priorHeadSha && pr?.headRefOid
