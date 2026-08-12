@@ -4362,7 +4362,12 @@ function boundedResolutionOutcomes(outcomes) {
 function isHighRiskReviewThreadPath(path) {
   const value = String(path || "").toLowerCase();
   if (value === "agents.md" || value.endsWith("/agents.md")) return true;
-  return value === "docs/workflows/end-to-end-lane-runner.md" || value.startsWith(".github/") || value.startsWith("scripts/codex-workspace") || value.includes("credential") || value.includes("secret") || value.includes("migration");
+  return value === "docs/workflows/end-to-end-lane-runner.md"
+    || value.startsWith(".github/")
+    || value.startsWith("scripts/codex-workspace")
+    // These are documented stop-line surfaces; classify conservatively rather
+    // than relying on a short list of file-name spellings.
+    || ["credential", "secret", "migration", "provider", "schema", "policy", "authority", "deployment", "release"].some((term) => value.includes(term));
 }
 
 function supersedeLiveUnresolvedResolutionAttempt(manifest, kind, fresh, audit) {
@@ -4501,6 +4506,13 @@ function compactReviewThreadAudit(audit) {
     metadataOnly: true,
     rawPayloadRetained: false,
   };
+}
+
+function reviewThreadStateSnapshotFingerprint(audit) {
+  // `checkedAt` is generated locally for retained evidence, so it cannot be
+  // part of a GitHub-state drift comparison.
+  const { checkedAt, ...stable } = compactReviewThreadAudit(audit);
+  return JSON.stringify(stable);
 }
 
 function verifyUnmanagedPrGates(argv) {
@@ -5121,8 +5133,8 @@ function buildPrGateEvidence(manifest, context = {}) {
   const postEvidenceReviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const postEvidenceChecks = normalizeStatusCheckRollup(postEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
   const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(postEvidenceChecks);
-  const reviewThreadSnapshotChanged = JSON.stringify(compactReviewThreadAudit(reviewThreadState))
-    !== JSON.stringify(compactReviewThreadAudit(postEvidenceReviewThreadState));
+  const reviewThreadSnapshotChanged = reviewThreadStateSnapshotFingerprint(reviewThreadState)
+    !== reviewThreadStateSnapshotFingerprint(postEvidenceReviewThreadState);
   const diffRiskEvidence = shapeDiffRiskEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
     expectedPrNumber: pr.number,

@@ -1443,6 +1443,8 @@ try {
     assert(highRiskPath[0].includes('value === "agents.md"'), "case-normalized AGENTS.md paths must remain high-risk");
     assert(highRiskPath[0].includes('value.endsWith("/agents.md")'), "nested AGENTS.md paths must remain high-risk");
     assert(highRiskPath[0].includes('value === "docs/workflows/end-to-end-lane-runner.md"'), "the source-owned delivery authority runbook must remain high-risk");
+    assert(highRiskPath[0].includes('"provider"'), "provider surfaces must remain high-risk");
+    assert(highRiskPath[0].includes('"schema"'), "schema surfaces must remain high-risk");
 
     const checkNormalizer = source.match(/function normalizeStatusCheckRollup[\s\S]*?function statusContextConclusion/);
     assert(checkNormalizer, "status check normalizer source not found");
@@ -12051,6 +12053,26 @@ try {
       assert(mapping.blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), renamed.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(renamedHighRiskFixture);
+    }
+
+    for (const changedPath of [
+      "services/supervisor/src/supervisor/application/memory_inbox_provider_policy.py",
+      "services/supervisor/src/supervisor/schema.py",
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture({ ...options, changedPaths: [changedPath] });
+      try {
+        const result = runFixtureScript(
+          fixture,
+          [...buildArgs(fixture).filter((value) => value !== "--apply"), "--summary-json"],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code === 0, result.stderr || result.stdout);
+        const mapping = JSON.parse(result.stdout).mapping;
+        assert(mapping.highRiskPaths.includes(changedPath), `${changedPath}: ${result.stdout}`);
+        assert(mapping.blockers.includes("High-risk review-thread resolution requires exact operator evidence: operator-authorized thread=<id> head=<sha>"), `${changedPath}: ${result.stdout}`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
 
     const authorizedFixture = createCanonicalManagedPrFixture(options);
