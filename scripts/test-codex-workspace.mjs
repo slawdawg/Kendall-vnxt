@@ -12505,6 +12505,62 @@ try {
     }
   });
 
+  test("cleanup-superseded closes a closed-unmerged PR only when every source patch is carried by the named merged successor", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = [
+      "cleanup-superseded", "superseded-task",
+      "--source-head", fixture.sourceHead,
+      "--closed-source-pr", "789",
+      "--source-patch-commits", fixture.sourceHead,
+      "--carry-forward-pr", "456",
+      "--carry-forward-commit", fixture.mergeCommit,
+      "--carry-forward-patch-commits", fixture.carryForwardCommit,
+      "--owner", "runner-a",
+      "--state-root", fixture.stateRoot,
+    ];
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const summary = JSON.parse(preview.stdout);
+      assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(summary.results[0].proof.closedSourcePr.status === "matched", preview.stdout || preview.stderr);
+      assert(summary.results[0].proof.patchEquivalence.patchIds.length === 1, preview.stdout || preview.stderr);
+
+      const applied = runFixtureScript(fixture, [...args, "--apply", "--approval", "operator approved closed PR patch-equivalent cleanup", "--reason", "closed source PR is carried by the named merged successor"], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      assert(!existsSync(fixture.worktree), "closed-PR apply did not remove source worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "closed-PR apply did not delete source local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "closed-PR apply deleted retained source remote branch");
+      assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).status === "closed", "closed-PR apply did not close manifest");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-superseded closed-unmerged PR mode refuses a non-equivalent patch pair before mutation", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, mutation: "content" });
+    const args = [
+      "cleanup-superseded", "superseded-task",
+      "--source-head", fixture.sourceHead,
+      "--closed-source-pr", "789",
+      "--source-patch-commits", fixture.sourceHead,
+      "--carry-forward-pr", "456",
+      "--carry-forward-commit", fixture.mergeCommit,
+      "--carry-forward-patch-commits", fixture.carryForwardCommit,
+      "--owner", "runner-a",
+      "--state-root", fixture.stateRoot,
+    ];
+    try {
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).counts.blocked === 1, preview.stdout || preview.stderr);
+      assert(existsSync(fixture.worktree), "mismatched closed-PR proof mutated worktree");
+      assert(branchExists(fixture.root, fixture.branch), "mismatched closed-PR proof mutated branch");
+    } finally {
+      cleanupSupersededCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-superseded falls back to a validated GraphQL base head only when gh rejects baseRefOid", () => {
     const fixture = createSupersededCleanupFixture({ unsupportedBaseRefOid: true, fallbackBaseDriftOnSecondLookup: true });
     const args = supersededCleanupArgs(fixture);
@@ -14993,6 +15049,7 @@ function createSupersededCleanupFixture(options = {}) {
     runGit(fixtureRoot, ["push", "-q", "origin", "main"]);
   }
 
+  const sourceBaseHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
   runGit(fixtureRoot, ["switch", "-q", "-c", branch, baseBranch]);
   const carriedPath = options.newlineNestedPath ? "carried/new\nline.txt" : "carried.txt";
   if (options.renameOnly) {
@@ -15019,6 +15076,10 @@ function createSupersededCleanupFixture(options = {}) {
     );
   }
   let successorHead = carryForwardCommit;
+  if (options.closedSourcePr) {
+    commitFile(fixtureRoot, "successor-only-hardening.txt", "merged successor hardening\n", "successor-only hardening");
+    successorHead = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+  }
   let firstHardeningCommit = null;
   const hardeningLineageCommits = [];
   if (options.firstUseRepair) {
@@ -15096,17 +15157,19 @@ function createSupersededCleanupFixture(options = {}) {
       base_ref: options.baseRef || (options.firstUseRepair ? (options.legacyManifestBasePresent ? "origin/main" : "origin/deleted-predecessor") : "origin/main"),
       branch,
       worktree_path: worktree,
-      status: options.mutation === "held" ? "held" : "active",
+      status: options.mutation === "held" ? "held" : options.closedSourcePr ? "pr_open" : "active",
+      pr_number: options.closedSourcePr ? 789 : null,
+      pr_url: options.closedSourcePr ? "https://example.test/pull/789" : null,
       pr_delivery_head_sha: options.mutation === "pr-evidence" ? sourceHead : null,
       mode: "pr",
-      source_assignment_id: options.firstUseRepair ? (options.linkedLegacyAssignment ? "legacy-assignment" : null) : "superseded-assignment",
+      source_assignment_id: options.firstUseRepair ? (options.linkedLegacyAssignment ? "legacy-assignment" : null) : options.closedSourcePr ? null : "superseded-assignment",
       owner: options.manifestOwner === undefined ? "runner-a" : options.manifestOwner,
       events: [],
     }, null, 2)}\n`,
   );
   mkdirSync(join(stateRootFixture, "assignments"), { recursive: true });
   const assignmentPath = join(stateRootFixture, "assignments", "superseded-assignment.json");
-  if (!options.firstUseRepair) writeFileSync(
+  if (!options.firstUseRepair && !options.closedSourcePr) writeFileSync(
     assignmentPath,
     `${JSON.stringify({
       schema_version: 1,
@@ -15166,7 +15229,7 @@ function createSupersededCleanupFixture(options = {}) {
   const reportedBaseRefOid = options.reportedBaseRefOid === "SOURCE_HEAD"
     ? sourceHead
     : options.reportedBaseRefOid === undefined
-      ? currentBaseHead
+      ? (options.closedSourcePr ? sourceBaseHead : currentBaseHead)
       : options.reportedBaseRefOid;
   const legacyPrNumberField = Object.hasOwn(options, "legacyPrNumber")
     ? `number: ${JSON.stringify(options.legacyPrNumber)},`
@@ -15240,7 +15303,23 @@ function createSupersededCleanupFixture(options = {}) {
         : `  console.log(JSON.stringify({ ${options.unsupportedBaseRefOid ? legacyPrNumberField : modernPrNumberField} url: 'https://example.test/pull/456', mergedAt: '2026-07-23T00:00:00Z', state: 'MERGED', baseRefName: '${options.successorBase || baseBranch}', ${options.unsupportedBaseRefOid ? "" : `baseRefOid: '${reportedBaseRefOid}',`} headRefOid: ${JSON.stringify(reportedHeadRefOid)}, mergeCommit: { oid: ${JSON.stringify(reportedMergeCommitOid)} } }));`,
       "  process.exit(0);",
       "}",
+      options.closedSourcePr
+        ? [
+            "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '789') {",
+            `  console.log(JSON.stringify({ number: 789, url: 'https://example.test/pull/789', state: 'CLOSED', mergedAt: null, baseRefName: ${JSON.stringify(baseBranch)}, headRefName: ${JSON.stringify(branch)}, headRefOid: ${JSON.stringify(sourceHead)} }));`,
+            "  process.exit(0);",
+            "}",
+          ].join("\n")
+        : "",
       "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: 'fixture-owner' }, name: 'fixture-repo' })); process.exit(0); }",
+      options.closedSourcePr
+        ? [
+            "if (args[0] === 'api' && args[1] === 'graphql' && args.includes('number=789')) {",
+            `  console.log(JSON.stringify({ data: { repository: { pullRequest: { number: 789, baseRefOid: ${JSON.stringify(sourceBaseHead)} } } } }));`,
+            "  process.exit(0);",
+            "}",
+          ].join("\n")
+        : "",
       ...fallbackGraphql,
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
       "process.exit(1);",
@@ -15249,7 +15328,7 @@ function createSupersededCleanupFixture(options = {}) {
   );
   chmodSync(fakeGh, 0o755);
 
-  return { root: fixtureRoot, remoteRoot, stateRoot: stateRootFixture, fakeBin, branch, worktree, sourceHead, carryForwardCommit, successorHead, mergeCommit, firstHardeningCommit, hardeningLineageCommits, currentBaseHead, carriedPath, baseBranch, script: join(fixtureRoot, "scripts", "codex-workspace.mjs"), env };
+  return { root: fixtureRoot, remoteRoot, stateRoot: stateRootFixture, fakeBin, branch, worktree, sourceHead, sourceBaseHead, carryForwardCommit, successorHead, mergeCommit, firstHardeningCommit, hardeningLineageCommits, currentBaseHead, carriedPath, baseBranch, script: join(fixtureRoot, "scripts", "codex-workspace.mjs"), env };
 }
 
 function cleanupSupersededCleanupFixture(fixture) {
