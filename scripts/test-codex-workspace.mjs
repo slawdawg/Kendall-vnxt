@@ -11386,6 +11386,124 @@ try {
     }
   });
 
+  test("cleanup-integrated closed-PR mode accepts an exact canonical tree replay without ancestry", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      runGit(fixture.worktree, ["commit", "--allow-empty", "-m", "replayed integrated tree"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved exact tree replay closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!existsSync(fixture.worktree), "exact-tree replay cleanup did not remove worktree");
+      const closed = readJson(manifestPath);
+      assert(closed.closed_pr_integrated_cleanup?.integration?.mode === "exact-tree", "exact-tree reconciliation evidence missing");
+      assert(closed.closed_pr_integrated_cleanup.integration.sourceTree === closed.closed_pr_integrated_cleanup.integration.baseTree, "exact-tree reconciliation did not retain equal tree evidence");
+      assert(closed.closed_pr_integrated_cleanup.integration.liveBase?.status === "matched", "exact-tree reconciliation did not retain live-base proof");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated closed-PR mode resumes its exact durable journal after local targets are absent", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      runGit(fixture.worktree, ["commit", "--allow-empty", "-m", "replayed integrated tree"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      const sourceTree = runGit(fixture.root, ["rev-parse", `${fixture.branch}^{tree}`]).stdout;
+      manifest.status = "cleanup_partial";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      manifest.cleanup_started_at = "2026-08-11T00:00:00.000Z";
+      manifest.cleanup_branch = fixture.branch;
+      manifest.cleanup_expected_head_sha = head;
+      manifest.closed_pr_integrated_cleanup = {
+        mode: "closed-pr-integrated-cleanup/v1",
+        baseRef: "origin/main",
+        expectedHeadSha: head,
+        retainedPr: { number: 77 },
+        integration: { mode: "exact-tree", sourceTree, baseSha: runGit(fixture.root, ["rev-parse", "origin/main"]).stdout, baseTree: sourceTree, liveBase: { status: "matched" } },
+        approval: "operator approved exact tree replay closeout",
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, head]);
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved exact tree replay closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readJson(manifestPath).status === "closed", "closed-PR journal resume did not close manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated closed-PR mode resumes ancestry cleanup from its journaled head after both branch refs are absent", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      manifest.status = "cleanup_partial";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      manifest.cleanup_started_at = "2026-08-11T00:00:00.000Z";
+      manifest.cleanup_branch = fixture.branch;
+      manifest.cleanup_expected_head_sha = head;
+      manifest.closed_pr_integrated_cleanup = {
+        mode: "closed-pr-integrated-cleanup/v1",
+        baseRef: "origin/main",
+        expectedHeadSha: head,
+        retainedPr: { number: 77 },
+        integration: { mode: "ancestry" },
+        approval: "operator approved closed integrated PR closeout",
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, head]);
+      runGit(fixture.root, ["push", "origin", "--delete", fixture.branch]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/remotes/origin/${fixture.branch}`]);
+
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved closed integrated PR closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readJson(manifestPath).status === "closed", "journaled closed-PR ancestry resume did not close manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated closed-PR exact-tree mode refuses a stale local base ref", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      runGit(fixture.worktree, ["commit", "--allow-empty", "-m", "replayed integrated tree"]);
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const localBaseSha = runGit(fixture.root, ["rev-parse", "origin/main"]).stdout;
+      commitFile(fixture.root, "live-base-advance.txt", "live base advance\n", "advance live base only");
+      runGit(fixture.root, ["push", "-q", "origin", "main"]);
+      runGit(fixture.root, ["update-ref", "refs/remotes/origin/main", localBaseSha]);
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved exact tree replay closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("live origin/main differs from local origin/main"), result.stdout || result.stderr);
+      assert(existsSync(fixture.worktree), "stale-base exact-tree cleanup removed worktree");
+      assert(branchExists(fixture.root, fixture.branch), "stale-base exact-tree cleanup deleted local branch");
+      assert(readJson(manifestPath).status === "pr_open", "stale-base exact-tree cleanup changed manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-integrated closes an assignment after an approved owner takeover", () => {
     const fixture = createIntegratedCleanupFixture({
       manifestOwner: "runner-a",
@@ -11529,7 +11647,7 @@ try {
         mutate(fixture) {
           installFixtureGitProxy(
             fixture,
-            "args[0] === 'ls-remote' && args[1] === '--heads' && args[2] === 'origin' && args[3] === 'dev'",
+            "args[0] === 'ls-remote' && args[1] === '--heads' && args[2] === 'origin' && args[3] === 'refs/heads/dev'",
             "simulated live origin/dev probe interruption",
           );
         },

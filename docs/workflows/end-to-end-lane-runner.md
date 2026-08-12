@@ -225,11 +225,13 @@ publisher.
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
    thread-aware review-thread check before merge. As part of this delivery
-   gate, the delegated worker may resolve only threads whose feedback has been
-   addressed by the current diff, test evidence, or explicit operator
-   decision. Record each resolved thread ID and its supporting evidence, then
-   rerun the thread-aware check; any unaddressed or ambiguous thread remains a
-   hold.
+   gate, the delegated worker has standing authority to automatically intake,
+   address, verify, and resolve newly appearing threads without a separate
+   operator checkpoint. Resolve a thread only after the current diff, test
+   evidence, or documentation addresses its feedback. Record each resolved
+   thread ID and supporting evidence, then rerun the thread-aware check; any
+   unaddressed or ambiguous thread remains a hold while the worker completes
+   that automatic remediation loop.
    Use exact-head merge protection for GitHub CLI merges, such as
    `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
@@ -277,6 +279,21 @@ publisher.
    scoped tree entries, then repeats that proof under lock before a local-only
    apply. This path never deletes the remote source branch and never applies to
    a held workspace or a source lane with PR evidence.
+   A clean lane with a retained, non-open PR can instead use the narrowly
+   approved closed-PR form only for one exact task:
+   `cleanup-integrated <task> --allow-closed-pr-integrated --approval "<recorded operator approval>" --base origin/<base> --summary-json`.
+   It requires a retained PR number and URL, no live open PR for the source
+   branch, a registered clean worktree, and a local source branch. The source
+   must either be an ancestor of the declared base or have the exact same tree.
+   The exact-tree alternative additionally proves that local `origin/<base>`
+   equals the live remote ref; fetch explicitly and rerun if it differs. Review
+   the one-task dry-run packet, then repeat the same command with `--apply`
+   **after removing `--summary-json`**.
+   The locked apply repeats every proof, records the retained PR, integration
+   mode, tree SHAs, live-base evidence, and approval in the manifest, removes
+   only the local worktree and local branch, and deliberately retains the
+   remote source branch. If interrupted, inspect `cleanup_partial` evidence and
+   rerun the same governed command—do not delete resources manually.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface. Use
    `cleanup-orphans --summary-json` to inspect matched orphan directories before

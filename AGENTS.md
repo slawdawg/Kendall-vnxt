@@ -604,9 +604,13 @@ surface is `node ./scripts/codex-workspace.mjs`.
 - Before merge, always perform a thread-aware review-comment check from the PR
   branch worktree. Do not treat a green check rollup or an empty flat comment
   list as proof that there are no unresolved review threads. Repeat this check
-  after every PR head update or amend before merge; resolve only review threads
-  that were actually addressed by code, docs, tests, or an explicit operator
-  decision.
+  after every PR head update or amend before merge. The delivery owner has
+  standing authority to automatically intake, address, verify, and resolve any
+  newly appearing review thread without a separate operator checkpoint. Resolve
+  a thread only when the current diff, documentation, or verification evidence
+  actually addresses it; record the thread ID and supporting evidence, then
+  recheck thread-aware state. Keep unaddressed or ambiguous threads blocking
+  while the delivery owner completes that automatic remediation loop.
 - When the operator says "clean up merged work", run
   `node ./scripts/codex-workspace.mjs cleanup-current --delete-remote` from
   inside the lane, or `node ./scripts/codex-workspace.mjs cleanup-merged
