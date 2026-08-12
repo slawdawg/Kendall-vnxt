@@ -239,11 +239,17 @@ publisher.
    thread-aware review-thread check before merge. As part of this delivery
    gate, the delegated worker has standing authority to automatically intake,
    address, verify, and resolve newly appearing threads without a separate
-   operator checkpoint. Resolve a thread only after the current diff, test
-   evidence, or documentation addresses its feedback. Record each resolved
-   thread ID and supporting evidence, then rerun the thread-aware check; any
-   unaddressed or ambiguous thread remains a hold while the worker completes
-   that automatic remediation loop.
+   operator checkpoint. Resolve a current thread only when both of these
+   positive prerequisites are proven:
+
+   - The feedback is fully addressed by the current diff and supported by the
+     relevant local verification and required independent code-review evidence.
+   - Fresh GitHub thread-aware data shows the thread is current and
+     unambiguous, with no requested change or pending review request.
+
+   Record each resolved thread ID and supporting evidence, then rerun the
+   thread-aware check; any unaddressed or ambiguous thread remains a hold while
+   the worker completes that automatic remediation loop.
    Use exact-head merge protection for GitHub CLI merges, such as
    `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
