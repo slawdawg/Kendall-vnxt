@@ -6442,7 +6442,7 @@ function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "", expectedB
     return { paths: [], ...snapshot(before), error: "GitHub changed-path inspection is not bound to the expected exact PR base commit" };
   }
   const repository = githubRepository(manifest);
-  const result = run("gh", ["api", "--paginate", "--slurp", `repos/${repository.owner}/${repository.name}/pulls/${prNumber}/files?per_page=100`], { cwd: manifest.worktree_path });
+  const result = run("gh", ["api", "--paginate", `repos/${repository.owner}/${repository.name}/pulls/${prNumber}/files?per_page=100`], { cwd: manifest.worktree_path });
   if (result.code !== 0) {
     return { paths: [], ...snapshot(before), error: safeMetadataText(result.stderr || result.stdout || "GitHub CLI changed-path inspection failed", 500) };
   }
@@ -6460,7 +6460,7 @@ function fetchPrChangedPaths(manifest, prNumber, expectedHeadSha = "", expectedB
     return { paths: [], ...snapshot(before), postInspectionHeadSha: after.headRefOid, postInspectionPrNumber: Number.isSafeInteger(after.number) ? after.number : null, postInspectionBaseRefName: after.baseRefName || null, postInspectionBaseRefOid: exactGitObjectIdOrNull(after.baseRefOid), error: "GitHub PR base commit changed during changed-path inspection" };
   }
   try {
-    const pages = JSON.parse(result.stdout);
+    const pages = parseConcatenatedJsonValues(result.stdout, "paginated changed-path metadata");
     if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw new Error("unexpected paginated payload");
     const files = pages.flat();
     if (!Number.isSafeInteger(expectedChangedFileCount) || expectedChangedFileCount < 0 || files.length !== expectedChangedFileCount) {
@@ -6484,7 +6484,7 @@ function fetchPrRenamedPaths(manifest, prNumber, expectedHeadSha = "", expectedB
     return { paths: [], inspectedHeadSha: before?.headRefOid || null, error: "GitHub rename inspection is not bound to the expected exact PR head" };
   }
   const repository = githubRepository(manifest);
-  const result = run("gh", ["api", "--paginate", "--slurp", `repos/${repository.owner}/${repository.name}/pulls/${prNumber}/files?per_page=100`], { cwd: manifest.worktree_path });
+  const result = run("gh", ["api", "--paginate", `repos/${repository.owner}/${repository.name}/pulls/${prNumber}/files?per_page=100`], { cwd: manifest.worktree_path });
   if (result.code !== 0) {
     return { paths: [], inspectedHeadSha: before.headRefOid, error: safeMetadataText(result.stderr || result.stdout || "GitHub CLI rename inspection failed", 500) };
   }
@@ -6493,7 +6493,7 @@ function fetchPrRenamedPaths(manifest, prNumber, expectedHeadSha = "", expectedB
     return { paths: [], inspectedHeadSha: before.headRefOid, error: "GitHub PR head changed during rename inspection" };
   }
   try {
-    const pages = JSON.parse(result.stdout);
+    const pages = parseConcatenatedJsonValues(result.stdout, "paginated rename metadata");
     if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw new Error("unexpected paginated payload");
     const listedFiles = pages.flat();
     if (!Number.isSafeInteger(expectedChangedFileCount) || expectedChangedFileCount < 0 || listedFiles.length !== expectedChangedFileCount) {
@@ -6517,6 +6517,48 @@ function parseGhJson(stdout, label) {
   } catch {
     throw new Error(`GitHub CLI returned invalid JSON for ${label}.`);
   }
+}
+
+function parseConcatenatedJsonValues(stdout, label) {
+  const input = String(stdout || "");
+  const values = [];
+  let index = 0;
+  while (index < input.length) {
+    while (index < input.length && /\s/.test(input[index])) index += 1;
+    if (index >= input.length) break;
+    const start = index;
+    const opener = input[index];
+    if (opener !== "[" && opener !== "{") throw new Error(`${label} contains a non-container JSON value`);
+    const closer = opener === "[" ? "]" : "}";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (; index < input.length; index += 1) {
+      const character = input[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === opener) depth += 1;
+      else if (character === closer) {
+        depth -= 1;
+        if (depth === 0) {
+          index += 1;
+          values.push(JSON.parse(input.slice(start, index)));
+          break;
+        }
+      }
+    }
+    if (depth !== 0 || inString) throw new Error(`${label} is incomplete`);
+  }
+  if (values.length === 0) throw new Error(`${label} is empty`);
+  return values;
 }
 
 function runAntiChurnFinalization(manifest, state, options = {}) {
