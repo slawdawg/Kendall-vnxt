@@ -5942,7 +5942,26 @@ function cleanupIntegratedPlan(record, state, context) {
     base.proof.evidence = { status: "matched", supersessionProvenance: strict.provenance, closeoutReason: strict.closeoutReason };
     return { ...base, status: "ready", reason: `clean no-PR workspace has an exact ${context.baseRef} tree and explicit closeout evidence`, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), localBranchSha, expectedHeadSha: localBranchSha || manifest.cleanup_expected_head_sha || null, remoteBranchSha: null, strictResume };
   }
-  const sourceRef = localBranchSha ? manifest.branch : `origin/${manifest.branch}`;
+  // A closed-PR partial cleanup may legitimately have removed both branch refs
+  // before its durable completion write. Its journal pins the commit that was
+  // previously proven safe to close; use that immutable object for the resume
+  // proof rather than guessing that a retained origin ref still exists.
+  const journaledSourceHead = closedPrIntegrated && partialResume
+    ? exactGitObjectIdOrNull(expectedHeadSha)
+    : null;
+  const sourceRef = localBranchSha
+    ? manifest.branch
+    : journaledSourceHead || `origin/${manifest.branch}`;
+  if (journaledSourceHead && git(["cat-file", "-e", `${journaledSourceHead}^{commit}`], { cwd: cleanupCwd }).code !== 0) {
+    return {
+      ...base,
+      cleanupCwd,
+      worktree: cleanupWorktreeSummary(worktreeStatus),
+      localBranchSha,
+      expectedHeadSha,
+      reason: "closed-PR partial cleanup requires the journaled source commit object to remain locally available",
+    };
+  }
   const integrated = git(["merge-base", "--is-ancestor", sourceRef, context.baseRef], { cwd: cleanupCwd });
   const baseSha = closedPrIntegrated ? branchSha(context.baseRef, cleanupCwd) || null : null;
   const sourceTree = closedPrIntegrated ? (gitTreeSha(sourceRef, cleanupCwd) || manifest.closed_pr_integrated_cleanup?.integration?.sourceTree || null) : null;

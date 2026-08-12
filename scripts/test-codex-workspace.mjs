@@ -11405,6 +11405,41 @@ try {
     }
   });
 
+  test("cleanup-integrated closed-PR mode resumes ancestry cleanup from its journaled head after both branch refs are absent", () => {
+    const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
+    const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "integrated-task.json");
+      const manifest = readJson(manifestPath);
+      const head = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      manifest.status = "cleanup_partial";
+      manifest.pr_number = 77;
+      manifest.pr_url = "https://example.test/pull/77";
+      manifest.cleanup_started_at = "2026-08-11T00:00:00.000Z";
+      manifest.cleanup_branch = fixture.branch;
+      manifest.cleanup_expected_head_sha = head;
+      manifest.closed_pr_integrated_cleanup = {
+        mode: "closed-pr-integrated-cleanup/v1",
+        baseRef: "origin/main",
+        expectedHeadSha: head,
+        retainedPr: { number: 77 },
+        integration: { mode: "ancestry" },
+        approval: "operator approved closed integrated PR closeout",
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`, head]);
+      runGit(fixture.root, ["push", "origin", "--delete", fixture.branch]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/remotes/origin/${fixture.branch}`]);
+
+      const result = runFixtureScript(fixture, ["cleanup-integrated", "integrated-task", "--allow-closed-pr-integrated", "--approval", "operator approved closed integrated PR closeout", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readJson(manifestPath).status === "closed", "journaled closed-PR ancestry resume did not close manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-integrated closed-PR exact-tree mode refuses a stale local base ref", () => {
     const prEvidence = [{ number: 77, state: "CLOSED", mergedAt: null, closedAt: "2026-08-11T00:00:00Z", headRefName: "codex/integrated-cleanup", headRefOid: "0123456789012345678901234567890123456789", baseRefName: "main" }];
     const fixture = createIntegratedCleanupFixture({ prListJson: JSON.stringify(prEvidence) });
