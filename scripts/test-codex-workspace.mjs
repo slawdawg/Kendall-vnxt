@@ -1611,10 +1611,14 @@ try {
     assert(interruptedRecovery?.[0].includes("nonTargetThreadPostMutationBlockers(audit, retained, threadId)"), "outdated interrupted recovery must recheck non-target threads");
     assert(interruptedRecovery?.[0].includes("const postAuditPr = prViewForGates(manifest);"), "outdated interrupted recovery must reload PR state after thread hydration");
     assert(interruptedRecovery?.[0].includes("Interrupted outdated-thread recovery PR state changed during the thread audit"), "outdated interrupted recovery must reject post-audit PR drift");
+    assert(interruptedRecovery?.[0].includes("Interrupted outdated-thread recovery checks changed during the thread audit"), "outdated interrupted recovery must reject post-audit check drift");
+    assert(interruptedRecovery?.[0].includes("Interrupted outdated-thread recovery worktree became dirty during the thread audit"), "outdated interrupted recovery must reject post-audit worktree drift");
     const currentInterruptedRecovery = source.match(/function recoverAlreadyResolvedCurrentThreadAttempt[\s\S]*?function currentThreadResolutionPreMutationBlockers/);
     assert(currentInterruptedRecovery?.[0].includes("nonTargetThreadPostMutationBlockers(audit, retained, threadId)"), "current interrupted recovery must recheck non-target threads");
     assert(currentInterruptedRecovery?.[0].includes("const postAuditPr = prViewForGates(manifest);"), "current interrupted recovery must reload PR state after thread hydration");
     assert(currentInterruptedRecovery?.[0].includes("Interrupted current-thread recovery PR state changed during the thread audit"), "current interrupted recovery must reject post-audit PR drift");
+    assert(currentInterruptedRecovery?.[0].includes("Interrupted current-thread recovery checks changed during the thread audit"), "current interrupted recovery must reject post-audit check drift");
+    assert(currentInterruptedRecovery?.[0].includes("Interrupted current-thread recovery worktree became dirty during the thread audit"), "current interrupted recovery must reject post-audit worktree drift");
     assert(source.includes("...(Array.isArray(lockedManifest.current_thread_resolution_outcomes)"), "outdated adjudication retention must protect current-thread recovery provenance");
     assert(source.includes("...(Array.isArray(locked.outdated_thread_resolution_outcomes)"), "current adjudication retention must protect outdated-thread recovery provenance");
 

@@ -3909,17 +3909,21 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
   const audit = pr?.number ? fetchReviewThreadState(manifest, githubRepository(manifest), pr.number) : null;
   const postAuditPr = prViewForGates(manifest);
   const postAuditHeadState = prGateHeadState(manifest);
+  const postAuditWorktreeStatus = parseStatus(manifest.worktree_path);
   const retained = (Array.isArray(manifest.outdated_thread_adjudications) ? manifest.outdated_thread_adjudications : [])
     .find((entry) => entry?.threadId === threadId && entry?.ready === true && entry?.expectedHeadSha === prior.expectedHeadSha);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
   }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
+  const initialChecks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const checks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
   const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
   const expectedFingerprint = retained?.targetRequestFingerprint;
   const blockers = [];
   if (!postAuditPr || postAuditPr.number !== pr?.number || postAuditPr.baseRefName !== pr?.baseRefName || postAuditPr.baseRefOid !== pr?.baseRefOid || postAuditPr.headRefName !== pr?.headRefName || postAuditPr.headRefOid !== pr?.headRefOid) blockers.push("Interrupted outdated-thread recovery PR state changed during the thread audit");
+  if (JSON.stringify(compactStatusCheckEvidence(initialChecks)) !== JSON.stringify(compactStatusCheckEvidence(checks))) blockers.push("Interrupted outdated-thread recovery checks changed during the thread audit");
+  if (postAuditWorktreeStatus.any) blockers.push("Interrupted outdated-thread recovery worktree became dirty during the thread audit");
   if (!prior.expectedHeadSha || prior.expectedHeadSha !== postAuditHeadState.expectedHeadSha || prior.expectedHeadSha !== postAuditPr?.headRefOid || !postAuditHeadState.localMatchesExpected) blockers.push("Interrupted outdated-thread attempt no longer matches the exact PR head");
   if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted outdated-thread attempt no longer matches the canonical repository");
   if (!postAuditPr || postAuditPr.state !== "OPEN" || postAuditPr.isDraft || postAuditPr.mergedAt || postAuditPr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted outdated-thread attempt PR state is no longer safe");
@@ -4110,12 +4114,14 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   const audit = pr?.number ? fetchReviewThreadState(manifest, githubRepository(manifest), pr.number) : null;
   const postAuditPr = prViewForGates(manifest);
   const postAuditHeadState = prGateHeadState(manifest);
+  const postAuditWorktreeStatus = parseStatus(manifest.worktree_path);
   const retained = (Array.isArray(manifest.current_thread_adjudications) ? manifest.current_thread_adjudications : [])
     .find((entry) => entry?.threadId === threadId && entry?.ready === true && entry?.expectedHeadSha === prior.expectedHeadSha);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
   }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
+  const initialChecks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const checks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
   const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
   // A still-unresolved mutation attempt is not a recovery case. Leave it for a
@@ -4123,6 +4129,8 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   if (!target?.isResolved) return null;
   const blockers = [];
   if (!postAuditPr || postAuditPr.number !== pr?.number || postAuditPr.baseRefName !== pr?.baseRefName || postAuditPr.baseRefOid !== pr?.baseRefOid || postAuditPr.headRefName !== pr?.headRefName || postAuditPr.headRefOid !== pr?.headRefOid) blockers.push("Interrupted current-thread recovery PR state changed during the thread audit");
+  if (JSON.stringify(compactStatusCheckEvidence(initialChecks)) !== JSON.stringify(compactStatusCheckEvidence(checks))) blockers.push("Interrupted current-thread recovery checks changed during the thread audit");
+  if (postAuditWorktreeStatus.any) blockers.push("Interrupted current-thread recovery worktree became dirty during the thread audit");
   if (!prior.expectedHeadSha || prior.expectedHeadSha !== postAuditHeadState.expectedHeadSha || prior.expectedHeadSha !== postAuditPr?.headRefOid || !postAuditHeadState.localMatchesExpected) blockers.push("Interrupted current-thread attempt no longer matches the exact PR head");
   if (prior.repository?.fullName !== `${githubRepository(manifest).owner}/${githubRepository(manifest).name}`) blockers.push("Interrupted current-thread attempt no longer matches the canonical repository");
   if (!postAuditPr || postAuditPr.state !== "OPEN" || postAuditPr.isDraft || postAuditPr.mergedAt || postAuditPr.reviewDecision === "CHANGES_REQUESTED") blockers.push("Interrupted current-thread attempt PR state is no longer safe");
