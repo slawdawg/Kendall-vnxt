@@ -10480,6 +10480,61 @@ try {
     }
   });
 
+  test("reconcile-merged-pr permits an explicitly approved clean descendant delivery-head reconciliation", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const recordedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      runGit(fixture.worktree, ["commit", "--allow-empty", "-m", "audited descendant delivery head"]);
+      const liveHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      runGit(fixture.root, ["push", "origin", "--delete", fixture.branch]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/remotes/origin/${fixture.branch}`]);
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = recordedHead;
+      manifest.status = "pr_open";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr", "cleanup-task", "--apply", "--allow-audited-descendant-head",
+        "--approval", "operator approved audited descendant delivery reconciliation",
+        "--owner", "runner-a", "--delivery-audit-agent", "PostMergeAudit",
+        "--delivery-audit-status", "cleanup-ready", "--delivery-audit-summary", "Audited clean descendant delivery head.",
+        "--delivery-audit-head-sha", liveHead, "--state-root", fixture.stateRoot,
+      ], { env: { ...fixture.env, CODEX_WORKSPACE_TEST_MERGED_PR_HEAD: liveHead } });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const updated = readJson(manifestPath);
+      assert(updated.pr_delivery_head_sha === liveHead, "live descendant head was not recorded");
+      assert(updated.audited_descendant_delivery_reconciliation?.recordedHeadSha === recordedHead, "recorded predecessor evidence missing");
+    } finally { cleanupMergedCleanupFixture(fixture); }
+  });
+
+  test("reconcile-merged-pr keeps an explicitly approved descendant reconciliation blocked for a dirty worktree", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const recordedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      runGit(fixture.worktree, ["commit", "--allow-empty", "-m", "dirty descendant delivery head"]);
+      const liveHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+      runGit(fixture.root, ["push", "origin", "--delete", fixture.branch]);
+      runGit(fixture.root, ["update-ref", "-d", `refs/remotes/origin/${fixture.branch}`]);
+      writeFileSync(join(fixture.worktree, "dirty-reconciliation-proof.txt"), "uncommitted\n");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = recordedHead;
+      manifest.status = "pr_open";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runMergedCleanupFixtureScript(fixture, [
+        "reconcile-merged-pr", "cleanup-task", "--apply", "--allow-audited-descendant-head",
+        "--approval", "operator approved audited descendant delivery reconciliation",
+        "--owner", "runner-a", "--delivery-audit-agent", "PostMergeAudit",
+        "--delivery-audit-status", "cleanup-ready", "--delivery-audit-summary", "Audited clean descendant delivery head.",
+        "--delivery-audit-head-sha", liveHead, "--state-root", fixture.stateRoot,
+      ], { env: { ...fixture.env, CODEX_WORKSPACE_TEST_MERGED_PR_HEAD: liveHead } });
+      assert(result.code !== 0, "dirty descendant reconciliation unexpectedly applied");
+      assert(result.stderr.includes("requires a clean managed worktree"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "dirty descendant reconciliation mutated the manifest");
+    } finally { cleanupMergedCleanupFixture(fixture); }
+  });
+
   test("reconcile-merged-pr is owner-gated and refuses ownership takeover", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -14244,7 +14299,7 @@ function createMergedCleanupFixture() {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'view') {",
-      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: '${branch}', headRefOid: '${branchHead}' }));`,
+      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: '${branch}', headRefOid: process.env.CODEX_WORKSPACE_TEST_MERGED_PR_HEAD || '${branchHead}' }));`,
       "  process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
@@ -14414,11 +14469,11 @@ function writeFixtureGhPrPayload(fixture, payload) {
   chmodSync(fakeGh, 0o755);
 }
 
-function runMergedCleanupFixtureScript(fixture, args) {
+function runMergedCleanupFixtureScript(fixture, args, options = {}) {
   const result = spawnSync(process.execPath, [fixture.worktreeScript, ...args], {
     cwd: fixture.worktree,
     encoding: "utf8",
-    env: fixture.env,
+    env: options.env || fixture.env,
     stdio: "pipe",
   });
   return {
