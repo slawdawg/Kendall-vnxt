@@ -17320,6 +17320,7 @@ function inspectTaskLease(state, taskId) {
             generation,
             heartbeat,
             chainDepth: depth + 1,
+            epoch,
             protocol: "versioned_lease",
           };
         }

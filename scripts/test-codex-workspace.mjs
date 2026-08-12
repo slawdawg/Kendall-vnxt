@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -9803,6 +9803,43 @@ try {
       const packet = JSON.parse(inspection.stdout);
       assert(packet.status === "released", inspection.stdout);
       assert(packet.reason === "owner_released_generation", inspection.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("versioned lease rolls a fully traversed dead-owner segment into a stale epoch before callbacks", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      for (let invocation = 0; invocation < 64; invocation += 1) {
+        const result = runFixtureScript(
+          fixture,
+          ["heartbeat", "resumed-task", "--phase", "lease-stale-epoch-test", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code === 0, `invocation ${invocation + 1}: ${result.stderr || result.stdout}`);
+      }
+      const generations = leaseJsonRecordsForFixture(join(leaseRoot, "generations"));
+      const terminal = generations.find((record) => record?.generation && !existsSync(join(leaseRoot, "handoffs", `${record.generation}.json`)));
+      assert(terminal?.generation, "fixture did not retain a terminal generation without a successor handoff");
+      unlinkSync(join(leaseRoot, "releases", `${terminal.generation}.json`));
+      const resumed = runFixtureScript(
+        fixture,
+        ["heartbeat", "resumed-task", "--phase", "lease-stale-epoch-successor", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const epoch = leaseJsonRecordsForFixture(join(leaseRoot, "epochs")).at(-1);
+      assert(epoch?.from_generation === terminal.generation, JSON.stringify(epoch));
+      assert(epoch.reason === "stale_owner_process_absent", JSON.stringify(epoch));
+      const inspection = runFixtureScript(
+        fixture,
+        ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      assert(JSON.parse(inspection.stdout).status === "released", inspection.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
