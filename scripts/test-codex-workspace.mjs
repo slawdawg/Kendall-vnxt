@@ -1437,6 +1437,18 @@ try {
       assert(blockers[0].includes(expected), `PR gate blockers must fail closed on ${expected}`);
     }
     assert(blockers[0].includes("supersedesAttemptId"), "PR gate blockers must clear only explicitly superseded recovery attempts");
+    for (const expected of [
+      "PR head branch ${pr.headRefName} does not match managed branch ${manifest.branch}",
+      "PR base commit changed while collecting gate evidence",
+      "PR identity or status checks changed during the final review-thread audit",
+    ]) {
+      assert(blockers[0].includes(expected), `PR gate blockers must fail closed on ${expected}`);
+    }
+
+    const prGateEvidence = source.match(/function buildPrGateEvidence[\s\S]*?function renderPrGateEvidence/);
+    assert(prGateEvidence, "PR gate evidence builder not found");
+    assert(prGateEvidence[0].includes("finalEvidencePr = prViewForGates(manifest)"), "PR gate must reload PR state after its final review-thread audit");
+    assert(prGateEvidence[0].includes("finalPrSnapshotChanged"), "PR gate must retain final-audit PR/check drift evidence");
 
     const highRiskPath = source.match(/function isHighRiskReviewThreadPath[\s\S]*?function assertNoUnrecoveredResolutionAttempt/);
     assert(highRiskPath, "high-risk review-thread path classifier not found");

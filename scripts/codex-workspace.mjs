@@ -5145,8 +5145,19 @@ function buildPrGateEvidence(manifest, context = {}) {
   // evidence calls so a newly-created request cannot be hidden by an earlier
   // clean snapshot.
   const postEvidenceReviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
-  const postEvidenceChecks = normalizeStatusCheckRollup(postEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
-  const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(postEvidenceChecks);
+  // The final thread audit itself can span paginated GraphQL requests. Reload
+  // the mutable PR/check snapshot after it so the gate cannot persist a pass
+  // for a head, base, or check set that changed during that audit.
+  const finalEvidencePr = prViewForGates(manifest);
+  if (!finalEvidencePr) throw new Error("Could not reload PR state after final review-thread audit.");
+  const finalEvidenceChecks = normalizeStatusCheckRollup(finalEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
+  const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(finalEvidenceChecks);
+  const finalPrSnapshotChanged = postEvidencePr.number !== finalEvidencePr.number
+    || postEvidencePr.baseRefName !== finalEvidencePr.baseRefName
+    || postEvidencePr.baseRefOid !== finalEvidencePr.baseRefOid
+    || postEvidencePr.headRefName !== finalEvidencePr.headRefName
+    || postEvidencePr.headRefOid !== finalEvidencePr.headRefOid
+    || JSON.stringify(normalizeStatusCheckRollup(postEvidencePr.statusCheckRollup, nonRequiredCheckPolicy)) !== JSON.stringify(finalEvidenceChecks);
   const reviewThreadSnapshotChanged = reviewThreadStateSnapshotFingerprint(reviewThreadState)
     !== reviewThreadStateSnapshotFingerprint(postEvidenceReviewThreadState);
   const diffRiskEvidence = shapeDiffRiskEvidence(context.options || {}, {
@@ -5173,12 +5184,14 @@ function buildPrGateEvidence(manifest, context = {}) {
     expectedHeadSha: headState.expectedHeadSha,
     prNumber: pr.number,
   });
-  const blockers = prGateBlockers(manifest, postEvidencePr, {
+  const blockers = prGateBlockers(manifest, finalEvidencePr, {
     repository,
     headState,
     worktreeStatus,
-    checks: postEvidenceChecks,
+    checks: finalEvidenceChecks,
     checkSnapshotChanged,
+    finalPrSnapshotChanged,
+    initialBaseRefOid: pr.baseRefOid,
     nonRequiredCheckPolicy,
     reviewThreadState: postEvidenceReviewThreadState,
     reviewThreadSnapshotChanged,
@@ -5222,17 +5235,17 @@ function buildPrGateEvidence(manifest, context = {}) {
     localHeadSha: headState.localHeadSha,
     worktree: { clean: !worktreeStatus.any, status: worktreeStatus },
     pr: {
-      number: postEvidencePr.number || manifest.pr_number || null,
-      url: postEvidencePr.url || manifest.pr_url || null,
-      state: postEvidencePr.state || null,
-      isDraft: Boolean(postEvidencePr.isDraft),
-      mergedAt: postEvidencePr.mergedAt || null,
-      baseRefName: postEvidencePr.baseRefName || null,
-      headRefOid: postEvidencePr.headRefOid || null,
-      mergeStateStatus: postEvidencePr.mergeStateStatus || null,
-      reviewDecision: postEvidencePr.reviewDecision || null,
+      number: finalEvidencePr.number || manifest.pr_number || null,
+      url: finalEvidencePr.url || manifest.pr_url || null,
+      state: finalEvidencePr.state || null,
+      isDraft: Boolean(finalEvidencePr.isDraft),
+      mergedAt: finalEvidencePr.mergedAt || null,
+      baseRefName: finalEvidencePr.baseRefName || null,
+      headRefOid: finalEvidencePr.headRefOid || null,
+      mergeStateStatus: finalEvidencePr.mergeStateStatus || null,
+      reviewDecision: finalEvidencePr.reviewDecision || null,
     },
-    checks: postEvidenceChecks,
+    checks: finalEvidenceChecks,
     checkSnapshotChanged,
     nonRequiredCheckPolicy,
     reviewThreads: postEvidenceReviewThreadState,
@@ -5962,6 +5975,14 @@ function prGateBlockers(manifest, pr, context) {
   } else if (pr.headRefOid !== context.headState.expectedHeadSha) {
     blockers.push(`PR head ${pr.headRefOid} does not match expected head ${context.headState.expectedHeadSha}`);
   }
+  if (!pr.headRefName) {
+    blockers.push("PR headRefName missing");
+  } else if (pr.headRefName !== manifest.branch) {
+    blockers.push(`PR head branch ${pr.headRefName} does not match managed branch ${manifest.branch}`);
+  }
+  if (!exactGitObjectIdOrNull(context.initialBaseRefOid) || pr.baseRefOid !== context.initialBaseRefOid) {
+    blockers.push("PR base commit changed while collecting gate evidence");
+  }
   if (!context.headState.localMatchesExpected) {
     blockers.push(`Local HEAD ${context.headState.localHeadSha} does not match recorded delivery head ${context.headState.expectedHeadSha}`);
   }
@@ -5990,6 +6011,9 @@ function prGateBlockers(manifest, pr, context) {
   }
   if (context.checkSnapshotChanged) {
     blockers.push("Status checks changed while collecting the remaining gate evidence");
+  }
+  if (context.finalPrSnapshotChanged) {
+    blockers.push("PR identity or status checks changed during the final review-thread audit");
   }
   if (context.reviewThreadSnapshotChanged) {
     blockers.push("Review-thread state changed while collecting the remaining gate evidence");
