@@ -250,6 +250,45 @@ publisher.
    Record each resolved thread ID and supporting evidence, then rerun the
    thread-aware check; any unaddressed or ambiguous thread remains a hold while
    the worker completes that automatic remediation loop.
+
+### Review-thread adjudication and recovery commands
+
+Use the source-owned `codex-workspace` commands for one thread at a time. First
+fetch the complete GitHub review-thread and review-request audit, then record
+the exact-head mapping and verification evidence without resolving anything:
+
+```bash
+node ./scripts/codex-workspace.mjs adjudicate-current-thread <task> --apply \
+  --thread-id <PRRT_id> --request-fingerprint <sha256> \
+  --request-summary "<bounded request summary>" \
+  --diff-summary "<current-head mapping>" --mapped-files '<json-or-list>' \
+  --verification "<focused result>" \
+  --verification-command "<executed command>" --verification-exit-code 0 \
+  --review-summary "<independent review evidence>" --reviewer-id <id>
+```
+
+For an outdated thread, use `adjudicate-outdated-thread` with the same bounded
+evidence fields and add `--renamed-paths '<json>'` when the review anchor moved.
+The `--apply` here records metadata-only adjudication; it never resolves a
+GitHub thread. High-risk paths require exact operator authorization in the
+form `operator-authorized thread=<PRRT_id> head=<sha>` via
+`--high-risk-authorization`. Do not invent a fingerprint, map a path outside
+the current diff, or treat a successful check as independent review evidence.
+
+After fresh adjudication, resolve only the matching kind with
+`resolve-adjudicated-current-thread <task> --thread-id <PRRT_id>` or
+`resolve-adjudicated-thread <task> --thread-id <PRRT_id>`. These commands repeat
+the exact-head, base, check, authorization, and thread-aware pre-mutation
+proofs, mutate one GitHub thread, and then re-audit PR/check/local/worktree and
+all non-target threads. A changed non-target thread, incomplete audit, or
+ambiguous mutation records `needs-recovery` and is a hold; never retry blindly.
+An interrupted `attempt-recorded` or ambiguous outcome is resumed only through
+the matching resolve command after a fresh audit. If a current target becomes
+outdated, use the retained cross-kind recovery path and a new outdated
+adjudication; do not manually edit the manifest or call the GraphQL mutation.
+For command profiles and bounded verification guidance, see the repository
+[`README.md` Developer Checks](../../README.md#developer-checks).
+
    Use exact-head merge protection for GitHub CLI merges, such as
    `gh pr merge <number> --merge --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary

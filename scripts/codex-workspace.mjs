@@ -4572,6 +4572,7 @@ function reviewThreadResolutionPostMutationBlockers(audit, target, fresh = {}) {
   if (unexpectedCurrent.length) {
     blockers.push(`New unresolved current review threads after resolution: ${unexpectedCurrent.map((thread) => thread.url || thread.id).join(", ")}`);
   }
+  blockers.push(...nonTargetThreadPostMutationBlockers(audit, fresh, fresh?.threadId));
   if (!target?.isResolved) blockers.push("Target review thread was not confirmed resolved by the post-resolution audit");
   if (target?.requestFingerprint !== fresh?.targetRequestFingerprint) blockers.push("Target review thread changed during resolution and requires recovery");
   return blockers;
@@ -13016,6 +13017,8 @@ function sanitizeVerificationDiagnosticText(value, maxBytes) {
     });
   };
   redact(/(?:github_pat_|sk-|gh[pousr]_)[A-Za-z0-9_-]+/gi, "[redacted-token]");
+  redact(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[redacted-jwt]");
+  redact(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gi, "[redacted-slack-token]");
   redact(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s\/@]*@/g, "[redacted-url-userinfo]@");
   redact(/-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9_-]+)? PRIVATE KEY-----/gi, "[redacted-private-key]");
   redact(/(?:["']?[A-Za-z0-9._-]*(?:private[_-]?key|ssh[_-]?private[_-]?key)[A-Za-z0-9._-]*["']?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[redacted-private-key]");

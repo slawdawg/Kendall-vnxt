@@ -1476,6 +1476,8 @@ try {
     const outdatedMutationGuards = source.match(/function reviewThreadResolutionPreMutationBlockers[\s\S]*?function reviewThreadResolutionPostMutationBlockers/);
     assert(outdatedMutationGuards, "outdated-thread pre-mutation guards not found");
     assert(outdatedMutationGuards[0].includes("PR base drifted immediately before the thread mutation"), "outdated-thread pre-mutation guards must reject base drift");
+    const outdatedPostMutationGuards = source.match(/function reviewThreadResolutionPostMutationBlockers[\s\S]*?function emptyReviewThreadState/);
+    assert(outdatedPostMutationGuards?.[0].includes("nonTargetThreadPostMutationBlockers(audit, fresh, fresh?.threadId)"), "outdated-thread post-mutation guards must reject non-target thread drift");
 
     const outdatedRecovery = source.match(/function recoverAlreadyResolvedOutdatedThreadAttempt[\s\S]*?function adjudicateCurrentThread/);
     assert(outdatedRecovery, "outdated-thread recovery helper not found");
@@ -8091,6 +8093,9 @@ try {
       assert(!JSON.stringify(diagnostic).includes("quoted-header-token"), "local diagnostic retained quoted authorization value");
       assert(!JSON.stringify(diagnostic).includes("quoted-api-key"), "local diagnostic retained quoted API-key value");
       assert(!JSON.stringify(diagnostic).includes("quoted-password"), "local diagnostic retained quoted password value");
+      assert(!JSON.stringify(diagnostic).includes("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.signaturefixture1234567890"), "local diagnostic retained bare JWT credential");
+      const slackFixtureCredential = ["xoxb", "123456789012", "123456789012", "abcdefghijklmnopqrstuv"].join("-");
+      assert(!JSON.stringify(diagnostic).includes(slackFixtureCredential), "local diagnostic retained Slack credential");
       assert(!JSON.stringify(diagnostic).includes("basic-credential"), "local diagnostic retained Basic authorization value");
       assert(!JSON.stringify(diagnostic).includes("control-basic"), "local diagnostic retained control-byte-obscured authorization value");
       assert(!JSON.stringify(diagnostic).includes("diagnostic-url-password"), "local diagnostic retained URL credential value");
@@ -11780,6 +11785,39 @@ try {
       assert(recovery.code !== 0, "base-commit-drifted outdated recovery unexpectedly succeeded");
       assert(recovery.stderr.includes("PR base commit changed before recovery"), recovery.stderr || recovery.stdout);
       assert(readJson(manifestPath).outdated_thread_resolution_outcomes.length === 1, "base-commit-drifted recovery must not append or retry a GitHub mutation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("resolve-adjudicated-thread fails closed on post-resolution non-target thread drift", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      postResolutionNonTargetThreadDrift: true,
+      reviewThreads: [
+        { id: "PRRT_outdated", isResolved: false, isOutdated: true, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_outdated", body: "Request." }] } },
+        { id: "PRRT_known_current", isResolved: true, isOutdated: false, path: "feature.txt", comments: { nodes: [{ url: "https://example.test/pull/456#discussion_known_current", body: "Separate request." }] } },
+      ],
+    });
+    const adjudicationArgs = [
+      "adjudicate-outdated-thread", "resumed-task", "--apply", "--owner", "runner-a", "--thread-id", "PRRT_outdated",
+      "--request-fingerprint", "eccad82bfa7664f6c3dde5511b901aca12622e68b1715c85c9c05401da175e2a", "--request-summary", "Request.",
+      "--diff-summary", "Current mapping.", "--mapped-files", "feature.txt", "--verification", "Focused test.",
+      "--verification-command", "pnpm run test:codex-workspace", "--verification-exit-code", "0", "--review-summary", "Review passed.",
+      "--reviewer-id", "reviewer-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      const adjudication = runFixtureScript(fixture, adjudicationArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(adjudication.code === 0, adjudication.stderr || adjudication.stdout);
+      const resolution = runFixtureScript(
+        fixture,
+        ["resolve-adjudicated-thread", "resumed-task", "--owner", "runner-a", "--thread-id", "PRRT_outdated", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(resolution.code !== 0, "outdated resolution unexpectedly ignored non-target post-resolution drift");
+      assert(resolution.stderr.includes("Pre-existing non-target review threads changed during resolution"), resolution.stderr || resolution.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.outdated_thread_resolution_outcomes.at(-1)?.status === "needs-recovery", JSON.stringify(manifest.outdated_thread_resolution_outcomes));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -16646,7 +16684,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     timeout: "sleep 1\nexit 0",
     nonzero: "echo 'fixture verification failed' >&2\nexit 23",
     "secret-nonzero": "echo 'fixture-secret-token-123' >&2\nexit 23",
-    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" DATABASE_URL=postgres://fixture:diagnostic-url-password@example.test/db ' >&2\nprintf '%s\\n' '-----BEGIN PRIVATE KEY-----' 'fixture-private-key-material' '-----END PRIVATE KEY-----' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
+    "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" DATABASE_URL=postgres://fixture:diagnostic-url-password@example.test/db jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.signaturefixture1234567890 ' >&2\nprintf 'xoxb-' >&2; printf '123456789012-123456789012-abcdefghijklmnopqrstuv ' >&2\nprintf '%s\\n' '-----BEGIN PRIVATE KEY-----' 'fixture-private-key-material' '-----END PRIVATE KEY-----' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
     "boundary-secret-nonzero": "printf 'xxxxxxxxxxsk-'\ni=0\nwhile [ \"$i\" -lt 2100 ]; do printf 'a'; i=$((i + 1)); done\nprintf '\\n'\nexit 23",
     "later-stage-nonzero": "echo '> pnpm run check:later-stage'\necho 'fixture-later-stage-secret' >&2\nexit 23",
     signal: "kill -TERM $$",
