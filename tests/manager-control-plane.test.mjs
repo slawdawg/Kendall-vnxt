@@ -19790,6 +19790,46 @@ test("stale-owner inspection fails closed when its bounded projection omits cano
   assert.match(inspection.nextActions[0].summary, /counted 13 stale-owner target/);
 });
 
+test("stale-owner inspection recovers a safe lookup id from governed dry-run evidence when display retention redacts it", () => {
+  const recoveredId = "repair-v2-external-completion-journal-durability";
+  const inspection = buildStaleOwnerInspection(
+    {},
+    {
+      resumeState: {
+        summary: {
+          ledger: { runId: "manager-test" },
+          takeoverInspection: {
+            targetCount: 1,
+            projectedTargetCount: 1,
+            complete: true,
+            targets: [{
+              kind: "workspace_assignment",
+              id: "repair-v2-external-[redacted-retention-term]-journal-durability",
+              dryRunCommand: `node ./scripts/codex-workspace.mjs takeover '${recoveredId}' --dry-run --summary-json --takeover-reason 'manager inspection'`,
+            }],
+          },
+        },
+        warnings: [],
+      },
+      takeoverResults: {
+        [recoveredId]: {
+          ok: true,
+          decision: "blocked",
+          allowed: false,
+          worktree: { exists: true, status: "clean", path: "/tmp/recovered" },
+          branch: { status: "matched", localSha: "abc123" },
+          pr: { status: "none" },
+          dirtyState: { dirty: false },
+        },
+      },
+    },
+  );
+  assert.equal(inspection.ok, true);
+  assert.equal(inspection.summary.inspectedCount, 1);
+  assert.equal(inspection.summary.inspections[0].id, recoveredId);
+  assert.equal(inspection.summary.inspections[0].classification, "takeover_blocked_needs_operator_or_evidence");
+});
+
 test("takeover inspection projects the complete bounded stale-owner set and fails closed above its cap", () => {
   const targets = Array.from({ length: 19 }, (_, index) => ({
     taskId: `stale-workspace-${index + 1}`,
