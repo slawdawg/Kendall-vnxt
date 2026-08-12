@@ -12882,6 +12882,7 @@ try {
   test("reconcile-merged-pr rejects semantically invalid provider PR identity fields", () => {
     const invalidCases = [
       { name: "URL", patch: { url: "http://example.test/pull/123" } },
+      { name: "foreign repository URL", patch: { url: "https://github.com/other/Kendall-vnxt/pull/123" } },
       { name: "base", patch: { baseRefName: "refs/heads/main" } },
       { name: "head branch", patch: { headRefName: "refs/heads/codex/cleanup-current" } },
       { name: "head object", patch: { headRefOid: "not-a-git-object" } },
@@ -12895,7 +12896,7 @@ try {
         const branchHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
         writeFixtureGhPrPayload(fixture, {
           number: 123,
-          url: "https://example.test/pull/123",
+          url: "https://github.com/slawdawg/Kendall-vnxt/pull/123",
           mergedAt: "2026-06-21T00:00:00Z",
           state: "MERGED",
           baseRefName: "main",
@@ -16810,7 +16811,7 @@ function createMergedCleanupFixture() {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'view') {",
-      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: '${branch}', headRefOid: process.env.CODEX_WORKSPACE_TEST_MERGED_PR_HEAD || '${branchHead}' }));`,
+      `  console.log(JSON.stringify({ number: 123, url: 'https://github.com/slawdawg/Kendall-vnxt/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: '${branch}', headRefOid: process.env.CODEX_WORKSPACE_TEST_MERGED_PR_HEAD || '${branchHead}' }));`,
       "  process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
@@ -16839,7 +16840,7 @@ function createMergedCleanupFixture() {
       worktree_path: worktree,
       status: "merged",
       mode: "pr",
-      pr_url: "https://example.test/pull/123",
+      pr_url: "https://github.com/slawdawg/Kendall-vnxt/pull/123",
       pr_number: 123,
       pr_delivery_head_sha: branchHead,
       pr_gate_evidence: {
@@ -16853,7 +16854,7 @@ function createMergedCleanupFixture() {
         baseBranch: "main",
         pr: {
           number: 123,
-          url: "https://example.test/pull/123",
+          url: "https://github.com/slawdawg/Kendall-vnxt/pull/123",
           baseRefName: "main",
           headRefOid: branchHead,
         },
@@ -16966,7 +16967,7 @@ function writeFixtureGhPrView(fixture, headRefOid) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'pr' && args[1] === 'view') {",
-      `  console.log(JSON.stringify({ number: 123, url: 'https://example.test/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: ${JSON.stringify(fixture.branch)}, headRefOid: ${JSON.stringify(headRefOid)} }));`,
+      `  console.log(JSON.stringify({ number: 123, url: 'https://github.com/slawdawg/Kendall-vnxt/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: ${JSON.stringify(fixture.branch)}, headRefOid: ${JSON.stringify(headRefOid)} }));`,
       "  process.exit(0);",
       "}",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",

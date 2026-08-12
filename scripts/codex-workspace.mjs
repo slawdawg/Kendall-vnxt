@@ -152,6 +152,7 @@ const taskLeaseMaximumGenerationChainLength = 64;
 let activeTaskLeaseWriteContext = null;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
+const canonicalKendallRepository = Object.freeze({ owner: "slawdawg", name: "Kendall-vnxt" });
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": {
@@ -4696,7 +4697,7 @@ function assertAuditedDescendantHeadOptionValues(options) {
 function buildMergedPrReconciliationEvidence(manifest, context = {}) {
   const checkedAt = new Date().toISOString();
   const blockers = [];
-  const livePr = prView(manifest);
+  const livePr = prView(manifest, canonicalKendallRepository);
   const { pr, blockers: providerFieldBlockers } = shapeMergedPrReconciliationPr(livePr);
   blockers.push(...providerFieldBlockers);
   let localHeadSha = "";
@@ -4980,8 +4981,8 @@ function shapeMergedPrReconciliationPr(livePr) {
 }
 
 function validateMergedPrReconciliationIdentity(pr, blockers) {
-  if (!validMergedPrUrl(pr.url, pr.number)) {
-    addReconciliationBlocker(blockers, "Live PR URL is not a valid HTTPS pull-request URL for the reported PR number.");
+  if (!validMergedPrUrl(pr.url, pr.number, canonicalKendallRepository)) {
+    addReconciliationBlocker(blockers, "Live PR URL is not the canonical Kendall_Nxt HTTPS pull-request URL for the reported PR number.");
   }
   if (!validProviderBranchName(pr.baseRefName, MAX_BASE_BRANCH_LENGTH)) {
     addReconciliationBlocker(blockers, "Live PR base branch is not a valid branch name.");
@@ -5000,14 +5001,17 @@ function validateMergedPrReconciliationIdentity(pr, blockers) {
   }
 }
 
-function validMergedPrUrl(value, number) {
+function validMergedPrUrl(value, number, repository = null) {
   if (!value || !Number.isSafeInteger(number) || number <= 0) {
     return false;
   }
   try {
     const parsed = new URL(value);
     const match = parsed.pathname.match(/\/pull\/(\d+)\/?$/);
-    return parsed.protocol === "https:" && Boolean(parsed.hostname) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && Boolean(match) && Number(match[1]) === number;
+    const canonical = repository
+      ? parsed.hostname === "github.com" && parsed.pathname === `/${repository.owner}/${repository.name}/pull/${number}`
+      : Boolean(parsed.hostname) && Boolean(match) && Number(match[1]) === number;
+    return parsed.protocol === "https:" && canonical && !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
   } catch {
     return false;
   }
@@ -17657,9 +17661,11 @@ function assertCleanManagedResolutionWorktree(manifest) {
   }
 }
 
-function prView(manifest) {
+function prView(manifest, repository = null) {
   const selector = manifest.pr_number ? String(manifest.pr_number) : manifest.branch;
-  const result = run("gh", ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName,headRefName,headRefOid"], {
+  const args = ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName,headRefName,headRefOid"];
+  if (repository?.owner && repository?.name) args.push("--repo", `${repository.owner}/${repository.name}`);
+  const result = run("gh", args, {
     cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
   });
   if (result.code !== 0) {
