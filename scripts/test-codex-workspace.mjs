@@ -1585,6 +1585,13 @@ try {
     assert(policy, "source-owned skip policy parser not found");
     assert(policy[0].includes("marker.length >= fence.length"), "a closing policy fence must be at least as long as its opener");
     assert(policy[0].includes("[ \\t]*$"), "a closing policy fence must contain no trailing content");
+    assert(source.includes("function visibleSkipPolicyListItems"), "skip policy validation must parse visible list items");
+    assert(source.includes("replace(/<!--[\\s\\S]*?-->/g, \"\")"), "skip policy validation must exclude HTML comments");
+
+    const interruptedRecovery = source.match(/function recoverAlreadyResolvedOutdatedThreadAttempt[\s\S]*?function adjudicateCurrentThread/);
+    assert(interruptedRecovery?.[0].includes("nonTargetThreadPostMutationBlockers(audit, retained, threadId)"), "outdated interrupted recovery must recheck non-target threads");
+    const currentInterruptedRecovery = source.match(/function recoverAlreadyResolvedCurrentThreadAttempt[\s\S]*?function currentThreadResolutionPreMutationBlockers/);
+    assert(currentInterruptedRecovery?.[0].includes("nonTargetThreadPostMutationBlockers(audit, retained, threadId)"), "current interrupted recovery must recheck non-target threads");
 
     const audit = source.match(/function fetchReviewThreadState[\s\S]*?function hydrateReviewThreadComments/);
     assert(audit, "review-thread audit helper not found");

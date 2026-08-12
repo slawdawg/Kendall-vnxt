@@ -3892,8 +3892,9 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
   if (!/^[a-f0-9]{64}$/.test(prior.targetRequestFingerprint || "") || !/^[a-f0-9]{64}$/.test(retained?.targetRequestFingerprint || "")) blockers.push("Interrupted outdated-thread attempt has malformed adjudication provenance");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage || audit.pendingReviewRequestCount) blockers.push("Interrupted outdated-thread attempt lacks a complete post-interruption thread audit");
   if (target && !target.isResolved && target.isOutdated && target.commentsComplete && target.requestFingerprint) return null;
-  if (!target.isOutdated || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted outdated-thread target is not proven resolved by the live thread audit");
+  if (!target?.isOutdated || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted outdated-thread target is not proven resolved by the live thread audit");
   if (expectedFingerprint && target?.requestFingerprint !== expectedFingerprint) blockers.push("Interrupted outdated-thread target fingerprint changed before recovery");
+  blockers.push(...nonTargetThreadPostMutationBlockers(audit, retained, threadId));
   if (checks.total === 0 || checks.pending.length || checks.failing.length) blockers.push("Interrupted outdated-thread attempt checks are not terminal-successful");
   blockers.push(...nonRequiredCheckPolicy.blockers);
   if (blockers.length) throw new Error(`A prior outdated review-thread resolution attempt is unrecovered; do not retry blindly: ${blockers.join("; ")}`);
@@ -4090,6 +4091,7 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   if (!target || !target.isResolved || !target.commentsComplete || !target.requestFingerprint) blockers.push("Interrupted current-thread target is not proven resolved by the live thread audit");
   if (target?.isOutdated) blockers.push("Interrupted current-thread target became outdated before recovery");
   if (target?.requestFingerprint !== retained?.targetRequestFingerprint) blockers.push("Interrupted current-thread target fingerprint changed before recovery");
+  blockers.push(...nonTargetThreadPostMutationBlockers(audit, retained, threadId));
   if (checks.total === 0 || checks.pending.length || checks.failing.length) blockers.push("Interrupted current-thread attempt checks are not terminal-successful");
   blockers.push(...nonRequiredCheckPolicy.blockers);
   if (blockers.length) throw new Error(`A prior current review-thread resolution attempt is unrecovered; do not retry blindly: ${blockers.join("; ")}`);
@@ -6421,7 +6423,18 @@ function validateSourceOwnedSkipPolicy(policyRef, names, worktreePath, expectedH
   const policyText = policyResult.stdout;
   const section = sourceOwnedSkipPolicySection(policyText);
   if (section === null) return false;
-  return names.every((name) => ["full", "javascript", "supervisor"].includes(name) && section.includes(`- \`${name}\``));
+  const visibleNames = visibleSkipPolicyListItems(section);
+  return names.every((name) => ["full", "javascript", "supervisor"].includes(name) && visibleNames.has(name));
+}
+
+function visibleSkipPolicyListItems(section) {
+  // HTML comments are not visible policy. Accept only actual Markdown bullet
+  // items, after removing comments that could otherwise preserve a stale
+  // `- `check`` substring.
+  const visible = String(section || "").replace(/<!--[\s\S]*?-->/g, "");
+  return new Set(visible.split(/\r?\n/)
+    .map((line) => /^[ \t]*[-+*][ \t]+`([^`\r\n]+)`(?:[ \t].*)?$/.exec(line)?.[1] || null)
+    .filter(Boolean));
 }
 
 function sourceOwnedSkipPolicySection(policyText) {
