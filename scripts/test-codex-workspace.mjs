@@ -9993,9 +9993,16 @@ try {
       const foreignOwner = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--dry-run", "--summary-json", "--owner", "runner-b", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
       assert(foreignOwner.code !== 0, "foreign lane owner unexpectedly prepared immutable rollover");
       assert(foreignOwner.stderr.includes("requires the exact manifest owner"), foreignOwner.stderr || foreignOwner.stdout);
-      const apply = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      const apply = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        cwd: fixture.worktree,
+        env: { ...fixture.env, CODEX_WORKSPACE_OWNER: "different-environment-owner" },
+      });
       assert(apply.code === 0, apply.stderr || apply.stdout);
       const applied = JSON.parse(apply.stdout);
+      const successorOwners = readdirSync(join(leaseRoot, "generations"))
+        .map((name) => readJson(join(leaseRoot, "generations", name)).owner)
+        .filter((owner) => owner !== initial.owner);
+      assert(successorOwners.length === 1 && successorOwners[0] === "runner-a", `rollover successor owner drifted: ${JSON.stringify(successorOwners)}`);
       const rollover = readJson(join(leaseRoot, "ledger-rollovers", "legacy.json"));
       assert(rollover.ledger_counts["external-intents"] === 4_096, JSON.stringify(rollover));
       assert(rollover.ledger_snapshot_digest === preview.snapshotDigest, JSON.stringify(rollover));
@@ -14735,18 +14742,61 @@ try {
         token_digest: digest,
         released_at: "2026-07-31T00:00:00.000Z",
       })}\n`);
-      const preview = runFixtureScript(fixture, [
+      const sameOwnerEnv = { ...fixture.env, CODEX_WORKSPACE_OWNER: "stale-runner" };
+      const foreignPreview = runFixtureScript(fixture, [
         "close-missing-worktree", fixture.taskId, "--summary-json", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
       ], { env: fixture.env });
+      assert(foreignPreview.code === 0, foreignPreview.stderr || foreignPreview.stdout);
+      const foreignPacket = JSON.parse(foreignPreview.stdout);
+      assert(foreignPacket.ready === false, foreignPreview.stdout);
+      assert(foreignPacket.blockers.some((blocker) => blocker.includes("invoking runner to exactly match the manifest owner")), foreignPreview.stdout);
+      const preview = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
+      ], { env: sameOwnerEnv });
       assert(preview.code === 0, preview.stderr || preview.stdout);
       const packet = JSON.parse(preview.stdout);
       assert(packet.ready === true, preview.stdout);
       assert(packet.proof.owner.status === "released_final_lease", preview.stdout);
       const apply = runFixtureScript(fixture, [
         "close-missing-worktree", fixture.taskId, "--apply", "--approval", "operator approved exact released lease closeout", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
-      ], { env: fixture.env });
+      ], { env: sameOwnerEnv });
       assert(apply.code === 0, apply.stderr || apply.stdout);
       assert(readJson(fixture.manifestPath).status === "closed", apply.stdout);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
+    }
+  });
+
+  test("close-missing-worktree requires rollover before advertising an exact-full released ledger as ready", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260806-pr-723-successor-review-resolution-hardening-fol" });
+    try {
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "stale-runner",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      const digest = createHash("sha256").update(lease.token).digest("hex");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId);
+      writeFileSync(join(leaseRoot, "releases", `${lease.generation}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: fixture.taskId,
+        generation: lease.generation,
+        token_digest: digest,
+        released_at: "2026-07-31T00:00:00.000Z",
+      })}\n`);
+      const fullLedger = join(leaseRoot, "external-intents");
+      mkdirSync(fullLedger, { recursive: true });
+      for (let index = 0; index < 4_096; index += 1) {
+        writeFileSync(join(fullLedger, `${index}.json`), "{}\n");
+      }
+      const preview = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
+      ], { env: { ...fixture.env, CODEX_WORKSPACE_OWNER: "stale-runner" } });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.ready === false, preview.stdout);
+      assert(packet.proof.releasedLeaseLedgerCapacity.status === "rollover_required", preview.stdout);
+      assert(packet.blockers.some((blocker) => blocker.includes("run rollover-task-lease-ledger before closeout")), preview.stdout);
     } finally {
       cleanupMissingWorktreeCloseoutFixture(fixture);
     }

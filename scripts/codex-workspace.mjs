@@ -3041,9 +3041,14 @@ function rolloverTaskLeaseLedger(argv) {
   const state = workspaceState(options);
   const manifestRecord = findManifestByExactTaskId(state, taskId);
   assertExactTaskLeaseLedgerRolloverOwner(manifestRecord.manifest, options);
-  const operator = safeMetadataText(currentLaneOwner(options), taskLeaseMaximumLedgerRolloverOperatorLength);
+  // The lease successor is an authorization boundary, so retain the exact
+  // owner validated against the manifest for acquisition and recovery.  The
+  // immutable rollover record intentionally stores only its bounded display
+  // form.
+  const validatedOwner = String(currentLaneOwner(options) || "").trim();
+  const operator = safeMetadataText(validatedOwner, taskLeaseMaximumLedgerRolloverOperatorLength);
   if (!operator) throw new Error("rollover-task-lease-ledger requires a bounded current lane owner.");
-  const packet = taskLeaseLedgerRolloverPacket(state, taskId, operator, { allowStaleRecovery: true });
+  const packet = taskLeaseLedgerRolloverPacket(state, taskId, validatedOwner, { allowStaleRecovery: true });
   if (options.dryRun) {
     const output = { ...packet, mutation: "none; dry-run only" };
     if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
@@ -3056,7 +3061,7 @@ function rolloverTaskLeaseLedger(argv) {
   // Normal commands cannot acquire while this successor is active, so no intent
   // can straddle the old and new ledger segments.
   withManifestLock(state, taskId, ({ token, generation }) => {
-    const fresh = taskLeaseLedgerRolloverPacket(state, taskId, operator, {
+    const fresh = taskLeaseLedgerRolloverPacket(state, taskId, validatedOwner, {
       expectedReleasedGeneration: packet.leaseGeneration,
       expectedReleasedEpoch: packet.leaseEpoch,
       expectedLeaseStatus: packet.leaseStatus,
@@ -3104,7 +3109,7 @@ function rolloverTaskLeaseLedger(argv) {
       rolledAt: record.rolled_at,
       mutation: "immutable ledger rollover published under a successor lease; all prior ledger JSON evidence remains retained",
     };
-  }, { recoverStale: true, allowFullLedgerRollover: true });
+  }, { owner: validatedOwner, recoverStale: true, allowFullLedgerRollover: true });
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("rollover-task-lease-ledger", [JSON.stringify(output)]);
 }
@@ -7789,6 +7794,16 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
       }
     : missingWorktreeOwnerEvidence(manifest, context.staleAfterSeconds, checkedAt);
   if (owner.status !== "stale" && owner.status !== "released_final_lease") blockers.push(owner.reason);
+  const releasedLeaseCurrentOwner = String(context.currentOwner || "").trim();
+  if (releasedLeaseCloseout && releasedLeaseCurrentOwner !== manifest.owner) {
+    blockers.push("released final-lease closeout requires the invoking runner to exactly match the manifest owner");
+  }
+  const releasedLeaseLedgerCapacity = releasedLeaseCloseout
+    ? missingWorktreeReleasedLeaseCloseoutLedgerCapacityEvidence(state, manifest.task_id)
+    : null;
+  if (releasedLeaseLedgerCapacity?.status !== "available") {
+    blockers.push(releasedLeaseLedgerCapacity.reason);
+  }
   if (
     taskLock.status !== "absent" &&
     taskLock.status !== "self_held_after_absent_precheck" &&
@@ -7814,6 +7829,10 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
   const requiredGates = [
     "exact allowlisted task manifest",
     target?.allowReleasedLeaseCloseout ? "stale manifest owner or exact released final-lease owner evidence" : "stale manifest owner evidence",
+    ...(target?.allowReleasedLeaseCloseout ? [
+      "released final-lease closeout is invoked by the exact manifest owner",
+      "active immutable lease ledger has callback admission capacity; otherwise rollover completed first",
+    ] : []),
     target?.allowReleasedLeaseCloseout ? "no retained task lock or exact released final-lease evidence before closeout lock acquisition" : "no retained task lock before closeout lock acquisition",
     "managed worktree path is absent and unregistered",
     "local and remote branch refs are absent",
@@ -7857,6 +7876,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
     blockers,
     proof: {
       owner,
+      releasedLeaseLedgerCapacity,
       repository,
       taskLock,
       worktree,
@@ -7868,6 +7888,32 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
     authorityDecision,
     mutation: "none; preview only",
   };
+}
+
+function missingWorktreeReleasedLeaseCloseoutLedgerCapacityEvidence(state, taskId) {
+  try {
+    const ledger = taskLeaseLedgerState(state, taskId);
+    const counts = Object.fromEntries(taskLeaseLedgerKinds.map((kind) => [
+      kind,
+      leaseJsonRecordCount(taskLeaseLedgerDirectory(state, taskId, kind, ledger), kind),
+    ]));
+    const exhaustedKinds = taskLeaseLedgerKinds.filter((kind) => counts[kind] >= taskLeaseMaximumHistoryRecords);
+    return exhaustedKinds.length === 0
+      ? { status: "available", segment: ledger.segment, epoch: ledger.epoch, counts, reason: "active immutable lease ledger has callback admission capacity" }
+      : {
+          status: "rollover_required",
+          segment: ledger.segment,
+          epoch: ledger.epoch,
+          counts,
+          exhaustedKinds,
+          reason: `active immutable lease ledger is at capacity (${exhaustedKinds.join(", ")}); run rollover-task-lease-ledger before closeout`,
+        };
+  } catch (error) {
+    return {
+      status: "blocked",
+      reason: `active immutable lease ledger capacity is not provable: ${safeMetadataText(error?.message || "unknown", 300)}`,
+    };
+  }
 }
 
 function missingWorktreeOwnerEvidence(manifest, staleAfterSeconds, checkedAt) {
@@ -17237,7 +17283,7 @@ function taskLeaseLedgerRolloverPacket(state, taskId, operator, options = {}) {
   }
   return {
     taskId,
-    operator,
+    operator: safeMetadataText(operator, taskLeaseMaximumLedgerRolloverOperatorLength),
     leaseStatus: inspection.status,
     leaseReason: inspection.reason,
     leaseGeneration: options.expectedReleasedGeneration || inspection.generation || null,
