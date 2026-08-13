@@ -50,7 +50,7 @@ space.
 When `doctor`, a governed command, or `inspect-task-lock` reports an
 intent/completion ledger at its exact 4,096-record boundary, preserve the task
 and all existing lease JSON. The only recovery is the owner-bound rollover
-command, and it is valid only for an exactly `released` versioned lease with
+command. It normally requires an exactly `released` versioned lease with
 complete matched intent/completion evidence.
 
 First capture a read-only packet from the recorded lane owner:
@@ -60,10 +60,10 @@ node ./scripts/codex-workspace.mjs rollover-task-lease-ledger <task-id> \
   --dry-run --summary-json
 ```
 
-Confirm that the packet is allowed, the lease is released, and the current
-segment has an exact capacity boundary. Do not use the command on another
-owner's lane; complete the normal governed takeover process first. After an
-explicit operator approval, publish one immutable rollover record:
+Confirm that the packet is allowed and the current segment has an exact
+capacity boundary. Do not use the command on another owner's lane; complete
+the normal governed takeover process first. After an explicit operator
+approval, publish one immutable rollover record:
 
 ```bash
 node ./scripts/codex-workspace.mjs rollover-task-lease-ledger <task-id> \
@@ -77,6 +77,15 @@ rehashes every sealed segment and stops on mismatched evidence; routine ledger
 operations use only the active segment so normal admission does not repeatedly
 rehash sealed history. If the preview blocks or its evidence changes before
 apply, stop and preserve the task for review.
+
+If an interruption occurs after the owner-bound successor lease is acquired but
+before the rollover record is published, the same recorded owner may rerun the
+same command. Its read-only packet may report a `stale` lease rather than
+`released`; this is recoverable only when the stale lease has no unresolved
+intent fence, the exact full segment and retained evidence still validate, and
+the current owner exactly matches the manifest owner. Do not take over or
+manually alter lease evidence to force this path. Any other stale lease state,
+owner mismatch, changed evidence, or blocked preview remains a hold.
 
 ### Interruptions and fenced operations
 
