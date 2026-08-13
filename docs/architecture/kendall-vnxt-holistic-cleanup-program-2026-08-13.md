@@ -381,6 +381,12 @@ checks, and 288 root scripts create a high cognitive and maintenance load.
 The aggregate check is a long serial chain. CI performs its full workflow on
 `main`, not on pushes to the active `dev` delivery branch.
 
+The repository-wide `docs/workflows/ci-confidence-and-efficiency-policy.md`
+governs this work beyond the cleanup program: it requires precise affected
+bundle selection, no duplicate required invocation, behavior-based long-suite
+shards, same-head migration evidence, and integration-branch/scheduled full
+confidence.
+
 **Plan.**
 
 1. Establish four discoverable profiles: `fast`, `affected`, `full`, and

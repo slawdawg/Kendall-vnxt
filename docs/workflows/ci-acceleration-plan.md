@@ -1,7 +1,14 @@
 # CI Acceleration Plan
 
 Date: 2026-07-07
-Status: active design artifact
+Status: historical rollout record; superseded as policy by
+`ci-confidence-and-efficiency-policy.md`
+
+> This document records the initial planner/static-bundle rollout and its
+> measurement evidence. The accepted repository-wide policy for future CI work
+> is `ci-confidence-and-efficiency-policy.md`. Retain this record for its
+> implementation history; do not treat its earlier target topology as current
+> policy.
 
 ## Problem
 
