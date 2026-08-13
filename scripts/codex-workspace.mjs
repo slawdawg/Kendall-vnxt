@@ -155,7 +155,12 @@ const taskLeaseMaximumLedgerEpochCount = 16;
 // epochs. Keep that retained generation index bounded independently from the
 // per-segment intent/completion budget, rather than making a rolled ledger
 // unusable after the next 4,096 lease acquisitions.
-const taskLeaseMaximumGenerationHistoryRecords = taskLeaseMaximumHistoryRecords * (taskLeaseMaximumLedgerEpochCount + 1);
+// Reserve one failed full-ledger admission and one administrative successor for
+// each allowed rollover. They are immutable generation records too, so omitting
+// them would make the advertised final ledger segment unreachable.
+const taskLeaseMaximumGenerationHistoryRecords =
+  taskLeaseMaximumHistoryRecords * (taskLeaseMaximumLedgerEpochCount + 1) +
+  taskLeaseMaximumLedgerEpochCount * 2;
 const taskLeaseMaximumLedgerRolloverOperatorLength = 160;
 const taskLeaseMaximumLedgerRolloverApprovalLength = 512;
 const taskLeaseLegacyLedgerSegment = "legacy";
@@ -3038,7 +3043,7 @@ function rolloverTaskLeaseLedger(argv) {
   assertExactTaskLeaseLedgerRolloverOwner(manifestRecord.manifest, options);
   const operator = safeMetadataText(currentLaneOwner(options), taskLeaseMaximumLedgerRolloverOperatorLength);
   if (!operator) throw new Error("rollover-task-lease-ledger requires a bounded current lane owner.");
-  const packet = taskLeaseLedgerRolloverPacket(state, taskId, operator);
+  const packet = taskLeaseLedgerRolloverPacket(state, taskId, operator, { allowStaleRecovery: true });
   if (options.dryRun) {
     const output = { ...packet, mutation: "none; dry-run only" };
     if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
@@ -3054,6 +3059,7 @@ function rolloverTaskLeaseLedger(argv) {
     const fresh = taskLeaseLedgerRolloverPacket(state, taskId, operator, {
       expectedReleasedGeneration: packet.leaseGeneration,
       expectedReleasedEpoch: packet.leaseEpoch,
+      expectedLeaseStatus: packet.leaseStatus,
       heldGeneration: generation,
       heldToken: token,
     });
@@ -3098,7 +3104,7 @@ function rolloverTaskLeaseLedger(argv) {
       rolledAt: record.rolled_at,
       mutation: "immutable ledger rollover published under a successor lease; all prior ledger JSON evidence remains retained",
     };
-  }, { recoverStale: false, allowFullLedgerRollover: true });
+  }, { recoverStale: true, allowFullLedgerRollover: true });
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("rollover-task-lease-ledger", [JSON.stringify(output)]);
 }
@@ -7946,7 +7952,7 @@ function missingWorktreeLockEvidence(state, taskId, context) {
   };
 }
 
-function missingWorktreeReleasedLeaseSuccessorEvidence(state, taskId, predecessorGeneration, heldGeneration, predecessorEpoch = 0) {
+function missingWorktreeReleasedLeaseSuccessorEvidence(state, taskId, predecessorGeneration, heldGeneration, predecessorEpoch = 0, handoffReason = "released") {
   if (!isUuid(predecessorGeneration) || !isUuid(heldGeneration)) {
     return { status: "blocked", reason: "released pre-lock generation or held successor generation is missing" };
   }
@@ -7961,7 +7967,7 @@ function missingWorktreeReleasedLeaseSuccessorEvidence(state, taskId, predecesso
       const handoff = readRegularJson(handoffPath);
       if (
         validTaskLeaseHandoff(handoff, taskId, predecessorGeneration, tokenDigest) &&
-        handoff.reason === "released" &&
+        handoff.reason === handoffReason &&
         handoff.to_generation === heldGeneration
       ) {
         return { status: "matched", kind: "handoff", predecessorGeneration, heldGeneration };
@@ -7972,7 +7978,7 @@ function missingWorktreeReleasedLeaseSuccessorEvidence(state, taskId, predecesso
       const epoch = readRegularJson(epochPath);
       if (
         validTaskLeaseEpoch(epoch, taskId, predecessorGeneration, tokenDigest, predecessorEpoch) &&
-        epoch.reason === "released" &&
+        epoch.reason === handoffReason &&
         epoch.to_generation === heldGeneration
       ) {
         return { status: "matched", kind: "epoch", predecessorGeneration, heldGeneration };
@@ -17205,9 +17211,12 @@ function taskLeaseLedgerRolloverPacket(state, taskId, operator, options = {}) {
         options.expectedReleasedGeneration,
         options.heldGeneration,
         options.expectedReleasedEpoch,
+        options.expectedLeaseStatus === "stale" ? "stale_owner_process_absent" : "released",
       ).status === "matched"
     : false;
-  if (inspection.protocol !== "versioned_lease" || (inspection.status !== "released" && !lockedSuccessor)) {
+  const ownerBoundStaleRecovery = options.allowStaleRecovery === true &&
+    inspection.status === "stale" && inspection.metadata?.owner === operator;
+  if (inspection.protocol !== "versioned_lease" || (inspection.status !== "released" && !ownerBoundStaleRecovery && !lockedSuccessor)) {
     blockers.push("task does not have an exactly released versioned lease");
   }
   let ledger = null;
