@@ -89,8 +89,9 @@ program's stated evidence and exit criteria are met:
   - manager and dashboard retain adapter/projection state only;
   - V0 lifecycle/action APIs are migrated and then removed;
   - `runtime/` is abandoned unless an active roadmap consumer is demonstrated;
-  - `/pipeline/demo` is not a supported product feature unless retained as a
-    bounded, isolated demo package; and
+  - `/pipeline/demo` is a supported, explicitly fixture-only daily-alpha flow;
+    retain that boundary unless an authoritative product decision supersedes the
+    runbook and fixture-fallback audit; and
   - SQLite is the default persistence target unless PostgreSQL has an active,
     documented product requirement.
 
@@ -113,14 +114,15 @@ The cleanup program uses the current Codex session as a **central coordinator**
 with bounded parallel worker lanes. It does not create a second Kendall runtime
 or another persistent orchestration subsystem merely to clean this repository.
 The central coordinator is the single owner of cleanup intent, ordering,
-cross-cutting contracts, integration, delivery evidence, and the durable
-inventory in `kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`.
+cross-cutting decision records, dispatch, and the durable evidence inventory in
+`kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`. It assigns every
+repository mutation to an owning worker lane.
 
 ### Responsibilities
 
 | Role | Owns | Must not do |
 | --- | --- | --- |
-| Central coordinator | Goal/phase state, dependency ordering, file-boundary assignment, lifecycle/authority/persistence decisions, integration, verification, PR delivery, and residual-risk records. | Delegate a cross-cutting decision without an explicit contract or merge concurrent changes directly into one shared tree. |
+| Central coordinator | Goal/phase state, dependency ordering, file-boundary assignment, lifecycle/authority/persistence decision records, worker dispatch, integration sequencing, delivery evidence, and residual-risk records. | Mutate source, documentation, workspace metadata, or routine hygiene directly; run verification or deliver a change itself. An assigned owning worker performs each of those actions. |
 | Read-only analysis lane | Bounded discovery, reachability, test/log analysis, architecture review, and a concise evidence summary. | Edit repository files, alter workspace metadata, or make product decisions. |
 | Isolated implementation lane | One approved, non-overlapping change slice in its assigned worktree and branch; focused tests and rollback notes. | Edit files outside its ownership boundary, push/merge another lane, or broaden product/runtime authority. |
 | Integration/review lane | Diff review, contract/regression checks, CI evidence, and review-thread remediation. | Reinterpret an unapproved product decision or silently repair a conflicting lane by discarding its work. |
@@ -139,6 +141,11 @@ highest, and faster models for narrow evidence work:
 The coordinator selects the number of lanes from the session's available
 capacity. Parallelism is a throughput tool, not a goal: a lane is not started
 until its input, file ownership, output, and integration dependency are clear.
+The table is the default model and effort selection. For every lane routed away
+from its applicable default, the coordinator records the selected model variant,
+reasoning effort, and concise rationale in the Phase 0 inventory or linked PR
+description before dispatch; this makes non-default routing reviewable rather
+than implicit.
 
 ### Execution waves
 
@@ -183,6 +190,8 @@ inventory or linked PR description:
 - required focused checks and the integration check;
 - rollback or restoration path;
 - upstream dependencies and downstream consumers; and
+- for a non-default model route, the selected model variant, reasoning effort,
+  and rationale; and
 - expected output: evidence only, a commit, a draft PR, or a merged cleanup.
 
 If a lane discovers overlap or a new cross-cutting decision, it stops mutation,
@@ -430,7 +439,7 @@ and no removed command is a hidden dependency of hooks or workflows.
 | --- | --- | --- |
 | `runtime/` | Archive/tag then remove if the Release 1 personal-assistant product is not on the roadmap. | Product owner confirms Outlook/scheduling/tasks is abandoned; no setup/packaging/runtime consumer remains. |
 | V0 action and approval APIs | Migrate then delete. | Consumer, database, and approval-evidence migration is complete. |
-| `/pipeline/demo` fixture catalogue | Keep only as an isolated demo package, or remove route, fixtures, and tests together. | Confirm it is a supported product/demo capability. |
+| `/pipeline/demo` fixture catalogue | Retain as the supported, fixture-only daily-alpha flow; consider removal only after an authoritative product decision supersedes the runbook and fixture-fallback audit. | Decision record naming the superseded authority, caller/fixture reachability, and removal/rollback proof. |
 | Epic/story-specific reports and panels | Move durable signal to a named capability or remove. | Report classification and replacement evidence. |
 | Date-stamped gap reviews, closeouts, handoffs | Archive from current navigation. | Durable decision is represented in the current ADR/index. |
 | `docs/ui.png` | Delete after confirming it remains unreferenced. | Search and documentation rendering check. |
@@ -456,7 +465,7 @@ focused runbook material.
 | 0. Inventory and freeze | A reviewed, measurable cleanup backlog. | Add inventory, owners, dependencies, consumer searches, baseline timings/counts, rollback notes. | Each item is `keep`, `migrate`, `delete`, `archive`, or `decision-needed`; no new legacy surface. |
 | 1. Safety and delivery | Authority and CI are internally consistent. | Correct authority record, add `dev`/manual/scheduled verification, lint/type checks, migration baseline. | Exact-target authority tests and supported-database upgrade proof pass. |
 | 2. Lifecycle convergence | One authoritative lifecycle path. | Introduce target contract and read model; migrate dashboard and manager adapters. | Dashboard and manager consume the canonical path without fallback. |
-| 3. Controlled retirement | Compatibility code and expired product surfaces shrink. | Remove V0, legacy routes, duplicated reports, abandoned runtime/demo material after proof. | Consumer search, migration tests, and rollback reference are clean. |
+| 3. Controlled retirement | Compatibility code and expired product surfaces shrink. | Remove V0, legacy routes, duplicated reports, and abandoned runtime material after proof; retire demo material only after authoritative supersession. | Consumer search, migration tests, and rollback reference are clean. |
 | 4. Bounded-context refactor | Major modules have understandable ownership. | Split service/API/manager/workspace/fixtures by domain and ports. | No behavior change beyond a tested bounded slice; dependency direction is enforced. |
 | 5. Verification and documentation consolidation | Lower cognitive load remains durable. | Replace script aliases, deduplicate CI, archive docs, migrate generated skills. | Clean clone, contributor path, profile matrix, and doc index all pass. |
 
@@ -513,7 +522,8 @@ Start Phase 0 with a **lifecycle and retirement inventory**, not a refactor:
    that are truly transient;
 3. classify every supervisor report route and dashboard panel;
 4. record caller reachability, archive destination, and rollback evidence for
-   the already-resolved `runtime/` and `/pipeline/demo` retirement defaults;
+   the resolved `runtime/` retirement and the authoritative `/pipeline/demo`
+   retention decision; reconsider the demo only after documented supersession;
 5. baseline current CI durations, database state, script dependencies, and
    documentation navigation; and
 6. publish the first narrow migration PR only after that evidence and its
