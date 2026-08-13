@@ -9944,6 +9944,69 @@ try {
     }
   });
 
+  test("released exact-full lease ledgers roll over only after complete immutable evidence validation", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task"));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const tokenDigest = createHash("sha256").update(initial.token).digest("hex");
+      writeFileSync(join(leaseRoot, "releases", `${initial.generation}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: tokenDigest,
+        released_at: "2026-07-26T00:01:00.000Z",
+      })}\n`);
+      const intentDirectory = join(leaseRoot, "external-intents");
+      const completionDirectory = join(leaseRoot, "external-completions");
+      mkdirSync(intentDirectory, { recursive: true });
+      mkdirSync(completionDirectory, { recursive: true });
+      for (let index = 0; index < 4_096; index += 1) {
+        const intentId = fixtureLeaseUuid("4", index + 1);
+        writeFileSync(join(intentDirectory, `${intentId}.json`), `${JSON.stringify({
+          schema_version: 1,
+          task_id: "resumed-task",
+          generation: initial.generation,
+          token_digest: tokenDigest,
+          intent_id: intentId,
+          runner_pid: initial.pid,
+          runner_process_start_identity: initial.process_start_identity,
+          command_digest: "a".repeat(64),
+          started_at: "2026-07-26T00:00:00.000Z",
+        })}\n`);
+        writeFileSync(join(completionDirectory, `${intentId}.json`), `${JSON.stringify({
+          schema_version: 1,
+          task_id: "resumed-task",
+          generation: initial.generation,
+          token_digest: tokenDigest,
+          intent_id: intentId,
+          completed_at: "2026-07-26T00:00:01.000Z",
+          status: 0,
+        })}\n`);
+      }
+      const command = ["rollover-task-lease-ledger", "resumed-task", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      const dryRun = runFixtureScript(fixture, command, { cwd: fixture.worktree, env: fixture.env });
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      const preview = JSON.parse(dryRun.stdout);
+      assert(preview.allowed === true, dryRun.stdout);
+      assert(preview.counts["external-intents"] === 4_096, dryRun.stdout);
+      const apply = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(apply.code === 0, apply.stderr || apply.stdout);
+      const applied = JSON.parse(apply.stdout);
+      const rollover = readJson(join(leaseRoot, "ledger-rollovers", "legacy.json"));
+      assert(rollover.ledger_counts["external-intents"] === 4_096, JSON.stringify(rollover));
+      assert(rollover.ledger_snapshot_digest === preview.snapshotDigest, JSON.stringify(rollover));
+      assert(leaseJsonRecordsForFixture(intentDirectory).length === 4_096, "rollover discarded immutable external intents");
+      assert(leaseJsonRecordsForFixture(completionDirectory).length === 4_096, "rollover discarded immutable external completions");
+      assert(existsSync(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-intents")), "rollover did not create the new ledger segment");
+      const resumed = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-intents")).length > 0, "resumed governed operation did not use the new external ledger segment");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("versioned lease malformed and over-depth histories fail closed before callbacks", () => {
     const malformedFixture = createFinishPrExistingCommitFixture();
     try {
@@ -14615,7 +14678,7 @@ try {
   });
 
   test("close-missing-worktree applies only bounded manifest closeout evidence for every approved task", () => {
-    for (const taskId of ["20260724-synchronize-dev-recovery", "dashboard-delivery-profile", "dashboard-lan-navigation"]) {
+    for (const taskId of ["20260724-synchronize-dev-recovery", "dashboard-delivery-profile", "dashboard-lan-navigation", "20260806-pr-723-successor-review-resolution-hardening-fol"]) {
       const fixture = createMissingWorktreeCloseoutFixture({ taskId });
       try {
         const beforeRefs = refSnapshot(fixture.root);
@@ -14637,6 +14700,40 @@ try {
       } finally {
         cleanupMissingWorktreeCloseoutFixture(fixture);
       }
+    }
+  });
+
+  test("close-missing-worktree accepts only PR 813's exact released final lease before stale-owner age", () => {
+    const fixture = createMissingWorktreeCloseoutFixture({ taskId: "20260806-pr-723-successor-review-resolution-hardening-fol" });
+    try {
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "stale-runner",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      const digest = createHash("sha256").update(lease.token).digest("hex");
+      const releasePath = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "releases", `${lease.generation}.json`);
+      writeFileSync(releasePath, `${JSON.stringify({
+        schema_version: 1,
+        task_id: fixture.taskId,
+        generation: lease.generation,
+        token_digest: digest,
+        released_at: "2026-07-31T00:00:00.000Z",
+      })}\n`);
+      const preview = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--summary-json", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.ready === true, preview.stdout);
+      assert(packet.proof.owner.status === "released_final_lease", preview.stdout);
+      const apply = runFixtureScript(fixture, [
+        "close-missing-worktree", fixture.taskId, "--apply", "--approval", "operator approved exact released lease closeout", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(apply.code === 0, apply.stderr || apply.stdout);
+      assert(readJson(fixture.manifestPath).status === "closed", apply.stdout);
+    } finally {
+      cleanupMissingWorktreeCloseoutFixture(fixture);
     }
   });
 
@@ -17316,6 +17413,7 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
     "20260724-synchronize-dev-recovery": null,
     "dashboard-delivery-profile": 751,
     "dashboard-lan-navigation": 753,
+    "20260806-pr-723-successor-review-resolution-hardening-fol": 813,
   };
   const prNumber = expectedPrNumbers[taskId];
   assert(Object.hasOwn(expectedPrNumbers, taskId), `unexpected missing-worktree fixture task ${taskId}`);
@@ -17327,6 +17425,7 @@ function createMissingWorktreeCloseoutFixture(options = {}) {
     "20260724-synchronize-dev-recovery": "codex/synchronize-dev-recovery",
     "dashboard-delivery-profile": "codex/dashboard-delivery-profile",
     "dashboard-lan-navigation": "codex/dashboard-lan-navigation",
+    "20260806-pr-723-successor-review-resolution-hardening-fol": "codex/pr-723-successor-review-resolution-hardening-fol",
   };
   const branch = expectedBranches[taskId];
   const worktree = taskId === "dashboard-delivery-profile"
