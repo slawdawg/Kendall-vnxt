@@ -10866,6 +10866,41 @@ try {
     }
   });
 
+  test("verify-pr-gates accepts one complete planner-bound static skip group after duplicate workflow runs", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
+        { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/999/job/956" },
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/457" },
+        { name: "static_bundle", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/458" },
+        { name: "static_bundle_summary", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/459" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/999/job/957" },
+        { name: "static_bundle", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/999/job/958" },
+        { name: "static_bundle_summary", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/999/job/959" },
+      ],
+    });
+    try {
+      const seeded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+        "--non-required-checks", "static,static_bundle,static_bundle_summary",
+        "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates reads skipped-check policy from the exact managed PR head", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,

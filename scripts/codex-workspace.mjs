@@ -6806,38 +6806,49 @@ function staticSkipPlannerEvidence(names, context = {}) {
   const waivedStaticChecks = nodes.filter((node) => staticFamily.has(statusCheckName(node))
     && terminalCheckStatus(String(node?.status || node?.state || "").toUpperCase())
     && String(node?.conclusion || "").toUpperCase() === "SKIPPED");
-  const waivedRunId = detailsRunId(waivedStaticChecks[0]);
-  const sameRun = waivedRunId && waivedStaticChecks.length === names.filter((name) => staticFamily.has(name)).length
-    && waivedStaticChecks.every((node) => detailsRunId(node) === waivedRunId);
-  const planner = sameRun ? nodes.find((node) => statusCheckName(node) === "changes" && detailsRunId(node) === waivedRunId) : null;
-  const match = /\/actions\/runs\/(\d+)\/job\/(\d+)(?:$|[?#])/.exec(String(planner?.detailsUrl || planner?.targetUrl || ""));
-  if (!expectedHeadSha || !context.worktreePath || !match || String(planner?.conclusion || "").toUpperCase() !== "SUCCESS") {
+  const requiredStaticNames = new Set(names.filter((name) => staticFamily.has(name)));
+  const skippedByRun = new Map();
+  for (const check of waivedStaticChecks) {
+    const runId = detailsRunId(check);
+    if (!runId) continue;
+    const group = skippedByRun.get(runId) || new Set();
+    group.add(statusCheckName(check));
+    skippedByRun.set(runId, group);
+  }
+  const candidateRunIds = [...skippedByRun.entries()]
+    .filter(([, namesForRun]) => [...requiredStaticNames].every((name) => namesForRun.has(name)))
+    .map(([runId]) => runId)
+    .sort();
+  if (!expectedHeadSha || !context.worktreePath || candidateRunIds.length === 0) {
     return { required: true, valid: false, staticSelected: null, source: null };
   }
-  const cacheKey = `${context.worktreePath}:${expectedHeadSha}:${match[1]}:${match[2]}`;
   const cache = staticPlannerEvidenceCache ||= new Map();
-  if (cache.has(cacheKey)) return cache.get(cacheKey);
-  const result = run("gh", ["run", "view", match[1], "--log", "--job", match[2]], {
-    cwd: context.worktreePath,
-    preserveStdout: true,
-    maxBuffer: 8 * 1024 * 1024,
+  const evidence = candidateRunIds.map((runId) => {
+    const planner = nodes.find((node) => statusCheckName(node) === "changes" && detailsRunId(node) === runId);
+    const match = /\/actions\/runs\/(\d+)\/job\/(\d+)(?:$|[?#])/.exec(String(planner?.detailsUrl || planner?.targetUrl || ""));
+    if (!match || String(planner?.conclusion || "").toUpperCase() !== "SUCCESS") {
+      return { required: true, valid: false, staticSelected: null, source: { runId, jobId: null, staticRunId: runId, exactHeadObserved: false } };
+    }
+    const cacheKey = `${context.worktreePath}:${expectedHeadSha}:${match[1]}:${match[2]}`;
+    if (cache.has(cacheKey)) return cache.get(cacheKey);
+    const result = run("gh", ["run", "view", match[1], "--log", "--job", match[2]], {
+      cwd: context.worktreePath,
+      preserveStdout: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const exactHeadPattern = new RegExp(`--head\\s+["']${escapeRegExp(expectedHeadSha)}["']`);
+    const staticMatch = /"static"\s*:\s*(true|false)/.exec(result.stdout || "");
+    const staticSelected = staticMatch ? staticMatch[1] === "true" : null;
+    const candidate = {
+      required: true,
+      valid: result.code === 0 && exactHeadPattern.test(result.stdout || "") && staticSelected === false,
+      staticSelected,
+      source: { runId: match[1], jobId: match[2], staticRunId: runId, exactHeadObserved: exactHeadPattern.test(result.stdout || "") },
+    };
+    cache.set(cacheKey, candidate);
+    return candidate;
   });
-  const exactHeadPattern = new RegExp(`--head\\s+["']${escapeRegExp(expectedHeadSha)}["']`);
-  const staticMatch = /"static"\s*:\s*(true|false)/.exec(result.stdout || "");
-  const staticSelected = staticMatch ? staticMatch[1] === "true" : null;
-  const evidence = {
-    required: true,
-    valid: sameRun && result.code === 0 && exactHeadPattern.test(result.stdout || "") && staticSelected === false,
-    staticSelected,
-    source: {
-      runId: match[1],
-      jobId: match[2],
-      staticRunId: waivedRunId,
-      exactHeadObserved: exactHeadPattern.test(result.stdout || ""),
-    },
-  };
-  cache.set(cacheKey, evidence);
-  return evidence;
+  return evidence.find((candidate) => candidate.valid) || evidence[0];
 }
 
 function escapeRegExp(value) {
