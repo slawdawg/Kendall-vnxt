@@ -10770,6 +10770,9 @@ try {
       statusCheckRollup: [
         { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
         { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED" },
+        { name: "static_bundle", status: "COMPLETED", conclusion: "SKIPPED" },
+        { name: "static_bundle_summary", status: "COMPLETED", conclusion: "SKIPPED" },
       ],
     });
     try {
@@ -10782,7 +10785,8 @@ try {
           "--delivery-audit-summary", "Exact-head delivery audit passed.",
           "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
           "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
-          "--non-required-checks", "full", "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+          "--non-required-checks", "full,static,static_bundle,static_bundle_summary",
+          "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
           "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
           "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
           "--state-root", fixture.stateRoot,
@@ -10793,6 +10797,8 @@ try {
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       assert(manifest.pr_gate_evidence.nonRequiredCheckPolicy.names.includes("full"), "gate evidence lost the allowed skipped check");
       assert(manifest.pr_gate_evidence.checks.passed.some((check) => check.name === "full"), "policy-bound skipped check did not pass");
+      assert(manifest.pr_gate_evidence.nonRequiredCheckPolicy.names.includes("static_bundle_summary"), "gate evidence lost the planner-skipped static check");
+      assert(manifest.pr_gate_evidence.checks.passed.some((check) => check.name === "static_bundle_summary"), "policy-bound static skip did not pass");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -16409,11 +16415,11 @@ function createFinishPrExistingCommitFixture(options = {}) {
   mkdirSync(join(fixtureRoot, "docs", "workflows"), { recursive: true });
   writeFileSync(
     join(fixtureRoot, "docs", "workflows", "end-to-end-lane-runner.md"),
-    "### Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
+    "### Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n- `static`\n- `static_bundle`\n- `static_bundle_summary`\n",
   );
   writeFileSync(
     join(fixtureRoot, "AGENTS.md"),
-    "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n",
+    "## Documented Non-Required Checks\n\n- `full`\n- `javascript`\n- `supervisor`\n- `static`\n- `static_bundle`\n- `static_bundle_summary`\n",
   );
   runGit(fixtureRoot, ["add", "base.txt", "scripts", "docs", "AGENTS.md"]);
   runGit(fixtureRoot, ["commit", "-q", "-m", "base"]);

@@ -525,6 +525,13 @@ line.
 - `full`
 - `javascript`
 - `supervisor`
+- `static`
+- `static_bundle`
+- `static_bundle_summary`
+
+The `static` family is non-required only when the exact-head `changes` planner
+does not select static confidence. A selected static path requires its checks
+to succeed; a skipped static check never bypasses that requirement.
 
 ### Checkpoint Budget
 

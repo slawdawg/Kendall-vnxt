@@ -6760,7 +6760,15 @@ function validateSourceOwnedSkipPolicy(policyRef, names, worktreePath, expectedH
   const section = sourceOwnedSkipPolicySection(policyText);
   if (section === null) return false;
   const visibleNames = visibleSkipPolicyListItems(section);
-  return names.every((name) => ["full", "javascript", "supervisor"].includes(name) && visibleNames.has(name));
+  const permittedCheckNames = new Set([
+    "full",
+    "javascript",
+    "supervisor",
+    "static",
+    "static_bundle",
+    "static_bundle_summary",
+  ]);
+  return names.every((name) => permittedCheckNames.has(name) && visibleNames.has(name));
 }
 
 function visibleSkipPolicyListItems(section) {
