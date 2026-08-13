@@ -278,10 +278,12 @@ planning database.
 #### Autonomous hygiene and wave reporting
 
 At the start and end of each wave, the coordinator runs the relevant read-only
-workspace, branch, PR, CI, and review-state inventory. It resolves routine
-cleanups through their governing tools, retries one demonstrated transient
-verification failure, and opens a bounded follow-up only for a supported,
-evidence-backed candidate. It records a concise scorecard rather than asking
+workspace, branch, PR, CI, and review-state inventory. It dispatches routine
+cleanup work to the owning worker, which uses the governing
+tools; the coordinator records the returned evidence. An owning worker retries
+one demonstrated transient verification failure and opens a bounded follow-up
+only for a supported, evidence-backed candidate. The coordinator records a
+concise scorecard rather than asking
 the operator to interpret routine green state: base freshness, active lanes,
 PR/review state, CI duration/health, legacy-surface counts, recoveries, and
 true stop-class blockers.
