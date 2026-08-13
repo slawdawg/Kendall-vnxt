@@ -7801,7 +7801,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
   const releasedLeaseLedgerCapacity = releasedLeaseCloseout
     ? missingWorktreeReleasedLeaseCloseoutLedgerCapacityEvidence(state, manifest.task_id)
     : null;
-  if (releasedLeaseLedgerCapacity?.status !== "available") {
+  if (releasedLeaseLedgerCapacity && releasedLeaseLedgerCapacity.status !== "available") {
     blockers.push(releasedLeaseLedgerCapacity.reason);
   }
   if (
