@@ -1164,7 +1164,7 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
   );
 });
 
-test("dedicated runtime falls back to legacy work-packet reads only on canonical 404", async () => {
+test("dedicated runtime falls back to legacy work-packet reads only for legacy identities on canonical 404", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1187,11 +1187,17 @@ test("dedicated runtime falls back to legacy work-packet reads only on canonical
             if (path === "/pipeline-control-plane/work-packets") {
               throw new Error("Request failed for /pipeline-control-plane/work-packets (404)");
             }
-            if (path === "/pipeline-control-plane/work-packets/packet-1") {
-              throw new Error("Request failed for /pipeline-control-plane/work-packets/packet-1 (404)");
+            if (path === "/pipeline-control-plane/work-packets/work_item%3Apacket-1") {
+              throw new Error("Request failed for /pipeline-control-plane/work-packets/work_item%3Apacket-1 (404)");
             }
-            if (path === "/work-packets/packet-1") {
-              return { packetId: "legacy-packet-1" };
+            if (path === "/pipeline-control-plane/work-packets/candidate_work%3Acandidate-1") {
+              throw new Error("Request failed for /pipeline-control-plane/work-packets/candidate_work%3Acandidate-1 (404)");
+            }
+            if (path === "/work-packets/work_item%3Apacket-1") {
+              return { packetId: "work_item:packet-1" };
+            }
+            if (path === "/work-packets/candidate_work%3Acandidate-1") {
+              return { packetId: "candidate_work:candidate-1" };
             }
             return [{ packetId: "legacy-packet" }];
           },
@@ -1204,13 +1210,111 @@ test("dedicated runtime falls back to legacy work-packet reads only on canonical
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
   const packets = await context.module.exports.getWorkPackets();
   assert.deepEqual(packets, [{ packetId: "legacy-packet" }]);
-  const packet = await context.module.exports.getWorkPacket("packet-1");
-  assert.deepEqual(packet, { packetId: "legacy-packet-1" });
+  const packet = await context.module.exports.getWorkPacket("work_item:packet-1");
+  assert.deepEqual(packet, { packetId: "work_item:packet-1" });
+  const candidatePacket = await context.module.exports.getWorkPacket("candidate_work:candidate-1");
+  assert.deepEqual(candidatePacket, { packetId: "candidate_work:candidate-1" });
   assert.deepEqual(calls, [
     "/pipeline-control-plane/work-packets",
     "/work-packets",
+    "/pipeline-control-plane/work-packets/work_item%3Apacket-1",
+    "/work-packets/work_item%3Apacket-1",
+    "/pipeline-control-plane/work-packets/candidate_work%3Acandidate-1",
+    "/work-packets/candidate_work%3Acandidate-1",
+  ]);
+});
+
+test("dedicated runtime fails closed on canonical 404 for authoritative identity", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            throw new Error(`Request failed for ${path} (404)`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("packet-1"),
+    /Request failed for \/pipeline-control-plane\/work-packets\/packet-1 \(404\)/,
+  );
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/packet-1"]);
+});
+
+test("dedicated runtime projects consistent authoritative list and detail without legacy requests", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const projectorOutput = ts.transpileModule(projectorSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") {
+        const projectorContext = { exports: {}, module: { exports: {} } };
+        projectorContext.exports = projectorContext.module.exports;
+        vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
+        return projectorContext.module.exports;
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [authoritativeLifecyclePacket("packet-1")];
+            if (path === "/pipeline-control-plane/work-packets/packet-1") return authoritativeLifecyclePacket("packet-1");
+            throw new Error(`Unexpected legacy request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  const packets = JSON.parse(JSON.stringify(await context.module.exports.getWorkPackets()));
+  const packet = JSON.parse(JSON.stringify(await context.module.exports.getWorkPacket("packet-1")));
+  assert.equal(packets.length, 1);
+  assert.equal(packet.packetId, "packet-1");
+  assert.equal(packet.requestedOutcome, "Created from authoritative metadata.");
+  assert.equal(packet.currentStage, "capture");
+  assert.equal(packet.currentOwner, "kendall");
+  assert.equal(packet.lifecycleState.latestTransitionEventRef, "event:created");
+  assert.deepEqual(packet.sourceRefs.map((ref) => ref.refId), ["doc:source"]);
+  assert.deepEqual(packets[0], packet);
+  assert.deepEqual(calls, [
+    "/pipeline-control-plane/work-packets",
     "/pipeline-control-plane/work-packets/packet-1",
-    "/work-packets/packet-1",
   ]);
 });
 
@@ -1253,7 +1357,7 @@ test("dedicated runtime does not legacy-fallback unsafe slash-containing packet 
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/foo%2Flearn-follow-up-candidate-work"]);
 });
 
-test("dedicated runtime falls back when canonical packet payload shape is incompatible", async () => {
+test("dedicated runtime fails closed without legacy fallback when canonical packet payload is malformed", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1274,7 +1378,6 @@ test("dedicated runtime falls back when canonical packet payload shape is incomp
           requestSupervisorJson: async (path) => {
             calls.push(path);
             if (path === "/pipeline-control-plane/work-packets/packet-1") return { packetId: "packet-1", lifecycle: [] };
-            if (path === "/work-packets/packet-1") return { shape: "valid", packetId: "packet-1" };
             throw new Error(`Unexpected request ${path}`);
           },
         };
@@ -1284,8 +1387,47 @@ test("dedicated runtime falls back when canonical packet payload shape is incomp
   };
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
-  assert.deepEqual(await context.module.exports.getWorkPacket("packet-1"), { shape: "valid", packetId: "packet-1" });
-  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/packet-1", "/work-packets/packet-1"]);
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("packet-1"),
+    /Canonical WorkPacket detail response is not authoritative lifecycle-shaped/,
+  );
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/packet-1"]);
+});
+
+test("dedicated runtime uses legacy list fallback when the canonical list is malformed", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [{ packetId: "malformed-canonical" }];
+            if (path === "/work-packets") return [{ shape: "valid", packetId: "legacy-only-1" }];
+            throw new Error(`Unexpected request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-only-1" }]);
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets", "/work-packets"]);
 });
 
 test("dedicated runtime merges legacy-only packets when canonical list succeeds", async () => {
@@ -1425,6 +1567,52 @@ function populatedFixtureCatalog() {
         title: "Shape cockpit route from Work Packet matrix",
       },
     ],
+  };
+}
+
+function authoritativeLifecyclePacket(packetId) {
+  const occurredAt = "2026-08-13T12:00:00.000Z";
+  const sourceRef = {
+    refId: "doc:source",
+    sourceType: "repo_doc",
+    pathOrUrl: "docs/source.md",
+    title: "Source metadata",
+  };
+  return {
+    packetId,
+    title: "Authoritative lifecycle packet",
+    currentStage: "capture",
+    status: "waiting",
+    truthLabel: "source_owned",
+    sourceRef,
+    createdAt: occurredAt,
+    updatedAt: occurredAt,
+    currentEventId: "created",
+    parentPacketId: null,
+    lineageKind: "root",
+    readyToTest: null,
+    operatorTestState: "not_ready",
+    operatorTestNote: null,
+    history: [{
+      eventId: "created",
+      packetId,
+      schemaVersion: 1,
+      eventType: "packet.created",
+      previousStage: null,
+      targetStage: "capture",
+      status: "waiting",
+      truthLabel: "source_owned",
+      sourceRef,
+      actor: { actorType: "manager", actorId: "manager-1", actorLabel: "Manager" },
+      occurredAt,
+      correlationId: "correlation-1",
+      causationId: null,
+      idempotencyKey: "packet-created-1",
+      payloadSummary: "Created from authoritative metadata.",
+      evidenceRefs: ["source:doc:source"],
+      metadataOnly: true,
+    }],
+    metadataOnly: true,
   };
 }
 
