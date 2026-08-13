@@ -9999,9 +9999,19 @@ try {
       assert(leaseJsonRecordsForFixture(intentDirectory).length === 4_096, "rollover discarded immutable external intents");
       assert(leaseJsonRecordsForFixture(completionDirectory).length === 4_096, "rollover discarded immutable external completions");
       assert(existsSync(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-intents")), "rollover did not create the new ledger segment");
+      const valuedMode = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--apply=false", "--approval", "operator approved immutable ledger rollover", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(valuedMode.code !== 0, "valued rollover --apply flag unexpectedly reached mutation handling");
+      assert(valuedMode.stderr.includes("must be a bare flag"), valuedMode.stderr || valuedMode.stdout);
       const resumed = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
       assert(resumed.code === 0, resumed.stderr || resumed.stdout);
       assert(leaseJsonRecordsForFixture(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-intents")).length > 0, "resumed governed operation did not use the new external ledger segment");
+      const tamperedCompletionPath = join(completionDirectory, `${fixtureLeaseUuid("4", 1)}.json`);
+      const tamperedCompletion = readJson(tamperedCompletionPath);
+      tamperedCompletion.status = 1;
+      writeFileSync(tamperedCompletionPath, `${JSON.stringify(tamperedCompletion)}\n`);
+      const tampered = runFixtureScript(fixture, ["heartbeat", "resumed-task", "--phase", "sealed-ledger-tamper", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(tampered.code !== 0, "tampered sealed ledger unexpectedly admitted another governed operation");
+      assert(tampered.stderr.includes("ledger_rollover_sealed_segment_mismatch"), tampered.stderr || tampered.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }

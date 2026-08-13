@@ -151,6 +151,8 @@ const taskLeaseMaximumHeartbeatHistoryRecords = 1_024;
 const taskLeaseMaximumGenerationChainLength = 64;
 const taskLeaseMaximumEpochCount = 16;
 const taskLeaseMaximumLedgerEpochCount = 16;
+const taskLeaseMaximumLedgerRolloverOperatorLength = 160;
+const taskLeaseMaximumLedgerRolloverApprovalLength = 512;
 const taskLeaseLegacyLedgerSegment = "legacy";
 const taskLeaseLedgerKinds = Object.freeze([
   "external-intents",
@@ -3014,6 +3016,7 @@ function settleExternalIntent(argv) {
 }
 
 function rolloverTaskLeaseLedger(argv) {
+  assertTaskLeaseLedgerRolloverModeOptionOccurrences(argv);
   const { positional, options } = parseOptions(argv);
   if (positional.length !== 1) throw new Error("rollover-task-lease-ledger requires exactly one task id.");
   if (Boolean(options.dryRun) === Boolean(options.apply)) {
@@ -3021,11 +3024,13 @@ function rolloverTaskLeaseLedger(argv) {
   }
   const taskId = String(positional[0] || "").trim();
   assertSafeTaskId(taskId);
-  if (options.apply && !validTakeoverReason(options.approval)) {
+  const approval = safeMetadataText(options.approval, taskLeaseMaximumLedgerRolloverApprovalLength);
+  if (options.apply && !validTakeoverReason(approval)) {
     throw new Error("rollover-task-lease-ledger --apply requires explicit operator approval of at least 10 non-whitespace characters.");
   }
   const state = workspaceState(options);
-  const operator = currentLaneOwner(options);
+  const operator = safeMetadataText(currentLaneOwner(options), taskLeaseMaximumLedgerRolloverOperatorLength);
+  if (!operator) throw new Error("rollover-task-lease-ledger requires a bounded current lane owner.");
   const packet = taskLeaseLedgerRolloverPacket(state, taskId, operator);
   if (options.dryRun) {
     const output = { ...packet, mutation: "none; dry-run only" };
@@ -3057,7 +3062,7 @@ function rolloverTaskLeaseLedger(argv) {
     ledger_snapshot_digest: fresh.snapshotDigest,
     rolled_at: new Date().toISOString(),
     operator,
-    approval: String(options.approval).trim(),
+    approval,
     evidence_retained: true,
     raw_payload_retained: false,
   };
@@ -3078,6 +3083,21 @@ function rolloverTaskLeaseLedger(argv) {
   };
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("rollover-task-lease-ledger", [JSON.stringify(output)]);
+}
+
+function assertTaskLeaseLedgerRolloverModeOptionOccurrences(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = arg === "--apply" || arg.startsWith("--apply=")
+      ? "--apply"
+      : arg === "--dry-run" || arg.startsWith("--dry-run=")
+        ? "--dry-run"
+        : null;
+    if (!option) continue;
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
+      throw new Error(`rollover-task-lease-ledger ${option} must be a bare flag without a value.`);
+    }
+  }
 }
 
 function adoptLegacyRecovery(argv) {
@@ -16673,8 +16693,8 @@ function validTaskLeaseLedgerRollover(record, taskId, segment, epoch) {
       taskLeaseLedgerKinds.every((kind) => Number.isInteger(record.ledger_counts[kind]) && record.ledger_counts[kind] >= 0 && record.ledger_counts[kind] <= taskLeaseMaximumHistoryRecords) &&
       typeof record.ledger_snapshot_digest === "string" && /^[a-f0-9]{64}$/i.test(record.ledger_snapshot_digest) &&
       isIsoTimestamp(record.rolled_at) &&
-      typeof record.operator === "string" && record.operator &&
-      typeof record.approval === "string" && validTakeoverReason(record.approval) &&
+      typeof record.operator === "string" && record.operator && record.operator.length <= taskLeaseMaximumLedgerRolloverOperatorLength &&
+      typeof record.approval === "string" && record.approval.length <= taskLeaseMaximumLedgerRolloverApprovalLength && validTakeoverReason(record.approval) &&
       record.evidence_retained === true &&
       record.raw_payload_retained === false,
   );
@@ -16698,6 +16718,13 @@ function taskLeaseLedgerState(state, taskId) {
     const record = readRegularJson(path);
     if (!validTaskLeaseLedgerRollover(record, taskId, segment, epoch)) {
       throw new Error("ledger_rollover_record_invalid");
+    }
+    const sealed = validateTaskLeaseLedgerSegment(state, taskId, { segment, epoch });
+    if (
+      taskLeaseLedgerKinds.some((kind) => sealed.counts[kind] !== record.ledger_counts[kind]) ||
+      sealed.digest !== record.ledger_snapshot_digest
+    ) {
+      throw new Error("ledger_rollover_sealed_segment_mismatch");
     }
     if (epoch >= taskLeaseMaximumLedgerEpochCount) throw new Error("ledger_rollover_capacity_exceeded");
     segment = record.to_segment;
