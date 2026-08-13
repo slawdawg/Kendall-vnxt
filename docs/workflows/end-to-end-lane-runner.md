@@ -64,6 +64,56 @@ party-mode allowance, production deploys, database or schema migration
 execution, cleanup outside the managed lane, or remote branch deletion outside
 the merged managed lane.
 
+## Autonomous Decision, Recovery, And Delivery Policy
+
+The operator's standing authorization is intended to remove routine
+coordination pauses, not evidence gates. Within `standard-delivery`, the lane
+owner applies the following decision classes without requesting a separate
+operator response.
+
+| Class | Lane-owner action | Examples |
+| --- | --- | --- |
+| `execute` | Perform the bounded, reversible engineering action and record the result. | Refactoring, test/CI/doc changes, dead-code retirement after proof, focused dependency maintenance, review remediation, and managed-lane cleanup. |
+| `default_and_record` | Apply the accepted source-owned default, record rationale and alternatives, and continue. | Selecting an implementation detail, choosing a non-overlapping lane order, using the standard verification profile, or retiring a surface already marked abandoned by policy. |
+| `stop` | Preserve state, return the narrow decision needed, and do not infer authority. | Core product-direction change, credential/secret use, paid/provider authority outside allowance, production action, real-user-data deletion, raw sensitive-payload retention, or an authority target not covered by source policy. |
+
+An exact-head merge is an `execute` action—not a separate operator checkpoint—
+only when every item in the Bounded Merge Checklist below is currently proven.
+A protected branch, failed/ambiguous evidence, a draft PR, unresolved review
+thread, or unmet branch rule is a fail-closed delivery condition, not a reason
+to bypass protection or reinterpret this authority.
+
+### Automatic recovery and hygiene
+
+The lane owner automatically performs bounded recovery before reporting a
+blocker:
+
+- retry one demonstrated transient environment/preflight failure with a fresh
+  exact-head check;
+- refresh stale PR, check, and review-thread evidence before classifying a
+  delivery failure;
+- address actionable review feedback, rerun the affected verification, and
+  recheck current and outdated review-thread state;
+- use the governed workspace doctor, recovery, closeout, and branch-cleanup
+  commands for stale local state; never hand-edit workspace metadata or remove
+  an ambiguous worktree by filesystem command; and
+- create a bounded follow-up lane when a hygiene scan finds an ownerless,
+  supported cleanup candidate, rather than silently widening the current lane.
+
+The central coordinator reports a concise wave scorecard—base freshness,
+active lanes/worktrees, PR and review-thread state, CI health and duration,
+legacy-surface count, completed recovery, and genuine blockers. Routine green
+state is recorded as evidence, not escalated as a question.
+
+### Delivery-loop completion
+
+For an eligible lane, the owner carries the full loop through scoped checks,
+broader verification when required, PR creation/update, review remediation,
+exact-head merge, and governed cleanup. The loop may stop only when evidence
+fails closed or a `stop`-class decision is genuinely required. The owner must
+not manufacture a follow-up, silently widen scope, force-push, bypass branch
+protection, or merge a different head to avoid that stop.
+
 ## Automatic Bounded Party-Mode Allowance
 
 Under `standard-delivery`, BMAD party mode and spawned BMAD subagents are

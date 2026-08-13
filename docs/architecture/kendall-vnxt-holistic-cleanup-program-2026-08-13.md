@@ -94,13 +94,18 @@ program's stated evidence and exit criteria are met:
   - SQLite is the default persistence target unless PostgreSQL has an active,
     documented product requirement.
 
-The cleanup owner must still stop only for a materially new, irreversible, or
-external consequence that this mandate cannot safely authorize: enabling a
+The cleanup owner follows the repository-wide
+`docs/workflows/end-to-end-lane-runner.md` autonomous decision, recovery, and
+delivery policy. An exact-head protected-branch merge is authorized when its
+permanent bounded merge checklist is completely satisfied; it remains blocked
+when any check, review, branch-protection, ownership, or evidence condition is
+ambiguous. The owner must still stop for a materially new, irreversible, or
+external consequence that no source-owned policy safely authorizes: enabling a
 provider or paid service, using credentials, deploying to a live environment,
-merging a protected branch, deleting real user data, changing the core product
-intent, or an authority boundary that requires a separate exact-target approval.
-Any such stop is recorded with the decision needed and the narrowest safe next
-action; it is not a routine implementation checkpoint.
+deleting real user data, changing the core product intent, or an authority
+boundary that requires a separate exact-target approval. Any such stop is
+recorded with the decision needed and the narrowest safe next action; it is not
+a routine implementation checkpoint.
 
 ## Centralized parallel execution model
 
@@ -257,6 +262,17 @@ coordinator keeps a short decision log in the existing cleanup inventory or
 linked ADR/PR: only architectural or irreversible decisions, their rationale,
 and the implementation link. This preserves context without creating another
 planning database.
+
+#### Autonomous hygiene and wave reporting
+
+At the start and end of each wave, the coordinator runs the relevant read-only
+workspace, branch, PR, CI, and review-state inventory. It resolves routine
+cleanups through their governing tools, retries one demonstrated transient
+verification failure, and opens a bounded follow-up only for a supported,
+evidence-backed candidate. It records a concise scorecard rather than asking
+the operator to interpret routine green state: base freshness, active lanes,
+PR/review state, CI duration/health, legacy-surface counts, recoveries, and
+true stop-class blockers.
 
 ### Speed rules
 
