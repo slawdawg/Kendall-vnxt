@@ -3046,48 +3046,59 @@ function rolloverTaskLeaseLedger(argv) {
     return;
   }
   if (!packet.allowed) throw new Error(`task lease ledger rollover blocked: ${packet.blockers.join("; ")}`);
-  const fresh = taskLeaseLedgerRolloverPacket(state, taskId, operator);
-  if (!fresh.allowed || fresh.segment !== packet.segment || fresh.epoch !== packet.epoch || fresh.snapshotDigest !== packet.snapshotDigest) {
-    throw new Error("task lease ledger rollover evidence changed before immutable publication; refusing to roll over.");
-  }
-  const nextSegment = randomUUID();
-  const nextEpoch = fresh.epoch + 1;
-  ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-segments"), state.tasksDir);
-  ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-rollovers"), state.tasksDir);
-  ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-rollover-candidates"), state.tasksDir);
-  const nextRoot = join(taskLeasePath(state, taskId, "ledger-segments"), nextSegment);
-  for (const kind of taskLeaseLedgerKinds) {
-    ensureDurableDirectory(join(nextRoot, kind), state.tasksDir);
-  }
-  const record = {
-    schema_version: taskLeaseSchemaVersion,
-    task_id: taskId,
-    from_segment: fresh.segment,
-    to_segment: nextSegment,
-    epoch: nextEpoch,
-    ledger_counts: fresh.counts,
-    ledger_snapshot_digest: fresh.snapshotDigest,
-    rolled_at: new Date().toISOString(),
-    operator,
-    approval,
-    evidence_retained: true,
-    raw_payload_retained: false,
-  };
-  try {
-    publishTaskLeaseLedgerRollover(state, taskId, record);
-  } catch (error) {
-    if (error?.code === "EEXIST") {
-      throw new Error("task lease ledger segment already has an immutable rollover record; refusing to overwrite evidence.");
+  let output = null;
+  // Acquire the released predecessor before the final re-proof and publication.
+  // Normal commands cannot acquire while this successor is active, so no intent
+  // can straddle the old and new ledger segments.
+  withManifestLock(state, taskId, ({ token, generation }) => {
+    const fresh = taskLeaseLedgerRolloverPacket(state, taskId, operator, {
+      expectedReleasedGeneration: packet.leaseGeneration,
+      expectedReleasedEpoch: packet.leaseEpoch,
+      heldGeneration: generation,
+      heldToken: token,
+    });
+    if (!fresh.allowed || fresh.segment !== packet.segment || fresh.epoch !== packet.epoch || fresh.snapshotDigest !== packet.snapshotDigest) {
+      throw new Error("task lease ledger rollover evidence changed before immutable publication; refusing to roll over.");
     }
-    throw error;
-  }
-  const output = {
-    ...fresh,
-    nextSegment,
-    nextEpoch,
-    rolledAt: record.rolled_at,
-    mutation: "immutable ledger rollover published; all prior ledger JSON evidence remains retained",
-  };
+    const nextSegment = randomUUID();
+    const nextEpoch = fresh.epoch + 1;
+    ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-segments"), state.tasksDir);
+    ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-rollovers"), state.tasksDir);
+    ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-rollover-candidates"), state.tasksDir);
+    const nextRoot = join(taskLeasePath(state, taskId, "ledger-segments"), nextSegment);
+    for (const kind of taskLeaseLedgerKinds) {
+      ensureDurableDirectory(join(nextRoot, kind), state.tasksDir);
+    }
+    const record = {
+      schema_version: taskLeaseSchemaVersion,
+      task_id: taskId,
+      from_segment: fresh.segment,
+      to_segment: nextSegment,
+      epoch: nextEpoch,
+      ledger_counts: fresh.counts,
+      ledger_snapshot_digest: fresh.snapshotDigest,
+      rolled_at: new Date().toISOString(),
+      operator,
+      approval,
+      evidence_retained: true,
+      raw_payload_retained: false,
+    };
+    try {
+      publishTaskLeaseLedgerRollover(state, taskId, record);
+    } catch (error) {
+      if (error?.code === "EEXIST") {
+        throw new Error("task lease ledger segment already has an immutable rollover record; refusing to overwrite evidence.");
+      }
+      throw error;
+    }
+    output = {
+      ...fresh,
+      nextSegment,
+      nextEpoch,
+      rolledAt: record.rolled_at,
+      mutation: "immutable ledger rollover published under a successor lease; all prior ledger JSON evidence remains retained",
+    };
+  }, { recoverStale: false, allowFullLedgerRollover: true });
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("rollover-task-lease-ledger", [JSON.stringify(output)]);
 }
@@ -17180,10 +17191,23 @@ function leaseJsonRecordCount(directory, label, maximumRecords = taskLeaseMaximu
   return count;
 }
 
-function taskLeaseLedgerRolloverPacket(state, taskId, operator) {
+function taskLeaseLedgerRolloverPacket(state, taskId, operator, options = {}) {
   const blockers = [];
   const inspection = inspectTaskLease(state, taskId);
-  if (inspection.protocol !== "versioned_lease" || inspection.status !== "released") {
+  const lockedSuccessor = options.expectedReleasedGeneration
+    ? inspection.protocol === "versioned_lease" &&
+      inspection.status === "active" &&
+      inspection.generation === options.heldGeneration &&
+      inspection.metadata?.token === options.heldToken &&
+      missingWorktreeReleasedLeaseSuccessorEvidence(
+        state,
+        taskId,
+        options.expectedReleasedGeneration,
+        options.heldGeneration,
+        options.expectedReleasedEpoch,
+      ).status === "matched"
+    : false;
+  if (inspection.protocol !== "versioned_lease" || (inspection.status !== "released" && !lockedSuccessor)) {
     blockers.push("task does not have an exactly released versioned lease");
   }
   let ledger = null;
@@ -17207,6 +17231,8 @@ function taskLeaseLedgerRolloverPacket(state, taskId, operator) {
     operator,
     leaseStatus: inspection.status,
     leaseReason: inspection.reason,
+    leaseGeneration: options.expectedReleasedGeneration || inspection.generation || null,
+    leaseEpoch: options.expectedReleasedGeneration ? options.expectedReleasedEpoch : inspection.epoch,
     segment: ledger?.segment || null,
     epoch: ledger?.epoch ?? null,
     counts: snapshot?.counts || null,
@@ -17315,7 +17341,7 @@ function assertTaskLeaseReleaseCapacity(state, taskId, metadata) {
   }
 }
 
-function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
+function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, options = {}) {
   const tokenDigest = taskLeaseTokenDigest(metadata.token);
   // The initial heartbeat has already been published when this guard runs.
   // Keep one further heartbeat slot available for the protected callback to
@@ -17336,6 +17362,14 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
   }
   if (existsSync(taskLeasePath(state, taskId, "releases", metadata.generation))) {
     throw new Error("Task lease callback admission is not provable: release record already exists.");
+  }
+
+  if (options.allowFullLedgerRollover === true) {
+    // This owner-bound administrative callback only publishes the rollover;
+    // it cannot write intents and holds the successor lease until the active
+    // segment changes. Release-time validation still runs below.
+    assertTaskLeaseReleaseCapacity(state, taskId, metadata);
+    return;
   }
 
   // Every callback can persist a durable manifest update and can begin an
@@ -17931,7 +17965,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
   // Check immediately after the initial heartbeat but before publishing this
   // generation as a root or successor.  A full history therefore leaves no
   // active lease behind and cannot enter the protected callback.
-  assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata);
+  assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, options);
   const rootRecord = {
     schema_version: taskLeaseSchemaVersion,
     task_id: taskId,
