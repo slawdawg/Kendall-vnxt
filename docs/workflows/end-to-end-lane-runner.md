@@ -389,10 +389,15 @@ implicitly accepted. First inspect the bounded packet from:
 ```bash
 node ./scripts/codex-workspace.mjs refresh-pr-head <lane> \
   --reason "why the exact reviewed head advanced" \
-  --non-required-checks full,javascript,supervisor,static,static_bundle,static_bundle_summary \
+  --non-required-checks <only-the-observed-skipped-check-names> \
   --non-required-check-policy docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks \
   --summary-json
 ```
+
+Only list checks whose exact-head rollup is terminal `SKIPPED`; do not include
+the static family when the planner selected static and its checks succeeded.
+Static-family skips additionally require the same Actions run's successful
+`changes` planner evidence with `static=false`.
 
 Only `--apply` records the rebind. It requires the exact lane owner (or a
 recorded operator-approved takeover), an absent task lock before acquisition,

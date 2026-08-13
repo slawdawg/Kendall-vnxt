@@ -3971,7 +3971,7 @@ function resolveAdjudicatedThread(argv) {
     const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationPr = prViewForGates(locked);
     const preMutationHead = prGateHeadState(locked);
-    const preMutationBlockers = reviewThreadResolutionPreMutationBlockers(preMutationPr, preMutationHead, preMutationAudit, fresh);
+    const preMutationBlockers = reviewThreadResolutionPreMutationBlockers(locked, preMutationPr, preMutationHead, preMutationAudit, fresh);
     if (preMutationBlockers.length) {
       throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
     }
@@ -4225,7 +4225,7 @@ function resolveAdjudicatedCurrentThread(argv) {
     const preMutationAudit = fetchReviewThreadState(locked, githubRepository(locked), fresh.pr.number);
     const preMutationPr = prViewForGates(locked);
     const preMutationHead = prGateHeadState(locked);
-    const preMutationBlockers = currentThreadResolutionPreMutationBlockers(preMutationPr, preMutationHead, preMutationAudit, fresh);
+    const preMutationBlockers = currentThreadResolutionPreMutationBlockers(locked, preMutationPr, preMutationHead, preMutationAudit, fresh);
     if (preMutationBlockers.length) throw new Error(`Pre-mutation review-thread audit drifted or is unsafe: ${preMutationBlockers.join("; ")}`);
     const retryRecovery = supersedeLiveUnresolvedResolutionAttempt(locked, "current", fresh, preMutationAudit);
     assertNoUnrecoveredResolutionAttempt(locked, "current", fresh, retryRecovery?.supersedesAttemptId || null);
@@ -4358,7 +4358,7 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   };
 }
 
-function currentThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) {
+function currentThreadResolutionPreMutationBlockers(manifest, pr, headState, audit, fresh) {
   const blockers = [];
   if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("PR is no longer open and non-draft immediately before the thread mutation");
   if (!pr?.baseRefName || pr.baseRefName !== fresh.pr?.baseRefName) blockers.push("PR base drifted immediately before the thread mutation");
@@ -4366,11 +4366,16 @@ function currentThreadResolutionPreMutationBlockers(pr, headState, audit, fresh)
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
   if (pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
-  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, fresh.nonRequiredCheckPolicy);
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
+    nonRequiredChecks: (fresh.nonRequiredCheckPolicy?.names || []).join(","),
+    nonRequiredCheckPolicy: fresh.nonRequiredCheckPolicy?.policyRef,
+  }, { expectedHeadSha: fresh.expectedHeadSha, worktreePath: manifest.worktree_path, statusCheckRollup: pr?.statusCheckRollup });
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
   if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
   if (checks.failing.length) blockers.push(`Failed or ambiguous checks immediately before the thread mutation: ${checks.failing.map((check) => check.name).join(", ")}`);
-  blockers.push(...(fresh.nonRequiredCheckPolicy?.blockers || []));
+  blockers.push(...(nonRequiredCheckPolicy?.blockers || []));
+  if (JSON.stringify(nonRequiredCheckPolicy.staticPlanner) !== JSON.stringify(fresh.nonRequiredCheckPolicy?.staticPlanner)) blockers.push("Static skip planner evidence changed immediately before the thread mutation");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Thread-aware audit is incomplete immediately before the thread mutation");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests immediately before the thread mutation: ${audit.pendingReviewRequestCount}`);
   if (audit?.auditFingerprint !== fresh.reviewThreads?.auditFingerprint) blockers.push("Thread-aware audit changed after the fresh adjudication and before the thread mutation");
@@ -4686,7 +4691,7 @@ function assertNoUnrecoveredResolutionAttempt(manifest, kind, freshAdjudication 
   throw new Error(`An outstanding ${kind} review-thread resolution attempt is unrecovered; do not mutate another thread until recovery is recorded: ${details}.`);
 }
 
-function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) {
+function reviewThreadResolutionPreMutationBlockers(manifest, pr, headState, audit, fresh) {
   const blockers = [];
   if (!pr || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("PR is no longer open and non-draft immediately before the thread mutation");
   if (!pr?.baseRefName || pr.baseRefName !== fresh.pr?.baseRefName) blockers.push("PR base drifted immediately before the thread mutation");
@@ -4694,11 +4699,16 @@ function reviewThreadResolutionPreMutationBlockers(pr, headState, audit, fresh) 
   if (!pr?.headRefOid || pr.headRefOid !== fresh.expectedHeadSha) blockers.push("PR head drifted immediately before the thread mutation");
   if (!headState.localMatchesExpected || headState.localHeadSha !== fresh.expectedHeadSha) blockers.push("Local worktree head drifted immediately before the thread mutation");
   if (pr?.reviewDecision === "CHANGES_REQUESTED") blockers.push(`PR reviewDecision is ${pr.reviewDecision} immediately before the thread mutation`);
-  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, fresh.nonRequiredCheckPolicy);
+  const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
+    nonRequiredChecks: (fresh.nonRequiredCheckPolicy?.names || []).join(","),
+    nonRequiredCheckPolicy: fresh.nonRequiredCheckPolicy?.policyRef,
+  }, { expectedHeadSha: fresh.expectedHeadSha, worktreePath: manifest.worktree_path, statusCheckRollup: pr?.statusCheckRollup });
+  const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
   if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
   if (checks.failing.length) blockers.push(`Failed or ambiguous checks immediately before the thread mutation: ${checks.failing.map((check) => check.name).join(", ")}`);
-  blockers.push(...(fresh.nonRequiredCheckPolicy?.blockers || []));
+  blockers.push(...(nonRequiredCheckPolicy?.blockers || []));
+  if (JSON.stringify(nonRequiredCheckPolicy.staticPlanner) !== JSON.stringify(fresh.nonRequiredCheckPolicy?.staticPlanner)) blockers.push("Static skip planner evidence changed immediately before the thread mutation");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Thread-aware audit is incomplete immediately before the thread mutation");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests immediately before the thread mutation: ${audit.pendingReviewRequestCount}`);
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads immediately before the thread mutation: ${audit.unresolvedNonOutdatedCount}`);
@@ -6730,8 +6740,11 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   const names = commaSeparatedMetadata(options.nonRequiredChecks);
   const policyRef = safeMetadataText(options.nonRequiredCheckPolicy, 300);
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
+  const observedSkippedNames = observedTerminalSkippedCheckNames(context.statusCheckRollup);
+  const allNamedChecksAreSkipped = names.every((name) => observedSkippedNames.has(name));
   const staticPlanner = staticSkipPlannerEvidence(names, context);
   const valid = validateSourceOwnedSkipPolicy(policyRef, names, context.worktreePath, expectedHeadSha)
+    && allNamedChecksAreSkipped
     && staticPlanner.valid;
   const blockers = [];
   if (names.length > 0 && !policyRef) {
@@ -6743,6 +6756,9 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   if (names.length > 0 && !valid) {
     blockers.push("Non-required skipped checks do not match the source-owned policy");
   }
+  if (names.length > 0 && !allNamedChecksAreSkipped) {
+    blockers.push("Non-required check names must be terminal SKIPPED checks in the exact-head rollup");
+  }
   if (staticPlanner.required && !staticPlanner.valid) {
     blockers.push("Static-family skipped checks require exact-head changes planner evidence with static=false");
   }
@@ -6751,11 +6767,32 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
     names,
     policyRef: policyRef || null,
     expectedHeadSha: expectedHeadSha || null,
+    observedSkippedNames: [...observedSkippedNames].sort(),
     valid,
     blockers,
     staticPlanner,
     metadataOnly: true,
   };
+}
+
+function statusCheckNodes(rollup) {
+  return Array.isArray(rollup) ? rollup : Array.isArray(rollup?.nodes) ? rollup.nodes : [];
+}
+
+function statusCheckName(node) {
+  return String(node?.name || node?.workflowName || node?.context || "");
+}
+
+function detailsRunId(node) {
+  return /\/actions\/runs\/(\d+)(?:\/job\/\d+)?(?:$|[?#])/.exec(String(node?.detailsUrl || node?.targetUrl || ""))?.[1] || null;
+}
+
+function observedTerminalSkippedCheckNames(rollup) {
+  return new Set(statusCheckNodes(rollup)
+    .filter((node) => terminalCheckStatus(String(node?.status || node?.state || "").toUpperCase())
+      && String(node?.conclusion || "").toUpperCase() === "SKIPPED")
+    .map(statusCheckName)
+    .filter(Boolean));
 }
 
 var staticPlannerEvidenceCache;
@@ -6765,14 +6802,15 @@ function staticSkipPlannerEvidence(names, context = {}) {
   const required = names.some((name) => staticFamily.has(name));
   if (!required) return { required: false, valid: true, staticSelected: null, source: null };
   const expectedHeadSha = exactGitObjectIdOrNull(context.expectedHeadSha || "");
-  const nodes = Array.isArray(context.statusCheckRollup)
-    ? context.statusCheckRollup
-    : Array.isArray(context.statusCheckRollup?.nodes)
-      ? context.statusCheckRollup.nodes
-      : [];
-  const planner = nodes.find((node) => String(node?.name || node?.workflowName || node?.context || "") === "changes");
-  const detailsUrl = String(planner?.detailsUrl || planner?.targetUrl || "");
-  const match = /\/actions\/runs\/(\d+)\/job\/(\d+)(?:$|[?#])/.exec(detailsUrl);
+  const nodes = statusCheckNodes(context.statusCheckRollup);
+  const waivedStaticChecks = nodes.filter((node) => staticFamily.has(statusCheckName(node))
+    && terminalCheckStatus(String(node?.status || node?.state || "").toUpperCase())
+    && String(node?.conclusion || "").toUpperCase() === "SKIPPED");
+  const waivedRunId = detailsRunId(waivedStaticChecks[0]);
+  const sameRun = waivedRunId && waivedStaticChecks.length === names.filter((name) => staticFamily.has(name)).length
+    && waivedStaticChecks.every((node) => detailsRunId(node) === waivedRunId);
+  const planner = sameRun ? nodes.find((node) => statusCheckName(node) === "changes" && detailsRunId(node) === waivedRunId) : null;
+  const match = /\/actions\/runs\/(\d+)\/job\/(\d+)(?:$|[?#])/.exec(String(planner?.detailsUrl || planner?.targetUrl || ""));
   if (!expectedHeadSha || !context.worktreePath || !match || String(planner?.conclusion || "").toUpperCase() !== "SUCCESS") {
     return { required: true, valid: false, staticSelected: null, source: null };
   }
@@ -6789,11 +6827,12 @@ function staticSkipPlannerEvidence(names, context = {}) {
   const staticSelected = staticMatch ? staticMatch[1] === "true" : null;
   const evidence = {
     required: true,
-    valid: result.code === 0 && exactHeadPattern.test(result.stdout || "") && staticSelected === false,
+    valid: sameRun && result.code === 0 && exactHeadPattern.test(result.stdout || "") && staticSelected === false,
     staticSelected,
     source: {
       runId: match[1],
       jobId: match[2],
+      staticRunId: waivedRunId,
       exactHeadObserved: exactHeadPattern.test(result.stdout || ""),
     },
   };

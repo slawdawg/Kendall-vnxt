@@ -10771,9 +10771,9 @@ try {
         { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
         { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
         { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
-        { name: "static", status: "COMPLETED", conclusion: "SKIPPED" },
-        { name: "static_bundle", status: "COMPLETED", conclusion: "SKIPPED" },
-        { name: "static_bundle_summary", status: "COMPLETED", conclusion: "SKIPPED" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/457" },
+        { name: "static_bundle", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/458" },
+        { name: "static_bundle_summary", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/459" },
       ],
     });
     try {
@@ -10812,7 +10812,7 @@ try {
       statusCheckRollup: [
         { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
         { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
-        { name: "static", status: "COMPLETED", conclusion: "SKIPPED" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/457" },
       ],
     });
     try {
@@ -10830,6 +10830,36 @@ try {
         "--state-root", fixture.stateRoot,
       ], { cwd: fixture.worktree, env: fixture.env });
       assert(result.code !== 0, "static-selected planner unexpectedly accepted a skipped static check");
+      assert(result.stderr.includes("Static-family skipped checks require exact-head changes planner evidence with static=false"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects static skips from a different Actions run than the changes planner", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      statusCheckRollup: [
+        { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/999/job/457" },
+      ],
+    });
+    try {
+      const seeded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+        "--non-required-checks", "static",
+        "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, "cross-run static skip unexpectedly passed");
       assert(result.stderr.includes("Static-family skipped checks require exact-head changes planner evidence with static=false"), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);

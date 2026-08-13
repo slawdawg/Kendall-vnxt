@@ -219,9 +219,10 @@ The coordinator records active writer ownership as path/module prefixes in the
 Phase 0 inventory. No two writer lanes may own the same shared contract,
 migration, package manifest/lockfile, CI workflow, documentation index, or
 lifecycle boundary. Completed lanes enter a sequential integration queue: the
-coordinator reviews the diff and evidence, runs cross-slice verification,
-updates the inventory, and then delivers or returns the lane for correction.
-The queue admits one integration at a time.
+coordinator reviews the diff and evidence, then assigns one integration worker
+to run cross-slice verification, update the inventory, and deliver or return
+the lane for correction. The coordinator records sequencing and evidence only;
+the queue admits one integration worker at a time.
 
 #### Health snapshots and quality ratchets
 
@@ -351,9 +352,9 @@ negative test demonstrating that either unapproved address fails closed.
 dialect-specific DDL mutation. SQLite and Postgres paths are both represented,
 but migrations are not versioned.
 
-**Decision needed.** Confirm whether both SQLite and Postgres are supported
-long term. Supporting both is valid, but doubles migration and concurrency
-proof obligations.
+**Accepted default.** Use SQLite unless an active, documented PostgreSQL
+requirement is found. Record that exception evidence before supporting both;
+dual support doubles migration and concurrency proof obligations.
 
 **Plan.** Baseline the current schema with a versioned migration tool, supply
 representative old-database fixtures, prove upgrade and rollback behavior, then
