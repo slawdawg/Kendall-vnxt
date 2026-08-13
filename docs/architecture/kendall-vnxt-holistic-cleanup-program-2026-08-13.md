@@ -1,0 +1,326 @@
+# Kendall vNxt Holistic Cleanup Program
+
+Date: 2026-08-13  
+Status: accepted cleanup mandate; no runtime authority change  
+Scope: product simplification, technical-debt retirement, lifecycle convergence,
+verification, documentation, and repository hygiene
+
+## Purpose
+
+This program is the source-owned plan for reducing accumulated Kendall vNxt
+complexity without weakening the current authority, evidence, or recovery
+boundaries. It is intentionally a correction program, not permission for a
+repository-wide rewrite or deletion sweep.
+
+On 2026-08-13 the operator approved this program as a standing cleanup mandate.
+That approval authorizes ordinary implementation and repository-maintenance
+actions required to complete the program without a per-slice operator
+checkpoint. It does not expand runtime/product authority.
+
+The target is a smaller pre-alpha control plane whose operator-visible path is
+easy to explain:
+
+1. the supervisor owns durable work-packet lifecycle and evidence;
+2. the dashboard projects that truth and submits bounded requests;
+3. manager, BMAD, workspace, and terminal components are adapters, not peer
+   product ledgers; and
+4. diagnostic and planning tooling does not masquerade as product runtime.
+
+The accepted product authority and correction order remain governed by
+`adr-current-product-slice-and-authority.md`. Nothing in this program enables
+providers, worker launch, source mutation, delivery, merge, cleanup, or other
+runtime authority.
+
+## Assessment snapshot
+
+The 2026-08-13 assessment combined repository inspection with an independent,
+high-reasoning architecture review. The working tree was clean. Findings below
+are separated into verified facts and planning inferences so that a cleanup
+slice can be challenged or refined without silently changing product intent.
+
+| Area | Verified condition | Cleanup implication |
+| --- | --- | --- |
+| Lifecycle ownership | The accepted ADR assigns canonical lifecycle truth to the supervisor, while the manager retains multiple mission/worker/event/checkpoint ledgers and the dashboard retains V0 fallback and merge behavior. | Converge on one lifecycle contract before retiring compatibility code. |
+| API/contracts | Both legacy `/work-packets` and `/pipeline-control-plane/work-packets` are live; `WorkPacketV0` remains a real contract and has active consumers. | Treat V0 retirement as a migration with consumer and persisted-data proof, not a deletion task. |
+| Supervisor | `application/service.py` is about 35k lines; `api/schemas.py` about 8k lines; the API exposes many report routes. | Split by bounded context and move development-only reports out of the runtime API. |
+| Manager/workspace tooling | `manager-control-plane/core.mjs` is about 32k lines; `codex-workspace.mjs` and their primary tests are each about 19k–34k lines. | Separate durable policy from adapters, command parsing, filesystem work, and test fixtures. |
+| Persistence | Startup code uses `create_all` plus dialect-specific schema mutation and many `ALTER TABLE` statements; no versioned migration tree exists. | Establish migrations before schema or lifecycle retirement. |
+| Verification | The root package exposes 288 scripts; `check` is a very long serial chain; CI's full workflow is only triggered on `main`, while delivery uses `dev`. | Consolidate into profiles and make post-merge health visible on `dev`. |
+| Old product surface | `runtime/` is a 64-file, roughly 11k-line Release 1 Outlook/scheduling/tasks scaffold with no meaningful code consumer outside its own tree. | Decide explicitly whether this is still a product. Archive/tag then remove it if it is abandoned. |
+| Generated compatibility data | `.agents/skills` contains 1,002 tracked files and is explicitly a temporary compatibility bundle. | Migrate to deterministic generation before untracking; do not hand-delete or deduplicate it. |
+| Documentation | The architecture index presents June gap reviews and planning-era materials as current navigation. | Keep a small current spine; archive historical reviews without losing durable decisions. |
+
+The likely root cause is **era overlap**: legacy and authoritative lifecycle
+APIs, V0/V1 contracts, fixture/readiness reporting, bespoke development
+control-plane tooling, and the current supervisor-led product model coexist in
+the same operator and repository surfaces.
+
+## Non-negotiable guardrails
+
+- Preserve the supervisor as the intended canonical lifecycle authority.
+- Do not delete an API, persisted field, generated bundle, route, workflow, or
+  document merely because it is old or large. Prove reachability, replacement,
+  rollback, and ownership first.
+- Do not expand runtime authority while simplifying implementation. The more
+  restrictive documented authority applies whenever code and policy disagree.
+- Preserve historical decisions through a concise archive/index; archive is not
+  erasure.
+- Keep each cleanup slice independently reviewable, reversible where practical,
+  and covered by focused verification.
+
+## Standing cleanup delegation
+
+The operator authorizes the cleanup owner to perform the following when the
+program's stated evidence and exit criteria are met:
+
+- create, move, refactor, archive, and remove repository source, tests, docs,
+  scripts, CI configuration, generated compatibility data, and obsolete assets;
+- add, remove, or update development dependencies and execute required local
+  verification;
+- migrate contracts, APIs, database schemas, configuration, and test fixtures;
+- create branches and commits, push scoped changes, and open or update pull
+  requests through the repository's normal delivery policy;
+- close stale local branches, worktrees, assignments, and lease metadata only
+  through their governing tooling and only when that tooling's exact evidence
+  gates pass; and
+- make these cleanup defaults unless later source-owned product direction
+  supersedes them:
+  - the supervisor is the canonical lifecycle authority;
+  - manager and dashboard retain adapter/projection state only;
+  - V0 lifecycle/action APIs are migrated and then removed;
+  - `runtime/` is abandoned unless an active roadmap consumer is demonstrated;
+  - `/pipeline/demo` is not a supported product feature unless retained as a
+    bounded, isolated demo package; and
+  - SQLite is the default persistence target unless PostgreSQL has an active,
+    documented product requirement.
+
+The cleanup owner must still stop only for a materially new, irreversible, or
+external consequence that this mandate cannot safely authorize: enabling a
+provider or paid service, using credentials, deploying to a live environment,
+merging a protected branch, deleting real user data, changing the core product
+intent, or an authority boundary that requires a separate exact-target approval.
+Any such stop is recorded with the decision needed and the narrowest safe next
+action; it is not a routine implementation checkpoint.
+
+## Prioritized correction register
+
+### P0 — converge lifecycle truth
+
+**Verified.** The current ADR requires supervisor-owned lifecycle truth, but
+the manager's core retains parallel ledgers and its own README still labels the
+area `backend_proof`. The dashboard reads the pipeline-control-plane endpoint,
+rejects non-V0-shaped responses, then falls back to and merges legacy
+`/work-packets` data. Both route families and V0 contracts are exercised by
+dashboard, manager, scripts, and tests.
+
+**Decision.** Define one versioned authoritative packet/read-model contract
+that represents the supervisor lifecycle. `CandidateWork` may remain intake and
+`ExecutionAttempt` may remain evidence, but peer lifecycle truth must be
+eliminated or made explicitly transient.
+
+**Migration sequence.**
+
+1. Publish the target contract, transition table, ownership table, and external
+   consumer inventory.
+2. Add a supervisor read model that satisfies the target contract without a
+   dashboard fallback.
+3. Migrate dashboard list, detail, and action requests; prove that a nonempty
+   canonical response does not touch a legacy endpoint.
+4. Reduce manager state to adapter/session metadata and supervisor references.
+5. Migrate persisted records and all callers; add removal telemetry or a
+   bounded compatibility report if a live installation exists.
+6. Remove legacy routes, `WorkPacketV0`, fallback/merge code, parity checks,
+   and obsolete fixtures in one or more tightly scoped deletion PRs.
+
+**Exit proof.** One contract test suite, a supervisor migration test from each
+supported prior schema, dashboard E2E proof, and repository search with no
+legacy consumer other than an explicitly time-bounded compatibility adapter.
+
+### P0 — reconcile authority-policy drift
+
+**Verified.** The current settings and newer workflow documentation identify
+one local provider source address, while an accepted approval-checkpoint record
+names a different exact address. Exact targets are duplicated across code,
+fixtures, policies, and documentation.
+
+**Decision.** Treat this as a stop-line discrepancy until a reviewed,
+source-owned authority record supersedes the older value. Decide explicitly
+whether providers are disabled by default; never infer enablement from a
+historical setting.
+
+**Implementation direction.** Create a single versioned authority-policy
+artifact, consume it from validation/adapters, and generate or verify the
+language-specific representations. Delete duplicated literals only after the
+artifact is the enforced source of truth.
+
+**Exit proof.** A target-bound approval test, code/document drift check, and a
+negative test demonstrating that either unapproved address fails closed.
+
+### P1 — make persistence evolvable
+
+**Verified.** Supervisor database startup combines `create_all` and
+dialect-specific DDL mutation. SQLite and Postgres paths are both represented,
+but migrations are not versioned.
+
+**Decision needed.** Confirm whether both SQLite and Postgres are supported
+long term. Supporting both is valid, but doubles migration and concurrency
+proof obligations.
+
+**Plan.** Baseline the current schema with a versioned migration tool, supply
+representative old-database fixtures, prove upgrade and rollback behavior, then
+delete startup mutation code incrementally.
+
+**Exit proof.** Clean-install, upgrade, rollback, and data-preservation tests
+for every supported database path.
+
+### P1 — separate product runtime from development diagnostics
+
+**Verified.** The supervisor has a large report surface, including many
+maintenance, readiness, documentation, Git hygiene, and Epic-specific report
+routes; the dashboard includes corresponding status panels.
+
+**Disposition rule.** Every report must be classified as one of:
+
+- retained runtime-operational signal;
+- developer diagnostic moved to a CLI/doctor profile;
+- durable decision rewritten into a concise document; or
+- historical/epic-specific surface removed.
+
+Do not expose a development report in a product API merely because it is useful
+to repository maintainers.
+
+### P1 — re-evaluate bespoke orchestration scope
+
+**Verified.** Earlier architecture recommended piloting mature orchestration
+tools while keeping custom implementation to Kendall-specific policy and
+adapters. The custom manager and workspace systems have since become major
+subsystems.
+
+**Decision needed.** Re-run build-versus-buy against actual MVP requirements:
+either a supervisor-owned lifecycle with thin workspace/tmux adapters, or a
+mature orchestration engine behind Kendall policy ports.
+
+**Guardrail.** First extract behavioral contracts and ports. Do not replace one
+large custom orchestration system with another without a narrow pilot.
+
+### P2 — reduce test, script, and CI duplication
+
+**Verified.** Large scenario suites, many envelope tests, source-text parity
+checks, and 288 root scripts create a high cognitive and maintenance load.
+The aggregate check is a long serial chain. CI performs its full workflow on
+`main`, not on pushes to the active `dev` delivery branch.
+
+**Plan.**
+
+1. Establish four discoverable profiles: `fast`, `affected`, `full`, and
+   `doctor`, with targeted component commands beneath them.
+2. Make `dev` push, manual dispatch, and a scheduled health run execute the
+   appropriate full/health profile.
+3. Add lint and package-local typecheck gates. Add Python lint first, then
+   targeted type checking once boundaries stabilize.
+4. Generate shared types/clients from a contract source rather than regex
+   checking duplicated language definitions.
+5. Parameterize route/envelope tests from the registry; split mega-suites by
+   bounded context while retaining fixture factories.
+6. Use timing reports to remove repeated CI execution without reducing coverage.
+
+**Exit proof.** A new contributor can discover the right command from one
+document; profile coverage is explicit; CI provides post-merge `dev` evidence;
+and no removed command is a hidden dependency of hooks or workflows.
+
+### P2 — retire or quarantine old product surfaces
+
+| Candidate | Recommended disposition | Required decision/proof |
+| --- | --- | --- |
+| `runtime/` | Archive/tag then remove if the Release 1 personal-assistant product is not on the roadmap. | Product owner confirms Outlook/scheduling/tasks is abandoned; no setup/packaging/runtime consumer remains. |
+| V0 action and approval APIs | Migrate then delete. | Consumer, database, and approval-evidence migration is complete. |
+| `/pipeline/demo` fixture catalogue | Keep only as an isolated demo package, or remove route, fixtures, and tests together. | Confirm it is a supported product/demo capability. |
+| Epic/story-specific reports and panels | Move durable signal to a named capability or remove. | Report classification and replacement evidence. |
+| Date-stamped gap reviews, closeouts, handoffs | Archive from current navigation. | Durable decision is represented in the current ADR/index. |
+| `docs/ui.png` | Delete after confirming it remains unreferenced. | Search and documentation rendering check. |
+
+### P2 — shrink generated and configuration surface safely
+
+The tracked `.agents/skills` tree is a temporary compatibility package, not
+ordinary source. Pin its generator/version, add clean-clone regeneration plus
+checksum verification, update every consumer, and only then untrack it. Do not
+deduplicate individual files: relative layout may be part of the generated
+contract.
+
+Also establish portable local/LAN/container configuration profiles, a validated
+`.env.example`, and a clear distinction between reusable defaults and
+machine-specific addresses or credentials. Reduce `AGENTS.md` to durable
+invariants; move command signatures and operational recipes into generated or
+focused runbook material.
+
+## Delivery phases
+
+| Phase | Outcome | Work allowed | Exit gate |
+| --- | --- | --- | --- |
+| 0. Inventory and freeze | A reviewed, measurable cleanup backlog. | Add inventory, owners, dependencies, consumer searches, baseline timings/counts, rollback notes. | Each item is `keep`, `migrate`, `delete`, `archive`, or `decision-needed`; no new legacy surface. |
+| 1. Safety and delivery | Authority and CI are internally consistent. | Correct authority record, add `dev`/manual/scheduled verification, lint/type checks, migration baseline. | Exact-target authority tests and supported-database upgrade proof pass. |
+| 2. Lifecycle convergence | One authoritative lifecycle path. | Introduce target contract and read model; migrate dashboard and manager adapters. | Dashboard and manager consume the canonical path without fallback. |
+| 3. Controlled retirement | Compatibility code and expired product surfaces shrink. | Remove V0, legacy routes, duplicated reports, abandoned runtime/demo material after proof. | Consumer search, migration tests, and rollback reference are clean. |
+| 4. Bounded-context refactor | Major modules have understandable ownership. | Split service/API/manager/workspace/fixtures by domain and ports. | No behavior change beyond a tested bounded slice; dependency direction is enforced. |
+| 5. Verification and documentation consolidation | Lower cognitive load remains durable. | Replace script aliases, deduplicate CI, archive docs, migrate generated skills. | Clean clone, contributor path, profile matrix, and doc index all pass. |
+
+Each phase may be delivered through multiple small PRs. A phase is not a reason
+to batch unrelated changes or skip the preceding exit gate.
+
+## Measures and review cadence
+
+Record a baseline at Phase 0 and review it at the end of each phase:
+
+- canonical versus legacy route and contract consumer count;
+- largest-module line/method count and cross-boundary dependency count;
+- number and duration of CI jobs/profiles;
+- root command count and command discoverability;
+- migration upgrade/rollback coverage for each supported database;
+- runtime report/panel count by retained/developer/historical classification;
+- generated/ignored/tracked artifact size and clean-clone reproducibility;
+- active versus historical documentation index entries;
+- worktree/lease metadata age, owner, and closure status.
+
+Metrics are signals, not quotas: removing lines or tests without preserving the
+contract is not progress.
+
+## Additional cleanup lenses
+
+The program must also examine the following, because code simplification alone
+will not make the project easier or safer to operate:
+
+- **Product value:** identify panels, routes, reports, and workflows with real
+  operator value; remove duplicate status surfaces.
+- **Security and privacy:** model trust boundaries; scan secrets and
+  dependencies; review retention/deletion; maintain an SBOM and license view.
+- **Data resilience:** exercise backup/restore, corruption, cancellation,
+  idempotency, restart, and partial-failure recovery.
+- **Operational simplicity:** minimize processes, ports, environment modes, and
+  startup steps; provide one-command diagnosis.
+- **Performance and cost:** profile dashboard bundle size, API/query behavior,
+  CI minutes, and any provider-call budget.
+- **Accessibility and UX:** test keyboard, screen-reader, responsive behavior,
+  and operator information density.
+- **Ownership and supply chain:** define maintained boundaries, dependency
+  update policy, source provenance, and generated-file ownership.
+- **Repository operations:** reconcile stale local branches, worktrees, leases,
+  and historical workflow metadata through their governing tools rather than
+  manual record edits.
+
+## Immediate next slice
+
+Start Phase 0 with a **lifecycle and retirement inventory**, not a refactor:
+
+1. enumerate every caller of legacy `/work-packets`, `WorkPacketV0`, and V0
+   action/approval models;
+2. record the authoritative target lifecycle contract and the manager fields
+   that are truly transient;
+3. classify every supervisor report route and dashboard panel;
+4. obtain explicit product decisions for `runtime/` and `/pipeline/demo`;
+5. baseline current CI durations, database state, script dependencies, and
+   documentation navigation; and
+6. publish the first narrow migration PR only after those decisions and
+   rollback paths are reviewed.
+
+This ordering attacks the project’s real complexity—competing truths and
+unbounded surfaces—before spending time on cosmetic code movement.

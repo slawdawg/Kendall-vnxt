@@ -1,17 +1,23 @@
 # Architecture Index
 
-Date: 2026-06-08
+Date: 2026-08-13
 Status: current navigation index
 
 ## Current Spine
 
 - `kendall-vnxt-overall-architecture.md`: durable system architecture spine.
+- `adr-current-product-slice-and-authority.md`: accepted ownership, authority,
+  evidence, and correction-order decision for the current product slice.
+- `kendall-vnxt-holistic-cleanup-program-2026-08-13.md`: current phased program
+  for lifecycle convergence, technical-debt retirement, refactoring, and
+  documentation/verification simplification. It carries the accepted standing
+  cleanup mandate but changes no runtime authority.
+- `kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`: active baseline and
+  ordered execution queue for the cleanup program.
 - `manager-supervisor-source-intake-boundary.md`: capability-gated loopback-only handoff from one eligible source-backed manager seed through continuous dry-run/apply into the supervisor-owned authoritative WorkPacket lifecycle.
 - `manager-supervisor-terminal-event-sync-boundary.md`: explicit loopback-only manager terminal-event persistence boundary that keeps refill planning network-free.
 - `manager-lane-clarity-projection-boundary.md`: metadata-only Lane Clarity contract, normal-cycle loopback-only typed handoff receipt, recovery, and fail-closed nullable production carrier.
 - `../workflows/manager-terminal-event-dogfood.md`: one-command local dogfood proof for fresh refill metadata and explicit terminal-event loopback sync.
-- `kendall-vnxt-current-gap-review-2026-06-08.md`: current gap review and recommended next work.
-- `kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md`: code-aware implementation reconciliation.
 - `kendall-vnxt-authority-dependency-graph-2026-06-08.md`: dependency graph for deferred execution authority.
 
 ## Execution Authority Boundaries
@@ -33,9 +39,15 @@ Status: current navigation index
 - `kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`: disabled provider fixture policy for Ollama, LM Studio, vLLM, and llama.cpp.
 - `kendall-vnxt-process-lifecycle-design-2026-06-08.md`: future subscription-agent process lifecycle design.
 
-## Older Gap Review
+## Historical Planning And Gap Reviews
 
-- `kendall-vnxt-architecture-gap-review-2026-06-08.md`: older architecture gap snapshot retained for history.
+- `kendall-vnxt-current-gap-review-2026-06-08.md`: dated gap review retained
+  as historical planning evidence; it does not override the current cleanup
+  program or accepted ADRs.
+- `kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md`: dated,
+  code-aware reconciliation retained for history.
+- `kendall-vnxt-architecture-gap-review-2026-06-08.md`: older architecture-gap
+  snapshot retained for history.
 
 ## Proposed / Blocked
 
