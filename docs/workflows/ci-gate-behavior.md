@@ -1,5 +1,11 @@
 # CI Gate Behavior
 
+Current implementation reference: the accepted repository-wide target and
+change rules are in `ci-confidence-and-efficiency-policy.md`. This document
+describes behavior that exists today; when a policy migration is incomplete,
+the effective gate remains the more conservative behavior until its replacement
+has same-head evidence.
+
 This repository uses tiered CI so pull requests get fast, relevant feedback while
 `main` still receives the full repository gate.
 
