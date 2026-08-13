@@ -3580,6 +3580,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: pr?.headRefOid || "",
     worktreePath: manifest.worktree_path,
+    statusCheckRollup: pr?.statusCheckRollup,
   });
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : emptyReviewThreadState();
@@ -4081,7 +4082,11 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
-  }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
+  }, {
+    expectedHeadSha: prior.expectedHeadSha,
+    worktreePath: manifest.worktree_path,
+    statusCheckRollup: pr?.statusCheckRollup,
+  });
   const initialChecks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const checks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
   const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
@@ -4301,7 +4306,11 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (retained?.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
-  }, { expectedHeadSha: prior.expectedHeadSha, worktreePath: manifest.worktree_path });
+  }, {
+    expectedHeadSha: prior.expectedHeadSha,
+    worktreePath: manifest.worktree_path,
+    statusCheckRollup: pr?.statusCheckRollup,
+  });
   const initialChecks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   const checks = normalizeStatusCheckRollup(postAuditPr?.statusCheckRollup, nonRequiredCheckPolicy);
   const target = audit?.threadRefs?.find((thread) => thread.id === threadId);
@@ -5386,6 +5395,7 @@ function buildPrGateEvidence(manifest, context = {}) {
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
     worktreePath: manifest.worktree_path,
+    statusCheckRollup: pr.statusCheckRollup,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
@@ -5553,6 +5563,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: headState.expectedHeadSha,
     worktreePath: manifest.worktree_path,
+    statusCheckRollup: pr.statusCheckRollup,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
@@ -5671,6 +5682,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: headState.expectedHeadSha,
     worktreePath: manifest.worktree_path,
+    statusCheckRollup: pr.statusCheckRollup,
   });
   const checks = normalizeStatusCheckRollup(pr.statusCheckRollup, nonRequiredCheckPolicy);
   const changedPathInspection = fetchPrChangedPaths(manifest, pr.number, headState.expectedHeadSha, pr.baseRefName, pr.baseRefOid, pr.changedFiles);
@@ -6718,7 +6730,9 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   const names = commaSeparatedMetadata(options.nonRequiredChecks);
   const policyRef = safeMetadataText(options.nonRequiredCheckPolicy, 300);
   const expectedHeadSha = safeMetadataText(context.expectedHeadSha || "", 80);
-  const valid = validateSourceOwnedSkipPolicy(policyRef, names, context.worktreePath, expectedHeadSha);
+  const staticPlanner = staticSkipPlannerEvidence(names, context);
+  const valid = validateSourceOwnedSkipPolicy(policyRef, names, context.worktreePath, expectedHeadSha)
+    && staticPlanner.valid;
   const blockers = [];
   if (names.length > 0 && !policyRef) {
     blockers.push("Non-required skipped checks require a source-owned policy reference");
@@ -6729,6 +6743,9 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   if (names.length > 0 && !valid) {
     blockers.push("Non-required skipped checks do not match the source-owned policy");
   }
+  if (staticPlanner.required && !staticPlanner.valid) {
+    blockers.push("Static-family skipped checks require exact-head changes planner evidence with static=false");
+  }
   return {
     schemaVersion: 1,
     names,
@@ -6736,8 +6753,56 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
     expectedHeadSha: expectedHeadSha || null,
     valid,
     blockers,
+    staticPlanner,
     metadataOnly: true,
   };
+}
+
+var staticPlannerEvidenceCache;
+
+function staticSkipPlannerEvidence(names, context = {}) {
+  const staticFamily = new Set(["static", "static_bundle", "static_bundle_summary"]);
+  const required = names.some((name) => staticFamily.has(name));
+  if (!required) return { required: false, valid: true, staticSelected: null, source: null };
+  const expectedHeadSha = exactGitObjectIdOrNull(context.expectedHeadSha || "");
+  const nodes = Array.isArray(context.statusCheckRollup)
+    ? context.statusCheckRollup
+    : Array.isArray(context.statusCheckRollup?.nodes)
+      ? context.statusCheckRollup.nodes
+      : [];
+  const planner = nodes.find((node) => String(node?.name || node?.workflowName || node?.context || "") === "changes");
+  const detailsUrl = String(planner?.detailsUrl || planner?.targetUrl || "");
+  const match = /\/actions\/runs\/(\d+)\/job\/(\d+)(?:$|[?#])/.exec(detailsUrl);
+  if (!expectedHeadSha || !context.worktreePath || !match || String(planner?.conclusion || "").toUpperCase() !== "SUCCESS") {
+    return { required: true, valid: false, staticSelected: null, source: null };
+  }
+  const cacheKey = `${context.worktreePath}:${expectedHeadSha}:${match[1]}:${match[2]}`;
+  const cache = staticPlannerEvidenceCache ||= new Map();
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const result = run("gh", ["run", "view", match[1], "--log", "--job", match[2]], {
+    cwd: context.worktreePath,
+    preserveStdout: true,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const exactHeadPattern = new RegExp(`--head\\s+["']${escapeRegExp(expectedHeadSha)}["']`);
+  const staticMatch = /"static"\s*:\s*(true|false)/.exec(result.stdout || "");
+  const staticSelected = staticMatch ? staticMatch[1] === "true" : null;
+  const evidence = {
+    required: true,
+    valid: result.code === 0 && exactHeadPattern.test(result.stdout || "") && staticSelected === false,
+    staticSelected,
+    source: {
+      runId: match[1],
+      jobId: match[2],
+      exactHeadObserved: exactHeadPattern.test(result.stdout || ""),
+    },
+  };
+  cache.set(cacheKey, evidence);
+  return evidence;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function validateSourceOwnedSkipPolicy(policyRef, names, worktreePath, expectedHeadSha) {

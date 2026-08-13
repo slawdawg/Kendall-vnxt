@@ -154,10 +154,12 @@ until its input, file ownership, output, and integration dependency are clear.
    CI-entry-point fix, an isolated archive/removal, or a report-to-CLI move.
    Agents must not concurrently edit the same contract, lifecycle module,
    database schema, package manifest, workflow, or documentation index.
-4. **Integration wave — centralized and sequential.** The coordinator reviews
-   each lane's evidence, resolves conflicts, runs cross-slice tests, updates
-   the inventory, and delivers the narrowest safe PR(s). Review remediation
-   follows the same ownership model.
+4. **Integration wave — centralized sequencing with owned execution.** The
+   coordinator reviews each lane's evidence, resolves conflicts, and assigns
+   one integration worker to run cross-slice tests, update the inventory, and
+   deliver the narrowest safe PR(s). The coordinator does not mutate source,
+   run verification, or deliver changes directly. Review remediation follows
+   the same ownership model.
 5. **Repeat from evidence.** New findings become a subsequent bounded wave;
    they do not expand an in-flight lane by default.
 
@@ -509,11 +511,12 @@ Start Phase 0 with a **lifecycle and retirement inventory**, not a refactor:
 2. record the authoritative target lifecycle contract and the manager fields
    that are truly transient;
 3. classify every supervisor report route and dashboard panel;
-4. obtain explicit product decisions for `runtime/` and `/pipeline/demo`;
+4. record caller reachability, archive destination, and rollback evidence for
+   the already-resolved `runtime/` and `/pipeline/demo` retirement defaults;
 5. baseline current CI durations, database state, script dependencies, and
    documentation navigation; and
-6. publish the first narrow migration PR only after those decisions and
-   rollback paths are reviewed.
+6. publish the first narrow migration PR only after that evidence and its
+   rollback path are reviewed.
 
 This ordering attacks the project’s real complexity—competing truths and
 unbounded surfaces—before spending time on cosmetic code movement.

@@ -10768,6 +10768,7 @@ try {
     const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
       statusCheckRollup: [
+        { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
         { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
         { name: "full", status: "COMPLETED", conclusion: "SKIPPED" },
         { name: "static", status: "COMPLETED", conclusion: "SKIPPED" },
@@ -10799,6 +10800,37 @@ try {
       assert(manifest.pr_gate_evidence.checks.passed.some((check) => check.name === "full"), "policy-bound skipped check did not pass");
       assert(manifest.pr_gate_evidence.nonRequiredCheckPolicy.names.includes("static_bundle_summary"), "gate evidence lost the planner-skipped static check");
       assert(manifest.pr_gate_evidence.checks.passed.some((check) => check.name === "static_bundle_summary"), "policy-bound static skip did not pass");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects static skips when the exact changes planner selected static", () => {
+    const fixture = createCanonicalManagedPrFixture({
+      existingPr: true,
+      plannerStatic: true,
+      statusCheckRollup: [
+        { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
+        { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "static", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
+    });
+    try {
+      const seeded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery audit passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+        "--non-required-checks", "static",
+        "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+        "--diff-risk-summary", "Focused gate fixture.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, "static-selected planner unexpectedly accepted a skipped static check");
+      assert(result.stderr.includes("Static-family skipped checks require exact-head changes planner evidence with static=false"), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -16556,12 +16588,14 @@ function createFinishPrExistingCommitFixture(options = {}) {
       "const fs = require('node:fs');",
       "const args = process.argv.slice(2);",
       `const prStatePath = ${JSON.stringify(prStatePath)};`,
+      `const plannerStatic = ${JSON.stringify(Boolean(options.plannerStatic))};`,
       `const postResolutionPrUnavailablePath = ${JSON.stringify(postResolutionPrUnavailablePath)};`,
       `const postResolutionAuditPath = ${JSON.stringify(postResolutionAuditPath)};`,
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
+      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic}\\n}`); process.exit(0); }",
       options.changedPathBaseOidDrift
         ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
         : "",
