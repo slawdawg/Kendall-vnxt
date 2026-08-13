@@ -390,7 +390,7 @@ implicitly accepted. First inspect the bounded packet from:
 node ./scripts/codex-workspace.mjs refresh-pr-head <lane> \
   --reason "why the exact reviewed head advanced" \
   --non-required-checks full,javascript,supervisor,static,static_bundle,static_bundle_summary \
-  --non-required-check-policy AGENTS.md#documented-non-required-checks \
+  --non-required-check-policy docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks \
   --summary-json
 ```
 
