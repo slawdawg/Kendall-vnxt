@@ -9990,6 +9990,9 @@ try {
       const preview = JSON.parse(dryRun.stdout);
       assert(preview.allowed === true, dryRun.stdout);
       assert(preview.counts["external-intents"] === 4_096, dryRun.stdout);
+      const foreignOwner = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--dry-run", "--summary-json", "--owner", "runner-b", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(foreignOwner.code !== 0, "foreign lane owner unexpectedly prepared immutable rollover");
+      assert(foreignOwner.stderr.includes("requires the exact manifest owner"), foreignOwner.stderr || foreignOwner.stdout);
       const apply = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
       assert(apply.code === 0, apply.stderr || apply.stdout);
       const applied = JSON.parse(apply.stdout);
@@ -10009,9 +10012,11 @@ try {
       const tamperedCompletion = readJson(tamperedCompletionPath);
       tamperedCompletion.status = 1;
       writeFileSync(tamperedCompletionPath, `${JSON.stringify(tamperedCompletion)}\n`);
-      const tampered = runFixtureScript(fixture, ["heartbeat", "resumed-task", "--phase", "sealed-ledger-tamper", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-      assert(tampered.code !== 0, "tampered sealed ledger unexpectedly admitted another governed operation");
-      assert(tampered.stderr.includes("ledger_rollover_sealed_segment_mismatch"), tampered.stderr || tampered.stdout);
+      const tampered = runFixtureScript(fixture, ["rollover-task-lease-ledger", "resumed-task", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(tampered.code === 0, tampered.stderr || tampered.stdout);
+      const tamperedPacket = JSON.parse(tampered.stdout);
+      assert(tamperedPacket.allowed === false, "tampered sealed ledger unexpectedly passed the next rollover verification");
+      assert(tamperedPacket.blockers.some((blocker) => blocker.includes("ledger_rollover_sealed_segment_mismatch")), JSON.stringify(tamperedPacket));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }

@@ -151,6 +151,11 @@ const taskLeaseMaximumHeartbeatHistoryRecords = 1_024;
 const taskLeaseMaximumGenerationChainLength = 64;
 const taskLeaseMaximumEpochCount = 16;
 const taskLeaseMaximumLedgerEpochCount = 16;
+// A ledger segment can reference generations from multiple ordinary lease
+// epochs. Keep that retained generation index bounded independently from the
+// per-segment intent/completion budget, rather than making a rolled ledger
+// unusable after the next 4,096 lease acquisitions.
+const taskLeaseMaximumGenerationHistoryRecords = taskLeaseMaximumHistoryRecords * (taskLeaseMaximumLedgerEpochCount + 1);
 const taskLeaseMaximumLedgerRolloverOperatorLength = 160;
 const taskLeaseMaximumLedgerRolloverApprovalLength = 512;
 const taskLeaseLegacyLedgerSegment = "legacy";
@@ -3029,6 +3034,8 @@ function rolloverTaskLeaseLedger(argv) {
     throw new Error("rollover-task-lease-ledger --apply requires explicit operator approval of at least 10 non-whitespace characters.");
   }
   const state = workspaceState(options);
+  const manifestRecord = findManifestByExactTaskId(state, taskId);
+  assertExactTaskLeaseLedgerRolloverOwner(manifestRecord.manifest, options);
   const operator = safeMetadataText(currentLaneOwner(options), taskLeaseMaximumLedgerRolloverOperatorLength);
   if (!operator) throw new Error("rollover-task-lease-ledger requires a bounded current lane owner.");
   const packet = taskLeaseLedgerRolloverPacket(state, taskId, operator);
@@ -7640,7 +7647,7 @@ function closeMissingWorktree(argv) {
   }
 
   let appliedPacket = null;
-  withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token }) => {
+  withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token, generation }) => {
     const lockedRecord = findMissingWorktreeManifestByExactTaskId(state, taskId);
     const lockedPacket = buildMissingWorktreeCloseoutPacket(lockedRecord, state, {
       staleAfterSeconds,
@@ -7649,6 +7656,7 @@ function closeMissingWorktree(argv) {
       currentOwner: currentLaneOwner(options),
       preLockEvidence: packet.proof.taskLock,
       heldLockToken: token,
+      heldLockGeneration: generation,
     });
     if (!lockedPacket.ready) {
       throw new Error(`Missing-worktree closeout changed under lock: ${lockedPacket.blockers.join("; ")}`);
@@ -7885,12 +7893,33 @@ function missingWorktreeLockEvidence(state, taskId, context) {
       typeof preLock.owner === "string" && preLock.owner &&
       rawObserved.status === "active" && rawObserved.metadata?.token === context.heldLockToken
     ) {
+      const successor = missingWorktreeReleasedLeaseSuccessorEvidence(
+        state,
+        taskId,
+        preLock.generation,
+        context.heldLockGeneration,
+        preLock.epoch,
+      );
+      if (successor.status !== "matched") {
+        return {
+          ...observed,
+          status: "blocked",
+          reason: successor.reason,
+          preLockStatus: preLock.status,
+          preLockOwner: preLock.owner,
+          predecessorGeneration: preLock.generation || null,
+          heldGeneration: context.heldLockGeneration || null,
+        };
+      }
       return {
         ...observed,
         status: "self_held_after_released_final_lease_precheck",
-        reason: "exact released final lease was observed before this command acquired its manifest lock",
+        reason: "exact released final lease directly handed off to this command before locked re-proof",
         preLockStatus: preLock.status,
         preLockOwner: preLock.owner,
+        predecessorGeneration: preLock.generation,
+        heldGeneration: context.heldLockGeneration,
+        successor,
       };
     }
     return { ...observed, status: "blocked", reason: "task lock was not absent before manifest lock acquisition" };
@@ -7904,6 +7933,44 @@ function missingWorktreeLockEvidence(state, taskId, context) {
     reason: "task lock was absent before this command acquired its manifest lock",
     preLockStatus: preLock.status,
   };
+}
+
+function missingWorktreeReleasedLeaseSuccessorEvidence(state, taskId, predecessorGeneration, heldGeneration, predecessorEpoch = 0) {
+  if (!isUuid(predecessorGeneration) || !isUuid(heldGeneration)) {
+    return { status: "blocked", reason: "released pre-lock generation or held successor generation is missing" };
+  }
+  try {
+    const predecessor = leaseRecord(state, taskId, predecessorGeneration);
+    if (!validTaskLeaseRecord(predecessor, taskId) || predecessor.generation !== predecessorGeneration) {
+      return { status: "blocked", reason: "released pre-lock generation is no longer valid" };
+    }
+    const tokenDigest = taskLeaseTokenDigest(predecessor.token);
+    const handoffPath = taskLeasePath(state, taskId, "handoffs", predecessorGeneration);
+    if (existsSync(handoffPath)) {
+      const handoff = readRegularJson(handoffPath);
+      if (
+        validTaskLeaseHandoff(handoff, taskId, predecessorGeneration, tokenDigest) &&
+        handoff.reason === "released" &&
+        handoff.to_generation === heldGeneration
+      ) {
+        return { status: "matched", kind: "handoff", predecessorGeneration, heldGeneration };
+      }
+    }
+    const epochPath = taskLeasePath(state, taskId, "epochs", predecessorGeneration);
+    if (existsSync(epochPath)) {
+      const epoch = readRegularJson(epochPath);
+      if (
+        validTaskLeaseEpoch(epoch, taskId, predecessorGeneration, tokenDigest, predecessorEpoch) &&
+        epoch.reason === "released" &&
+        epoch.to_generation === heldGeneration
+      ) {
+        return { status: "matched", kind: "epoch", predecessorGeneration, heldGeneration };
+      }
+    }
+    return { status: "blocked", reason: "held closeout lease is not the direct released successor observed before acquisition" };
+  } catch {
+    return { status: "blocked", reason: "released-to-held successor evidence is unreadable" };
+  }
 }
 
 function missingWorktreeRegistrationEvidence(manifest, state, target) {
@@ -13279,6 +13346,16 @@ function assertLaneOwner(manifest, options = {}) {
   }
 }
 
+function assertExactTaskLeaseLedgerRolloverOwner(manifest, options = {}) {
+  const recordedOwner = String(manifest?.owner || "").trim();
+  const currentOwner = String(currentLaneOwner(options) || "").trim();
+  if (!recordedOwner || recordedOwner !== currentOwner) {
+    throw new Error(
+      `rollover-task-lease-ledger requires the exact manifest owner; recorded=${safeMetadataText(recordedOwner || "missing", 160)} current=${safeMetadataText(currentOwner || "missing", 160)}. Complete normal governed takeover before rollover.`,
+    );
+  }
+}
+
 function assertExactReconciliationOwner(manifest, options = {}) {
   const recordedOwner = String(manifest.owner || "").trim();
   const currentOwner = String(currentLaneOwner(options) || "").trim();
@@ -16700,7 +16777,7 @@ function validTaskLeaseLedgerRollover(record, taskId, segment, epoch) {
   );
 }
 
-function taskLeaseLedgerState(state, taskId) {
+function taskLeaseLedgerState(state, taskId, options = {}) {
   const root = taskLeaseRoot(state, taskId);
   if (!existsSync(root)) return { segment: taskLeaseLegacyLedgerSegment, epoch: 0 };
   const rollovers = taskLeasePath(state, taskId, "ledger-rollovers");
@@ -16719,12 +16796,14 @@ function taskLeaseLedgerState(state, taskId) {
     if (!validTaskLeaseLedgerRollover(record, taskId, segment, epoch)) {
       throw new Error("ledger_rollover_record_invalid");
     }
-    const sealed = validateTaskLeaseLedgerSegment(state, taskId, { segment, epoch });
-    if (
-      taskLeaseLedgerKinds.some((kind) => sealed.counts[kind] !== record.ledger_counts[kind]) ||
-      sealed.digest !== record.ledger_snapshot_digest
-    ) {
-      throw new Error("ledger_rollover_sealed_segment_mismatch");
+    if (options.verifySealedHistory === true) {
+      const sealed = validateTaskLeaseLedgerSegment(state, taskId, { segment, epoch });
+      if (
+        taskLeaseLedgerKinds.some((kind) => sealed.counts[kind] !== record.ledger_counts[kind]) ||
+        sealed.digest !== record.ledger_snapshot_digest
+      ) {
+        throw new Error("ledger_rollover_sealed_segment_mismatch");
+      }
     }
     if (epoch >= taskLeaseMaximumLedgerEpochCount) throw new Error("ledger_rollover_capacity_exceeded");
     segment = record.to_segment;
@@ -17081,21 +17160,21 @@ function appendTaskLeaseHeartbeat(state, taskId, record) {
   return heartbeat;
 }
 
-function leaseJsonRecords(directory) {
+function leaseJsonRecords(directory, maximumRecords = taskLeaseMaximumHistoryRecords) {
   if (!existsSync(directory)) return [];
   const stats = lstatSync(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("lease_record_directory_invalid");
   const names = readdirSync(directory).filter((name) => name.endsWith(".json")).sort();
-  if (names.length > taskLeaseMaximumHistoryRecords) throw new Error("lease_history_depth_exceeded");
+  if (names.length > maximumRecords) throw new Error("lease_history_depth_exceeded");
   return names.map((name) => ({ name, path: join(directory, name), record: readRegularJson(join(directory, name)) }));
 }
 
-function leaseJsonRecordCount(directory, label) {
+function leaseJsonRecordCount(directory, label, maximumRecords = taskLeaseMaximumHistoryRecords) {
   if (!existsSync(directory)) return 0;
   const stats = lstatSync(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error(`${label}_directory_invalid`);
   const count = readdirSync(directory).filter((name) => name.endsWith(".json")).length;
-  if (count > taskLeaseMaximumHistoryRecords) {
+  if (count > maximumRecords) {
     throw new Error(`${label}_history_capacity_exhausted`);
   }
   return count;
@@ -17110,7 +17189,9 @@ function taskLeaseLedgerRolloverPacket(state, taskId, operator) {
   let ledger = null;
   let snapshot = null;
   try {
-    ledger = taskLeaseLedgerState(state, taskId);
+    // Rehash prior sealed segments only while preparing a further rollover.
+    // Routine ledger path resolution stays bounded to the active segment.
+    ledger = taskLeaseLedgerState(state, taskId, { verifySealedHistory: true });
     if (ledger.epoch >= taskLeaseMaximumLedgerEpochCount) {
       blockers.push("immutable ledger rollover epoch capacity is exhausted");
     }
@@ -17138,7 +17219,10 @@ function taskLeaseLedgerRolloverPacket(state, taskId, operator) {
 }
 
 function validateTaskLeaseLedgerSegment(state, taskId, ledger) {
-  const generationRecords = leaseJsonRecords(taskLeasePath(state, taskId, "generations"));
+  const generationRecords = leaseJsonRecords(
+    taskLeasePath(state, taskId, "generations"),
+    taskLeaseMaximumGenerationHistoryRecords,
+  );
   const tokenDigests = new Map();
   for (const { name, record } of generationRecords) {
     if (!validTaskLeaseRecord(record, taskId) || name !== `${record.generation}.json`) {
@@ -17778,6 +17862,7 @@ function redactTaskLockInspection(inspection) {
     tokenPresent: Boolean(metadata?.token),
     protocol: inspection?.protocol || "unknown",
     generation: inspection?.generation || null,
+    epoch: inspection?.epoch ?? 0,
     mutation: "none; read-only lock inspection",
   };
 }
@@ -17797,6 +17882,20 @@ function assertTaskLeaseAcquisitionCapacity(inspection, taskId, options = {}) {
     throw new Error(
       `Task lease handoff capacity is exhausted: task_id=${taskId}; chain_depth=${inspection.chainDepth}; ` +
       `maximum_chain_length=${taskLeaseMaximumGenerationChainLength}; mutation=none.`,
+    );
+  }
+}
+
+function assertTaskLeaseGenerationHistoryCapacity(state, taskId) {
+  const count = leaseJsonRecordCount(
+    taskLeasePath(state, taskId, "generations"),
+    "lease_generation",
+    taskLeaseMaximumGenerationHistoryRecords,
+  );
+  if (count >= taskLeaseMaximumGenerationHistoryRecords) {
+    throw new Error(
+      `Task lease generation history capacity is exhausted: task_id=${taskId}; ` +
+      `maximum_generation_records=${taskLeaseMaximumGenerationHistoryRecords}; mutation=none.`,
     );
   }
 }
@@ -17826,6 +17925,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
     token: randomUUID(),
   };
   ensureTaskLeaseDirectories(state, taskId);
+  assertTaskLeaseGenerationHistoryCapacity(state, taskId);
   writeNewJson(taskLeasePath(state, taskId, "generations", metadata.generation), metadata);
   appendTaskLeaseHeartbeat(state, taskId, metadata);
   // Check immediately after the initial heartbeat but before publishing this

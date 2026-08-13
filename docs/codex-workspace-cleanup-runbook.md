@@ -45,6 +45,39 @@ invitation to prune immutable evidence. Do not delete records, edit lease JSON,
 or retry an external action outside the workspace command in an attempt to make
 space.
 
+### Exact-full ledger rollover recovery
+
+When `doctor`, a governed command, or `inspect-task-lock` reports an
+intent/completion ledger at its exact 4,096-record boundary, preserve the task
+and all existing lease JSON. The only recovery is the owner-bound rollover
+command, and it is valid only for an exactly `released` versioned lease with
+complete matched intent/completion evidence.
+
+First capture a read-only packet from the recorded lane owner:
+
+```bash
+node ./scripts/codex-workspace.mjs rollover-task-lease-ledger <task-id> \
+  --dry-run --summary-json
+```
+
+Confirm that the packet is allowed, the lease is released, and the current
+segment has an exact capacity boundary. Do not use the command on another
+owner's lane; complete the normal governed takeover process first. After an
+explicit operator approval, publish one immutable rollover record:
+
+```bash
+node ./scripts/codex-workspace.mjs rollover-task-lease-ledger <task-id> \
+  --apply --approval "reviewed exact-full immutable ledger rollover"
+```
+
+`--apply` and `--dry-run` must be bare flags. The command retains the sealed
+segment unchanged, records its counts and SHA-256 snapshot digest, and starts a
+new segment. It never prunes history. Before any later rollover, the command
+rehashes every sealed segment and stops on mismatched evidence; routine ledger
+operations use only the active segment so normal admission does not repeatedly
+rehash sealed history. If the preview blocks or its evidence changes before
+apply, stop and preserve the task for review.
+
 ### Interruptions and fenced operations
 
 Before a governed external command or manifest write, the lease records an
