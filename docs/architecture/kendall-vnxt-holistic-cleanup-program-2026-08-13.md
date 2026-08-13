@@ -102,6 +102,101 @@ intent, or an authority boundary that requires a separate exact-target approval.
 Any such stop is recorded with the decision needed and the narrowest safe next
 action; it is not a routine implementation checkpoint.
 
+## Centralized parallel execution model
+
+The cleanup program uses the current Codex session as a **central coordinator**
+with bounded parallel worker lanes. It does not create a second Kendall runtime
+or another persistent orchestration subsystem merely to clean this repository.
+The central coordinator is the single owner of cleanup intent, ordering,
+cross-cutting contracts, integration, delivery evidence, and the durable
+inventory in `kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`.
+
+### Responsibilities
+
+| Role | Owns | Must not do |
+| --- | --- | --- |
+| Central coordinator | Goal/phase state, dependency ordering, file-boundary assignment, lifecycle/authority/persistence decisions, integration, verification, PR delivery, and residual-risk records. | Delegate a cross-cutting decision without an explicit contract or merge concurrent changes directly into one shared tree. |
+| Read-only analysis lane | Bounded discovery, reachability, test/log analysis, architecture review, and a concise evidence summary. | Edit repository files, alter workspace metadata, or make product decisions. |
+| Isolated implementation lane | One approved, non-overlapping change slice in its assigned worktree and branch; focused tests and rollback notes. | Edit files outside its ownership boundary, push/merge another lane, or broaden product/runtime authority. |
+| Integration/review lane | Diff review, contract/regression checks, CI evidence, and review-thread remediation. | Reinterpret an unapproved product decision or silently repair a conflicting lane by discarding its work. |
+
+### Model and lane allocation
+
+Use the strongest reasoning where ambiguity and cross-cutting ownership are
+highest, and faster models for narrow evidence work:
+
+| Work shape | Preferred lane configuration |
+| --- | --- |
+| Lifecycle ownership, authority policy, persistence design, or major architectural tradeoff | Sol with high or xhigh reasoning; central coordinator retains the decision. |
+| CI/tooling, report/panel inventory, dependency mapping, test-log analysis, or broad code exploration | Terra with high reasoning; return evidence and a bounded implementation proposal. |
+| Mechanical reachability searches, documentation/reference inventories, fixture catalogues, or repeatable verification classification | Luna with medium reasoning; return structured results only. |
+
+The coordinator selects the number of lanes from the session's available
+capacity. Parallelism is a throughput tool, not a goal: a lane is not started
+until its input, file ownership, output, and integration dependency are clear.
+
+### Execution waves
+
+1. **Reconnaissance wave — parallel, read-only.** Run independent lanes for
+   lifecycle consumers, report/panel classification, CI/script topology,
+   persistence inventory, and retirement reachability. Each returns a concise
+   evidence packet rather than raw command logs.
+2. **Partition wave — centralized.** The coordinator converts those findings
+   into small slices with one owner, exact path/module boundaries, verification,
+   rollback, dependencies, and expected delivery order.
+3. **Implementation wave — parallel only where isolated.** Independent slices
+   use separate governed worktrees and branches. Good candidates include a
+   CI-entry-point fix, an isolated archive/removal, or a report-to-CLI move.
+   Agents must not concurrently edit the same contract, lifecycle module,
+   database schema, package manifest, workflow, or documentation index.
+4. **Integration wave — centralized and sequential.** The coordinator reviews
+   each lane's evidence, resolves conflicts, runs cross-slice tests, updates
+   the inventory, and delivers the narrowest safe PR(s). Review remediation
+   follows the same ownership model.
+5. **Repeat from evidence.** New findings become a subsequent bounded wave;
+   they do not expand an in-flight lane by default.
+
+### Serial boundaries
+
+The following require one coordinated owner and must not have concurrent writer
+lanes: authority-policy source of truth, canonical lifecycle contract and its
+cross-language clients, database migration baseline and migrations, shared
+package manifests/lockfiles, CI workflow restructuring, and final integration
+or merge. These boundaries are where speed from parallel edits is outweighed by
+split truth, merge conflict, or invalid migration risk.
+
+### Lane contract
+
+Before an implementation lane begins, the coordinator records in the Phase 0
+inventory or linked PR description:
+
+- objective and exact file/module ownership;
+- base revision, worktree, branch, and lane owner;
+- allowed and prohibited operations, including authority stop-lines;
+- required focused checks and the integration check;
+- rollback or restoration path;
+- upstream dependencies and downstream consumers; and
+- expected output: evidence only, a commit, a draft PR, or a merged cleanup.
+
+If a lane discovers overlap or a new cross-cutting decision, it stops mutation,
+returns the evidence, and the coordinator repartitions the work. This is normal
+coordination, not an operator checkpoint.
+
+### Speed rules
+
+- Parallelize read-heavy exploration, triage, test analysis, reachability, and
+  genuinely isolated changes.
+- Keep lifecycle migration, authority correction, schema changes, shared
+  contract changes, and integration sequential.
+- Prefer several small PRs with non-overlapping ownership over one large
+  cleanup branch.
+- Do not build a new repository orchestration layer to coordinate cleanup; use
+  the existing Codex session, governed worktrees, the cleanup inventory, and
+  concise lane evidence.
+- Treat a clean integration path and reproducible verification as throughput:
+  rework and conflict resolution are slower than a short centralized partition
+  pass.
+
 ## Prioritized correction register
 
 ### P0 — converge lifecycle truth
