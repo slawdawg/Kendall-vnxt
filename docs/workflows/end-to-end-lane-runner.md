@@ -51,7 +51,10 @@ It authorizes, for the named lane only:
 - Run scoped verification, then broader checks when the changed surface
   requires it.
 - Commit, push, open or update the lane PR, and address review or CI feedback.
-- Merge low-risk PRs when the merge evidence checklist is satisfied.
+- Resolve current, fully satisfied GitHub review threads under the bounded
+  delivery-thread rule below; this is not standing permission to close unclear
+  or merely old conversations.
+- Merge PRs under the permanent bounded merge checklist when it is satisfied.
 - Clean up the merged local worktree, local lane branch, and remote lane branch
   after a valid dry run names only expected lane resources.
 
@@ -217,28 +220,163 @@ publisher.
    `merge-ready`/hold status, exact head SHA, and a short summary. Do not make
    `codex-workspace.mjs` launch subagents, provider calls, or retain raw audit
    transcripts.
-8. **Merge.** The delegated delivery worker merges only when the low-risk
-   checklist is proven for the exact head SHA or when an explicit higher-risk
-   approval covers the residual risk. The manager inspects the evidence and
-   enforces the gate but does not merge from the manager session.
+8. **Merge.** The operator's permanent bounded merge authority covers all
+   Kendall_Nxt PRs. The delegated delivery worker merges only at the exact
+   reviewed head when the bounded checklist is proven: expected repository and
+   base branch, non-draft state, clean mergeability, terminal successful or
+   policy-documented non-required skipped checks, zero unresolved current
+   threads (including unadjudicated outdated threads), no requested changes or
+   pending review requests, relevant local verification, and
+   reviewed diff-risk assessment. The manager inspects the evidence and
+   enforces the gate but does not merge from the manager session. Record the PR
+   URL, exact head/base, checks, review state, verification, diff-risk review,
+   planned merge method, and rollback path. Record the actual merge result
+   after the merge and before any cleanup decision. This authority never
+   includes cleanup.
    If merge is blocked after checks are green, inspect thread-aware review
    threads before assuming branch policy, approval state, or GitHub lag. After
    every amend, force-with-lease push, or PR head update, repeat the
    thread-aware review-thread check before merge. As part of this delivery
    gate, the delegated worker has standing authority to automatically intake,
    address, verify, and resolve newly appearing threads without a separate
-   operator checkpoint. Resolve a thread only after the current diff, test
-   evidence, or documentation addresses its feedback. Record each resolved
-   thread ID and supporting evidence, then rerun the thread-aware check; any
-   unaddressed or ambiguous thread remains a hold while the worker completes
-   that automatic remediation loop.
+   operator checkpoint. Resolve a current thread only when both of these
+   positive prerequisites are proven:
+
+   - The feedback is fully addressed by the current diff and supported by the
+     relevant local verification and required independent code-review evidence.
+   - Fresh GitHub thread-aware data shows the thread is current and
+     unambiguous, with no requested change or pending review request.
+
+   Record each resolved thread ID and supporting evidence, then rerun the
+   thread-aware check; any unaddressed or ambiguous thread remains a hold while
+   the worker completes that automatic remediation loop.
+
+### Review-thread adjudication and recovery commands
+
+Use the source-owned `codex-workspace` commands for one thread at a time. First
+fetch the complete GitHub review-thread and review-request audit, then record
+the exact-head mapping and verification evidence without resolving anything:
+
+```bash
+node ./scripts/codex-workspace.mjs adjudicate-current-thread <task> --apply \
+  --thread-id <PRRT_id> --request-fingerprint <sha256> \
+  --request-summary "<bounded request summary>" \
+  --diff-summary "<current-head mapping>" --mapped-files '<json-or-list>' \
+  --verification "<focused result>" \
+  --verification-command "<executed command>" --verification-exit-code 0 \
+  --review-summary "<independent review evidence>" --reviewer-id <id>
+```
+
+For an outdated thread, use `adjudicate-outdated-thread` with the same bounded
+evidence fields and add `--renamed-paths '<json>'` when the review anchor moved.
+The `--apply` here records metadata-only adjudication; it never resolves a
+GitHub thread. High-risk paths require exact operator authorization in the
+form `operator-authorized thread=<PRRT_id> head=<sha>` via
+`--high-risk-authorization`. Do not invent a fingerprint, map a path outside
+the current diff, or treat a successful check as independent review evidence.
+
+After fresh adjudication, resolve only the matching kind with
+`resolve-adjudicated-current-thread <task> --thread-id <PRRT_id>` or
+`resolve-adjudicated-thread <task> --thread-id <PRRT_id>`. These commands repeat
+the exact-head, base, check, authorization, and thread-aware pre-mutation
+proofs, mutate one GitHub thread, and then re-audit PR/check/local/worktree and
+all non-target threads. A changed non-target thread, incomplete audit, or
+ambiguous mutation records `needs-recovery` and is a hold; never retry blindly.
+An interrupted `attempt-recorded` or ambiguous outcome is resumed only through
+the matching resolve command after a fresh audit. If a current target becomes
+outdated, use the retained cross-kind recovery path and a new outdated
+adjudication; do not manually edit the manifest or call the GraphQL mutation.
+For command profiles and bounded verification guidance, see the repository
+[`README.md` Developer Checks](../../README.md#developer-checks).
+
    Use exact-head merge protection for GitHub CLI merges, such as
-   `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+   `gh pr merge <number> --merge --match-head-commit <headRefOid>`.
    For dependency or bot PRs outside a managed lane, verify in a temporary
    detached worktree from the PR head so dirty local work does not contaminate
-   merge evidence.
+   merge evidence. Retain a bounded unmanaged-PR evidence packet with every
+   gate above—repository/base/draft/mergeability, thread-aware review and
+   pending-review state, terminal check outcomes plus named skip policy, local
+   verification, diff-risk review, planned method, and rollback—rather than a
+   managed manifest-owner record. This is an alternate evidence carrier, not a
+   bypass of any merge criterion. Generate it without mutation from the
+   detached worktree with `node ./scripts/codex-workspace.mjs
+   verify-unmanaged-pr-gates --pr <number> --base <branch> --expected-head
+   <sha> --merge-method <exact-head-method> --rollback-path <revert-path>
+   --summary-json` plus the same delivery-audit, skip-policy, and
+   diff-risk evidence fields required by the managed gate.
    Use `doctor --summary-json` when automation needs a bounded readiness packet
    instead of human-readable doctor output.
+
+### Documented Non-Required Checks
+
+The only check names that may be accepted as a non-required `SKIPPED` result by
+`verify-pr-gates` are the changed-area jobs below. The exact-head gate requires
+both the named source-owned policy reference
+`docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks` and
+the matching check name; every other skipped or neutral result blocks delivery.
+
+- `full`
+- `javascript`
+- `supervisor`
+
+### Explicit Delivery-Head Refresh
+
+When a managed lane has a recorded delivery head and a later verified push has
+advanced the same PR, do not edit its manifest or treat the new local head as
+implicitly accepted. First inspect the bounded packet from:
+
+```bash
+node ./scripts/codex-workspace.mjs refresh-pr-head <lane> \
+  --reason "why the exact reviewed head advanced" \
+  --non-required-checks full,javascript,supervisor \
+  --non-required-check-policy AGENTS.md#documented-non-required-checks \
+  --summary-json
+```
+
+Only `--apply` records the rebind. It requires the exact lane owner (or a
+recorded operator-approved takeover), an absent task lock before acquisition,
+the canonical Kendall_Nxt repository, matching managed PR URL/number/base,
+open non-draft state, one matching local/origin/GitHub head, terminal checks,
+and a complete thread-aware audit with no pending review request. It retains
+only prior/new heads, bounded reason, timestamp, check summary, and thread
+counts. Existing unresolved current or outdated threads remain explicit holds;
+the refresh neither resolves them nor makes the PR merge-ready. An active,
+stale, or ambiguous lock; a remote mismatch; a failing/pending check; or an
+incomplete audit blocks the rebind. A successful rebind marks older PR-gate
+and delivery-audit evidence stale, so a fresh exact-head gate packet is still
+required before merge. Resume normal adjudication only after a successful
+refresh packet; never rewrite manifest JSON by hand.
+
+#### PR #723 historical-rewrite recovery exception
+
+The normal refresh rule requires the recorded delivery head to be an ancestor
+of the live PR head. There is one persistent, source-governed exception for
+the documented PR #723 historical rewrite only. It is not a generic recovery
+flag and must not be copied to another lane. In addition to every normal
+refresh gate, it requires the literal managed task, canonical repository and
+PR URL/number, branch `codex/standing-review-thread-resolution-authority`, base
+`dev`, recorded prior head `df0200175510c8346ef98b10f45c19a5e195219a`, and the
+documented merge base `b8df8d162195993c7d37f5162b46783a388963d1`. The live
+local, origin, and GitHub PR head must be one exact SHA that descends from the
+authorized anchor `85a74486f65328f76986834a61859b8f2e191042`. Descendant
+matching is intentional: the recovery implementation itself advances the PR
+after that authorized anchor.
+
+The one metadata-only rebind also requires this exact operator-evidence value:
+
+```text
+operator-authorized recovery=pr-723 prior=df0200175510c8346ef98b10f45c19a5e195219a anchor=85a74486f65328f76986834a61859b8f2e191042 merge-base=b8df8d162195993c7d37f5162b46783a388963d1
+```
+
+Pass it only to the governed `refresh-pr-head` command via
+`--non-ancestral-recovery-authorization`. The recorded rebind retains the
+literal recovery contract, observed merge base, live head, check summary,
+thread audit, and the normal lock-backed authority decision. It neither
+resolves a thread nor authorizes merge or cleanup. Any field mismatch, absent
+operator evidence, non-terminal check, incomplete review audit, non-owned
+lock, or a live head outside the authorized anchor's ancestry remains a hard
+stop.
+
 9. **Cleanup.** The delegated delivery/cleanup worker should prefer
    `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
@@ -549,8 +687,9 @@ Worker launch prompts must make the stop lines explicit:
 - Set `CODEX_WORKSPACE_OWNER` to the matching `codex-#` value.
 - Claim exactly one lane with `dispatch-next --apply`.
 - Use the returned worktree and follow this end-to-end lane workflow.
-- Merge is default-authorized for normal low-risk lane delivery, but only after
-  exact-head, check, review-thread, and cleanup evidence is collected.
+- Merge is permanently bounded-authorized for Kendall_Nxt PR delivery, but only
+  after exact-head, check, review-thread, diff-risk, and merge evidence is
+  collected. Cleanup remains a separate authority and evidence path.
 - Stop for secrets, credential changes, destructive migrations, unsafe provider
   or worker authority expansion, failed checks the worker cannot fix,
   unresolved requested changes, ambiguous exact-head merge state, unsafe
@@ -573,34 +712,48 @@ state changes rather than streaming raw output. Relay only blockers, questions,
 failed checks, PR links, merge results, cleanup results, and extreme-risk
 findings to the operator.
 
-## Low-Risk Merge Checklist
+## Bounded Merge Checklist
 
 Merge under `standard-delivery` only when current evidence proves all of these:
 
-- The PR belongs to the current lane and targets the expected base branch.
-- The workspace manifest owner matches the current runner, or ownership was
-  explicitly taken over with operator confirmation.
+- The PR belongs to the current lane and targets the expected base branch, or
+  an unmanaged detached-worktree evidence packet proves the same repository and
+  expected base binding.
+- For a managed lane, the workspace manifest owner matches the current runner,
+  or ownership was explicitly taken over with operator confirmation.
 - The PR is not a draft.
-- The PR is mergeable at the exact reviewed head SHA.
-- Required and reported checks for that exact head are successful or
-  intentionally skipped.
-- Review threads are resolved and there are no requested changes or pending
-  review requests. This must be proven with thread-aware review data, such as
-  GraphQL `reviewThreads`; flat PR comments or check rollups are not enough.
-  The evidence must be collected after the latest pushed PR head.
+- The PR is in Kendall_Nxt, targets the expected base branch, and is mergeable
+  at the exact reviewed head SHA.
+- Required and reported checks for that exact head are terminal and successful,
+  or policy-documented as non-required skipped.
+- There are zero unresolved current review threads—including unadjudicated
+  outdated threads—and no requested changes or pending review requests. This must be proven with
+  thread-aware review data, such as GraphQL `reviewThreads`; flat PR comments
+  or check rollups are not enough. The evidence must be collected after the
+  latest pushed PR head.
+- Relevant local verification and a reviewed diff-risk assessment cover the
+  current exact head; the pre-merge evidence records the PR URL, head/base,
+  checks, review state, verification, diff-risk review, planned merge method,
+  and rollback path. Re-audit every bounded merge criterion immediately before
+  the merge mutation; changed, missing, or newly ambiguous evidence aborts it.
+  Record the actual merge result only after that mutation succeeds.
 - Local verification has completed for the changed surface.
-- The changed-file list avoids high-blast-radius surfaces.
+- The changed-file list has a diff-risk review that identifies the
+  risk-appropriate verification and recovery evidence for the current head.
 - A rollback or revert path is known.
 - For dependency/security bumps, the changed-file list is limited to the
   affected package metadata/lockfiles and focused local verification covers the
   package that changed.
 
 If any evidence source is stale, unavailable, ambiguous, failing, or too narrow
-for the changed surface, do not classify the merge as low risk.
+for the changed surface, do not allow the bounded merge.
 
 ## High-Risk Surfaces
 
-These surfaces are not automatically covered by `standard-delivery`:
+These surfaces require risk-appropriate verification and review before a
+bounded merge; they do not by themselves create a second merge-approval gate.
+They remain separate authority gates for implementation, provider use, launch,
+and cleanup operations:
 
 - Secrets, credentials, tokens, or authentication state.
 - Provider calls, paid execution, model selection, or budget changes outside
@@ -615,7 +768,8 @@ These surfaces are not automatically covered by `standard-delivery`:
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
 - GitHub Actions or automation with write permissions.
-- Review-thread mutation, branch protection changes, or merge automation.
+- Review-thread mutation outside the bounded current-thread rule above, branch
+  protection changes, or merge automation.
 - Destructive cleanup outside the managed lane.
 - Lane ownership takeover without operator confirmation.
 - Broad policy expansion or evidence-retention changes.
