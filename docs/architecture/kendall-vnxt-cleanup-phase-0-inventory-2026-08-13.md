@@ -87,16 +87,21 @@ coordinator for repartitioning.
 
 ### Documentation asset cleanup — Luna/medium, default
 
-- **Path ownership:** `docs/ui.png` only; documentation prose, indexes, and
-  unrelated assets remain outside this lane.
-- **Dependencies:** zero-reference search and the documentation/render
-  surface.
-- **Focused verification:** repeat the reference search, run
-  `pnpm run check:docs`, and complete the documentation/render check before
-  removal.
+- **Path ownership:** `docs/ui.png` plus the exact planning records
+  `docs/architecture/kendall-vnxt-holistic-cleanup-program-2026-08-13.md` and
+  `docs/architecture/kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`.
+  Their asset mentions must be updated or removed together; unrelated
+  documentation and assets remain outside this lane.
+- **Dependencies:** distinguish those planning-record mentions from external
+  or runtime reachability; a planning mention does not demonstrate that the
+  asset is externally or operationally reachable.
+- **Focused verification:** repeat the reference search, update/remove the two
+  planning mentions together, run `pnpm run check:docs`, and complete the
+  documentation/render check before removal.
 - **Rollback:** revert the asset-removal commit with `git revert`.
-- **Allowed / prohibited:** remove the asset only after the checks pass; do not
-  edit documentation text or remove another asset in this lane.
+- **Allowed / prohibited:** remove the asset only after the checks pass and the
+  two planning records are consistent; do not change product authority, edit
+  unrelated documentation, or remove another asset in this lane.
 
 ### Runtime archive/removal — Luna/medium, default
 
