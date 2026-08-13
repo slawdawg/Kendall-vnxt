@@ -182,6 +182,82 @@ If a lane discovers overlap or a new cross-cutting decision, it stops mutation,
 returns the evidence, and the coordinator repartitions the work. This is normal
 coordination, not an operator checkpoint.
 
+### Operating controls
+
+These controls make the parallel model enforceable without creating a separate
+cleanup service or a second backlog system.
+
+#### Work in progress limits
+
+At any time there is one central coordinator, at most two active writer lanes,
+and only as many read-only lanes as the remaining session capacity permits.
+Writer capacity is intentionally scarce: a completed, integrated slice creates
+more throughput than a large queue of conflicting diffs. A new writer does not
+start until the coordinator records its lane contract and confirms it has no
+active ownership conflict.
+
+#### Definition of ready and done
+
+A slice is **ready** only when it has a specific behavior/deletion outcome,
+exact owner paths, base revision, dependencies, required checks, rollback path,
+and authority classification. It is **done** only when its focused checks pass,
+the integration check passes, its consumer/migration/deletion proof is attached,
+the inventory is updated, and its intended commit or PR state is recorded.
+Passing a unit test, reducing line count, or creating a plan does not by itself
+make a cleanup slice done.
+
+#### Ownership locks and integration queue
+
+The coordinator records active writer ownership as path/module prefixes in the
+Phase 0 inventory. No two writer lanes may own the same shared contract,
+migration, package manifest/lockfile, CI workflow, documentation index, or
+lifecycle boundary. Completed lanes enter a sequential integration queue: the
+coordinator reviews the diff and evidence, runs cross-slice verification,
+updates the inventory, and then delivers or returns the lane for correction.
+The queue admits one integration at a time.
+
+#### Health snapshots and quality ratchets
+
+At the start and end of each execution wave, record a concise health snapshot:
+base-branch freshness, managed worktree/lease state, open PR/review-thread
+state, relevant CI status and duration, focused-test result, and the legacy
+consumer count for the affected surface. The following regressions are blocked
+unless a short-lived compatibility record names an owner, removal condition,
+and expiry:
+
+- a new V0 API, model, or dashboard fallback;
+- a new epic/story-specific product route or report panel;
+- a new root script alias outside the verification-profile design;
+- a duplicated lifecycle enum or hand-maintained cross-language parity copy;
+- a new startup schema mutation instead of a versioned migration; or
+- a new generated or machine-local tree tracked without a reproducible source.
+
+#### Deletion protocol
+
+Every retirement follows the same narrow sequence:
+
+1. record whether the target is archive, migrate-then-delete, or direct delete;
+2. preserve the durable decision or tag/archive reference when history matters;
+3. prove callers, setup paths, generated outputs, persisted data, and runtime
+   consumers are absent or migrated;
+4. remove the target and its tests/fixtures/configuration together when they
+   are a single feature surface;
+5. run targeted and clean-install verification; and
+6. record the deletion and restoration reference in the inventory/PR.
+
+No deletion is approved by age, size, stale branch metadata, or a passing grep
+alone.
+
+#### Time, budget, and decision discipline
+
+Each lane has a bounded work budget and a concrete output. If it exceeds the
+budget, finds broad overlap, or encounters a cross-cutting decision, it returns
+its evidence to the coordinator rather than silently broadening scope. The
+coordinator keeps a short decision log in the existing cleanup inventory or
+linked ADR/PR: only architectural or irreversible decisions, their rationale,
+and the implementation link. This preserves context without creating another
+planning database.
+
 ### Speed rules
 
 - Parallelize read-heavy exploration, triage, test analysis, reachability, and
