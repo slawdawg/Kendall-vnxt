@@ -142,6 +142,10 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
+For managed workspace recovery and cleanup, including the exact-full immutable
+lease-ledger rollover procedure, see the
+[Codex workspace cleanup runbook](docs/codex-workspace-cleanup-runbook.md).
+
 For a read-only, bounded recommendation about whether source-ready work can be
 planned in parallel, use the [Parallel Suitability Report runbook](docs/workflows/end-to-end-lane-runner.md#parallel-suitability-report-read-only).
 It is advisory only and does not dispatch workers or mutate workspace, Git, or

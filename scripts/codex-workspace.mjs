@@ -150,6 +150,26 @@ const taskLeaseMaximumHeartbeatHistoryRecords = 1_024;
 // or durable manifest write can run.
 const taskLeaseMaximumGenerationChainLength = 64;
 const taskLeaseMaximumEpochCount = 16;
+const taskLeaseMaximumLedgerEpochCount = 16;
+// A ledger segment can reference generations from multiple ordinary lease
+// epochs. Keep that retained generation index bounded independently from the
+// per-segment intent/completion budget, rather than making a rolled ledger
+// unusable after the next 4,096 lease acquisitions.
+// Reserve one failed full-ledger admission and one administrative successor for
+// each allowed rollover. They are immutable generation records too, so omitting
+// them would make the advertised final ledger segment unreachable.
+const taskLeaseMaximumGenerationHistoryRecords =
+  taskLeaseMaximumHistoryRecords * (taskLeaseMaximumLedgerEpochCount + 1) +
+  taskLeaseMaximumLedgerEpochCount * 2;
+const taskLeaseMaximumLedgerRolloverOperatorLength = 160;
+const taskLeaseMaximumLedgerRolloverApprovalLength = 512;
+const taskLeaseLegacyLedgerSegment = "legacy";
+const taskLeaseLedgerKinds = Object.freeze([
+  "external-intents",
+  "external-completions",
+  "manifest-intents",
+  "manifest-commits",
+]);
 let activeTaskLeaseWriteContext = null;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
@@ -184,6 +204,16 @@ const missingWorktreeCloseoutTargets = Object.freeze({
       recordedHead: "63c138fdca01d6af5bd234c861f64a5779c6f58e",
       livePrHead: "4499822c180fb6d5d85d7109d9f0fec78dc1bed6",
     }),
+  },
+  // PR #813's managed worktree and branch were already removed after its
+  // exact-head merge.  Its manifest could not be reconciled only because the
+  // lease ledger was exactly full; this permits no other missing-worktree
+  // closeout and still requires fresh merged-PR and absence proof.
+  "20260806-pr-723-successor-review-resolution-hardening-fol": {
+    prNumber: 813,
+    branch: "codex/pr-723-successor-review-resolution-hardening-fol",
+    worktreeName: "20260806-pr-723-successor-review-resolution-hardening-fol",
+    allowReleasedLeaseCloseout: true,
   },
 });
 const rebuildIndexBaseBranch = "main";
@@ -275,6 +305,9 @@ try {
       break;
     case "settle-external-intent":
       settleExternalIntent(commandArgs);
+      break;
+    case "rollover-task-lease-ledger":
+      rolloverTaskLeaseLedger(commandArgs);
       break;
     case "adopt-legacy-recovery":
       adoptLegacyRecovery(commandArgs);
@@ -505,6 +538,12 @@ settle-external-intent options:
   --intent-id <uuid>        Exact immutable unresolved intent to settle.
   --dry-run                 Print the bounded settlement packet without mutation.
   --apply                   Append an immutable owner-attested completion record.
+  --approval <text>         Required with --apply; records the operator authorization.
+
+rollover-task-lease-ledger options:
+  <task-id>                 Exact released versioned lease whose current ledger segment is full.
+  --dry-run                 Inspect and verify the bounded rollover packet without mutation.
+  --apply                   Seal the verified ledger segment and begin a new immutable segment.
   --approval <text>         Required with --apply; records the operator authorization.
 
 adopt-legacy-recovery options:
@@ -2959,7 +2998,7 @@ function settleExternalIntent(argv) {
     throw new Error("external intent settlement evidence changed before immutable completion; refusing to settle.");
   }
   try {
-    writeNewJson(taskLeasePath(state, taskId, "external-completions", intentId), {
+    writeNewJson(taskLeaseLedgerPath(state, taskId, "external-completions", intentId), {
       schema_version: taskLeaseSchemaVersion,
       task_id: taskId,
       generation: fresh.generation,
@@ -2984,6 +3023,110 @@ function settleExternalIntent(argv) {
   };
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("settle-external-intent", [JSON.stringify(output)]);
+}
+
+function rolloverTaskLeaseLedger(argv) {
+  assertTaskLeaseLedgerRolloverModeOptionOccurrences(argv);
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) throw new Error("rollover-task-lease-ledger requires exactly one task id.");
+  if (Boolean(options.dryRun) === Boolean(options.apply)) {
+    throw new Error("rollover-task-lease-ledger requires exactly one of --dry-run or --apply.");
+  }
+  const taskId = String(positional[0] || "").trim();
+  assertSafeTaskId(taskId);
+  const approval = safeMetadataText(options.approval, taskLeaseMaximumLedgerRolloverApprovalLength);
+  if (options.apply && !validTakeoverReason(approval)) {
+    throw new Error("rollover-task-lease-ledger --apply requires explicit operator approval of at least 10 non-whitespace characters.");
+  }
+  const state = workspaceState(options);
+  const manifestRecord = findManifestByExactTaskId(state, taskId);
+  assertExactTaskLeaseLedgerRolloverOwner(manifestRecord.manifest, options);
+  // The lease successor is an authorization boundary, so retain the exact
+  // owner validated against the manifest for acquisition and recovery.  The
+  // immutable rollover record intentionally stores only its bounded display
+  // form.
+  const validatedOwner = String(currentLaneOwner(options) || "").trim();
+  const operator = safeMetadataText(validatedOwner, taskLeaseMaximumLedgerRolloverOperatorLength);
+  if (!operator) throw new Error("rollover-task-lease-ledger requires a bounded current lane owner.");
+  const packet = taskLeaseLedgerRolloverPacket(state, taskId, validatedOwner, { allowStaleRecovery: true });
+  if (options.dryRun) {
+    const output = { ...packet, mutation: "none; dry-run only" };
+    if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+    else printPlan("rollover-task-lease-ledger", [JSON.stringify(output)]);
+    return;
+  }
+  if (!packet.allowed) throw new Error(`task lease ledger rollover blocked: ${packet.blockers.join("; ")}`);
+  let output = null;
+  // Acquire the released predecessor before the final re-proof and publication.
+  // Normal commands cannot acquire while this successor is active, so no intent
+  // can straddle the old and new ledger segments.
+  withManifestLock(state, taskId, ({ token, generation }) => {
+    const fresh = taskLeaseLedgerRolloverPacket(state, taskId, validatedOwner, {
+      expectedReleasedGeneration: packet.leaseGeneration,
+      expectedReleasedEpoch: packet.leaseEpoch,
+      expectedLeaseStatus: packet.leaseStatus,
+      heldGeneration: generation,
+      heldToken: token,
+    });
+    if (!fresh.allowed || fresh.segment !== packet.segment || fresh.epoch !== packet.epoch || fresh.snapshotDigest !== packet.snapshotDigest) {
+      throw new Error("task lease ledger rollover evidence changed before immutable publication; refusing to roll over.");
+    }
+    const nextSegment = randomUUID();
+    const nextEpoch = fresh.epoch + 1;
+    ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-segments"), state.tasksDir);
+    ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-rollovers"), state.tasksDir);
+    ensureDurableDirectory(taskLeasePath(state, taskId, "ledger-rollover-candidates"), state.tasksDir);
+    const nextRoot = join(taskLeasePath(state, taskId, "ledger-segments"), nextSegment);
+    for (const kind of taskLeaseLedgerKinds) {
+      ensureDurableDirectory(join(nextRoot, kind), state.tasksDir);
+    }
+    const record = {
+      schema_version: taskLeaseSchemaVersion,
+      task_id: taskId,
+      from_segment: fresh.segment,
+      to_segment: nextSegment,
+      epoch: nextEpoch,
+      ledger_counts: fresh.counts,
+      ledger_snapshot_digest: fresh.snapshotDigest,
+      rolled_at: new Date().toISOString(),
+      operator,
+      approval,
+      evidence_retained: true,
+      raw_payload_retained: false,
+    };
+    try {
+      publishTaskLeaseLedgerRollover(state, taskId, record);
+    } catch (error) {
+      if (error?.code === "EEXIST") {
+        throw new Error("task lease ledger segment already has an immutable rollover record; refusing to overwrite evidence.");
+      }
+      throw error;
+    }
+    output = {
+      ...fresh,
+      nextSegment,
+      nextEpoch,
+      rolledAt: record.rolled_at,
+      mutation: "immutable ledger rollover published under a successor lease; all prior ledger JSON evidence remains retained",
+    };
+  }, { owner: validatedOwner, recoverStale: true, allowFullLedgerRollover: true });
+  if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+  else printPlan("rollover-task-lease-ledger", [JSON.stringify(output)]);
+}
+
+function assertTaskLeaseLedgerRolloverModeOptionOccurrences(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = arg === "--apply" || arg.startsWith("--apply=")
+      ? "--apply"
+      : arg === "--dry-run" || arg.startsWith("--dry-run=")
+        ? "--dry-run"
+        : null;
+    if (!option) continue;
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
+      throw new Error(`rollover-task-lease-ledger ${option} must be a bare flag without a value.`);
+    }
+  }
 }
 
 function adoptLegacyRecovery(argv) {
@@ -7526,7 +7669,7 @@ function closeMissingWorktree(argv) {
   }
 
   let appliedPacket = null;
-  withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token }) => {
+  withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token, generation }) => {
     const lockedRecord = findMissingWorktreeManifestByExactTaskId(state, taskId);
     const lockedPacket = buildMissingWorktreeCloseoutPacket(lockedRecord, state, {
       staleAfterSeconds,
@@ -7535,6 +7678,7 @@ function closeMissingWorktree(argv) {
       currentOwner: currentLaneOwner(options),
       preLockEvidence: packet.proof.taskLock,
       heldLockToken: token,
+      heldLockGeneration: generation,
     });
     if (!lockedPacket.ready) {
       throw new Error(`Missing-worktree closeout changed under lock: ${lockedPacket.blockers.join("; ")}`);
@@ -7634,10 +7778,38 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
   const repository = missingWorktreeRepositoryEvidence(manifest);
   if (repository.status !== "matched") blockers.push(repository.reason);
 
-  const owner = missingWorktreeOwnerEvidence(manifest, context.staleAfterSeconds, checkedAt);
-  if (owner.status !== "stale") blockers.push(owner.reason);
-  const taskLock = missingWorktreeLockEvidence(state, manifest.task_id, context);
-  if (taskLock.status !== "absent" && taskLock.status !== "self_held_after_absent_precheck") blockers.push(taskLock.reason);
+  const taskLock = missingWorktreeLockEvidence(state, manifest.task_id, {
+    ...context,
+    allowReleasedLeaseCloseout: target?.allowReleasedLeaseCloseout === true,
+  });
+  const releasedLeaseCloseout = target?.allowReleasedLeaseCloseout === true && (
+    (taskLock.status === "released" && taskLock.owner === manifest.owner) ||
+    (taskLock.status === "self_held_after_released_final_lease_precheck" && taskLock.preLockOwner === manifest.owner)
+  );
+  const owner = releasedLeaseCloseout
+    ? {
+        status: "released_final_lease",
+        owner: manifest.owner,
+        reason: "exact manifest owner released the final versioned lease",
+      }
+    : missingWorktreeOwnerEvidence(manifest, context.staleAfterSeconds, checkedAt);
+  if (owner.status !== "stale" && owner.status !== "released_final_lease") blockers.push(owner.reason);
+  const releasedLeaseCurrentOwner = String(context.currentOwner || "").trim();
+  if (releasedLeaseCloseout && releasedLeaseCurrentOwner !== manifest.owner) {
+    blockers.push("released final-lease closeout requires the invoking runner to exactly match the manifest owner");
+  }
+  const releasedLeaseLedgerCapacity = releasedLeaseCloseout
+    ? missingWorktreeReleasedLeaseCloseoutLedgerCapacityEvidence(state, manifest.task_id)
+    : null;
+  if (releasedLeaseLedgerCapacity && releasedLeaseLedgerCapacity.status !== "available") {
+    blockers.push(releasedLeaseLedgerCapacity.reason);
+  }
+  if (
+    taskLock.status !== "absent" &&
+    taskLock.status !== "self_held_after_absent_precheck" &&
+    taskLock.status !== "self_held_after_released_final_lease_precheck" &&
+    !releasedLeaseCloseout
+  ) blockers.push(taskLock.reason);
   const worktree = missingWorktreeRegistrationEvidence(manifest, state, target);
   if (worktree.status !== "absent_unregistered") blockers.push(worktree.reason);
   const localBranch = missingWorktreeLocalBranchEvidence(manifest);
@@ -7656,8 +7828,12 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
 
   const requiredGates = [
     "exact allowlisted task manifest",
-    "stale manifest owner evidence",
-    "no retained task lock before closeout lock acquisition",
+    target?.allowReleasedLeaseCloseout ? "stale manifest owner or exact released final-lease owner evidence" : "stale manifest owner evidence",
+    ...(target?.allowReleasedLeaseCloseout ? [
+      "released final-lease closeout is invoked by the exact manifest owner",
+      "active immutable lease ledger has callback admission capacity; otherwise rollover completed first",
+    ] : []),
+    target?.allowReleasedLeaseCloseout ? "no retained task lock or exact released final-lease evidence before closeout lock acquisition" : "no retained task lock before closeout lock acquisition",
     "managed worktree path is absent and unregistered",
     "local and remote branch refs are absent",
     "no linked assignment metadata exists",
@@ -7674,7 +7850,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
     satisfiedGates: ready ? (context.applying ? requiredGates : requiredGates.slice(0, -1)) : [],
     blockedReasons: blockers,
     stopLines: [
-      "exact three-task allowlist only",
+      "exact allowlisted task only",
       "no closeout on ambiguous lock, worktree, branch, assignment, or GitHub evidence",
       "never delete a worktree, local branch, remote branch, assignment, or PR",
       "apply writes only the selected manifest after a fresh locked re-proof",
@@ -7700,6 +7876,7 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
     blockers,
     proof: {
       owner,
+      releasedLeaseLedgerCapacity,
       repository,
       taskLock,
       worktree,
@@ -7711,6 +7888,32 @@ function buildMissingWorktreeCloseoutPacket(record, state, context) {
     authorityDecision,
     mutation: "none; preview only",
   };
+}
+
+function missingWorktreeReleasedLeaseCloseoutLedgerCapacityEvidence(state, taskId) {
+  try {
+    const ledger = taskLeaseLedgerState(state, taskId);
+    const counts = Object.fromEntries(taskLeaseLedgerKinds.map((kind) => [
+      kind,
+      leaseJsonRecordCount(taskLeaseLedgerDirectory(state, taskId, kind, ledger), kind),
+    ]));
+    const exhaustedKinds = taskLeaseLedgerKinds.filter((kind) => counts[kind] >= taskLeaseMaximumHistoryRecords);
+    return exhaustedKinds.length === 0
+      ? { status: "available", segment: ledger.segment, epoch: ledger.epoch, counts, reason: "active immutable lease ledger has callback admission capacity" }
+      : {
+          status: "rollover_required",
+          segment: ledger.segment,
+          epoch: ledger.epoch,
+          counts,
+          exhaustedKinds,
+          reason: `active immutable lease ledger is at capacity (${exhaustedKinds.join(", ")}); run rollover-task-lease-ledger before closeout`,
+        };
+  } catch (error) {
+    return {
+      status: "blocked",
+      reason: `active immutable lease ledger capacity is not provable: ${safeMetadataText(error?.message || "unknown", 300)}`,
+    };
+  }
 }
 
 function missingWorktreeOwnerEvidence(manifest, staleAfterSeconds, checkedAt) {
@@ -7747,6 +7950,41 @@ function missingWorktreeLockEvidence(state, taskId, context) {
   if (!context.heldLockToken) return observed;
   const preLock = context.preLockEvidence;
   if (preLock?.status !== "absent") {
+    if (
+      context.allowReleasedLeaseCloseout === true &&
+      preLock?.status === "released" &&
+      typeof preLock.owner === "string" && preLock.owner &&
+      rawObserved.status === "active" && rawObserved.metadata?.token === context.heldLockToken
+    ) {
+      const successor = missingWorktreeReleasedLeaseSuccessorEvidence(
+        state,
+        taskId,
+        preLock.generation,
+        context.heldLockGeneration,
+        preLock.epoch,
+      );
+      if (successor.status !== "matched") {
+        return {
+          ...observed,
+          status: "blocked",
+          reason: successor.reason,
+          preLockStatus: preLock.status,
+          preLockOwner: preLock.owner,
+          predecessorGeneration: preLock.generation || null,
+          heldGeneration: context.heldLockGeneration || null,
+        };
+      }
+      return {
+        ...observed,
+        status: "self_held_after_released_final_lease_precheck",
+        reason: "exact released final lease directly handed off to this command before locked re-proof",
+        preLockStatus: preLock.status,
+        preLockOwner: preLock.owner,
+        predecessorGeneration: preLock.generation,
+        heldGeneration: context.heldLockGeneration,
+        successor,
+      };
+    }
     return { ...observed, status: "blocked", reason: "task lock was not absent before manifest lock acquisition" };
   }
   if (rawObserved.status !== "active" || rawObserved.metadata?.token !== context.heldLockToken) {
@@ -7758,6 +7996,44 @@ function missingWorktreeLockEvidence(state, taskId, context) {
     reason: "task lock was absent before this command acquired its manifest lock",
     preLockStatus: preLock.status,
   };
+}
+
+function missingWorktreeReleasedLeaseSuccessorEvidence(state, taskId, predecessorGeneration, heldGeneration, predecessorEpoch = 0, handoffReason = "released") {
+  if (!isUuid(predecessorGeneration) || !isUuid(heldGeneration)) {
+    return { status: "blocked", reason: "released pre-lock generation or held successor generation is missing" };
+  }
+  try {
+    const predecessor = leaseRecord(state, taskId, predecessorGeneration);
+    if (!validTaskLeaseRecord(predecessor, taskId) || predecessor.generation !== predecessorGeneration) {
+      return { status: "blocked", reason: "released pre-lock generation is no longer valid" };
+    }
+    const tokenDigest = taskLeaseTokenDigest(predecessor.token);
+    const handoffPath = taskLeasePath(state, taskId, "handoffs", predecessorGeneration);
+    if (existsSync(handoffPath)) {
+      const handoff = readRegularJson(handoffPath);
+      if (
+        validTaskLeaseHandoff(handoff, taskId, predecessorGeneration, tokenDigest) &&
+        handoff.reason === handoffReason &&
+        handoff.to_generation === heldGeneration
+      ) {
+        return { status: "matched", kind: "handoff", predecessorGeneration, heldGeneration };
+      }
+    }
+    const epochPath = taskLeasePath(state, taskId, "epochs", predecessorGeneration);
+    if (existsSync(epochPath)) {
+      const epoch = readRegularJson(epochPath);
+      if (
+        validTaskLeaseEpoch(epoch, taskId, predecessorGeneration, tokenDigest, predecessorEpoch) &&
+        epoch.reason === handoffReason &&
+        epoch.to_generation === heldGeneration
+      ) {
+        return { status: "matched", kind: "epoch", predecessorGeneration, heldGeneration };
+      }
+    }
+    return { status: "blocked", reason: "held closeout lease is not the direct released successor observed before acquisition" };
+  } catch {
+    return { status: "blocked", reason: "released-to-held successor evidence is unreadable" };
+  }
 }
 
 function missingWorktreeRegistrationEvidence(manifest, state, target) {
@@ -12080,7 +12356,7 @@ function writeManifest(path, manifest, options = {}) {
       manifest_digest: createHash("sha256").update(serialized).digest("hex"),
       started_at: new Date().toISOString(),
     };
-    writeNewJson(taskLeasePath(context.state, context.taskId, "manifest-intents", intent.intent_id), intent);
+    writeNewJson(taskLeaseLedgerPath(context.state, context.taskId, "manifest-intents", intent.intent_id), intent);
   }
   atomicDurableWrite(path, serialized);
   if (options.testHardCrashAfterRename && process.env[options.testHardCrashAfterRename] === "1") {
@@ -12105,7 +12381,7 @@ function writeManifest(path, manifest, options = {}) {
 
 function completeTaskLeaseManifestIntent(context, intent) {
   assertActiveTaskLeaseWriteOwnership(context);
-  writeNewJson(taskLeasePath(context.state, context.taskId, "manifest-commits", intent.intent_id), {
+  writeNewJson(taskLeaseLedgerPath(context.state, context.taskId, "manifest-commits", intent.intent_id), {
     schema_version: taskLeaseSchemaVersion,
     task_id: context.taskId,
     generation: context.generation,
@@ -13130,6 +13406,16 @@ function assertLaneOwner(manifest, options = {}) {
   }
   if (warning && options.takeOwnership && !validTakeoverReason(options.takeoverReason)) {
     throw new Error("--takeover-reason must explain the takeover in at least 10 non-whitespace characters.");
+  }
+}
+
+function assertExactTaskLeaseLedgerRolloverOwner(manifest, options = {}) {
+  const recordedOwner = String(manifest?.owner || "").trim();
+  const currentOwner = String(currentLaneOwner(options) || "").trim();
+  if (!recordedOwner || recordedOwner !== currentOwner) {
+    throw new Error(
+      `rollover-task-lease-ledger requires the exact manifest owner; recorded=${safeMetadataText(recordedOwner || "missing", 160)} current=${safeMetadataText(currentOwner || "missing", 160)}. Complete normal governed takeover before rollover.`,
+    );
   }
 }
 
@@ -15954,7 +16240,7 @@ function recoverInterruptedDirtyTakeover(state, target) {
     finalizeDirtyInLaneTakeover(decision);
   }
   atomicDurableWrite(target.path, restoredBytes);
-  writeNewJson(taskLeasePath(state, taskId, "manifest-commits", intent.intent_id), {
+  writeNewJson(taskLeaseLedgerPath(state, taskId, "manifest-commits", intent.intent_id), {
     schema_version: taskLeaseSchemaVersion,
     task_id: taskId,
     generation: inspection.generation,
@@ -16534,6 +16820,75 @@ function taskLeasePath(state, taskId, kind, name = null) {
   return name ? join(directory, `${name}.json`) : directory;
 }
 
+function validTaskLeaseLedgerRollover(record, taskId, segment, epoch) {
+  return Boolean(
+    record &&
+      record.schema_version === taskLeaseSchemaVersion &&
+      record.task_id === taskId &&
+      record.from_segment === segment &&
+      isUuid(record.to_segment) &&
+      record.to_segment !== segment &&
+      record.epoch === epoch + 1 &&
+      record.ledger_counts &&
+      taskLeaseLedgerKinds.every((kind) => Number.isInteger(record.ledger_counts[kind]) && record.ledger_counts[kind] >= 0 && record.ledger_counts[kind] <= taskLeaseMaximumHistoryRecords) &&
+      typeof record.ledger_snapshot_digest === "string" && /^[a-f0-9]{64}$/i.test(record.ledger_snapshot_digest) &&
+      isIsoTimestamp(record.rolled_at) &&
+      typeof record.operator === "string" && record.operator && record.operator.length <= taskLeaseMaximumLedgerRolloverOperatorLength &&
+      typeof record.approval === "string" && record.approval.length <= taskLeaseMaximumLedgerRolloverApprovalLength && validTakeoverReason(record.approval) &&
+      record.evidence_retained === true &&
+      record.raw_payload_retained === false,
+  );
+}
+
+function taskLeaseLedgerState(state, taskId, options = {}) {
+  const root = taskLeaseRoot(state, taskId);
+  if (!existsSync(root)) return { segment: taskLeaseLegacyLedgerSegment, epoch: 0 };
+  const rollovers = taskLeasePath(state, taskId, "ledger-rollovers");
+  if (!existsSync(rollovers)) return { segment: taskLeaseLegacyLedgerSegment, epoch: 0 };
+  const stats = lstatSync(rollovers);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("ledger_rollover_directory_invalid");
+  let segment = taskLeaseLegacyLedgerSegment;
+  let epoch = 0;
+  const seen = new Set();
+  while (true) {
+    if (seen.has(segment)) throw new Error("ledger_rollover_cycle");
+    seen.add(segment);
+    const path = taskLeasePath(state, taskId, "ledger-rollovers", segment);
+    if (!existsSync(path)) return { segment, epoch };
+    const record = readRegularJson(path);
+    if (!validTaskLeaseLedgerRollover(record, taskId, segment, epoch)) {
+      throw new Error("ledger_rollover_record_invalid");
+    }
+    if (options.verifySealedHistory === true) {
+      const sealed = validateTaskLeaseLedgerSegment(state, taskId, { segment, epoch });
+      if (
+        taskLeaseLedgerKinds.some((kind) => sealed.counts[kind] !== record.ledger_counts[kind]) ||
+        sealed.digest !== record.ledger_snapshot_digest
+      ) {
+        throw new Error("ledger_rollover_sealed_segment_mismatch");
+      }
+    }
+    if (epoch >= taskLeaseMaximumLedgerEpochCount) throw new Error("ledger_rollover_capacity_exceeded");
+    segment = record.to_segment;
+    epoch += 1;
+  }
+}
+
+function taskLeaseLedgerDirectory(state, taskId, kind, ledger = taskLeaseLedgerState(state, taskId)) {
+  if (!taskLeaseLedgerKinds.includes(kind)) throw new Error("task_lease_ledger_kind_invalid");
+  if (ledger.segment === taskLeaseLegacyLedgerSegment) return taskLeasePath(state, taskId, kind);
+  const directory = join(taskLeasePath(state, taskId, "ledger-segments"), ledger.segment, kind);
+  if (!existsSync(directory)) throw new Error("ledger_segment_directory_missing");
+  const stats = lstatSync(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("ledger_segment_directory_invalid");
+  return directory;
+}
+
+function taskLeaseLedgerPath(state, taskId, kind, name = null) {
+  const directory = taskLeaseLedgerDirectory(state, taskId, kind);
+  return name ? join(directory, `${name}.json`) : directory;
+}
+
 function taskLeaseRootRecordPath(state, taskId) {
   return join(taskLeaseRoot(state, taskId), "root.json");
 }
@@ -16762,6 +17117,9 @@ function ensureTaskLeaseDirectories(state, taskId) {
     taskLeasePath(state, taskId, "external-completions"),
     taskLeasePath(state, taskId, "manifest-intents"),
     taskLeasePath(state, taskId, "manifest-commits"),
+    taskLeasePath(state, taskId, "ledger-segments"),
+    taskLeasePath(state, taskId, "ledger-rollovers"),
+    taskLeasePath(state, taskId, "ledger-rollover-candidates"),
     taskLeasePath(state, taskId, "legacy-adoptions"),
     taskLeasePath(state, taskId, "legacy-adoption-candidates"),
   ];
@@ -16803,6 +17161,14 @@ function publishTaskLeaseEpoch(state, taskId, record) {
   return publishImmutableLeaseRecord(
     taskLeasePath(state, taskId, "epoch-candidates", `${record.from_generation}-${record.to_generation}`),
     taskLeasePath(state, taskId, "epochs", record.from_generation),
+    record,
+  );
+}
+
+function publishTaskLeaseLedgerRollover(state, taskId, record) {
+  return publishImmutableLeaseRecord(
+    taskLeasePath(state, taskId, "ledger-rollover-candidates", `${record.from_segment}-${record.to_segment}`),
+    taskLeasePath(state, taskId, "ledger-rollovers", record.from_segment),
     record,
   );
 }
@@ -16857,24 +17223,141 @@ function appendTaskLeaseHeartbeat(state, taskId, record) {
   return heartbeat;
 }
 
-function leaseJsonRecords(directory) {
+function leaseJsonRecords(directory, maximumRecords = taskLeaseMaximumHistoryRecords) {
   if (!existsSync(directory)) return [];
   const stats = lstatSync(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("lease_record_directory_invalid");
   const names = readdirSync(directory).filter((name) => name.endsWith(".json")).sort();
-  if (names.length > taskLeaseMaximumHistoryRecords) throw new Error("lease_history_depth_exceeded");
+  if (names.length > maximumRecords) throw new Error("lease_history_depth_exceeded");
   return names.map((name) => ({ name, path: join(directory, name), record: readRegularJson(join(directory, name)) }));
 }
 
-function leaseJsonRecordCount(directory, label) {
+function leaseJsonRecordCount(directory, label, maximumRecords = taskLeaseMaximumHistoryRecords) {
   if (!existsSync(directory)) return 0;
   const stats = lstatSync(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error(`${label}_directory_invalid`);
   const count = readdirSync(directory).filter((name) => name.endsWith(".json")).length;
-  if (count > taskLeaseMaximumHistoryRecords) {
+  if (count > maximumRecords) {
     throw new Error(`${label}_history_capacity_exhausted`);
   }
   return count;
+}
+
+function taskLeaseLedgerRolloverPacket(state, taskId, operator, options = {}) {
+  const blockers = [];
+  const inspection = inspectTaskLease(state, taskId);
+  const lockedSuccessor = options.expectedReleasedGeneration
+    ? inspection.protocol === "versioned_lease" &&
+      inspection.status === "active" &&
+      inspection.generation === options.heldGeneration &&
+      inspection.metadata?.token === options.heldToken &&
+      missingWorktreeReleasedLeaseSuccessorEvidence(
+        state,
+        taskId,
+        options.expectedReleasedGeneration,
+        options.heldGeneration,
+        options.expectedReleasedEpoch,
+        options.expectedLeaseStatus === "stale" ? "stale_owner_process_absent" : "released",
+      ).status === "matched"
+    : false;
+  const ownerBoundStaleRecovery = options.allowStaleRecovery === true &&
+    inspection.status === "stale" && inspection.metadata?.owner === operator;
+  if (inspection.protocol !== "versioned_lease" || (inspection.status !== "released" && !ownerBoundStaleRecovery && !lockedSuccessor)) {
+    blockers.push("task does not have an exactly released versioned lease");
+  }
+  let ledger = null;
+  let snapshot = null;
+  try {
+    // Rehash prior sealed segments only while preparing a further rollover.
+    // Routine ledger path resolution stays bounded to the active segment.
+    ledger = taskLeaseLedgerState(state, taskId, { verifySealedHistory: true });
+    if (ledger.epoch >= taskLeaseMaximumLedgerEpochCount) {
+      blockers.push("immutable ledger rollover epoch capacity is exhausted");
+    }
+    snapshot = validateTaskLeaseLedgerSegment(state, taskId, ledger);
+    if (!taskLeaseLedgerKinds.some((kind) => snapshot.counts[kind] === taskLeaseMaximumHistoryRecords)) {
+      blockers.push("current immutable ledger segment is not at its exact capacity boundary");
+    }
+  } catch (error) {
+    blockers.push(`ledger evidence is not provable: ${error?.message || "unknown"}`);
+  }
+  return {
+    taskId,
+    operator: safeMetadataText(operator, taskLeaseMaximumLedgerRolloverOperatorLength),
+    leaseStatus: inspection.status,
+    leaseReason: inspection.reason,
+    leaseGeneration: options.expectedReleasedGeneration || inspection.generation || null,
+    leaseEpoch: options.expectedReleasedGeneration ? options.expectedReleasedEpoch : inspection.epoch,
+    segment: ledger?.segment || null,
+    epoch: ledger?.epoch ?? null,
+    counts: snapshot?.counts || null,
+    snapshotDigest: snapshot?.digest || null,
+    allowed: blockers.length === 0,
+    blockers,
+    evidenceRetained: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function validateTaskLeaseLedgerSegment(state, taskId, ledger) {
+  const generationRecords = leaseJsonRecords(
+    taskLeasePath(state, taskId, "generations"),
+    taskLeaseMaximumGenerationHistoryRecords,
+  );
+  const tokenDigests = new Map();
+  for (const { name, record } of generationRecords) {
+    if (!validTaskLeaseRecord(record, taskId) || name !== `${record.generation}.json`) {
+      throw new Error("lease_generation_record_invalid");
+    }
+    tokenDigests.set(record.generation, taskLeaseTokenDigest(record.token));
+  }
+  if (tokenDigests.size === 0) throw new Error("lease_generation_history_missing");
+  const records = Object.fromEntries(taskLeaseLedgerKinds.map((kind) => [
+    kind,
+    leaseJsonRecords(taskLeaseLedgerDirectory(state, taskId, kind, ledger)),
+  ]));
+  const counts = Object.fromEntries(taskLeaseLedgerKinds.map((kind) => [kind, records[kind].length]));
+  const validateIntent = (record, validator, label) => {
+    const tokenDigest = tokenDigests.get(record?.generation);
+    if (!tokenDigest || !validator(record, taskId, record.generation, tokenDigest)) {
+      throw new Error(`${label}_record_invalid`);
+    }
+  };
+  const uniqueByIntentId = (entries, label) => {
+    const mapped = new Map();
+    for (const { name, record } of entries) {
+      if (!isUuid(record?.intent_id) || name !== `${record.intent_id}.json` || mapped.has(record.intent_id)) {
+        throw new Error(`${label}_identity_invalid`);
+      }
+      mapped.set(record.intent_id, record);
+    }
+    return mapped;
+  };
+  const externalIntents = uniqueByIntentId(records["external-intents"], "external_intent");
+  const externalCompletions = uniqueByIntentId(records["external-completions"], "external_completion");
+  const manifestIntents = uniqueByIntentId(records["manifest-intents"], "manifest_intent");
+  const manifestCommits = uniqueByIntentId(records["manifest-commits"], "manifest_commit");
+  for (const intent of externalIntents.values()) {
+    validateIntent(intent, validTaskLeaseExternalIntent, "external_intent");
+    const completion = externalCompletions.get(intent.intent_id);
+    if (!completion || !validTaskLeaseExternalCompletion(completion, taskId, intent.generation, tokenDigests.get(intent.generation), intent.intent_id)) {
+      throw new Error("external_completion_missing_or_invalid");
+    }
+  }
+  if (externalIntents.size !== externalCompletions.size) throw new Error("external_completion_without_matching_intent");
+  for (const intent of manifestIntents.values()) {
+    validateIntent(intent, validTaskLeaseManifestIntent, "manifest_intent");
+    const commit = manifestCommits.get(intent.intent_id);
+    if (!commit || !validTaskLeaseManifestCommit(commit, taskId, intent.generation, tokenDigests.get(intent.generation), intent.intent_id)) {
+      throw new Error("manifest_commit_missing_or_invalid");
+    }
+  }
+  if (manifestIntents.size !== manifestCommits.size) throw new Error("manifest_commit_without_matching_intent");
+  const digestInput = taskLeaseLedgerKinds.flatMap((kind) => records[kind].map(({ name, path }) => `${kind}:${name}:${streamingFileSha256(path)}`)).join("\n");
+  return {
+    counts,
+    digest: createHash("sha256").update(digestInput).digest("hex"),
+  };
 }
 
 function assertTaskLeaseIntentPairCapacity(context, kind) {
@@ -16882,8 +17365,8 @@ function assertTaskLeaseIntentPairCapacity(context, kind) {
     ? ["external-intents", "external-completions", "external_intent"]
     : ["manifest-intents", "manifest-commits", "manifest_intent"];
   const [intentKind, completionKind, label] = pair;
-  const intentCount = leaseJsonRecordCount(taskLeasePath(context.state, context.taskId, intentKind), label);
-  const completionCount = leaseJsonRecordCount(taskLeasePath(context.state, context.taskId, completionKind), `${label}_completion`);
+  const intentCount = leaseJsonRecordCount(taskLeaseLedgerPath(context.state, context.taskId, intentKind), label);
+  const completionCount = leaseJsonRecordCount(taskLeaseLedgerPath(context.state, context.taskId, completionKind), `${label}_completion`);
   if (intentCount >= taskLeaseMaximumHistoryRecords || completionCount >= taskLeaseMaximumHistoryRecords) {
     throw new Error(
       `Task lease ${label} capacity is exhausted: task_id=${context.taskId}; generation=${context.generation}; ` +
@@ -16905,7 +17388,7 @@ function assertTaskLeaseReleaseCapacity(state, taskId, metadata) {
     ["manifest-intents", "manifest_intent"],
     ["manifest-commits", "manifest_commit"],
   ]) {
-    leaseJsonRecordCount(taskLeasePath(state, taskId, kind), label);
+    leaseJsonRecordCount(taskLeaseLedgerPath(state, taskId, kind), label);
   }
   const fence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
   if (fence) {
@@ -16913,7 +17396,7 @@ function assertTaskLeaseReleaseCapacity(state, taskId, metadata) {
   }
 }
 
-function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
+function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, options = {}) {
   const tokenDigest = taskLeaseTokenDigest(metadata.token);
   // The initial heartbeat has already been published when this guard runs.
   // Keep one further heartbeat slot available for the protected callback to
@@ -16936,6 +17419,14 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
     throw new Error("Task lease callback admission is not provable: release record already exists.");
   }
 
+  if (options.allowFullLedgerRollover === true) {
+    // This owner-bound administrative callback only publishes the rollover;
+    // it cannot write intents and holds the successor lease until the active
+    // segment changes. Release-time validation still runs below.
+    assertTaskLeaseReleaseCapacity(state, taskId, metadata);
+    return;
+  }
+
   // Every callback can persist a durable manifest update and can begin an
   // external action.  Reserve both sides of each immutable intent/completion
   // pair before publishing root.json: once root is visible, rejecting a full
@@ -16946,7 +17437,7 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
     ["manifest-intents", "manifest_intent"],
     ["manifest-commits", "manifest_commit"],
   ]) {
-    const count = leaseJsonRecordCount(taskLeasePath(state, taskId, kind), label);
+    const count = leaseJsonRecordCount(taskLeaseLedgerPath(state, taskId, kind), label);
     if (count >= taskLeaseMaximumHistoryRecords) {
       throw new Error(
         `Task lease ${label} callback reservation capacity is exhausted: task_id=${taskId}; generation=${metadata.generation}; ` +
@@ -16958,9 +17449,9 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata) {
 }
 
 function unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest) {
-  const intents = leaseJsonRecords(taskLeasePath(state, taskId, "external-intents"));
+  const intents = leaseJsonRecords(taskLeaseLedgerPath(state, taskId, "external-intents"));
   const completions = new Map(
-    leaseJsonRecords(taskLeasePath(state, taskId, "external-completions"))
+    leaseJsonRecords(taskLeaseLedgerPath(state, taskId, "external-completions"))
       .filter(({ record }) => record?.generation === metadata.generation)
       .map(({ record }) => [record?.intent_id, record]),
   );
@@ -16979,9 +17470,9 @@ function unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest)
 }
 
 function unresolvedTaskLeaseManifestIntent(state, taskId, metadata, tokenDigest) {
-  const intents = leaseJsonRecords(taskLeasePath(state, taskId, "manifest-intents"));
+  const intents = leaseJsonRecords(taskLeaseLedgerPath(state, taskId, "manifest-intents"));
   const commits = new Map(
-    leaseJsonRecords(taskLeasePath(state, taskId, "manifest-commits"))
+    leaseJsonRecords(taskLeaseLedgerPath(state, taskId, "manifest-commits"))
       .filter(({ record }) => record?.generation === metadata.generation)
       .map(({ record }) => [record?.intent_id, record]),
   );
@@ -17022,12 +17513,12 @@ function taskLeaseExternalIntent(context, commandName, commandArguments) {
     command_digest: createHash("sha256").update(JSON.stringify([commandName, ...commandArguments])).digest("hex"),
     started_at: new Date().toISOString(),
   };
-  writeNewJson(taskLeasePath(context.state, context.taskId, "external-intents", intent.intent_id), intent);
+  writeNewJson(taskLeaseLedgerPath(context.state, context.taskId, "external-intents", intent.intent_id), intent);
   return intent;
 }
 
 function completeTaskLeaseExternalIntent(context, intent, result) {
-  writeNewJson(taskLeasePath(context.state, context.taskId, "external-completions", intent.intent_id), {
+  writeNewJson(taskLeaseLedgerPath(context.state, context.taskId, "external-completions", intent.intent_id), {
     schema_version: taskLeaseSchemaVersion,
     task_id: context.taskId,
     generation: context.generation,
@@ -17460,6 +17951,7 @@ function redactTaskLockInspection(inspection) {
     tokenPresent: Boolean(metadata?.token),
     protocol: inspection?.protocol || "unknown",
     generation: inspection?.generation || null,
+    epoch: inspection?.epoch ?? 0,
     mutation: "none; read-only lock inspection",
   };
 }
@@ -17479,6 +17971,20 @@ function assertTaskLeaseAcquisitionCapacity(inspection, taskId, options = {}) {
     throw new Error(
       `Task lease handoff capacity is exhausted: task_id=${taskId}; chain_depth=${inspection.chainDepth}; ` +
       `maximum_chain_length=${taskLeaseMaximumGenerationChainLength}; mutation=none.`,
+    );
+  }
+}
+
+function assertTaskLeaseGenerationHistoryCapacity(state, taskId) {
+  const count = leaseJsonRecordCount(
+    taskLeasePath(state, taskId, "generations"),
+    "lease_generation",
+    taskLeaseMaximumGenerationHistoryRecords,
+  );
+  if (count >= taskLeaseMaximumGenerationHistoryRecords) {
+    throw new Error(
+      `Task lease generation history capacity is exhausted: task_id=${taskId}; ` +
+      `maximum_generation_records=${taskLeaseMaximumGenerationHistoryRecords}; mutation=none.`,
     );
   }
 }
@@ -17508,12 +18014,13 @@ function withManifestLock(state, taskId, fn, options = {}) {
     token: randomUUID(),
   };
   ensureTaskLeaseDirectories(state, taskId);
+  assertTaskLeaseGenerationHistoryCapacity(state, taskId);
   writeNewJson(taskLeasePath(state, taskId, "generations", metadata.generation), metadata);
   appendTaskLeaseHeartbeat(state, taskId, metadata);
   // Check immediately after the initial heartbeat but before publishing this
   // generation as a root or successor.  A full history therefore leaves no
   // active lease behind and cannot enter the protected callback.
-  assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata);
+  assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, options);
   const rootRecord = {
     schema_version: taskLeaseSchemaVersion,
     task_id: taskId,
