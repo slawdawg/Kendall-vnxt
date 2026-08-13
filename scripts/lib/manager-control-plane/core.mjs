@@ -23423,7 +23423,7 @@ function staleOwnerBlockersForCleanup(staleOwner = {}) {
 }
 
 function inspectStaleOwnerTarget(target = {}, context = {}, options = {}) {
-  const id = sanitizeLedgerField(target.id || "", "", 140);
+  const id = staleOwnerTargetLookupId(target);
   if (!id) {
     return { ok: false, id: "", classification: "invalid_target", error: "stale owner target id is missing", nextAction: "Refresh manager resume state." };
   }
@@ -23464,6 +23464,20 @@ function inspectStaleOwnerTarget(target = {}, context = {}, options = {}) {
     nextAction: staleOwnerTargetNextAction(classification, id),
     mutation: "none; dry-run summary only",
   };
+}
+
+function staleOwnerTargetLookupId(target = {}) {
+  const direct = sanitizeIdentifierField(target.id || "", "", 140);
+  if (isSafeCommandIdentifier(direct)) return direct;
+
+  // A previous, governed dry-run packet can retain the exact CLI argument even
+  // when its display identifier has been redacted for retention.  Recover only
+  // a strict single-quoted takeover id, then subject it to the same command-id
+  // safety check before it is ever passed to the workspace CLI.
+  const dryRunCommand = String(target.dryRunCommand || "");
+  const match = /(?:^|\s)takeover\s+'([^']+)'(?:\s|$)/.exec(dryRunCommand);
+  const recovered = sanitizeIdentifierField(match?.[1] || "", "", 140);
+  return isSafeCommandIdentifier(recovered) ? recovered : direct;
 }
 
 function unresolvedExactTargetInspection(target = {}, result = {}) {
