@@ -1,7 +1,7 @@
 # Kendall vNxt Cleanup Phase 0 Inventory
 
-Date: 2026-08-13  
-Status: active baseline under the accepted holistic cleanup mandate  
+Date: 2026-08-13
+Status: active baseline under the accepted holistic cleanup mandate
 Scope: lifecycle convergence, retirement safety, CI/tooling, persistence,
 documentation, and workspace metadata
 

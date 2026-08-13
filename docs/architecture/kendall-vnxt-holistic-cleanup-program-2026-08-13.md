@@ -1,7 +1,7 @@
 # Kendall vNxt Holistic Cleanup Program
 
-Date: 2026-08-13  
-Status: accepted cleanup mandate; no runtime authority change  
+Date: 2026-08-13
+Status: accepted cleanup mandate; no runtime authority change
 Scope: product simplification, technical-debt retirement, lifecycle convergence,
 verification, documentation, and repository hygiene
 

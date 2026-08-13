@@ -1,7 +1,7 @@
 # CI Confidence And Efficiency Policy
 
-Date: 2026-08-13  
-Status: accepted durable engineering policy; implementation adoption in progress  
+Date: 2026-08-13
+Status: accepted durable engineering policy; implementation adoption in progress
 Scope: all repository pull requests, integration branches, scheduled
 verification, local delivery checks, and CI workflow changes
 

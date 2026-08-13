@@ -368,6 +368,17 @@ the matching check name; every other skipped or neutral result blocks delivery.
 - `full`
 - `javascript`
 - `supervisor`
+- `static`
+- `static_bundle`
+- `static_bundle_summary`
+
+The `static` family is non-required only when the exact-head `changes` planner
+did not select static confidence. When that planner output selects static work,
+each required static check must complete successfully; a skipped static check
+never bypasses the selected confidence path. `full` remains non-required for
+pull requests because it is integration-branch coverage, while `javascript`
+and `supervisor` remain non-required only when their changed-area selectors do
+not require them.
 
 ### Explicit Delivery-Head Refresh
 
@@ -378,7 +389,7 @@ implicitly accepted. First inspect the bounded packet from:
 ```bash
 node ./scripts/codex-workspace.mjs refresh-pr-head <lane> \
   --reason "why the exact reviewed head advanced" \
-  --non-required-checks full,javascript,supervisor \
+  --non-required-checks full,javascript,supervisor,static,static_bundle,static_bundle_summary \
   --non-required-check-policy AGENTS.md#documented-non-required-checks \
   --summary-json
 ```
