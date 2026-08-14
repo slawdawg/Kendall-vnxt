@@ -3650,7 +3650,7 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
     }
     for proof in proofs:
         if proof["workerId"] == "local.ollama.disabled":
-            assert proof["disabledReason"] == "ollama_provider_gate_not_enabled"
+            assert proof["disabledReason"] == "ollama_authority_policy_unresolved"
         else:
             assert proof["disabledReason"].endswith("_local_provider_not_enabled")
         assert proof["endpointFamily"].endswith("_openai_compatible_localhost")
@@ -3665,7 +3665,7 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
         assert proof["retentionPolicy"].startswith("disabled_fixture_forbids")
 
     ollama = next(proof for proof in proofs if proof["workerId"] == "local.ollama.disabled")
-    assert ollama["registryState"] == "disabled"
+    assert ollama["registryState"] == "authority_policy_unresolved"
     assert ollama["broadGateEnabled"] is False
     assert ollama["providerSpecificGateEnabled"] is False
     assert ollama["modelIdConfigured"] is False
