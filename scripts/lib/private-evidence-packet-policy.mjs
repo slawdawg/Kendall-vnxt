@@ -66,6 +66,7 @@ export function evaluatePrivateEvidencePacket(input = {}, options = {}) {
     }
     validateClaudeProof(packet.routeProof, blockers);
   } else if (provider === "ollama") {
+    if (!BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityResolved) blockers.push("ollama_authority_policy_unresolved");
     if (routeRole !== "backup-review" || packet.fallbackUsed !== true || !isApprovedFallbackFailure(packet.primaryFailure)) blockers.push("Ollama private evidence requires an approved Claude fallback outcome");
     if (packet.endpoint !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaEndpoint || packet.model !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaModel) blockers.push("Ollama destination/model is outside the exact approved route");
     validateOllamaProof(packet.routeProof, blockers);

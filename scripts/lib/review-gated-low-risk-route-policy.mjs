@@ -1,8 +1,13 @@
-const OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions";
-const OLLAMA_MODEL = "qwen3:14b";
-const OLLAMA_SOURCE_VM = "192.168.1.8";
-const OLLAMA_CONNECT_TIMEOUT_SECONDS = 2;
-const OLLAMA_TOTAL_TIMEOUT_SECONDS = 120;
+import { readFileSync } from "node:fs";
+
+const AUTHORITY_POLICY_PATH = new URL("../../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url);
+const LOCAL_PROVIDER_AUTHORITY_UNRESOLVED = "ollama_authority_policy_unresolved";
+const LOCAL_PROVIDER_AUTHORITY_POLICY = loadAuthorityPolicy();
+const OLLAMA_ENDPOINT = policyText(LOCAL_PROVIDER_AUTHORITY_POLICY.route?.endpoint);
+const OLLAMA_MODEL = policyText(LOCAL_PROVIDER_AUTHORITY_POLICY.route?.model);
+const OLLAMA_SOURCE_VM = policyText(LOCAL_PROVIDER_AUTHORITY_POLICY.approvedSourceVm) || null;
+const OLLAMA_CONNECT_TIMEOUT_SECONDS = LOCAL_PROVIDER_AUTHORITY_POLICY.route?.connectTimeoutSeconds;
+const OLLAMA_TOTAL_TIMEOUT_SECONDS = LOCAL_PROVIDER_AUTHORITY_POLICY.route?.totalTimeoutSeconds;
 const CLAUDE_ALLOWED_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const FALLBACK_FAILURES = new Set(["unavailable", "empty", "rate-limited"]);
 
@@ -28,6 +33,7 @@ export function evaluateBoundedReviewRoute(input = {}) {
 
   const eligible = blockers.length === 0;
   const reviewEligible = eligible;
+  const authorityUnresolved = blockers.includes(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
 
   return {
     schemaVersion: 2,
@@ -40,6 +46,8 @@ export function evaluateBoundedReviewRoute(input = {}) {
     activationEligible: false,
     allowed: eligible,
     blockers: unique(blockers),
+    authorityStatus: role === "backup-review" ? LOCAL_PROVIDER_AUTHORITY_POLICY.status : null,
+    disabledReason: authorityUnresolved ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED : null,
     metadataOnly: true,
     rawPayloadRetained: false,
     execution: {
@@ -80,11 +88,14 @@ export function selectOrderedReviewRoute({ primary = {}, backup = {}, primaryFai
 }
 
 function validateOllamaRoute(route, blockers) {
+  if (LOCAL_PROVIDER_AUTHORITY_POLICY.status !== "approved" || OLLAMA_SOURCE_VM === null) {
+    blockers.push(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
+  }
   rejectUnknownKeys(route, ["role", "provider", "endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed", "fallbackUsed", "primaryFailure"], blockers);
   if (text(route.provider).toLowerCase() !== "ollama") blockers.push("backup-review role requires Ollama");
   if (text(route.endpoint) !== OLLAMA_ENDPOINT) blockers.push("Ollama endpoint is outside the approved VM-to-host boundary");
   if (text(route.model) !== OLLAMA_MODEL) blockers.push("Ollama model must remain qwen3:14b");
-  if (text(route.sourceVm) !== OLLAMA_SOURCE_VM) blockers.push("Ollama source VM is not the approved Kendall VM");
+  if (text(route.sourceVm) !== OLLAMA_SOURCE_VM) blockers.push("Ollama source VM is not approved by the authority policy");
   if (route.connectTimeoutSeconds !== OLLAMA_CONNECT_TIMEOUT_SECONDS) blockers.push("Ollama connect timeout must remain 2 seconds");
   if (route.totalTimeoutSeconds !== OLLAMA_TOTAL_TIMEOUT_SECONDS) blockers.push("Ollama total timeout must remain 120 seconds");
   if (route.metadataOnly !== true || route.rawPayloadRetained !== false) blockers.push("Ollama route must retain metadata only");
@@ -125,6 +136,19 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function policyText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function loadAuthorityPolicy() {
+  try {
+    const policy = JSON.parse(readFileSync(AUTHORITY_POLICY_PATH, "utf8"));
+    return policy && typeof policy === "object" ? policy : { status: "invalid", approvedSourceVm: null, route: {} };
+  } catch {
+    return { status: "invalid", approvedSourceVm: null, route: {} };
+  }
+}
+
 function unique(values) {
   return [...new Set(values)];
 }
@@ -135,6 +159,8 @@ export function isApprovedFallbackFailure(value) {
 }
 
 export const BOUNDED_ROUTE_POLICY_DEFAULTS = Object.freeze({
+  localProviderAuthorityStatus: LOCAL_PROVIDER_AUTHORITY_POLICY.status,
+  localProviderAuthorityResolved: LOCAL_PROVIDER_AUTHORITY_POLICY.status === "approved" && OLLAMA_SOURCE_VM !== null,
   ollamaEndpoint: OLLAMA_ENDPOINT,
   ollamaModel: OLLAMA_MODEL,
   ollamaSourceVm: OLLAMA_SOURCE_VM,

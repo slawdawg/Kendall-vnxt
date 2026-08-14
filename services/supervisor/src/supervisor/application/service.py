@@ -25,7 +25,8 @@ UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
 )
 CANONICAL_OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions"
 CANONICAL_OLLAMA_MODEL = "qwen3:14b"
-CANONICAL_OLLAMA_SOURCE_VM = "192.168.1.8"
+LOCAL_PROVIDER_AUTHORITY_STATUS = "hold_conflicting_source_vm"
+CANONICAL_OLLAMA_SOURCE_VM: str | None = None
 CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS = 2
 CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS = 120
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
@@ -21485,11 +21486,12 @@ class SupervisorService:
                 affected_workers=["local.ollama.disabled"],
                 evidence=[
                     "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS is the broad local-provider gate.",
-                    "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to true in the approved local-only profile; set it to false to disable Ollama.",
+                    "Broad local-provider, Ollama-specific, and automatic local-evidence gates default to false.",
+                    "Local-provider authority is unresolved; neither candidate source VM is approved.",
                     f"SUPERVISOR_OLLAMA_MODEL_ID defaults to {self.settings.ollama_model_id or self.settings.ollama_approved_model_id} and must match the approved model before adapter readiness.",
-                    "SUPERVISOR_OLLAMA_ENDPOINT_URL must match the approved VM-to-host endpoint exactly.",
-                    f"Approved endpoint: {self.settings.ollama_approved_endpoint_url}.",
-                    f"Approved model id: {self.settings.ollama_approved_model_id}.",
+                    "SUPERVISOR_OLLAMA_ENDPOINT_URL must match the agreed VM-to-host endpoint, but endpoint/model parity alone grants no authority.",
+                    f"Agreed endpoint metadata: {self.settings.ollama_approved_endpoint_url}.",
+                    f"Agreed model metadata: {self.settings.ollama_approved_model_id}.",
                     f"Registry state: {ollama_state['registry_state']}.",
                     "Story 4.4 approval allows only this Ollama endpoint/model; LM Studio, vLLM, llama.cpp, remote providers, premium, commands, source mutation, credentials, and subscription launch remain disabled.",
                 ],
@@ -21584,16 +21586,25 @@ class SupervisorService:
         endpoint_approved = endpoint_url == approved_endpoint_url
         model_id_configured = bool(model_id)
         model_id_approved = model_id == approved_model_id
+        authority_resolved = (
+            LOCAL_PROVIDER_AUTHORITY_STATUS == "approved"
+            and isinstance(CANONICAL_OLLAMA_SOURCE_VM, str)
+            and bool(CANONICAL_OLLAMA_SOURCE_VM)
+        )
 
         route_policy_mismatch = (
             approved_endpoint_url != CANONICAL_OLLAMA_ENDPOINT
             or approved_model_id != CANONICAL_OLLAMA_MODEL
-            or approved_source_vm != CANONICAL_OLLAMA_SOURCE_VM
+            or (authority_resolved and approved_source_vm != CANONICAL_OLLAMA_SOURCE_VM)
             or self.settings.ollama_connect_timeout_seconds != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS
             or self.settings.ollama_total_timeout_seconds != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS
         )
 
-        if route_policy_mismatch:
+        if not authority_resolved:
+            registry_state = "authority_policy_unresolved"
+            disabled_reason = "ollama_authority_policy_unresolved"
+            adapter_ready = False
+        elif route_policy_mismatch:
             registry_state = "disabled"
             disabled_reason = "ollama_approved_route_policy_mismatch"
             adapter_ready = False
@@ -21638,6 +21649,8 @@ class SupervisorService:
             "endpoint_approved": endpoint_approved,
             "model_id_configured": model_id_configured,
             "model_id_approved": model_id_approved,
+            "authority_status": LOCAL_PROVIDER_AUTHORITY_STATUS,
+            "authority_resolved": authority_resolved,
             "registry_state": registry_state,
             "disabled_reason": disabled_reason,
             "adapter_ready": adapter_ready,

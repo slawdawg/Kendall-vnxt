@@ -9,12 +9,12 @@ Generic continuation language does not approve blocked post-MVP authority storie
 ## Blocked Authority Evidence
 
 - Orchestrator CLI worker launch: Story 6.1 is complete for the fake-worker spike, but real Codex CLI process launch and real Claude Code CLI process launch remain blocked pending exact post-MVP approval.
-- Ollama local provider: no currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model; any endpoint, model, provider, or retention expansion requires explicit successor approval.
+- Ollama local provider: source-VM authority is held by `local-provider-authority-policy-v1.json`; neither candidate address is approved until a reviewed decision resolves the conflict.
 - Subscription-agent launch: Stories 5.1-5.4 are complete as non-executing preparation; Story 5.5 remains deferred because it crosses into supervised process launch.
 
 Local provider execution: `docs/workflows/execution-authority-boundary.md#local-provider-execution-contract`
 
-No currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model.
+The agreed endpoint/model metadata are insufficient to enable Ollama while the source-VM authority conflict remains unresolved.
 
 Any endpoint, model, provider, or retention expansion still requires explicit successor approval.
 

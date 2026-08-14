@@ -55,23 +55,27 @@ test("allows explicitly consented bounded private work-item evidence for Claude"
   assert.equal(packet.execution.providerCall, false);
 });
 
-test("requires the exact Ollama backup route and approved Claude failure", () => {
-  const packet = evaluatePrivateEvidencePacket(valid({
-    provider: "ollama",
-    routeRole: "backup-review",
-    fallbackUsed: true,
-    primaryFailure: "HTTP 429",
-    endpoint: "http://192.168.1.128:11434/v1/chat/completions",
-    model: "qwen3:14b",
-    destinationAllowlist: ["ollama"],
-    contextDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    contextDigestAlgorithm: "sha256",
-    revocationStatus: "active",
-    revoked: false,
-    rollbackReady: true,
-    routeProof: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm: "192.168.1.8", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
-  }), { now: NOW });
-  assert.equal(packet.status, "READY");
+test("holds exact Ollama backup packets for both unresolved source-VM candidates", () => {
+  for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
+    const packet = evaluatePrivateEvidencePacket(valid({
+      provider: "ollama",
+      routeRole: "backup-review",
+      fallbackUsed: true,
+      primaryFailure: "HTTP 429",
+      endpoint: "http://192.168.1.128:11434/v1/chat/completions",
+      model: "qwen3:14b",
+      destinationAllowlist: ["ollama"],
+      contextDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      contextDigestAlgorithm: "sha256",
+      revocationStatus: "active",
+      revoked: false,
+      rollbackReady: true,
+      routeProof: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
+    }), { now: NOW });
+    assert.equal(packet.status, "HOLD", sourceVm);
+    assert.equal(packet.sendEligible, false, sourceVm);
+    assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
+  }
 });
 
 test("rejects Ollama destination and fallback metadata on Claude packets", () => {
