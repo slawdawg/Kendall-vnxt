@@ -8258,7 +8258,7 @@ try {
       }
       const routingSource = readFileSync(join(rootDir, "services", "supervisor", "tests", "integration", "test_routing_preview.py"), "utf8");
       const routingSourceNames = [...routingSource.matchAll(/^def (test_[A-Za-z0-9_]+)\(/gm)].map((match) => match[1]);
-      assert(routingSourceNames.length === 174, `routing source test count drifted: ${routingSourceNames.length}`);
+      assert(routingSourceNames.length === 175, `routing source test count drifted: ${routingSourceNames.length}`);
       const routingLeafNodeIds = routingPreviewCheckLeafStages.map((stage) => {
         const script = packageScripts[stage] || "";
         assert(script.startsWith("node ./scripts/run-supervisor-tests.mjs --no-preflight --timeout-ms=150000 -q "), `routing leaf command is not fixed: ${stage}`);
