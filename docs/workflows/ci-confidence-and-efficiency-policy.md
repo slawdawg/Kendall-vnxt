@@ -187,9 +187,12 @@ took 9m07s, while the other five shards took 25--87s. The supervisor sample
 spent about 11m30s in its profiled test job, leaving little margin under its
 12-minute timeout. In contrast, docs-only and JavaScript-only PRs already
 avoid the broad/static and supervisor paths and complete in under two minutes.
-The failure sample is actionable test evidence rather than a flaky transport
-signal: `close-missing-worktree` emitted an empty child JSON result and then
-failed on `Cannot read properties of null (reading 'reason')`.
+The failure sample is inconclusive, not proof of either a flaky transport or a
+deterministic product failure: `close-missing-worktree` emitted an empty child
+JSON result and then failed on `Cannot read properties of null (reading
+'reason')`. The empty result may reflect a fixture/diagnostic defect or a
+sandbox/process-boundary issue. Classify it as actionable only after bounded
+diagnostics and an exact-head rerun establish the underlying failure.
 
 ### Safe next slices
 
@@ -202,8 +205,11 @@ failed on `Cannot read properties of null (reading 'reason')`.
   equivalence is demonstrated; do not remove coverage based on elapsed time.
 - For supervisor, measure setup/cache time separately from the profiled suite
   before changing the 12-minute boundary or reducing coverage.
-- Do not spend a topology change on docs/JavaScript routing: the selected-path
-  runs already demonstrate the intended low-latency behavior.
+- For the sampled docs/JavaScript heads, routing already demonstrates the
+  intended low-latency behavior; do not change topology from this small sample.
+  Collect the broader distribution evidence required by this policy first:
+  P50/P95 duration, setup/queue/execution time, failure/flake/retry rate, first
+  actionable-failure time, and duplicate-command counts.
 
 This inventory is a reporting/update slice only. No workflow gate, required
 check, or test command was removed or rerouted. Any shard split, cache change,
