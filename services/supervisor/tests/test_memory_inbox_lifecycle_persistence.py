@@ -19,6 +19,7 @@ from supervisor.domain.memory_inbox import (
     can_advance_lifecycle,
     is_positive_revision,
 )
+from supervisor.infrastructure.db import database
 from supervisor.infrastructure.db.database import Base, _ensure_sqlite_memory_inbox_manifest_ownership, _ensure_sqlite_memory_inbox_revision_states
 from supervisor.infrastructure.db import models  # noqa: F401
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult
@@ -159,6 +160,83 @@ def test_revision_states_and_manifest_owners_are_database_enforced() -> None:
         ))
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_update(tmp_path, monkeypatch) -> None:
+    """The normal SQLite startup path enforces parent protection without FK PRAGMA setup."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'default-startup.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        await database.init_db()
+
+        async with engine.begin() as connection:
+            trigger_names = set((await connection.execute(text(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name IN ('memory_inbox_source_revisions', 'memory_inbox_proposal_revisions')"
+            ))).scalars())
+            assert trigger_names >= {
+                "trg_memory_inbox_source_revisions_manifest_restrict_delete",
+                "trg_memory_inbox_source_revisions_manifest_restrict_update",
+                "trg_memory_inbox_proposal_revisions_manifest_restrict_delete",
+                "trg_memory_inbox_proposal_revisions_manifest_restrict_update",
+            }
+            await connection.execute(text("""
+                INSERT INTO memory_inbox_sources
+                  (id, current_revision, lifecycle_state, retention_deadline_at, deletion_state, policy_ref, created_at, updated_at)
+                VALUES ('source:default', 1, 'Scanning', '2026-08-10 00:00:00', 'None', 'policy:test', '2026-08-10 00:00:00', '2026-08-10 00:00:00')
+            """))
+            await connection.execute(text("""
+                INSERT INTO memory_inbox_source_revisions
+                  (id, source_id, revision, lifecycle_state, actor_ref, audit_ref, policy_ref, created_at)
+                VALUES ('source-revision:default', 'source:default', 1, 'Scanning', 'operator:test', 'audit:test', 'policy:test', '2026-08-10 00:00:00')
+            """))
+            await connection.execute(text("""
+                INSERT INTO memory_inbox_proposals
+                  (id, source_id, current_revision, lifecycle_state, created_at, updated_at)
+                VALUES ('proposal:default', 'source:default', 1, 'Draft', '2026-08-10 00:00:00', '2026-08-10 00:00:00')
+            """))
+            await connection.execute(text("""
+                INSERT INTO memory_inbox_proposal_revisions
+                  (id, proposal_id, revision, lifecycle_state, actor_ref, audit_ref, created_at)
+                VALUES ('proposal-revision:default', 'proposal:default', 1, 'Draft', 'operator:test', 'audit:test', '2026-08-10 00:00:00')
+            """))
+            await connection.execute(text("""
+                INSERT INTO memory_inbox_manifests
+                  (id, owner_revision_id, source_revision_id, copy_class, store_ref, creation_state, retention_class, deletion_state, created_at)
+                VALUES ('manifest:default', 'source-revision:default', 'source-revision:default', 'quarantine', 'store:default', 'Created', 'source_retention', 'None', '2026-08-10 00:00:00')
+            """))
+            await connection.execute(text("""
+                INSERT INTO memory_inbox_manifests
+                  (id, owner_revision_id, proposal_revision_id, copy_class, store_ref, creation_state, retention_class, deletion_state, created_at)
+                VALUES ('manifest:proposal-default', 'proposal-revision:default', 'proposal-revision:default', 'preview', 'store:proposal-default', 'Created', 'proposal_retention', 'None', '2026-08-10 00:00:00')
+            """))
+
+        with pytest.raises(IntegrityError, match="memory_inbox_manifest_source_reference_in_use"):
+            async with engine.begin() as connection:
+                await connection.execute(text(
+                    "DELETE FROM memory_inbox_source_revisions WHERE id = 'source-revision:default'"
+                ))
+        with pytest.raises(IntegrityError, match="memory_inbox_manifest_source_reference_in_use"):
+            async with engine.begin() as connection:
+                await connection.execute(text(
+                    "UPDATE memory_inbox_source_revisions SET id = 'source-revision:renamed' "
+                    "WHERE id = 'source-revision:default'"
+                ))
+        with pytest.raises(IntegrityError, match="memory_inbox_manifest_proposal_reference_in_use"):
+            async with engine.begin() as connection:
+                await connection.execute(text(
+                    "DELETE FROM memory_inbox_proposal_revisions WHERE id = 'proposal-revision:default'"
+                ))
+        with pytest.raises(IntegrityError, match="memory_inbox_manifest_proposal_reference_in_use"):
+            async with engine.begin() as connection:
+                await connection.execute(text(
+                    "UPDATE memory_inbox_proposal_revisions SET id = 'proposal-revision:renamed' "
+                    "WHERE id = 'proposal-revision:default'"
+                ))
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
