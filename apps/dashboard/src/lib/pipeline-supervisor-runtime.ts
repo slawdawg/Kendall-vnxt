@@ -64,6 +64,7 @@ function isAuthoritativeWorkPacketLifecycleView(value: unknown): value is Author
     !isDateString(packet.createdAt) ||
     !isDateString(packet.updatedAt) ||
     !isSafeCanonicalRef(packet.currentEventId) ||
+    !isAuthoritativeReadyToTest(packet.readyToTest) ||
     !Array.isArray(packet.history) ||
     packet.history.length === 0 ||
     packet.metadataOnly !== true
@@ -110,8 +111,8 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
         blockedReason: `Source is superseded by ${supersededBy}.`,
       };
   const eventRefs = packet.history.map((event) => `event:${event.eventId}`);
-  const suppliedEvidenceRefs = packet.history.flatMap((event) => event.evidenceRefs);
-  const readyToTestEvidenceRefs = packet.readyToTest?.evidenceRefs ?? [];
+  const suppliedEvidenceRefs = projectionSafeLifecycleRefs(packet.history.flatMap((event) => event.evidenceRefs));
+  const readyToTestEvidenceRefs = projectionSafeLifecycleRefs(packet.readyToTest?.evidenceRefs ?? []);
   const evidenceRefs = [...new Set([...eventRefs, ...suppliedEvidenceRefs, ...readyToTestEvidenceRefs])];
   const transitionEvents = packet.history.map((event) => ({
     eventId: event.eventId,
@@ -125,7 +126,7 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
     sourceStatus: null,
     targetStatus: event.status,
     reasonCodes: ["supervisor.authoritative_lifecycle_event", `supervisor.truth.${event.truthLabel}`],
-    evidenceRefs: [...new Set([`event:${event.eventId}`, ...event.evidenceRefs])],
+    evidenceRefs: [...new Set([`event:${event.eventId}`, ...projectionSafeLifecycleRefs(event.evidenceRefs)])],
     durable: true,
     sourceEventId: null,
     actorLabel: event.actor.actorLabel || event.actor.actorId || event.actor.actorType,
@@ -230,6 +231,13 @@ function isAuthoritativeLifecycleEvent(value: unknown, packetId: string): boolea
     event.metadataOnly === true;
 }
 
+function isAuthoritativeReadyToTest(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  const readyToTest = value as Record<string, unknown>;
+  return Array.isArray(readyToTest.evidenceRefs) && readyToTest.evidenceRefs.every(isSafeCanonicalRef);
+}
+
 function supersededPlanningSource(pathOrUrl: string | null | undefined): string | null {
   if (typeof pathOrUrl !== "string") return null;
   let normalized = pathOrUrl.trim().replace(/\\/g, "/");
@@ -247,6 +255,13 @@ function projectionSafeLifecycleSummary(summary: string | null | undefined): str
   if (!value) return "Metadata-only lifecycle event.";
   if (UNSAFE_LIFECYCLE_TEXT_RE.test(value)) return "Redacted metadata-only lifecycle summary.";
   return value.slice(0, 500);
+}
+
+function projectionSafeLifecycleRefs(refs: string[]): string[] {
+  return refs.flatMap((ref) => {
+    const value = ref.trim();
+    return value.length > 0 && value.length <= 500 && !UNSAFE_LIFECYCLE_TEXT_RE.test(value) ? [value] : [];
+  });
 }
 
 function legacyStage(stage: AuthoritativeWorkPacketLifecycleView["currentStage"]): WorkPacketV0View["currentStage"] {
@@ -291,7 +306,7 @@ function canonicalPackets(value: unknown): CanonicalPacketCollection {
   if (!Array.isArray(value)) {
     throw new Error("Canonical WorkPacket response is not a collection.");
   }
-  if (value.length > 0 && value.every((packet) => isAuthoritativeWorkPacketLifecycleView(packet))) {
+  if (value.length === 0 || value.every((packet) => isAuthoritativeWorkPacketLifecycleView(packet))) {
     const packets = value.map((packet) => projectAuthoritativeWorkPacket(packet));
     if (packets.some((packet) => !isWorkPacketV0View(packet)) || new Set(packets.map((packet) => packet.packetId)).size !== packets.length) {
       throw new Error("Canonical WorkPacket response authoritative projection failed validation.");

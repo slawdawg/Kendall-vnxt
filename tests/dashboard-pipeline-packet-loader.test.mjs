@@ -1325,7 +1325,7 @@ test("dedicated runtime projects consistent authoritative list and detail withou
   ]);
 });
 
-test("dedicated runtime redacts unsafe canonical lifecycle summaries before rendering", async () => {
+test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evidence refs before rendering", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");
   const ts = dashboardRequire("typescript");
@@ -1345,6 +1345,20 @@ test("dedicated runtime redacts unsafe canonical lifecycle summaries before rend
     packet.history[0].payloadSummary = payloadSummary;
     return packet;
   });
+  canonicalPackets[0].history[0].evidenceRefs = [
+    " safe:event-evidence ",
+    "provider payload: retained event secret",
+    `oversized:${"x".repeat(501)}`,
+  ];
+  canonicalPackets[0].readyToTest = {
+    readyId: "ready:unsafe-summary-1",
+    userFacingSummary: "Inspect metadata-only verification evidence.",
+    testableSurface: "Dashboard packet detail",
+    verificationRefs: [],
+    evidenceRefs: [" safe:ready-evidence ", "credential token: retained ready-to-test secret"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
   const calls = [];
   const context = {
     exports: {},
@@ -1381,6 +1395,48 @@ test("dedicated runtime redacts unsafe canonical lifecycle summaries before rend
     assert.equal(packet.requestedOutcome, "Redacted metadata-only lifecycle summary.");
     assert.deepEqual(packet.transitionEvents.map((event) => event.summary), ["Redacted metadata-only lifecycle summary."]);
   }
+  assert.deepEqual(packets[0].evidenceRefs.map((ref) => ref.refId), [
+    "event:created",
+    "safe:event-evidence",
+    "safe:ready-evidence",
+  ]);
+  assert.deepEqual(packets[0].transitionEvents[0].evidenceRefs, ["event:created", "safe:event-evidence"]);
+  assert.doesNotMatch(JSON.stringify(packets[0]), /provider payload|credential token|oversized:/i);
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
+});
+
+test("dedicated runtime treats a successful empty canonical list as authoritative", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [];
+            throw new Error(`Unexpected legacy request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  assert.deepEqual(await context.module.exports.getWorkPackets(), []);
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
 });
 
@@ -1394,6 +1450,54 @@ test("dedicated runtime safely falls back when canonical list events have missin
     const packet = authoritativeLifecyclePacket(`malformed-actor-${index + 1}`);
     if (actor === undefined) delete packet.history[0].actor;
     else packet.history[0].actor = actor;
+    return packet;
+  });
+  const calls = [];
+  let canonicalIndex = 0;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [malformedPackets[canonicalIndex++]];
+            if (path === "/work-packets") return [{ shape: "valid", packetId: `legacy-${canonicalIndex}` }];
+            throw new Error(`Unexpected request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-1" }]);
+  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-2" }]);
+  assert.deepEqual(calls, [
+    "/pipeline-control-plane/work-packets",
+    "/work-packets",
+    "/pipeline-control-plane/work-packets",
+    "/work-packets",
+  ]);
+});
+
+test("dedicated runtime safely falls back when canonical ready-to-test evidence is malformed", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const malformedPackets = [42, { evidenceRefs: 42 }].map((readyToTest, index) => {
+    const packet = authoritativeLifecyclePacket(`malformed-ready-to-test-${index + 1}`);
+    packet.readyToTest = readyToTest;
     return packet;
   });
   const calls = [];
