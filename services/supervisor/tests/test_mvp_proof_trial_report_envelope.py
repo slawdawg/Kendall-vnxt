@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,18 @@ def test_mvp_proof_trial_envelope_is_strict_and_typed() -> None:
 
 def test_mvp_proof_trial_route_uses_typed_envelope() -> None:
     assert _route("/supervisor/epic-6-mvp-proof-trial-report").response_model is MvpProofTrialReportApiEnvelope
+
+
+def test_mvp_proof_trial_catalog_entry_is_historical() -> None:
+    route = _route("/supervisor/report-catalog")
+    result = asyncio.run(route.endpoint())
+
+    entry = next(
+        report
+        for report in result.data.reports
+        if report.reportId == "epic-6-mvp-proof-trial-report-v1"
+    )
+    assert entry.status == "historical"
 
 
 def test_mvp_proof_trial_typescript_contract_matches_python() -> None:

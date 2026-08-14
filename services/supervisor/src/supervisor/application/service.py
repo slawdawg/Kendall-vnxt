@@ -11834,7 +11834,7 @@ class SupervisorService:
                 reportId="epic-6-completion-audit-report-v1",
                 label="Epic 6 completion audit",
                 endpoint="GET /supervisor/epic-6-completion-audit-report",
-                status="active",
+                status="historical",
                 summary="Shows Epic 6 completion evidence, remaining blockers, and the next approval needed before delivery work continues.",
                 evidenceScope=["Epic 6 local stack", "delivery packaging plan", "authority gates", "completion blockers"],
                 relatedDocs=[
@@ -11847,7 +11847,7 @@ class SupervisorService:
                 reportId="epic-6-mvp-proof-trial-report-v1",
                 label="Epic 6 MVP proof trial packet",
                 endpoint="GET /supervisor/epic-6-mvp-proof-trial-report",
-                status="active",
+                status="historical",
                 summary="Defines the exact read-only approval packet needed before one real BMAD story trial can use bounded Codex, Claude, delivery, and cleanup lanes.",
                 evidenceScope=["selected story", "approval packets", "blocked operations", "stop conditions", "next safe actions"],
                 relatedDocs=[
