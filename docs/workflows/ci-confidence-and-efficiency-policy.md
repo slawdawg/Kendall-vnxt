@@ -162,6 +162,60 @@ required invocation of the same expensive command, unclassified check script,
 or a planner route that runs all components due solely to an unmapped ordinary
 path.
 
+## Phase 0 delivery-health baseline (2026-08-14)
+
+This is the first durable timing/failure inventory for the current workflow
+after the cleanup-program baseline (`origin/dev`:
+`05ad91c22d449c8a14a98e78bf8def88826ad80a`). Durations below are taken from
+completed GitHub Actions job timestamps and are reproducible with
+`gh run view RUN_ID --json jobs`. The GitHub timing endpoint was also queried
+with `gh api repos/slawdawg/Kendall-vnxt/actions/runs/RUN_ID/timing`; it returned
+`total_ms: 0` for the sampled public-repository Ubuntu runs, so these numbers
+must not be interpreted as zero billing. Until billable usage is exposed, the
+sum of job wall times is the available runner-minute proxy.
+
+| Scenario / run | Head and result | Required path observed | Optional/reporting path | Wall time | Job-wall proxy |
+| --- | --- | --- | --- | ---: | ---: |
+| Docs-only PR #821 / [31756292895](https://github.com/slawdawg/Kendall-vnxt/actions/runs/31756292895) | `5a5f4d5f`, success | `changes`, `fast`, `check` | component jobs and `full` skipped | 1m45s | 1.6m |
+| JavaScript PR #822 / [31757254851](https://github.com/slawdawg/Kendall-vnxt/actions/runs/31757254851) | `a1767fa6`, success | `changes`, `fast`, `javascript`, `check` | static, supervisor, and `full` skipped | 1m49s | 2.2m |
+| Supervisor change / [31482998751](https://github.com/slawdawg/Kendall-vnxt/actions/runs/31482998751) | `8ea29e50`, success | `changes`, `fast`, `supervisor`, `check` | static, javascript, and `full` skipped | 11m55s | 13.1m |
+| Broad static change / [31660220947](https://github.com/slawdawg/Kendall-vnxt/actions/runs/31660220947) | `0dee23e5`, success | `changes`, `fast`, six `static_bundle` shards, `static`, `check` | `static_bundle_summary` is non-blocking reporting | 9m49s | 16.1m |
+| Broad static failure / [31659723799](https://github.com/slawdawg/Kendall-vnxt/actions/runs/31659723799) | `fc90455b`, failure | workspace shard failed after 7m41s; `static` and `check` failed | other shards still reported | 8m48s | failure sample |
+
+The broad-success run shows the current high-ROI target: the workspace shard
+took 9m07s, while the other five shards took 25--87s. The supervisor sample
+spent about 11m30s in its profiled test job, leaving little margin under its
+12-minute timeout. In contrast, docs-only and JavaScript-only PRs already
+avoid the broad/static and supervisor paths and complete in under two minutes.
+The failure sample is inconclusive, not proof of either a flaky transport or a
+deterministic product failure: `close-missing-worktree` emitted an empty child
+JSON result and then failed on `Cannot read properties of null (reading
+'reason')`. The empty result may reflect a fixture/diagnostic defect or a
+sandbox/process-boundary issue. Classify it as actionable only after bounded
+diagnostics and an exact-head rerun establish the underlying failure.
+
+### Safe next slices
+
+- Keep `changes`, `fast`, the selected component gate, and `check` as required
+  authority. Keep `static_bundle_summary` as optional reporting; it does not
+  currently add merge authority.
+- For workspace, profile behavior-based shards (discovery/read-only state,
+  start/resume, assignment/lease, delivery/review, and cleanup/recovery) in
+  shadow mode. Retain an aggregate required workspace gate until same-head
+  equivalence is demonstrated; do not remove coverage based on elapsed time.
+- For supervisor, measure setup/cache time separately from the profiled suite
+  before changing the 12-minute boundary or reducing coverage.
+- For the sampled docs/JavaScript heads, routing already demonstrates the
+  intended low-latency behavior; do not change topology from this small sample.
+  Collect the broader distribution evidence required by this policy first:
+  P50/P95 duration, setup/queue/execution time, failure/flake/retry rate, first
+  actionable-failure time, and duplicate-command counts.
+
+This inventory is a reporting/update slice only. No workflow gate, required
+check, or test command was removed or rerouted. Any shard split, cache change,
+or authority promotion needs a separate implementation change with the
+same-head, before/after, failure-rate, and rollback evidence required above.
+
 ## Adoption roadmap
 
 1. Capture current timing baselines, including component command durations and
