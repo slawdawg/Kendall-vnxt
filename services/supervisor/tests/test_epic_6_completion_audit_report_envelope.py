@@ -99,6 +99,18 @@ def test_epic_6_completion_audit_route_uses_typed_envelope() -> None:
     assert isinstance(result.data, EpicCompletionAuditReportView)
 
 
+def test_epic_6_completion_audit_catalog_entry_is_historical() -> None:
+    route = _route("/supervisor/report-catalog")
+    result = asyncio.run(route.endpoint())
+
+    entry = next(
+        report
+        for report in result.data.reports
+        if report.reportId == "epic-6-completion-audit-report-v1"
+    )
+    assert entry.status == "historical"
+
+
 def test_epic_6_completion_audit_typescript_contract_matches_python() -> None:
     contract = (
         Path(__file__).parents[3] / "packages" / "contracts" / "src" / "api.ts"

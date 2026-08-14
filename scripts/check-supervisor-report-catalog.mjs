@@ -320,6 +320,22 @@ for (const report of reports) {
   }
 }
 
+for (const historicalReportId of [
+  "epic-6-completion-audit-report-v1",
+  "epic-6-mvp-proof-trial-report-v1",
+]) {
+  const entryStart = serviceSource.indexOf(`reportId="${historicalReportId}"`);
+  const entryEnd = serviceSource.indexOf("            ),", entryStart);
+  const entry = entryStart >= 0 && entryEnd > entryStart
+    ? serviceSource.slice(entryStart, entryEnd)
+    : "";
+  assertCondition(
+    entry.includes('status="historical"'),
+    `Epic 6 report catalog entry ${historicalReportId} must remain classified as historical`,
+    failures,
+  );
+}
+
 for (const visibleEndpoint of [
   "GET /supervisor/execution-readiness-report",
   "GET /supervisor/legacy-planning-artifact-inventory",
