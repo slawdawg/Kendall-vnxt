@@ -26,7 +26,6 @@ use the source-owned inputs below for current evaluation and verification:
 - `.node-version`
 - `package.json`
 - `services/supervisor/pyproject.toml`
-- `runtime/pyproject.toml`
 
 ## Standard Tooling Decision
 
@@ -80,10 +79,11 @@ Version pins must come from existing repo sources of truth:
 - `.node-version` pins Node `22.13.0`.
 - `package.json` declares `pnpm@11.5.2`.
 - `services/supervisor/pyproject.toml` requires Python `>=3.12`.
-- `runtime/pyproject.toml` requires Python `>=3.11`.
+- The archived runtime scaffold is not part of the active Python package
+  surface.
 
-Python `3.12` is the first shared default because it satisfies both Python
-package constraints.
+Python `3.12` is the active default because it satisfies the supervisor
+package constraint.
 
 If the host already satisfies a requirement, still record whether `mise` adds
 value:

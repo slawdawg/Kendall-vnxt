@@ -1,2 +1,0 @@
-"""Kendall runtime scaffold."""
-
