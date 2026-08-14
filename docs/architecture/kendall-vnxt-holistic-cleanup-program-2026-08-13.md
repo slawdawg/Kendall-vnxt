@@ -444,7 +444,6 @@ and no removed command is a hidden dependency of hooks or workflows.
 | `/pipeline/demo` fixture catalogue | Retain as the supported, fixture-only daily-alpha flow; consider removal only after an authoritative product decision supersedes the runbook and fixture-fallback audit. | Decision record naming the superseded authority, caller/fixture reachability, and removal/rollback proof. |
 | Epic/story-specific reports and panels | Move durable signal to a named capability or remove. | Report classification and replacement evidence. |
 | Date-stamped gap reviews, closeouts, handoffs | Archive from current navigation. | Durable decision is represented in the current ADR/index. |
-| `docs/ui.png` | Delete after confirming it remains unreferenced. | Search and documentation rendering check. |
 
 ### P2 — shrink generated and configuration surface safely
 

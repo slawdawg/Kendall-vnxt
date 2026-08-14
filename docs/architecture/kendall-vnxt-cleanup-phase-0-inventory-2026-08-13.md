@@ -39,11 +39,12 @@ baseline; they do not authorize schema, route, runtime, or workspace deletion.
   `/work-packets`. The first slice is a canonical detail projector with
   fallback only for legacy `work_item` and `candidate_work` identities. No
   schema or route deletion is in scope.
-- **Retirement:** `docs/ui.png` is unreferenced. Its first cleanup slice is
-  limited to the asset, a documentation/render check, and a `git revert`
-  rollback. `runtime/` requires archive/tag, then removal only after clean
-  documentation, render, reachability, and clean-install proof. `/pipeline/demo`
-  remains the supported, fixture-only daily-alpha flow.
+- **Retirement:** the documentation asset cleanup slice is limited to the
+  asset and its two planning-record mentions, with documentation/render,
+  reachability, clean-install, and `git revert` rollback evidence. `runtime/`
+  requires archive/tag, then removal only after clean documentation, render,
+  reachability, and clean-install proof. `/pipeline/demo` remains the
+  supported, fixture-only daily-alpha flow.
 - **Delivery, persistence, and workspace:** CI reporting/timing evidence must
   precede any topology or coverage change. Duplicate workspace stages are
   known, but neither may be removed without equivalence and timing proof.
@@ -85,23 +86,19 @@ coordinator for repartitioning.
   do not delete or rename a route/schema, widen the fallback, or mutate
   supervisor persistence.
 
-### Documentation asset cleanup — Luna/medium, default
+### Documentation asset cleanup — Luna/medium, default (completed)
 
-- **Path ownership:** `docs/ui.png` plus the exact planning records
-  `docs/architecture/kendall-vnxt-holistic-cleanup-program-2026-08-13.md` and
-  `docs/architecture/kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`.
-  Their asset mentions must be updated or removed together; unrelated
-  documentation and assets remain outside this lane.
-- **Dependencies:** distinguish those planning-record mentions from external
-  or runtime reachability; a planning mention does not demonstrate that the
-  asset is externally or operationally reachable.
-- **Focused verification:** repeat the reference search, update/remove the two
-  planning mentions together, run `pnpm run check:docs`, and complete the
-  documentation/render check before removal.
+- **Path ownership:** the documentation asset and its two exact planning-record
+  mentions were owned together; both mentions were removed in the same slice.
+  Unrelated documentation and assets remain outside this lane.
+- **Dependencies:** planning-record references were distinguished from
+  external or runtime reachability; no planning mention demonstrated an
+  external or operational consumer.
+- **Focused verification:** reference search, documentation/render checks, and
+  clean-install checks passed before removal.
 - **Rollback:** revert the asset-removal commit with `git revert`.
-- **Allowed / prohibited:** remove the asset only after the checks pass and the
-  two planning records are consistent; do not change product authority, edit
-  unrelated documentation, or remove another asset in this lane.
+- **Allowed / prohibited:** this lane is closed; no product authority changed,
+  and no unrelated documentation or asset was removed.
 
 ### Runtime archive/removal — Luna/medium, default
 
@@ -197,7 +194,6 @@ not implied by an evidence-only contract.
 | `/pipeline/demo` and its fixture catalogue | **retain: supported, fixture-only daily-alpha flow; retirement decision needed only after authoritative supersession** | The [daily alpha runbook](../workflows/alpha-daily-use-runbook.md) directs use of `/pipeline/demo` for the explicitly labeled fixture catalogue, and the [fixture-fallback audit](../workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md) says removing it would break the supported demo contract. It is not production evidence. | Record route/proxy callers and fixture boundaries. Do not mark retirement resolved or remove it unless a product decision explicitly supersedes both authorities and supplies removal plus rollback evidence. |
 | Epic/story-specific report routes and panels | **classify then retire** | Many supervisor report routes serve readiness, maintenance, Git hygiene, or dated epic concerns. | Produce retained runtime / CLI diagnostic / archive / delete classification. |
 | June gap reviews in navigation | **archive from current navigation** | Architecture index previously called dated reviews current. | Completed: index now labels them historical; retain documents for provenance. |
-| `docs/ui.png` | **delete after final reachability check** | Repository text search found no reference. | Include only in a documentation-assets cleanup slice with rendering check. |
 | `.agents/skills` | **migrate then untrack** | Current setup/docs/checks explicitly depend on it. | Pin generator and verify deterministic clean-clone regeneration; do not hand-edit/dedupe. |
 
 ## Safety and delivery inventory
