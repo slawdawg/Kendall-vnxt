@@ -31,6 +31,10 @@ const AUTHORITATIVE_EVENT_TYPES = new Set([
   "packet.operational_action_applied",
   "packet.parallel_work_graph_refreshed",
 ]);
+const AUTHORITATIVE_PLANNING_SOURCE_PATH = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md";
+const CURRENT_OPERATIONAL_ACTION_LOOP_PRD_PATH = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
+const PLANNING_SOURCE_MARKER = "_bmad-output/planning-artifacts/prds/";
+const UNSAFE_LIFECYCLE_TEXT_RE = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
 
 function isCanonicalShapeError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "message" in error && typeof error.message === "string" && error.message.startsWith("Canonical WorkPacket response"));
@@ -80,17 +84,31 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
   const stage = legacyStage(packet.currentStage);
   const owner = legacyOwner(packet.currentStage, packet.status);
   const currentEvent = packet.history.find((event) => event.eventId === packet.currentEventId)!;
-  const sourceRef = {
-    refId: packet.sourceRef.refId,
-    sourceType: packet.sourceRef.sourceType === "prd" || packet.sourceRef.sourceType === "bmad_story" ? "bmad_artifact" as const : "manual" as const,
-    label: packet.sourceRef.title || packet.sourceRef.refId,
-    pathOrUrl: packet.sourceRef.pathOrUrl ?? null,
-    freshness: "unknown" as const,
-    accessState: "allowed" as const,
-    canonical: true,
-    summaryOnly: true,
-    blockedReason: null,
-  };
+  const supersededBy = supersededPlanningSource(packet.sourceRef.pathOrUrl);
+  const sourceType = packet.sourceRef.sourceType === "prd" || packet.sourceRef.sourceType === "bmad_story" ? "bmad_artifact" as const : "manual" as const;
+  const sourceRef: WorkPacketV0View["sourceRefs"][number] = supersededBy === null
+    ? {
+        refId: packet.sourceRef.refId,
+        sourceType,
+        label: packet.sourceRef.title || packet.sourceRef.refId,
+        pathOrUrl: packet.sourceRef.pathOrUrl ?? null,
+        freshness: "unknown",
+        accessState: "allowed",
+        canonical: true,
+        summaryOnly: true,
+        blockedReason: null,
+      }
+    : {
+        refId: packet.sourceRef.refId,
+        sourceType,
+        label: packet.sourceRef.title || packet.sourceRef.refId,
+        pathOrUrl: null,
+        freshness: "stale",
+        accessState: "blocked",
+        canonical: true,
+        summaryOnly: true,
+        blockedReason: `Source is superseded by ${supersededBy}.`,
+      };
   const eventRefs = packet.history.map((event) => `event:${event.eventId}`);
   const suppliedEvidenceRefs = packet.history.flatMap((event) => event.evidenceRefs);
   const readyToTestEvidenceRefs = packet.readyToTest?.evidenceRefs ?? [];
@@ -98,7 +116,7 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
   const transitionEvents = packet.history.map((event) => ({
     eventId: event.eventId,
     eventType: event.eventType,
-    summary: event.payloadSummary,
+    summary: projectionSafeLifecycleSummary(event.payloadSummary),
     createdAt: event.occurredAt,
     sourceStage: event.previousStage == null ? null : legacyStage(event.previousStage),
     targetStage: legacyStage(event.targetStage),
@@ -115,7 +133,7 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
   return {
     packetId: packet.packetId,
     title: packet.title,
-    requestedOutcome: currentEvent.payloadSummary,
+    requestedOutcome: projectionSafeLifecycleSummary(currentEvent.payloadSummary),
     currentStage: stage,
     currentOwner: owner,
     status: packet.status,
@@ -188,7 +206,7 @@ function isAuthoritativeSourceRef(value: unknown): boolean {
 function isAuthoritativeLifecycleEvent(value: unknown, packetId: string): boolean {
   if (!value || typeof value !== "object") return false;
   const event = value as Record<string, unknown>;
-  const actor = event.actor as Record<string, unknown> | null;
+  const actor = event.actor;
   return isSafeCanonicalRef(event.eventId) &&
     event.packetId === packetId &&
     event.schemaVersion === 1 &&
@@ -199,14 +217,36 @@ function isAuthoritativeLifecycleEvent(value: unknown, packetId: string): boolea
     isSetValue(event.truthLabel, AUTHORITATIVE_TRUTH_LABELS) &&
     isAuthoritativeSourceRef(event.sourceRef) &&
     actor !== null &&
-    isSetValue(actor.actorType, AUTHORITATIVE_ACTOR_TYPES) &&
-    isOptionalString(actor.actorId) &&
-    isOptionalString(actor.actorLabel) &&
+    typeof actor === "object" &&
+    !Array.isArray(actor) &&
+    actor !== undefined &&
+    isSetValue((actor as Record<string, unknown>).actorType, AUTHORITATIVE_ACTOR_TYPES) &&
+    isOptionalString((actor as Record<string, unknown>).actorId) &&
+    isOptionalString((actor as Record<string, unknown>).actorLabel) &&
     isDateString(event.occurredAt) &&
     isNonEmptyString(event.payloadSummary) &&
     Array.isArray(event.evidenceRefs) &&
     event.evidenceRefs.every(isSafeCanonicalRef) &&
     event.metadataOnly === true;
+}
+
+function supersededPlanningSource(pathOrUrl: string | null | undefined): string | null {
+  if (typeof pathOrUrl !== "string") return null;
+  let normalized = pathOrUrl.trim().replace(/\\/g, "/");
+  if (normalized.startsWith("./")) normalized = normalized.slice(2);
+  const markerIndex = normalized.indexOf(PLANNING_SOURCE_MARKER);
+  if (markerIndex >= 0) normalized = normalized.slice(markerIndex);
+  if (normalized === AUTHORITATIVE_PLANNING_SOURCE_PATH || normalized === CURRENT_OPERATIONAL_ACTION_LOOP_PRD_PATH) return null;
+  return normalized.startsWith(PLANNING_SOURCE_MARKER) && normalized.endsWith("/prd.md")
+    ? AUTHORITATIVE_PLANNING_SOURCE_PATH
+    : null;
+}
+
+function projectionSafeLifecycleSummary(summary: string | null | undefined): string {
+  const value = (summary || "Metadata-only lifecycle event.").trim();
+  if (!value) return "Metadata-only lifecycle event.";
+  if (UNSAFE_LIFECYCLE_TEXT_RE.test(value)) return "Redacted metadata-only lifecycle summary.";
+  return value.slice(0, 500);
 }
 
 function legacyStage(stage: AuthoritativeWorkPacketLifecycleView["currentStage"]): WorkPacketV0View["currentStage"] {

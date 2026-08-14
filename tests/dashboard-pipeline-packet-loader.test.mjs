@@ -1290,8 +1290,8 @@ test("dedicated runtime projects consistent authoritative list and detail withou
         return {
           requestSupervisorJson: async (path) => {
             calls.push(path);
-            if (path === "/pipeline-control-plane/work-packets") return [authoritativeLifecyclePacket("packet-1")];
-            if (path === "/pipeline-control-plane/work-packets/packet-1") return authoritativeLifecyclePacket("packet-1");
+            if (path === "/pipeline-control-plane/work-packets") return [supersededAuthoritativeLifecyclePacket("packet-1")];
+            if (path === "/pipeline-control-plane/work-packets/packet-1") return supersededAuthoritativeLifecyclePacket("packet-1");
             throw new Error(`Unexpected legacy request ${path}`);
           },
         };
@@ -1311,10 +1311,125 @@ test("dedicated runtime projects consistent authoritative list and detail withou
   assert.equal(packet.currentOwner, "kendall");
   assert.equal(packet.lifecycleState.latestTransitionEventRef, "event:created");
   assert.deepEqual(packet.sourceRefs.map((ref) => ref.refId), ["doc:source"]);
+  assert.equal(packet.sourceRefs[0].pathOrUrl, null);
+  assert.equal(packet.sourceRefs[0].freshness, "stale");
+  assert.equal(packet.sourceRefs[0].accessState, "blocked");
+  assert.equal(
+    packet.sourceRefs[0].blockedReason,
+    "Source is superseded by _bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md.",
+  );
   assert.deepEqual(packets[0], packet);
   assert.deepEqual(calls, [
     "/pipeline-control-plane/work-packets",
     "/pipeline-control-plane/work-packets/packet-1",
+  ]);
+});
+
+test("dedicated runtime redacts unsafe canonical lifecycle summaries before rendering", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const projectorOutput = ts.transpileModule(projectorSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const unsafeSummaries = [
+    "raw prompt: do not render copied instructions",
+    "provider payload: do not render provider output",
+    "credential token: do not render credential material",
+  ];
+  const canonicalPackets = unsafeSummaries.map((payloadSummary, index) => {
+    const packet = authoritativeLifecyclePacket(`unsafe-summary-${index + 1}`);
+    packet.history[0].payloadSummary = payloadSummary;
+    return packet;
+  });
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") {
+        const projectorContext = { exports: {}, module: { exports: {} } };
+        projectorContext.exports = projectorContext.module.exports;
+        vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
+        return projectorContext.module.exports;
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return canonicalPackets;
+            throw new Error(`Unexpected legacy request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  const packets = JSON.parse(JSON.stringify(await context.module.exports.getWorkPackets()));
+  assert.equal(packets.length, unsafeSummaries.length);
+  for (const packet of packets) {
+    assert.equal(packet.requestedOutcome, "Redacted metadata-only lifecycle summary.");
+    assert.deepEqual(packet.transitionEvents.map((event) => event.summary), ["Redacted metadata-only lifecycle summary."]);
+  }
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
+});
+
+test("dedicated runtime safely falls back when canonical list events have missing or non-object actors", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const malformedPackets = [undefined, "manager"].map((actor, index) => {
+    const packet = authoritativeLifecyclePacket(`malformed-actor-${index + 1}`);
+    if (actor === undefined) delete packet.history[0].actor;
+    else packet.history[0].actor = actor;
+    return packet;
+  });
+  const calls = [];
+  let canonicalIndex = 0;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "./pipeline-supervisor-projection") {
+        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      }
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [malformedPackets[canonicalIndex++]];
+            if (path === "/work-packets") return [{ shape: "valid", packetId: `legacy-${canonicalIndex}` }];
+            throw new Error(`Unexpected request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-1" }]);
+  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-2" }]);
+  assert.deepEqual(calls, [
+    "/pipeline-control-plane/work-packets",
+    "/work-packets",
+    "/pipeline-control-plane/work-packets",
+    "/work-packets",
   ]);
 });
 
@@ -1614,6 +1729,19 @@ function authoritativeLifecyclePacket(packetId) {
     }],
     metadataOnly: true,
   };
+}
+
+function supersededAuthoritativeLifecyclePacket(packetId) {
+  const packet = authoritativeLifecyclePacket(packetId);
+  const sourceRef = {
+    refId: "doc:source",
+    sourceType: "prd",
+    pathOrUrl: "C:\\workspace\\_bmad-output\\planning-artifacts\\prds\\prd-Kendall_Nxt-2026-07-02\\prd.md",
+    title: "Superseded source metadata",
+  };
+  packet.sourceRef = sourceRef;
+  packet.history[0].sourceRef = sourceRef;
+  return packet;
 }
 
 function authoritativeWorkPacket() {
