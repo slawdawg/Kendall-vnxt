@@ -3835,6 +3835,7 @@ def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, mon
     assert any("Do not include secrets" in note for note in packet["redactionNotes"])
     assert any("file writes are not allowed" in boundary for boundary in packet["boundaries"])
     assert any("Provider endpoints policy: deny_all" in boundary for boundary in packet["boundaries"])
+    assert any("reviewed authority policy selects one source VM" in boundary for boundary in packet["boundaries"])
     assert any("Credential policy: forbid_worker_access" in boundary for boundary in packet["boundaries"])
 
 
@@ -3913,6 +3914,7 @@ def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeyp
     assert explanation["commandsAllowed"] is False
     assert explanation["evidence"]
     assert any("Read-only" in boundary for boundary in explanation["boundaries"])
+    assert any("reviewed authority policy selects one source VM" in boundary for boundary in explanation["boundaries"])
     assert explanation["nextStepSuggestions"]
     assert before_item == after_item
     assert before_events == after_events

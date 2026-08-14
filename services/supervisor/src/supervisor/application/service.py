@@ -27501,7 +27501,7 @@ class SupervisorService:
                     f"Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model "
                     f"{self.settings.ollama_approved_model_id} only."
                     if bool(ollama_state["enabled"])
-                    else "Ollama provider calls remain disabled until the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                    else "Ollama provider calls remain disabled until a reviewed authority policy selects one source VM and the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
                 ),
                 f"Credential policy: {threat_boundary.credentialPolicy}.",
             ],
@@ -28182,7 +28182,7 @@ class SupervisorService:
                     f"Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model "
                     f"{self.settings.ollama_approved_model_id} only."
                     if bool(ollama_state["enabled"])
-                    else "Ollama provider calls remain disabled until the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                    else "Ollama provider calls remain disabled until a reviewed authority policy selects one source VM and the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
                 ),
                 f"Credential policy: {threat_boundary.credentialPolicy}.",
             ],
