@@ -440,7 +440,7 @@ and no removed command is a hidden dependency of hooks or workflows.
 
 | Candidate | Recommended disposition | Required decision/proof |
 | --- | --- | --- |
-| `runtime/` | **archived/tagged then removed in Phase 0** | No setup, packaging, or runtime code consumer exists outside the tree; archive tag `archive/runtime-scaffold-2026-08-14` preserves rollback. | Restore only through a new product decision and a reviewed PR from the archive tag. |
+| `runtime/` | **archived/tagged then removed in Phase 0** | No setup, packaging, or runtime code consumer exists outside the tree; archive tag `archive/runtime-scaffold-2026-08-14` preserves rollback. Restore only through a new product decision and a reviewed PR from the archive tag. |
 | V0 action and approval APIs | Migrate then delete. | Consumer, database, and approval-evidence migration is complete. |
 | `/pipeline/demo` fixture catalogue | Retain as the supported, fixture-only daily-alpha flow; consider removal only after an authoritative product decision supersedes the runbook and fixture-fallback audit. | Decision record naming the superseded authority, caller/fixture reachability, and removal/rollback proof. |
 | Epic/story-specific reports and panels | Move durable signal to a named capability or remove. | Report classification and replacement evidence. |
