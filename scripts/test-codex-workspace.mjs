@@ -8264,7 +8264,7 @@ try {
         assert(script.startsWith("node ./scripts/run-supervisor-tests.mjs --no-preflight --timeout-ms=150000 -q "), `routing leaf command is not fixed: ${stage}`);
         return [...script.matchAll(/test_routing_preview\.py::(test_[A-Za-z0-9_]+)/g)].map((match) => match[1]);
       });
-      assert(routingLeafNodeIds.map((nodeIds) => nodeIds.length).join(",") === "22,22,22,22,21,21,21,23", JSON.stringify(routingLeafNodeIds.map((nodeIds) => nodeIds.length)));
+      assert(routingLeafNodeIds.map((nodeIds) => nodeIds.length).join(",") === "22,23,22,22,21,21,21,23", JSON.stringify(routingLeafNodeIds.map((nodeIds) => nodeIds.length)));
       const flattenedRoutingNodeIds = routingLeafNodeIds.flat();
       assert(new Set(flattenedRoutingNodeIds).size === flattenedRoutingNodeIds.length, "routing leaf node IDs contain duplicates");
       assert(flattenedRoutingNodeIds.join(",") === routingSourceNames.join(","), "routing leaf node IDs do not exactly match source order");
