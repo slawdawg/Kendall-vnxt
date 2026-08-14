@@ -25,10 +25,19 @@ UNSAFE_LIFECYCLE_TEXT_RE = re.compile(
 )
 CANONICAL_OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions"
 CANONICAL_OLLAMA_MODEL = "qwen3:14b"
-LOCAL_PROVIDER_AUTHORITY_STATUS = "hold_conflicting_source_vm"
-CANONICAL_OLLAMA_SOURCE_VM: str | None = None
 CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS = 2
 CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS = 120
+LOCAL_PROVIDER_AUTHORITY_POLICY_PATH = Path(__file__).resolve().parents[5] / "docs/workflows/local-provider-authority-policy-v1.json"
+LOCAL_PROVIDER_AUTHORITY_CANDIDATE_PROVENANCE = {
+    "192.168.1.118": (
+        "accepted_operator_approval",
+        "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+    ),
+    "192.168.1.8": (
+        "current_routed_source_observation",
+        "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md",
+    ),
+}
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -37,6 +46,83 @@ PIPELINE_WORK_GRAPH_LOCAL_PATH_RE = re.compile(
     r"(?:/|\bfile:|[A-Za-z]:[\\/]|~(?:[A-Za-z0-9._-]+)?[\\/]|\\)",
     re.IGNORECASE,
 )
+
+
+def _invalid_local_provider_authority_policy() -> dict[str, object]:
+    return {
+        "status": "invalid",
+        "approved_source_vm": None,
+        "endpoint": None,
+        "model": None,
+        "connect_timeout_seconds": None,
+        "total_timeout_seconds": None,
+    }
+
+
+def _load_local_provider_authority_policy() -> dict[str, object]:
+    """Load the versioned authority record as a closed, fail-closed contract."""
+    try:
+        raw_policy = json.loads(LOCAL_PROVIDER_AUTHORITY_POLICY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _invalid_local_provider_authority_policy()
+    if not isinstance(raw_policy, dict):
+        return _invalid_local_provider_authority_policy()
+
+    candidates = raw_policy.get("candidateSourceVms")
+    if (
+        raw_policy.get("schemaVersion") != 1
+        or raw_policy.get("authorityFamily") != "local-provider-execution"
+        or not isinstance(candidates, list)
+        or len(candidates) != 2
+    ):
+        return _invalid_local_provider_authority_policy()
+    candidate_by_source: dict[str, dict[str, object]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return _invalid_local_provider_authority_policy()
+        source_vm = candidate.get("sourceVm")
+        if not isinstance(source_vm, str) or not source_vm.strip() or source_vm in candidate_by_source:
+            return _invalid_local_provider_authority_policy()
+        candidate_by_source[source_vm] = candidate
+    if set(candidate_by_source) != set(LOCAL_PROVIDER_AUTHORITY_CANDIDATE_PROVENANCE):
+        return _invalid_local_provider_authority_policy()
+    for source_vm, (claim, provenance_ref) in LOCAL_PROVIDER_AUTHORITY_CANDIDATE_PROVENANCE.items():
+        candidate = candidate_by_source[source_vm]
+        if candidate.get("claim") != claim or candidate.get("provenanceRef") != provenance_ref:
+            return _invalid_local_provider_authority_policy()
+
+    route = raw_policy.get("route")
+    defaults = raw_policy.get("defaults")
+    if (
+        not isinstance(route, dict)
+        or route.get("endpoint") != CANONICAL_OLLAMA_ENDPOINT
+        or route.get("model") != CANONICAL_OLLAMA_MODEL
+        or route.get("connectTimeoutSeconds") != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS
+        or route.get("totalTimeoutSeconds") != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS
+        or route.get("retentionMode") != "metadata-only"
+        or not isinstance(defaults, dict)
+        or defaults.get("allowLocalProviderCalls") is not False
+        or defaults.get("allowOllamaProviderCalls") is not False
+        or defaults.get("allowAutomaticOllamaLocalEvidence") is not False
+    ):
+        return _invalid_local_provider_authority_policy()
+
+    status = raw_policy.get("status")
+    approved_source_vm = raw_policy.get("approvedSourceVm")
+    if status == "hold_conflicting_source_vm" and approved_source_vm is None:
+        selected_source_vm: str | None = None
+    elif status == "approved" and isinstance(approved_source_vm, str) and approved_source_vm in candidate_by_source:
+        selected_source_vm = approved_source_vm
+    else:
+        return _invalid_local_provider_authority_policy()
+    return {
+        "status": status,
+        "approved_source_vm": selected_source_vm,
+        "endpoint": route["endpoint"],
+        "model": route["model"],
+        "connect_timeout_seconds": route["connectTimeoutSeconds"],
+        "total_timeout_seconds": route["totalTimeoutSeconds"],
+    }
 
 
 @dataclass(frozen=True)
@@ -21575,6 +21661,13 @@ class SupervisorService:
         )
 
     def _ollama_provider_gate_state(self) -> dict[str, object]:
+        authority_policy = _load_local_provider_authority_policy()
+        authority_status = authority_policy["status"]
+        authority_source_vm = authority_policy["approved_source_vm"]
+        authority_endpoint = authority_policy["endpoint"]
+        authority_model = authority_policy["model"]
+        authority_connect_timeout_seconds = authority_policy["connect_timeout_seconds"]
+        authority_total_timeout_seconds = authority_policy["total_timeout_seconds"]
         broad_gate_enabled = self.settings.allow_local_provider_calls
         provider_gate_enabled = self.settings.allow_ollama_provider_calls
         endpoint_url = (self.settings.ollama_endpoint_url or "").strip()
@@ -21587,17 +21680,17 @@ class SupervisorService:
         model_id_configured = bool(model_id)
         model_id_approved = model_id == approved_model_id
         authority_resolved = (
-            LOCAL_PROVIDER_AUTHORITY_STATUS == "approved"
-            and isinstance(CANONICAL_OLLAMA_SOURCE_VM, str)
-            and bool(CANONICAL_OLLAMA_SOURCE_VM)
+            authority_status == "approved"
+            and isinstance(authority_source_vm, str)
+            and bool(authority_source_vm)
         )
 
         route_policy_mismatch = (
-            approved_endpoint_url != CANONICAL_OLLAMA_ENDPOINT
-            or approved_model_id != CANONICAL_OLLAMA_MODEL
-            or (authority_resolved and approved_source_vm != CANONICAL_OLLAMA_SOURCE_VM)
-            or self.settings.ollama_connect_timeout_seconds != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS
-            or self.settings.ollama_total_timeout_seconds != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS
+            approved_endpoint_url != authority_endpoint
+            or approved_model_id != authority_model
+            or (authority_resolved and approved_source_vm != authority_source_vm)
+            or self.settings.ollama_connect_timeout_seconds != authority_connect_timeout_seconds
+            or self.settings.ollama_total_timeout_seconds != authority_total_timeout_seconds
         )
 
         if not authority_resolved:
@@ -21649,7 +21742,7 @@ class SupervisorService:
             "endpoint_approved": endpoint_approved,
             "model_id_configured": model_id_configured,
             "model_id_approved": model_id_approved,
-            "authority_status": LOCAL_PROVIDER_AUTHORITY_STATUS,
+            "authority_status": authority_status,
             "authority_resolved": authority_resolved,
             "registry_state": registry_state,
             "disabled_reason": disabled_reason,
@@ -22192,14 +22285,14 @@ class SupervisorService:
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-ollama-no-call-prep",
-                    label="Ollama approved host provider lane",
+                    label="Ollama authority-conflict hold lane",
                     priority="P1",
                     target="Review Ollama gate, approved endpoint/model, prompt-retention, timeout, and cancellation evidence.",
-                    summary="Stories 4.1-4.4 now allow only the approved VM-to-host Ollama endpoint/model with metadata-only retention.",
+                    summary="Stories 4.1-4.4 retain bounded metadata-only route evidence, but provider calls remain denied until a reviewed authority decision selects one source VM.",
                     evidence=[
                         "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false.",
-                        "Approved endpoint: http://192.168.1.128:11434/v1/chat/completions.",
-                        "Approved model id: qwen3:14b.",
+                        "Agreed endpoint metadata: http://192.168.1.128:11434/v1/chat/completions.",
+                        "Agreed model metadata: qwen3:14b.",
                         "Raw Ollama prompts, completions, reasoning fields, and provider payloads are excluded from workflow events and runtime exports.",
                         "cancel_requested -> request_abort_recorded",
                         "retry_requires_new_route_decision_and_fresh_approval",
@@ -22217,8 +22310,8 @@ class SupervisorService:
                     ],
                     dashboardAnchors=["#runtime-evidence-export", "/controls#execution-readiness-report"],
                     stopLines=[
-                        "Ollama provider/model calls are allowed only for the approved host endpoint and qwen3:14b model.",
-                        "Do not add endpoint discovery, model discovery, raw payload retention, or any other provider/model authority without a successor approval.",
+                        "Ollama provider/model calls remain denied until a reviewed authority policy selects one source VM and the explicit gates are enabled.",
+                        "Do not add endpoint discovery, model discovery, raw payload retention, or any other provider/model authority without a successor reviewed decision.",
                     ],
                     crossChecks=cross_checks,
                 ),

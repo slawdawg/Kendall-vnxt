@@ -114,11 +114,9 @@ assertCondition(
   "Authority policy must keep all local-provider and automatic-consent defaults false",
   failures,
 );
-const candidateSourceVms = new Map(
-  Array.isArray(authorityPolicy?.candidateSourceVms)
-    ? authorityPolicy.candidateSourceVms.map((candidate) => [candidate?.sourceVm, candidate])
-    : [],
-);
+const candidateSourceVmRows = Array.isArray(authorityPolicy?.candidateSourceVms) ? authorityPolicy.candidateSourceVms : [];
+assertCondition(candidateSourceVmRows.length === 2, "Authority policy must contain exactly two candidate rows before source-VM de-duplication", failures);
+const candidateSourceVms = new Map(candidateSourceVmRows.map((candidate) => [candidate?.sourceVm, candidate]));
 assertCondition(candidateSourceVms.size === 2, "Authority policy must contain exactly the two conflicting source-VM candidates", failures);
 assertCondition(
   candidateSourceVms.get("192.168.1.118")?.claim === "accepted_operator_approval"
@@ -170,14 +168,16 @@ assertAllIncludes(serviceSource, [
   "self.settings.allow_local_provider_calls",
   "self.settings.allow_ollama_provider_calls",
   "self.settings.allow_automatic_ollama_local_evidence",
-  "LOCAL_PROVIDER_AUTHORITY_STATUS = \"hold_conflicting_source_vm\"",
-  "CANONICAL_OLLAMA_SOURCE_VM: str | None = None",
+  "def _load_local_provider_authority_policy()",
+  "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH",
+  "authority_status = authority_policy[\"status\"]",
+  "authority_source_vm = authority_policy[\"approved_source_vm\"]",
   "ollama_authority_policy_unresolved",
   "authority_resolved",
   "endpoint_approved = endpoint_url == approved_endpoint_url",
   "model_id_approved = model_id == approved_model_id",
-  "self.settings.ollama_connect_timeout_seconds != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS",
-  "self.settings.ollama_total_timeout_seconds != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS",
+  "self.settings.ollama_connect_timeout_seconds != authority_connect_timeout_seconds",
+  "self.settings.ollama_total_timeout_seconds != authority_total_timeout_seconds",
   "\"provider_calls_allowed\": enabled",
   "\"model_calls_allowed\": enabled",
 ], "Supervisor service must preserve the unresolved local-provider runtime gate", failures);

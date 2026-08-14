@@ -142,11 +142,65 @@ function policyText(value) {
 
 function loadAuthorityPolicy() {
   try {
-    const policy = JSON.parse(readFileSync(AUTHORITY_POLICY_PATH, "utf8"));
-    return policy && typeof policy === "object" ? policy : { status: "invalid", approvedSourceVm: null, route: {} };
+    return parseLocalProviderAuthorityPolicy(JSON.parse(readFileSync(AUTHORITY_POLICY_PATH, "utf8")));
   } catch {
-    return { status: "invalid", approvedSourceVm: null, route: {} };
+    return invalidAuthorityPolicy();
   }
+}
+
+/**
+ * Parse the versioned policy as a closed contract. A future reviewed policy
+ * transition may select a candidate VM, but malformed or partial "approved"
+ * data can never turn the route on.
+ */
+export function parseLocalProviderAuthorityPolicy(policy) {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return invalidAuthorityPolicy();
+  const candidates = Array.isArray(policy.candidateSourceVms) ? policy.candidateSourceVms : [];
+  if (policy.schemaVersion !== 1 || policy.authorityFamily !== "local-provider-execution" || candidates.length !== 2) {
+    return invalidAuthorityPolicy();
+  }
+
+  const candidateByVm = new Map();
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return invalidAuthorityPolicy();
+    const sourceVm = policyText(candidate.sourceVm);
+    if (!sourceVm || candidateByVm.has(sourceVm)) return invalidAuthorityPolicy();
+    candidateByVm.set(sourceVm, candidate);
+  }
+  if (
+    candidateByVm.get("192.168.1.118")?.claim !== "accepted_operator_approval"
+    || candidateByVm.get("192.168.1.118")?.provenanceRef !== "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"
+    || candidateByVm.get("192.168.1.8")?.claim !== "current_routed_source_observation"
+    || candidateByVm.get("192.168.1.8")?.provenanceRef !== "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md"
+  ) return invalidAuthorityPolicy();
+
+  const route = policy.route;
+  const defaults = policy.defaults;
+  if (
+    !route || typeof route !== "object" || Array.isArray(route)
+    || policyText(route.endpoint) !== "http://192.168.1.128:11434/v1/chat/completions"
+    || policyText(route.model) !== "qwen3:14b"
+    || route.connectTimeoutSeconds !== 2
+    || route.totalTimeoutSeconds !== 120
+    || route.retentionMode !== "metadata-only"
+    || !defaults || typeof defaults !== "object" || Array.isArray(defaults)
+    || defaults.allowLocalProviderCalls !== false
+    || defaults.allowOllamaProviderCalls !== false
+    || defaults.allowAutomaticOllamaLocalEvidence !== false
+  ) return invalidAuthorityPolicy();
+
+  const approvedSourceVm = policyText(policy.approvedSourceVm);
+  if (policy.status === "hold_conflicting_source_vm" && policy.approvedSourceVm === null) {
+    return { ...policy, approvedSourceVm: null, route: { ...route } };
+  }
+  if (policy.status === "approved" && approvedSourceVm && candidateByVm.has(approvedSourceVm)) {
+    return { ...policy, approvedSourceVm, route: { ...route } };
+  }
+  return invalidAuthorityPolicy();
+}
+
+function invalidAuthorityPolicy() {
+  return { status: "invalid", approvedSourceVm: null, route: {} };
 }
 
 function unique(values) {

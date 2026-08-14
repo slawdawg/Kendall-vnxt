@@ -8,6 +8,7 @@ import subprocess
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -1522,6 +1523,38 @@ def test_ollama_provider_gate_holds_both_source_vm_candidates_despite_exact_endp
     assert ollama.modelCallsAttempted is False
     assert ollama.connectTimeoutSeconds == 2
     assert ollama.totalTimeoutSeconds == 120
+
+
+def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "approved"
+    policy["approvedSourceVm"] = "192.168.1.118"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+
+    assert state["authority_status"] == "approved"
+    assert state["authority_resolved"] is True
+    assert state["enabled"] is True
+    assert state["disabled_reason"] is None
 
 
 def test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch(tmp_path, monkeypatch) -> None:
@@ -6113,10 +6146,11 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert any("not execution-authority approval" in stop_line for stop_line in authority_item["stopLines"])
     ollama_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-ollama-no-call-prep")
     assert "GET /supervisor/disabled-provider-proofs" in ollama_item["relatedReports"]
-    assert "Approved endpoint: http://192.168.1.128:11434/v1/chat/completions." in ollama_item["evidence"]
-    assert "Approved model id: qwen3:14b." in ollama_item["evidence"]
+    assert ollama_item["label"] == "Ollama authority-conflict hold lane"
+    assert "Agreed endpoint metadata: http://192.168.1.128:11434/v1/chat/completions." in ollama_item["evidence"]
+    assert "Agreed model metadata: qwen3:14b." in ollama_item["evidence"]
     assert "cancel_requested -> request_abort_recorded" in ollama_item["evidence"]
-    assert any("approved host endpoint and qwen3:14b model" in stop_line for stop_line in ollama_item["stopLines"])
+    assert any("remain denied until a reviewed authority policy selects one source VM" in stop_line for stop_line in ollama_item["stopLines"])
     assert before_events_response.json()["data"] == after_events_response.json()["data"]
     assert missing_response.status_code == 404
 

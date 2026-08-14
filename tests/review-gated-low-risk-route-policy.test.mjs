@@ -3,7 +3,33 @@ import test from "node:test";
 
 import { buildFakeReviewInput } from "../scripts/lib/review-gated-low-risk-fake-adapter.mjs";
 import { evaluateGovernedReadOnlyReview } from "../scripts/lib/review-gated-low-risk-read-only-review.mjs";
-import { BOUNDED_ROUTE_POLICY_DEFAULTS, evaluateBoundedReviewRoute, selectOrderedReviewRoute } from "../scripts/lib/review-gated-low-risk-route-policy.mjs";
+import { BOUNDED_ROUTE_POLICY_DEFAULTS, evaluateBoundedReviewRoute, parseLocalProviderAuthorityPolicy, selectOrderedReviewRoute } from "../scripts/lib/review-gated-low-risk-route-policy.mjs";
+
+test("only a complete reviewed authority policy can select a source VM", () => {
+  const validApprovedPolicy = {
+    schemaVersion: 1,
+    authorityFamily: "local-provider-execution",
+    status: "approved",
+    approvedSourceVm: "192.168.1.118",
+    candidateSourceVms: [
+      { sourceVm: "192.168.1.118", claim: "accepted_operator_approval", provenanceRef: "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" },
+      { sourceVm: "192.168.1.8", claim: "current_routed_source_observation", provenanceRef: "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md" },
+    ],
+    route: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, retentionMode: "metadata-only" },
+    defaults: { allowLocalProviderCalls: false, allowOllamaProviderCalls: false, allowAutomaticOllamaLocalEvidence: false },
+  };
+  assert.equal(parseLocalProviderAuthorityPolicy(validApprovedPolicy).approvedSourceVm, "192.168.1.118");
+  for (const malformed of [
+    { ...validApprovedPolicy, candidateSourceVms: [validApprovedPolicy.candidateSourceVms[0], validApprovedPolicy.candidateSourceVms[0]] },
+    { ...validApprovedPolicy, approvedSourceVm: "192.168.1.9" },
+    { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, totalTimeoutSeconds: 121 } },
+    { ...validApprovedPolicy, defaults: { ...validApprovedPolicy.defaults, allowOllamaProviderCalls: true } },
+  ]) {
+    const parsed = parseLocalProviderAuthorityPolicy(malformed);
+    assert.equal(parsed.status, "invalid");
+    assert.equal(parsed.approvedSourceVm, null);
+  }
+});
 
 test("unresolved authority holds both Ollama source-VM candidates despite exact endpoint and model", () => {
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityStatus, "hold_conflicting_source_vm");
