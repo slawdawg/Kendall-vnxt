@@ -64,9 +64,11 @@ baseline; they do not authorize schema, route, runtime, or workspace deletion.
 ### Runtime retirement evidence — 2026-08-14
 
 The `runtime/` scaffold had no import, package, setup, or runtime code
-consumer outside its own tree. Its only concrete external references were the
-two mise/readiness documents, which were updated to describe the active
-supervisor Python surface. Baseline documentation, authority, mise,
+consumer outside its own tree. The two mise/readiness document references
+were updated to describe the active supervisor Python surface. Retained
+mentions of `runtime/.batch_timer_state.json` in `.gitignore`, clean-install,
+and delivery-guard checks are deliberate anti-reintroduction guardrails, not
+runtime consumers. Baseline documentation, authority, mise,
 clean-install, and Linux-install checks passed before removal. The full
 pre-removal tree is preserved by annotated tag
 `archive/runtime-scaffold-2026-08-14` at `be068262`; rollback is a reviewed
