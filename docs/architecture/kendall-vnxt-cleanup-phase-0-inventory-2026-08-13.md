@@ -29,6 +29,154 @@ second backlog or a promise to delete every listed path.
 The figures are planning signals, not success targets. Line removal or test
 removal without a proven replacement is not cleanup.
 
+## Dated evidence update — 2026-08-13
+
+The following are completed read-only observations. They update the planning
+baseline; they do not authorize schema, route, runtime, or workspace deletion.
+
+- **Lifecycle:** canonical dashboard packet detail currently rejects
+  `AuthoritativeWorkPacketLifecycleView` and then falls back to
+  `/work-packets`. The first slice is a canonical detail projector with
+  fallback only for legacy `work_item` and `candidate_work` identities. No
+  schema or route deletion is in scope.
+- **Retirement:** `docs/ui.png` is unreferenced. Its first cleanup slice is
+  limited to the asset, a documentation/render check, and a `git revert`
+  rollback. `runtime/` requires archive/tag, then removal only after clean
+  documentation, render, reachability, and clean-install proof. `/pipeline/demo`
+  remains the supported, fixture-only daily-alpha flow.
+- **Delivery, persistence, and workspace:** CI reporting/timing evidence must
+  precede any topology or coverage change. Duplicate workspace stages are
+  known, but neither may be removed without equivalence and timing proof.
+  Persistence migration contract/inventory work is **blocked** by existing
+  persistence PRs/lanes 796–798 and the shared database surface. The read-only
+  workspace snapshot reports 26 clean active managed worktrees, 25 local-only
+  commits, 5 PRs waiting for merge reconciliation, and 751 closed retained
+  records; closeout must use governed tooling, never manual cleanup.
+- **Routing record:** Sol/high was used for lifecycle (non-default because the
+  canonical-detail rejection/fallback boundary requires an ownership decision
+  before any route or schema change). Luna/medium was the default for the
+  reachability and retirement evidence. Terra/high was used for delivery,
+  persistence, and workspace evidence (non-default because the CI, shared-DB,
+  and governed-workspace dependencies needed one cross-surface evidence
+  packet before mutation).
+
+## Durable non-overlapping lane contracts
+
+Each contract below is a bounded owner lock. A discovery of overlap or a new
+cross-cutting decision stops mutation and returns the evidence to the central
+coordinator for repartitioning.
+
+### Lifecycle canonical-detail projector — Sol/high, non-default
+
+- **Path ownership:** `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`,
+  `apps/dashboard/src/components/pipeline/packet-detail-page.tsx`,
+  `apps/dashboard/scripts/packet-detail-mediator.mjs`, and their focused tests
+  only. The supervisor schema, routes, persistence models, and manager
+  source-intake paths are not owned here.
+- **Dependencies:** the authoritative lifecycle detail contract and the
+  existing dashboard packet-loader/detail callers. Compatibility is limited
+  to `work_item` and `candidate_work` identities.
+- **Focused verification:** dashboard pipeline-boundary and packet-loader /
+  packet-detail contract tests, followed by the coordinator's integration
+  check.
+- **Rollback:** revert the projector commit as one unit; no data or route
+  rollback is permitted because this slice makes no schema or route change.
+- **Allowed / prohibited:** change only the projector and its focused tests;
+  do not delete or rename a route/schema, widen the fallback, or mutate
+  supervisor persistence.
+
+### Documentation asset cleanup — Luna/medium, default
+
+- **Path ownership:** `docs/ui.png` plus the exact planning records
+  `docs/architecture/kendall-vnxt-holistic-cleanup-program-2026-08-13.md` and
+  `docs/architecture/kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`.
+  Their asset mentions must be updated or removed together; unrelated
+  documentation and assets remain outside this lane.
+- **Dependencies:** distinguish those planning-record mentions from external
+  or runtime reachability; a planning mention does not demonstrate that the
+  asset is externally or operationally reachable.
+- **Focused verification:** repeat the reference search, update/remove the two
+  planning mentions together, run `pnpm run check:docs`, and complete the
+  documentation/render check before removal.
+- **Rollback:** revert the asset-removal commit with `git revert`.
+- **Allowed / prohibited:** remove the asset only after the checks pass and the
+  two planning records are consistent; do not change product authority, edit
+  unrelated documentation, or remove another asset in this lane.
+
+### Runtime archive/removal — Luna/medium, default
+
+- **Path ownership:** `runtime/` and its archival/tag evidence only. The
+  documentation-assets and demo-fixture lanes do not share this path.
+- **Dependencies:** archive/tag first, then clean documentation, render,
+  reachability, and clean-install proof.
+- **Focused verification:** archive/reachability evidence plus the required
+  documentation, render, and clean-install checks before a removal commit.
+- **Rollback:** restore from the archival tag and revert the removal commit.
+- **Allowed / prohibited:** archive/tag before removal; do not remove runtime
+  files, alter callers, or claim retirement complete without all four proofs.
+
+### Supported demo fixture retention — Luna/medium, default
+
+- **Path ownership:** `/pipeline/demo` route and its fixture catalogue are
+  read-only in this phase; no writer lane is assigned.
+- **Dependencies:** the daily-alpha runbook and fixture-fallback audit remain
+  authoritative.
+- **Focused verification:** record route/proxy callers and fixture boundaries
+  without treating fixture output as production evidence.
+- **Rollback:** no mutation means no rollback action; any future removal needs
+  a new contract naming the superseding product authority.
+- **Allowed / prohibited:** retain the supported fixture-only flow; do not
+  delete, repurpose, or mark it retired in this lane.
+
+### CI reporting and timing evidence — Terra/high, non-default
+
+- **Path ownership:** read-only inspection of `.github/workflows/`,
+  `package.json`, and the relevant CI/reporting scripts. No topology or
+  coverage writer is assigned here.
+- **Dependencies:** current CI entry points, job reports, timings, and the
+  known duplicate workspace stages.
+- **Focused verification:** capture current reporting and timing evidence and
+  produce an equivalence/timing comparison before any topology or coverage
+  proposal.
+- **Rollback:** discard the evidence packet; no source rollback is needed
+  because this lane is read-only.
+- **Allowed / prohibited:** inventory and compare only; do not remove stages,
+  reduce coverage, or change workflow topology without a separately approved
+  implementation contract and proof.
+
+### Persistence migration contract/inventory — Terra/high, blocked
+
+- **Path ownership:** read-only inspection of
+  `services/supervisor/src/supervisor/infrastructure/db/`, migration/schema
+  code, and persistence tests. No migration writer is active.
+- **Dependencies:** existing persistence PRs/lanes 796–798 and the shared
+  database surface block this lane until the coordinator reconciles ownership.
+- **Focused verification:** record the migration contract, current schema
+  paths, callers, and the blocking PR/lane evidence; no migration execution.
+- **Rollback:** none while blocked because no mutation is allowed.
+- **Allowed / prohibited:** inventory and contract drafting only; do not edit
+  migrations, `create_all`/startup mutation, schema models, shared DB code, or
+  the blocked PRs/lanes.
+
+### Governed workspace health and closeout — Terra/high, non-default
+
+- **Path ownership:** read-only managed-worktree, assignment, lease, and PR
+  reconciliation records; no direct filesystem cleanup or metadata writer.
+- **Dependencies:** the 26/25/5/751 workspace snapshot and the repository's
+  governed closeout tooling.
+- **Focused verification:** refresh the health snapshot and reconcile only
+  through the exact governed closeout path for an explicitly approved target.
+- **Rollback:** use the closeout tool's documented restoration path; never
+  repair state by hand.
+- **Allowed / prohibited:** preserve dirty or retained records and use governed
+  closeout; do not delete worktrees, branches, leases, or the 751 closed
+  records with filesystem or manual metadata commands.
+
+These locks are intentionally disjoint: dashboard detail, documentation
+assets, runtime, demo fixtures, CI topology evidence, persistence, and
+workspace metadata each have one owner. Integration or deletion authority is
+not implied by an evidence-only contract.
+
 ## Lifecycle and contract inventory
 
 | Item | Disposition | Evidence of current dependency | Required replacement / proof | First slice |
