@@ -22,7 +22,7 @@ second backlog or a promise to delete every listed path.
 | Supervisor test source | ~37.8k lines | `services/supervisor/tests`. |
 | Manager/workspace scripts | ~121.6k lines | `scripts`; `manager-control-plane/core.mjs` is ~31.9k and `codex-workspace.mjs` is ~18.7k. |
 | Root JavaScript tests | ~88.5k lines | `tests`; `manager-control-plane.test.mjs` is ~34.3k. |
-| Legacy runtime scaffold | 64 files, ~11.3k lines | `runtime/`; last changed 2026-06-20. |
+| Legacy runtime scaffold | 64 files, ~11.3k lines; archived and removed in Phase 0 | `runtime/`; archive tag `archive/runtime-scaffold-2026-08-14` at `be068262`. |
 | Generated Codex compatibility tree | 1,002 tracked files | `.agents/skills`; temporary checked-in bundle per generated-artifacts policy. |
 | Current managed worktrees | 25 | Workspace health baseline; each requires governed, evidence-based closeout rather than manual deletion. |
 
@@ -60,6 +60,18 @@ baseline; they do not authorize schema, route, runtime, or workspace deletion.
   persistence, and workspace evidence (non-default because the CI, shared-DB,
   and governed-workspace dependencies needed one cross-surface evidence
   packet before mutation).
+
+### Runtime retirement evidence — 2026-08-14
+
+The `runtime/` scaffold had no import, package, setup, or runtime code
+consumer outside its own tree. Its only concrete external references were the
+two mise/readiness documents, which were updated to describe the active
+supervisor Python surface. Baseline documentation, authority, mise,
+clean-install, and Linux-install checks passed before removal. The full
+pre-removal tree is preserved by annotated tag
+`archive/runtime-scaffold-2026-08-14` at `be068262`; rollback is a reviewed
+revert of the removal PR or restoration from that tag under a new product
+decision.
 
 ## Durable non-overlapping lane contracts
 
@@ -100,17 +112,19 @@ coordinator for repartitioning.
 - **Allowed / prohibited:** this lane is closed; no product authority changed,
   and no unrelated documentation or asset was removed.
 
-### Runtime archive/removal — Luna/medium, default
+### Runtime archive/removal — Luna/medium, default (completed)
 
 - **Path ownership:** `runtime/` and its archival/tag evidence only. The
   documentation-assets and demo-fixture lanes do not share this path.
 - **Dependencies:** archive/tag first, then clean documentation, render,
   reachability, and clean-install proof.
 - **Focused verification:** archive/reachability evidence plus the required
-  documentation, render, and clean-install checks before a removal commit.
-- **Rollback:** restore from the archival tag and revert the removal commit.
-- **Allowed / prohibited:** archive/tag before removal; do not remove runtime
-  files, alter callers, or claim retirement complete without all four proofs.
+  documentation, readiness, Linux-install, and clean-install checks passed
+  before the removal commit.
+- **Rollback:** restore from `archive/runtime-scaffold-2026-08-14` or revert
+  the removal PR; restoration requires a new product decision.
+- **Allowed / prohibited:** this lane is closed; no non-runtime path was
+  removed, and no source, CI, or product authority was changed.
 
 ### Supported demo fixture retention — Luna/medium, default
 
@@ -190,7 +204,7 @@ not implied by an evidence-only contract.
 
 | Candidate | Disposition | Safety evidence | Next action |
 | --- | --- | --- |
-| `runtime/` | **decision resolved: abandon, archive/tag, then remove** | It is a separate personal-assistant scaffold; external references are documentation/readiness and not a code consumer. | Create an archival record/tag and a removal PR with clean-install proof. |
+| `runtime/` | **archived/tagged then removed in Phase 0** | It is a separate personal-assistant scaffold; no setup, packaging, or runtime code consumer exists outside the tree. Archive tag `archive/runtime-scaffold-2026-08-14` preserves rollback. | Restore only through a new product decision and a reviewed PR from the archive tag. |
 | `/pipeline/demo` and its fixture catalogue | **retain: supported, fixture-only daily-alpha flow; retirement decision needed only after authoritative supersession** | The [daily alpha runbook](../workflows/alpha-daily-use-runbook.md) directs use of `/pipeline/demo` for the explicitly labeled fixture catalogue, and the [fixture-fallback audit](../workflows/legacy-dashboard-fixture-fallback-audit-2026-07-17.md) says removing it would break the supported demo contract. It is not production evidence. | Record route/proxy callers and fixture boundaries. Do not mark retirement resolved or remove it unless a product decision explicitly supersedes both authorities and supplies removal plus rollback evidence. |
 | Epic/story-specific report routes and panels | **classify then retire** | Many supervisor report routes serve readiness, maintenance, Git hygiene, or dated epic concerns. | Produce retained runtime / CLI diagnostic / archive / delete classification. |
 | June gap reviews in navigation | **archive from current navigation** | Architecture index previously called dated reviews current. | Completed: index now labels them historical; retain documents for provenance. |
@@ -219,8 +233,8 @@ not implied by an evidence-only contract.
    before removing lifecycle/schema compatibility code.
 5. **Report/panel classification.** Move developer diagnostics out of product
    runtime in small, proven slices.
-6. **Legacy runtime archival/removal.** It is isolated enough to be an early
-   deletion slice once the archival record is created.
+6. **Legacy runtime archival/removal.** **Completed:** archive tag created
+   before the isolated removal slice; retain the tag as the rollback source.
 7. **Demo fixture decision/removal.** Execute only after route/proxy inventory.
 8. **Generated skills migration and workspace closeout.** These have their own
    governing contracts and proceed after deterministic regeneration/evidence.

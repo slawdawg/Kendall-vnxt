@@ -16,8 +16,7 @@ remain the workflow authorities.
 
 - Node `22.13.0`, matching `.node-version`.
 - pnpm `11.5.2`, matching `package.json`.
-- Python `3.12`, satisfying `services/supervisor/pyproject.toml` and
-  `runtime/pyproject.toml`.
+- Python `3.12`, satisfying `services/supervisor/pyproject.toml`.
 
 Tracked tasks delegate to existing package scripts:
 

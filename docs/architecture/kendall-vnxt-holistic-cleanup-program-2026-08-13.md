@@ -46,7 +46,7 @@ slice can be challenged or refined without silently changing product intent.
 | Manager/workspace tooling | `manager-control-plane/core.mjs` is about 32k lines; `codex-workspace.mjs` and their primary tests are each about 19k–34k lines. | Separate durable policy from adapters, command parsing, filesystem work, and test fixtures. |
 | Persistence | Startup code uses `create_all` plus dialect-specific schema mutation and many `ALTER TABLE` statements; no versioned migration tree exists. | Establish migrations before schema or lifecycle retirement. |
 | Verification | The root package exposes 288 scripts; `check` is a very long serial chain; CI's full workflow is only triggered on `main`, while delivery uses `dev`. | Consolidate into profiles and make post-merge health visible on `dev`. |
-| Old product surface | `runtime/` is a 64-file, roughly 11k-line Release 1 Outlook/scheduling/tasks scaffold with no meaningful code consumer outside its own tree. | Decide explicitly whether this is still a product. Archive/tag then remove it if it is abandoned. |
+| Old product surface | `runtime/` was a 64-file, roughly 11k-line Release 1 Outlook/scheduling/tasks scaffold with no meaningful code consumer outside its own tree. It was archived at `archive/runtime-scaffold-2026-08-14` before removal. | Preserve the archive tag as the rollback source; do not restore the product surface without a new product decision. |
 | Generated compatibility data | `.agents/skills` contains 1,002 tracked files and is explicitly a temporary compatibility bundle. | Migrate to deterministic generation before untracking; do not hand-delete or deduplicate it. |
 | Documentation | The architecture index presents June gap reviews and planning-era materials as current navigation. | Keep a small current spine; archive historical reviews without losing durable decisions. |
 
@@ -88,7 +88,8 @@ program's stated evidence and exit criteria are met:
   - the supervisor is the canonical lifecycle authority;
   - manager and dashboard retain adapter/projection state only;
   - V0 lifecycle/action APIs are migrated and then removed;
-  - `runtime/` is abandoned unless an active roadmap consumer is demonstrated;
+  - `runtime/` is archived and removed; restore it only after an active roadmap
+    consumer and a new product decision are demonstrated;
   - `/pipeline/demo` is a supported, explicitly fixture-only daily-alpha flow;
     retain that boundary unless an authoritative product decision supersedes the
     runbook and fixture-fallback audit; and
@@ -439,7 +440,7 @@ and no removed command is a hidden dependency of hooks or workflows.
 
 | Candidate | Recommended disposition | Required decision/proof |
 | --- | --- | --- |
-| `runtime/` | Archive/tag then remove if the Release 1 personal-assistant product is not on the roadmap. | Product owner confirms Outlook/scheduling/tasks is abandoned; no setup/packaging/runtime consumer remains. |
+| `runtime/` | **archived/tagged then removed in Phase 0** | No setup, packaging, or runtime code consumer exists outside the tree; archive tag `archive/runtime-scaffold-2026-08-14` preserves rollback. | Restore only through a new product decision and a reviewed PR from the archive tag. |
 | V0 action and approval APIs | Migrate then delete. | Consumer, database, and approval-evidence migration is complete. |
 | `/pipeline/demo` fixture catalogue | Retain as the supported, fixture-only daily-alpha flow; consider removal only after an authoritative product decision supersedes the runbook and fixture-fallback audit. | Decision record naming the superseded authority, caller/fixture reachability, and removal/rollback proof. |
 | Epic/story-specific reports and panels | Move durable signal to a named capability or remove. | Report classification and replacement evidence. |
