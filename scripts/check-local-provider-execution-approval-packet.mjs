@@ -55,6 +55,7 @@ const providerContract = extractSection(
 );
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
+const supervisorDockerfile = readWorkspaceFile("services/supervisor/Dockerfile");
 const apiSchemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/schemas.py");
 const contractSchemaSource = readWorkspaceFile("packages/contracts/src/api.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
@@ -170,6 +171,9 @@ assertAllIncludes(serviceSource, [
   "self.settings.allow_automatic_ollama_local_evidence",
   "def _load_local_provider_authority_policy()",
   "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH",
+  "SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH",
+  "UnicodeDecodeError",
+  "type(raw_policy.get(\"schemaVersion\")) is not int",
   "authority_status = authority_policy[\"status\"]",
   "authority_source_vm = authority_policy[\"approved_source_vm\"]",
   "ollama_authority_policy_unresolved",
@@ -181,6 +185,10 @@ assertAllIncludes(serviceSource, [
   "\"provider_calls_allowed\": enabled",
   "\"model_calls_allowed\": enabled",
 ], "Supervisor service must preserve the unresolved local-provider runtime gate", failures);
+assertAllIncludes(supervisorDockerfile, [
+  "COPY docs/workflows/local-provider-authority-policy-v1.json ./docs/workflows/local-provider-authority-policy-v1.json",
+  "SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH=/app/docs/workflows/local-provider-authority-policy-v1.json",
+], "Supervisor image must package the versioned authority policy", failures);
 
 assertAllIncludes(routePolicySource, [
   "local-provider-authority-policy-v1.json",
@@ -258,7 +266,7 @@ assertOrderedIncludes(localProviderValidation, [
   "(\"authorityFamily\", approval.authorityFamily, \"local-provider-execution\", \"approval-authority-family-mismatch\")",
   "(\"operation\", approval.operation, \"one bounded Ollama provider operation\", \"approval-operation-mismatch\")",
   "(\"endpointUrl\", approval.endpointUrl, expected_endpoint, \"approval-endpoint-mismatch\")",
-  "(\"sourceVm\", approval.sourceVm, self.settings.ollama_approved_source_vm.strip(), \"approval-source-vm-mismatch\")",
+  "(\"sourceVm\", approval.sourceVm, str(ollama_state.get(\"authority_source_vm\") or \"\"), \"approval-source-vm-mismatch\")",
   "(\"modelId\", approval.modelId, expected_model, \"approval-model-mismatch\")",
   "(\"retainedEvidencePolicy\", approval.retainedEvidencePolicy, \"metadata-only\", \"approval-retention-policy-mismatch\")",
   "connect_timeout_2s_total_timeout_120s",

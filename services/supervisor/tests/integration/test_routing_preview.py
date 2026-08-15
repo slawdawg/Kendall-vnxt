@@ -1539,7 +1539,6 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
-    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
 
     _reset_supervisor_modules()
 
@@ -1552,9 +1551,18 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
 
     assert state["authority_status"] == "approved"
+    assert state["authority_source_vm"] == "192.168.1.118"
     assert state["authority_resolved"] is True
     assert state["enabled"] is True
     assert state["disabled_reason"] is None
+    checks = {check.checkId: check for check in SupervisorService(Settings(), EventBus()).get_execution_configuration_checks().checks}
+    assert "Reviewed local-provider authority selects source VM: 192.168.1.118." in checks["ollama-provider-gate"].evidence
+
+    policy["schemaVersion"] = True
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["disabled_reason"] == "ollama_authority_policy_unresolved"
+    policy_path.write_bytes(b"\xff")
+    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["disabled_reason"] == "ollama_authority_policy_unresolved"
 
 
 def test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch(tmp_path, monkeypatch) -> None:
@@ -1644,11 +1652,11 @@ def test_ollama_local_evidence_explanation_holds_unresolved_authority_before_ada
     assert response.status_code == 200
     explanation = response.json()["data"]
     assert adapter_calls["count"] == 0
-    assert explanation["providerAttempt"] is None
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
 
     events = events_response.json()["data"]
     recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
-    assert recorded["payload"]["providerAttempt"] is None
+    assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
 
@@ -1768,7 +1776,7 @@ def test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unr
     assert explanation is not None
     assert adapter_calls["count"] == 0
     assert automatic_approval_calls["count"] == 0
-    assert explanation.providerAttempt is None
+    assert explanation.providerAttempt.rejectionReason == "ollama_authority_policy_unresolved"
     assert service._ollama_provider_gate_state()["disabled_reason"] == "ollama_authority_policy_unresolved"
 
 
@@ -1832,7 +1840,7 @@ def test_ollama_local_evidence_explanation_rejects_operator_approval_while_autho
 
     assert response.status_code == 200
     explanation = response.json()["data"]
-    assert explanation["providerAttempt"] is None
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
     assert captured_provider_prompt["count"] == 0
     assert captured_provider_prompt["reservation"] is None
     attempts = attempts_response.json()["data"]
@@ -1842,7 +1850,7 @@ def test_ollama_local_evidence_explanation_rejects_operator_approval_while_autho
 
     events = events_response.json()["data"]
     recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
-    assert recorded["payload"]["providerAttempt"] is None
+    assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
 
@@ -1885,7 +1893,7 @@ def test_ollama_local_evidence_explanation_authority_hold_precedes_mismatched_ap
     assert response.status_code == 200
     explanation = response.json()["data"]
     assert adapter_calls["count"] == 0
-    assert explanation["providerAttempt"] is None
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
 
 
 def test_ollama_local_evidence_explanation_authority_hold_precedes_unsafe_approval(tmp_path, monkeypatch) -> None:
@@ -1926,7 +1934,7 @@ def test_ollama_local_evidence_explanation_authority_hold_precedes_unsafe_approv
     assert response.status_code == 200
     explanation = response.json()["data"]
     assert adapter_calls["count"] == 0
-    assert explanation["providerAttempt"] is None
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
 
 
 def test_ollama_provider_request_uses_connect_timeout_without_global_socket_mutation(monkeypatch) -> None:
