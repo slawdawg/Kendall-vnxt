@@ -74,6 +74,11 @@ def _reject_duplicate_json_object_keys(pairs: list[tuple[str, object]]) -> dict[
     return result
 
 
+def _reject_non_json_constant(value: str) -> object:
+    """Reject Python's permissive NaN and Infinity extensions to JSON."""
+    raise ValueError(f"non-JSON numeric constant: {value}")
+
+
 def _matches_canonical_timeout(value: object, expected: int) -> bool:
     """Accept JSON's integral numeric spelling, but never booleans or fractions.
 
@@ -91,6 +96,7 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
         raw_policy = json.loads(
             LOCAL_PROVIDER_AUTHORITY_POLICY_PATH.read_text(encoding="utf-8"),
             object_pairs_hook=_reject_duplicate_json_object_keys,
+            parse_constant=_reject_non_json_constant,
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return _invalid_local_provider_authority_policy()
@@ -99,8 +105,7 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
 
     candidates = raw_policy.get("candidateSourceVms")
     if (
-        type(raw_policy.get("schemaVersion")) is not int
-        or raw_policy.get("schemaVersion") != 1
+        not _matches_canonical_timeout(raw_policy.get("schemaVersion"), 1)
         or raw_policy.get("authorityFamily") != "local-provider-execution"
         or not isinstance(candidates, list)
         or len(candidates) != 2

@@ -164,7 +164,7 @@ export function parseJsonRejectingDuplicateKeys(source) {
   let index = 0;
 
   const skipWhitespace = () => {
-    while (/\s/.test(source[index] ?? "")) index += 1;
+    while (/[ \t\r\n]/.test(source[index] ?? "")) index += 1;
   };
   const expect = (token) => {
     if (source[index] !== token) throw new SyntaxError(`Expected ${token}`);
@@ -187,7 +187,7 @@ export function parseJsonRejectingDuplicateKeys(source) {
   };
   const parsePrimitive = () => {
     const start = index;
-    while (index < source.length && !/[\s,}\]]/.test(source[index])) index += 1;
+    while (index < source.length && !/[ \t\r\n,}\]]/.test(source[index])) index += 1;
     return JSON.parse(source.slice(start, index));
   };
   const parseArray = () => {

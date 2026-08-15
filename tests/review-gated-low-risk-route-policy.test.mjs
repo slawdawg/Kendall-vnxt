@@ -74,6 +74,14 @@ test("duplicate authority-policy JSON members fail closed before validation", ()
     parseLocalProviderAuthorityPolicyDocument('{"schemaVersion":1,"schemaVersion":1}').status,
     "invalid",
   );
+  assert.equal(
+    parseLocalProviderAuthorityPolicyDocument(JSON.stringify(activeAuthorityPolicy).replace('"schemaVersion":1', '"schemaVersion":1.0')).status,
+    "hold_conflicting_source_vm",
+  );
+  assert.equal(
+    parseLocalProviderAuthorityPolicyDocument(JSON.stringify(activeAuthorityPolicy).replace('{', '{\u00a0')).status,
+    "invalid",
+  );
 });
 
 test("active authority state governs Ollama source-VM eligibility", () => {
