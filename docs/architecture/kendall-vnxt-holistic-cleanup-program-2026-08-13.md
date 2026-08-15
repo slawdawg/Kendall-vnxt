@@ -391,6 +391,11 @@ routes; the dashboard includes corresponding status panels.
 Do not expose a development report in a product API merely because it is useful
 to repository maintainers.
 
+The initial route-by-route classification and safe removal order are recorded
+in [the supervisor report surface classification](kendall-vnxt-supervisor-report-surface-classification-2026-08-15.md).
+It is a migration record only: no report is removed until its dashboard, API,
+schema, test, script, and documentation consumers have replacement evidence.
+
 ### P1 — re-evaluate bespoke orchestration scope
 
 **Verified.** Earlier architecture recommended piloting mature orchestration
