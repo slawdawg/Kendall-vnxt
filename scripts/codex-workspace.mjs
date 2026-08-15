@@ -3422,6 +3422,9 @@ function verifyPrGates(argv) {
   if (postMergeRecovery && manifest.pr_gate_evidence) {
     throw new Error("verify-pr-gates --post-merge-recovery only records missing gate evidence; existing gate evidence must not be overwritten.");
   }
+  if (postMergeRecovery && (manifest.events || []).some((event) => event?.type === "post_merge_pr_gate_recovery_recorded")) {
+    throw new Error("verify-pr-gates --post-merge-recovery is once-only; retained recovery history already exists.");
+  }
 
   const packet = buildPrGateEvidence(manifest, { options, postMergeRecovery });
   if (options.summaryJson) {
@@ -3450,6 +3453,9 @@ function verifyPrGates(argv) {
     reconcileManifest(manifest, { refreshPr: true });
     if (postMergeRecovery && manifest.pr_gate_evidence) {
       throw new Error("verify-pr-gates --post-merge-recovery changed under lock because gate evidence now exists.");
+    }
+    if (postMergeRecovery && (manifest.events || []).some((event) => event?.type === "post_merge_pr_gate_recovery_recorded")) {
+      throw new Error("verify-pr-gates --post-merge-recovery changed under lock because recovery history already exists.");
     }
     const lockedPacket = buildPrGateEvidence(manifest, { options, postMergeRecovery });
     if (!lockedPacket.lowRiskReady) {
@@ -11563,7 +11569,7 @@ function cleanupDeliverySubagentAuditBlocker(manifest, pr, context = {}) {
   if (recoveryGate?.authorityProfile === "post-merge-recovery") {
     const reconciliation = manifest.merged_pr_reconciliation;
     const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
-    if (reconciliation?.ready !== true || reconciliation?.expectedHeadSha !== expectedHeadSha || reconciliation?.pr?.number !== pr?.number) {
+    if (reconciliation?.ready !== true || reconciliation?.expectedHeadSha !== expectedHeadSha || reconciliation?.pr?.number !== pr?.number || reconciliation?.preMergeGate?.checkedAt !== recoveryGate.checkedAt) {
       return "Post-merge recovery requires matching merged-PR reconciliation evidence before cleanup";
     }
   }

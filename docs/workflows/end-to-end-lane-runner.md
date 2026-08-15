@@ -423,6 +423,11 @@ node ./scripts/codex-workspace.mjs verify-pr-gates <lane> \
   --rollback-path "<bounded revert path>" --summary-json
 ```
 
+After confirming that dry-run packet, repeat the exact same command with
+`--apply` in place of `--summary-json`. Those flags are mutually exclusive;
+the latter records the recovery evidence and still performs no merge or
+cleanup.
+
 If any field, check, identity, review thread, or head drift blocks the packet,
 preserve the worktree and correct the underlying evidence; do not retry with
 broader skips, a generic approval, manual manifest edits, or cleanup flags.
