@@ -27,11 +27,8 @@ CANONICAL_OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions"
 CANONICAL_OLLAMA_MODEL = "qwen3:14b"
 CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS = 2
 CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS = 120
-LOCAL_PROVIDER_AUTHORITY_POLICY_PATH = Path(
-    os.environ.get(
-        "SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH",
-        Path(__file__).resolve().parents[5] / "docs/workflows/local-provider-authority-policy-v1.json",
-    )
+LOCAL_PROVIDER_AUTHORITY_POLICY_PATH = (
+    Path(__file__).resolve().parents[5] / "docs/workflows/local-provider-authority-policy-v1.json"
 )
 LOCAL_PROVIDER_AUTHORITY_CANDIDATE_PROVENANCE = {
     "192.168.1.118": (
@@ -98,7 +95,7 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
             object_pairs_hook=_reject_duplicate_json_object_keys,
             parse_constant=_reject_non_json_constant,
         )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
         return _invalid_local_provider_authority_policy()
     if not isinstance(raw_policy, dict):
         return _invalid_local_provider_authority_policy()
@@ -22045,6 +22042,39 @@ class SupervisorService:
             ),
         ]
 
+    def _runtime_evidence_ollama_navigator_content(self) -> tuple[str, str, str]:
+        """Describe the actual local-provider authority state without changing it."""
+        ollama_gate_state = self._ollama_provider_gate_state()
+        ollama_authority_status = ollama_gate_state["authority_status"]
+        ollama_authority_source_vm = ollama_gate_state["authority_source_vm"]
+        if ollama_gate_state["authority_resolved"]:
+            return (
+                "Ollama reviewed authority lane",
+                "Stories 4.1-4.4 retain bounded metadata-only route evidence; the reviewed authority policy "
+                f"selects source VM {ollama_authority_source_vm}. "
+                + (
+                    "Provider calls are enabled only for the explicit reviewed route and gates."
+                    if ollama_gate_state["enabled"]
+                    else "Provider calls remain denied until the explicit gates are enabled."
+                ),
+                "Ollama provider/model calls remain bound to the reviewed source VM, route, timeout, and explicit gates.",
+            )
+        if ollama_authority_status == "hold_conflicting_source_vm":
+            return (
+                "Ollama authority-conflict hold lane",
+                "Stories 4.1-4.4 retain bounded metadata-only route evidence, but provider calls remain denied "
+                "until a reviewed authority decision selects one source VM.",
+                "Ollama provider/model calls remain denied until a reviewed authority policy selects one source VM "
+                "and the explicit gates are enabled.",
+            )
+        return (
+            "Ollama authority-policy invalid hold lane",
+            "Stories 4.1-4.4 retain bounded metadata-only route evidence, but provider calls remain denied "
+            "because the reviewed local-provider authority policy is invalid.",
+            "Ollama provider/model calls remain denied until a valid reviewed authority policy selects one source VM "
+            "and the explicit gates are enabled.",
+        )
+
     async def get_runtime_evidence_review_report(self, session: AsyncSession) -> RuntimeEvidenceReviewReportView:
         items = await self.list_work_items(session)
         cross_checks = self._runtime_evidence_cross_checks()
@@ -22154,6 +22184,10 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
+
+        ollama_navigator_label, ollama_navigator_summary, ollama_navigator_stop_line = (
+            self._runtime_evidence_ollama_navigator_content()
+        )
 
         attempts = await self.list_execution_attempts(session, work_item_id)
         events = [
@@ -22336,10 +22370,10 @@ class SupervisorService:
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-ollama-no-call-prep",
-                    label="Ollama authority-conflict hold lane",
+                    label=ollama_navigator_label,
                     priority="P1",
                     target="Review Ollama gate, approved endpoint/model, prompt-retention, timeout, and cancellation evidence.",
-                    summary="Stories 4.1-4.4 retain bounded metadata-only route evidence, but provider calls remain denied until a reviewed authority decision selects one source VM.",
+                    summary=ollama_navigator_summary,
                     evidence=[
                         "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false.",
                         "Agreed endpoint metadata: http://192.168.1.128:11434/v1/chat/completions.",
@@ -22361,7 +22395,7 @@ class SupervisorService:
                     ],
                     dashboardAnchors=["#runtime-evidence-export", "/controls#execution-readiness-report"],
                     stopLines=[
-                        "Ollama provider/model calls remain denied until a reviewed authority policy selects one source VM and the explicit gates are enabled.",
+                        ollama_navigator_stop_line,
                         "Do not add endpoint discovery, model discovery, raw payload retention, or any other provider/model authority without a successor reviewed decision.",
                     ],
                     crossChecks=cross_checks,

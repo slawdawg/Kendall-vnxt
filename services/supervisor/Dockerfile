@@ -6,8 +6,6 @@ COPY services/supervisor/pyproject.toml services/supervisor/README.md ./
 COPY services/supervisor/src ./src
 COPY docs/workflows/local-provider-authority-policy-v1.json ./docs/workflows/local-provider-authority-policy-v1.json
 
-ENV SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH=/app/docs/workflows/local-provider-authority-policy-v1.json
-
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000

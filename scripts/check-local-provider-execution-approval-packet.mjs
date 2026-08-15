@@ -179,8 +179,8 @@ assertAllIncludes(serviceSource, [
   "self.settings.allow_automatic_ollama_local_evidence",
   "def _load_local_provider_authority_policy()",
   "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH",
-  "SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH",
   "UnicodeDecodeError",
+  "RecursionError",
   "_matches_canonical_timeout(raw_policy.get(\"schemaVersion\"), 1)",
   "parse_constant=_reject_non_json_constant",
   "authority_status = authority_policy[\"status\"]",
@@ -197,7 +197,6 @@ assertAllIncludes(serviceSource, [
 ], "Supervisor service must preserve the unresolved local-provider runtime gate", failures);
 assertAllIncludes(supervisorDockerfile, [
   "COPY docs/workflows/local-provider-authority-policy-v1.json ./docs/workflows/local-provider-authority-policy-v1.json",
-  "SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH=/app/docs/workflows/local-provider-authority-policy-v1.json",
 ], "Supervisor image must package the versioned authority policy", failures);
 
 assertAllIncludes(routePolicySource, [
