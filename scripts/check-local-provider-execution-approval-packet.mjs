@@ -39,6 +39,18 @@ function assertOrderedIncludes(source, texts, scope, failures) {
   }
 }
 
+function markdownFieldValues(source, label) {
+  const expression = new RegExp(`^${label}:\\s*(.+?)\\s*$`, "gm");
+  return [...source.matchAll(expression)].map((match) => match[1]);
+}
+
+function assertExactlyOneMarkdownField(source, label, expected, scope, failures) {
+  const values = markdownFieldValues(source, label);
+  if (values.length !== 1 || values[0] !== expected) {
+    failures.push(`${scope}: ${label} must appear exactly once as ${expected}`);
+  }
+}
+
 function extractSection(source, startText, endText) {
   const start = source.indexOf(startText);
   const end = source.indexOf(endText, start + startText.length);
@@ -73,6 +85,7 @@ const acceptedApproval = readWorkspaceFile("docs/architecture/kendall-vnxt-execu
 const acceptedCheckpoint = readWorkspaceFile("docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md");
 const routedSourceObservation = readWorkspaceFile("docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md");
 const successorApproval = readWorkspaceFile("docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md");
+const enablementApproval = readWorkspaceFile("docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md");
 const routePolicySource = readWorkspaceFile("scripts/lib/review-gated-low-risk-route-policy.mjs");
 const privateEvidencePolicySource = readWorkspaceFile("scripts/lib/private-evidence-packet-policy.mjs");
 const routePolicyTests = readWorkspaceFile("tests/review-gated-low-risk-route-policy.test.mjs");
@@ -159,6 +172,36 @@ assertCondition(
   "Authority policy must retain a canonical non-activating enablement hold or a complete, expiring reviewed enablement record",
   failures,
 );
+assertAllIncludes(enablementApproval, [
+  "# Local Provider Enablement Approval Record v1",
+  "Authority family: `local-provider-execution`",
+], "Local-provider enablement provenance record", failures);
+if (enablementOnHold) {
+  assertExactlyOneMarkdownField(
+    enablementApproval,
+    "Status",
+    "no enablement approved",
+    "Held local-provider enablement provenance record",
+    failures,
+  );
+  assertAllIncludes(enablementApproval, ["does not permit a provider call"], "Held local-provider enablement provenance record", failures);
+} else if (enablementApproved) {
+  const approvedRecordFields = [
+    ["Status", "accepted operator enablement decision"],
+    ["Operation", "`one bounded Ollama provider operation`"],
+    ["Source VM", `\`${authorityPolicy.approvedSourceVm}\``],
+    ["Endpoint", `\`${agreedEndpoint}\``],
+    ["Model", `\`${agreedModel}\``],
+    ["Enablement gates", "`SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=true`; `SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS=true`; `SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE=false`"],
+    ["Local interface verification", "`trusted attestation-service receipt bound to the actual caller host`"],
+    ["Expiry", `\`${authorityPolicy.enablement.expiresAt}\``],
+    ["Retention", "`metadata-only`"],
+    ["Rollback", "set all three provider and automatic-consent gates to `false` and verify zero adapter calls."],
+  ];
+  for (const [label, expected] of approvedRecordFields) {
+    assertExactlyOneMarkdownField(enablementApproval, label, expected, "Approved local-provider enablement provenance record", failures);
+  }
+}
 
 assertAllIncludes(providerContract, [
   authorityOnHold
@@ -234,8 +277,8 @@ assertAllIncludes(routePolicySource, [
   "approvedSourceVm",
 ], "JavaScript route policy must consume and fail closed on the authority record", failures);
 assertAllIncludes(privateEvidencePolicySource, [
-  "localProviderAuthorityResolved",
-  "localProviderAuthorityDisabledReason",
+  "routePolicyDefaults.localProviderAuthorityDisabledReason",
+  "trusted-attestation hold",
 ], "Private-evidence Ollama policy must inherit the authority record's fail-closed reason", failures);
 assertAllIncludes(runbook, [
   authorityOnHold
