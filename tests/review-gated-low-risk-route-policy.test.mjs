@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { buildFakeReviewInput } from "../scripts/lib/review-gated-low-risk-fake-adapter.mjs";
 import { evaluateGovernedReadOnlyReview } from "../scripts/lib/review-gated-low-risk-read-only-review.mjs";
-import { BOUNDED_ROUTE_POLICY_DEFAULTS, evaluateBoundedReviewRoute, parseLocalProviderAuthorityPolicy, selectOrderedReviewRoute } from "../scripts/lib/review-gated-low-risk-route-policy.mjs";
+import { BOUNDED_ROUTE_POLICY_DEFAULTS, evaluateBoundedReviewRoute, parseJsonRejectingDuplicateKeys, parseLocalProviderAuthorityPolicy, parseLocalProviderAuthorityPolicyDocument, selectOrderedReviewRoute } from "../scripts/lib/review-gated-low-risk-route-policy.mjs";
 
 const activeAuthorityPolicy = JSON.parse(readFileSync(new URL("../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url), "utf8"));
 const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_source_vm" && activeAuthorityPolicy.approvedSourceVm === null;
@@ -59,6 +59,21 @@ test("only a complete reviewed authority policy can select a source VM", () => {
     assert.equal(parsed.status, "invalid");
     assert.equal(parsed.approvedSourceVm, null);
   }
+});
+
+test("duplicate authority-policy JSON members fail closed before validation", () => {
+  assert.throws(
+    () => parseJsonRejectingDuplicateKeys('{"status":"hold_conflicting_source_vm","status":"approved"}'),
+    /Duplicate JSON object key: status/,
+  );
+  assert.throws(
+    () => parseJsonRejectingDuplicateKeys('{"route":{"endpoint":"one","endpoint":"two"}}'),
+    /Duplicate JSON object key: endpoint/,
+  );
+  assert.equal(
+    parseLocalProviderAuthorityPolicyDocument('{"schemaVersion":1,"schemaVersion":1}').status,
+    "invalid",
+  );
 });
 
 test("active authority state governs Ollama source-VM eligibility", () => {

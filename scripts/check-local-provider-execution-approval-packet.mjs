@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseJsonRejectingDuplicateKeys } from "./lib/review-gated-low-risk-route-policy.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -72,9 +73,9 @@ const privateEvidenceTests = readWorkspaceFile("tests/private-evidence-packet-po
 const failures = [];
 let authorityPolicy = null;
 try {
-  authorityPolicy = JSON.parse(readWorkspaceFile("docs/workflows/local-provider-authority-policy-v1.json"));
+  authorityPolicy = parseJsonRejectingDuplicateKeys(readWorkspaceFile("docs/workflows/local-provider-authority-policy-v1.json"));
 } catch {
-  failures.push("Versioned local-provider authority policy must be valid JSON");
+  failures.push("Versioned local-provider authority policy must be valid JSON without duplicate object keys");
 }
 const agreedEndpoint = authorityPolicy?.route?.endpoint;
 const agreedModel = authorityPolicy?.route?.model;

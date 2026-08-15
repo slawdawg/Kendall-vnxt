@@ -153,7 +153,106 @@ function policyExactText(value) {
 
 function loadAuthorityPolicy() {
   try {
-    return parseLocalProviderAuthorityPolicy(JSON.parse(readFileSync(AUTHORITY_POLICY_PATH, "utf8")));
+    return parseLocalProviderAuthorityPolicyDocument(readFileSync(AUTHORITY_POLICY_PATH, "utf8"));
+  } catch {
+    return invalidAuthorityPolicy();
+  }
+}
+
+/** Parse JSON without permitting duplicate object members to overwrite policy fields. */
+export function parseJsonRejectingDuplicateKeys(source) {
+  let index = 0;
+
+  const skipWhitespace = () => {
+    while (/\s/.test(source[index] ?? "")) index += 1;
+  };
+  const expect = (token) => {
+    if (source[index] !== token) throw new SyntaxError(`Expected ${token}`);
+    index += 1;
+  };
+  const parseString = () => {
+    const start = index;
+    expect('"');
+    while (index < source.length) {
+      if (source[index] === "\\") {
+        index += 2;
+      } else if (source[index] === '"') {
+        index += 1;
+        return JSON.parse(source.slice(start, index));
+      } else {
+        index += 1;
+      }
+    }
+    throw new SyntaxError("Unterminated JSON string");
+  };
+  const parsePrimitive = () => {
+    const start = index;
+    while (index < source.length && !/[\s,}\]]/.test(source[index])) index += 1;
+    return JSON.parse(source.slice(start, index));
+  };
+  const parseArray = () => {
+    const values = [];
+    expect("[");
+    skipWhitespace();
+    if (source[index] === "]") {
+      index += 1;
+      return values;
+    }
+    while (true) {
+      values.push(parseValue());
+      skipWhitespace();
+      if (source[index] === "]") {
+        index += 1;
+        return values;
+      }
+      expect(",");
+      skipWhitespace();
+    }
+  };
+  const parseObject = () => {
+    const result = Object.create(null);
+    const keys = new Set();
+    expect("{");
+    skipWhitespace();
+    if (source[index] === "}") {
+      index += 1;
+      return result;
+    }
+    while (true) {
+      if (source[index] !== '"') throw new SyntaxError("Expected JSON object key");
+      const key = parseString();
+      if (keys.has(key)) throw new SyntaxError(`Duplicate JSON object key: ${key}`);
+      keys.add(key);
+      skipWhitespace();
+      expect(":");
+      skipWhitespace();
+      result[key] = parseValue();
+      skipWhitespace();
+      if (source[index] === "}") {
+        index += 1;
+        return result;
+      }
+      expect(",");
+      skipWhitespace();
+    }
+  };
+  const parseValue = () => {
+    skipWhitespace();
+    if (source[index] === "{") return parseObject();
+    if (source[index] === "[") return parseArray();
+    if (source[index] === '"') return parseString();
+    return parsePrimitive();
+  };
+
+  const value = parseValue();
+  skipWhitespace();
+  if (index !== source.length) throw new SyntaxError("Unexpected trailing JSON data");
+  return value;
+}
+
+export function parseLocalProviderAuthorityPolicyDocument(source) {
+  try {
+    return parseLocalProviderAuthorityPolicy(parseJsonRejectingDuplicateKeys(source));
   } catch {
     return invalidAuthorityPolicy();
   }

@@ -64,6 +64,16 @@ def _invalid_local_provider_authority_policy() -> dict[str, object]:
     }
 
 
+def _reject_duplicate_json_object_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build a JSON object only when every member name occurs once."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
 def _matches_canonical_timeout(value: object, expected: int) -> bool:
     """Accept JSON's integral numeric spelling, but never booleans or fractions.
 
@@ -78,8 +88,11 @@ def _matches_canonical_timeout(value: object, expected: int) -> bool:
 def _load_local_provider_authority_policy() -> dict[str, object]:
     """Load the versioned authority record as a closed, fail-closed contract."""
     try:
-        raw_policy = json.loads(LOCAL_PROVIDER_AUTHORITY_POLICY_PATH.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raw_policy = json.loads(
+            LOCAL_PROVIDER_AUTHORITY_POLICY_PATH.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_object_keys,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return _invalid_local_provider_authority_policy()
     if not isinstance(raw_policy, dict):
         return _invalid_local_provider_authority_policy()

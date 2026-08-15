@@ -1578,6 +1578,16 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
     assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    policy["route"]["connectTimeoutSeconds"] = 2
+    policy_path.write_text(
+        json.dumps(policy).replace(
+            '"status": "approved"',
+            '"status": "hold_conflicting_source_vm", "status": "approved"',
+        ),
+        encoding="utf-8",
+    )
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
 
 
 def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_policy(tmp_path, monkeypatch) -> None:
