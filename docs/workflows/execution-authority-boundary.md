@@ -29,7 +29,7 @@ Do not call this provider from this packet alone.
 
 Required controls:
 
-- The accepted 2026-06 approval records `192.168.1.118`, while the later routed-source observation records `192.168.1.8`. The explicit 2026-08-15 authority decision selects only `192.168.1.8`; retain `192.168.1.118` as historical provenance, not a permitted source.
+- The accepted 2026-06 approval records `192.168.1.118`. The explicit 2026-08-15 successor authority decision selects only `192.168.1.8`; retain `192.168.1.118` as historical provenance, not a permitted source.
 - Approved source VM: `192.168.1.8` via reviewed authority policy.
 - Exact endpoint and model metadata are insufficient without one explicitly approved source VM.
 - Connect timeout is 2 seconds and total timeout is 120 seconds.
@@ -40,7 +40,7 @@ Required controls:
 Stop lines:
 
 - Do not call any endpoint other than the exact bounded route from an approved pilot.
-- Do not infer activation from the approved source VM or from current settings; separate gate enablement requires a reviewed successor decision.
+- Do not infer activation from the approved source VM or from current settings; separate gate enablement requires a reviewed successor decision, and runtime must verify that the configured source VM is a local interface before any adapter becomes ready.
 - Do not discover endpoints or models.
 - Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.
 - Do not read credentials or external sessions.
@@ -63,15 +63,18 @@ sanitized diff text is never retained locally after provider dispatch.
 
 Claude is the default primary-review route for every review workflow and has no
 repository per-run dollar cap. The exact qwen3:14b Ollama backup shape remains
-documented, but it cannot receive a packet while local-provider authority is
-unresolved; internal BMAD is the final local fallback.
+documented. Source-VM authority selects `192.168.1.8`, but it cannot receive a
+packet until a separate enablement authority is approved, the configured VM is
+verified as local, and the explicit provider gates are enabled; internal BMAD
+is the final local fallback.
 Credentials, secrets, tokens, MFA/account-security data, excluded vault
 folders, customer/production data, broad repository/vault dumps, raw prompts,
 raw completions, and raw provider payloads remain forbidden.
 
 This exception permits packet send eligibility only. The local Ollama evidence
 explanation path is a separate `local-policy-review` capability, but automatic
-local-policy consent is disabled while the source-VM authority conflict remains.
+local-policy consent and provider enablement remain disabled pending their
+separate reviewed authority decision.
 It is not the Claude-to-Ollama ordered review route and cannot claim a Claude
 fallback. It does not activate a review, authorize source mutation, delivery,
 merge, cleanup, or persistent provider memory.

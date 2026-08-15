@@ -11,8 +11,8 @@
     },
     {
       "sourceVm": "192.168.1.8",
-      "claim": "current_routed_source_observation",
-      "provenanceRef": "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md"
+      "claim": "accepted_operator_successor_approval",
+      "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md"
     }
   ],
   "route": {
@@ -26,6 +26,11 @@
     "allowLocalProviderCalls": false,
     "allowOllamaProviderCalls": false,
     "allowAutomaticOllamaLocalEvidence": false
+  },
+  "enablement": {
+    "status": "hold_requires_separate_review",
+    "claim": "separate_review_required",
+    "provenanceRef": null
   },
   "decisionRequired": [
     "Any change to the disabled-by-default local-provider or automatic-consent gates requires a separate reviewed authority decision.",
