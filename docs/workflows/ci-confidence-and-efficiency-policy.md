@@ -365,9 +365,12 @@ rerunning it;
    the selected covering set, and the rationale for omitted higher-order
    combinations; do not require the unbounded power set of ordinary mixed
    paths;
-4. exercise a deterministic controlled failure for every selected component and
-   the unknown/shared escalation path, proving that the proposed profile and
-   final fan-in reject the same head as the aggregate route;
+4. exercise a deterministic controlled failure for every mandatory baseline-only
+   graph node, every selected component, and the unknown/shared escalation path,
+   proving that the proposed profile and final fan-in reject the same head as
+   the aggregate route. The evidence must identify the failed baseline gate and
+   show that its failure reaches the final fan-in; a passing documentation or
+   installation vector alone is not a substitute for this negative proof;
 5. meet the paired measurement-window requirements above and prove equivalent
    required results, retained fail-closed escalation, no duplicated expensive
    invocation, and P95 first actionable-failure time no slower than baseline;
