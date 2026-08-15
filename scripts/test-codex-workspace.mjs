@@ -12833,6 +12833,229 @@ try {
     }
   });
 
+  test("verify-pr-gates records a guarded cleanup-only post-merge recovery when ordinary gate evidence is absent", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+    });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.pr_gate_evidence;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const recoveryApproval = `operator-authorized post-merge-recovery task=resumed-task pr=456 head=${expectedHead} scope=cleanup-only`;
+      const recoveryDeliveryProof = `recovery-delivery-identity task=resumed-task branch=codex/resumed-task base=main pr=456 head=${expectedHead}`;
+      pr.state = "MERGED";
+      pr.mergedAt = "2026-07-02T00:00:00Z";
+      pr.mergeStateStatus = "UNKNOWN";
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+
+      const recoveryArgs = [
+          "verify-pr-gates", "resumed-task", "--apply", "--post-merge-recovery",
+          "--approval", recoveryApproval,
+          "--recovery-delivery-proof", recoveryDeliveryProof,
+          "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "The exact merged head has successful checks and a clear review audit.",
+          "--diff-risk-summary", "Single fixture file change with focused verification.",
+          "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "Focused fixture verification passed.",
+          "--diff-risk-verification-command", "node --test scripts/test-codex-workspace.mjs",
+          "--diff-risk-verification-exit-code", "0",
+          "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`,
+          "--rollback-path", "git revert -m 1 merged-commit",
+          "--state-root", fixture.stateRoot,
+        ];
+      const previewArgs = recoveryArgs.map((arg) => arg === "--apply" ? "--summary-json" : arg);
+      const preview = runFixtureScript(fixture, previewArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).postMergeRecovery?.status === "ready", "dry-run recovery must not claim to be recorded");
+      const trailingProofArgs = recoveryArgs.map((arg) => arg === recoveryDeliveryProof ? `${arg} trailing-data` : arg);
+      const trailingProof = runFixtureScript(fixture, trailingProofArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(trailingProof.code !== 0, "recovery unexpectedly accepted a proof with trailing data");
+      assert(trailingProof.stderr.includes("requires retained standard-delivery identity or exact explicit live-PR recovery proof"), trailingProof.stderr || trailingProof.stdout);
+      const whitespaceApprovalArgs = recoveryArgs.map((arg) => arg === recoveryApproval ? ` ${arg}` : arg);
+      const whitespaceApproval = runFixtureScript(fixture, whitespaceApprovalArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(whitespaceApproval.code !== 0, "recovery unexpectedly accepted normalized approval evidence");
+      assert(whitespaceApproval.stderr.includes("requires exact operator authorization"), whitespaceApproval.stderr || whitespaceApproval.stdout);
+      const result = runFixtureScript(
+        fixture,
+        recoveryArgs,
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const updated = readJson(manifestPath);
+      assert(updated.pr_gate_evidence?.status === "passed", "recovery gate was not recorded as passed");
+      assert(updated.pr_gate_evidence?.authorityProfile === "post-merge-recovery", "recovery authority profile was not retained");
+      assert(updated.pr_gate_evidence?.postMergeRecovery?.scope === "cleanup-only", "recovery scope was not retained");
+      assert(updated.pr_gate_evidence?.postMergeRecovery?.status === "recorded", "applied recovery was not marked recorded");
+      assert(updated.pr_gate_evidence?.postMergeRecovery?.approval?.evidence === recoveryApproval, "bound recovery approval was not retained");
+      assert(updated.pr_gate_evidence?.postMergeRecovery?.deliveryIdentity?.proof === recoveryDeliveryProof, "bound delivery identity proof was not retained");
+      assert(updated.pr_gate_evidence?.authorityDecision?.authorityProfile === "post-merge-recovery", "recovery authority profile was not retained on the nested decision");
+      assert(updated.pr_gate_evidence?.requiredGates?.includes("delivery subagent audit recommends merge-ready for exact head"), "recovery gate omitted its mandatory delivery audit");
+      assert(updated.events.some((event) => event.type === "post_merge_pr_gate_recovery_recorded"), "recovery event missing");
+
+      // Losing the top-level packet later must not make this exceptional
+      // recovery repeatable: immutable history is the once-only guard.
+      delete updated.pr_gate_evidence;
+      writeFileSync(manifestPath, `${JSON.stringify(updated, null, 2)}\n`);
+      const replay = runFixtureScript(fixture, recoveryArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(replay.code !== 0, "post-merge recovery unexpectedly replayed after retained history");
+      assert(replay.stderr.includes("once-only"), replay.stderr || replay.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects post-merge recovery without bound authorization and delivery identity proof", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true, repository: { owner: "slawdawg", name: "Kendall-vnxt" } });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--post-merge-recovery", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "post-merge recovery unexpectedly proceeded without bound recovery evidence");
+      assert(result.stderr.includes("requires exact operator authorization"), result.stderr || result.stdout);
+      assert(result.stderr.includes("requires retained standard-delivery identity or exact explicit live-PR recovery proof"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects an unvalidated recovery proof when standard delivery identity is retained", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.pr_gate_evidence;
+      manifest.status = "merged";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.state = "MERGED";
+      pr.mergedAt = "2026-07-02T00:00:00Z";
+      pr.mergeStateStatus = "UNKNOWN";
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const args = [
+        "verify-pr-gates", "resumed-task", "--post-merge-recovery", "--summary-json",
+        "--approval", `operator-authorized post-merge-recovery task=resumed-task pr=456 head=${expectedHead} scope=cleanup-only`,
+        "--recovery-delivery-proof", "unvalidated-proof",
+        "--owner", "runner-a", "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact merged head passed checks and review.",
+        "--diff-risk-summary", "Focused fixture change.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "Focused fixture passed.", "--diff-risk-verification-command", "node scripts/test-codex-workspace.mjs", "--diff-risk-verification-exit-code", "0",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`, "--rollback-path", "git revert -m 1 merged-commit", "--state-root", fixture.stateRoot,
+      ];
+      const blocked = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      const blockedPacket = JSON.parse(blocked.stdout);
+      assert(blockedPacket.postMergeRecovery?.deliveryIdentity?.status === "blocked", blocked.stdout);
+      assert(blockedPacket.postMergeRecovery?.deliveryIdentity?.proof === null, "unvalidated proof must not be retained");
+      assert(blockedPacket.blockers.some((entry) => entry.includes("rejects a supplied delivery proof")), blocked.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates rejects recovery identity beyond reconciliation capacity", () => {
+    const longBranch = `codex/${Array.from({ length: 5 }, () => "branch-segment-".repeat(12)).join("/")}`;
+    const longBase = `base-${"identity-component-".repeat(18)}`;
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      branch: longBranch,
+    });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = longBase;
+      delete manifest.pr_gate_evidence;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.state = "MERGED";
+      pr.mergedAt = "2026-07-02T00:00:00Z";
+      pr.mergeStateStatus = "UNKNOWN";
+      pr.baseRefName = longBase;
+      pr.headRefName = longBranch;
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const proof = `recovery-delivery-identity task=resumed-task branch=${longBranch} base=${longBase} pr=456 head=${expectedHead}`;
+      assert(proof.length > 1200, `fixture proof must exceed the historical cap, got ${proof.length}`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--apply", "--post-merge-recovery",
+        "--approval", `operator-authorized post-merge-recovery task=resumed-task pr=456 head=${expectedHead} scope=cleanup-only`,
+        "--recovery-delivery-proof", proof,
+        "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "The exact merged head has successful checks and a clear review audit.",
+        "--diff-risk-summary", "Single fixture file change with focused verification.",
+        "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "Focused fixture verification passed.",
+        "--diff-risk-verification-command", "node --test scripts/test-codex-workspace.mjs",
+        "--diff-risk-verification-exit-code", "0",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`,
+        "--rollback-path", "git revert -m 1 merged-commit",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, "recovery unexpectedly accepted a branch reconciliation cannot consume");
+      assert(result.stderr.includes("reconciliation-valid managed head branch"), result.stderr || result.stdout);
+      assert(!readJson(manifestPath).pr_gate_evidence, "blocked recovery must not record a one-time gate");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates keeps undocumented skipped checks blocking during post-merge recovery", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      statusCheckRollup: [{ name: "required-unit", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://example.test/checks/required-unit" }],
+    });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.pr_gate_evidence;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.state = "MERGED";
+      pr.mergedAt = "2026-07-02T00:00:00Z";
+      pr.mergeStateStatus = "UNKNOWN";
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const result = runFixtureScript(
+        fixture,
+        [
+          "verify-pr-gates", "resumed-task", "--post-merge-recovery",
+          "--approval", `operator-authorized post-merge-recovery task=resumed-task pr=456 head=${expectedHead} scope=cleanup-only`,
+          "--recovery-delivery-proof", `recovery-delivery-identity task=resumed-task branch=codex/resumed-task base=main pr=456 head=${expectedHead}`,
+          "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "The exact merged head has successful checks and a clear review audit.",
+          "--diff-risk-summary", "Single fixture file change with focused verification.",
+          "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "Focused fixture verification passed.",
+          "--diff-risk-verification-command", "node --test scripts/test-codex-workspace.mjs",
+          "--diff-risk-verification-exit-code", "0",
+          "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`,
+          "--rollback-path", "git revert -m 1 merged-commit",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "post-merge recovery accepted an undocumented skipped required check");
+      assert(result.stderr.includes("Failing checks: required-unit"), result.stderr || result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("cleanup-merged can apply from inside the target worktree and delete remote branch", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -12928,6 +13151,44 @@ try {
         cleanup.authorityDecision?.blockedReasons?.some((reason) => reason.includes("Delivery subagent audit")),
         "cleanup audit blocker authority decision missing audit blocker",
       );
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged blocks recovery-backed cleanup until matching reconciliation is recorded", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_gate_evidence = {
+        ...(manifest.pr_gate_evidence || {}),
+        authorityProfile: "post-merge-recovery",
+        checkedAt: "2026-06-20T00:00:00.000Z",
+      };
+      manifest.merged_pr_reconciliation = {
+        ready: true,
+        expectedHeadSha: manifest.pr_delivery_head_sha,
+        pr: { number: 123 },
+        preMergeGate: { checkedAt: "2026-06-19T00:00:00.000Z" },
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 0, `cleanupReady count is ${summary.counts.cleanupReady}`);
+      assert(summary.results[0].reason.includes("requires matching merged-PR reconciliation"), summary.results[0].reason);
+      const apply = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(apply.code !== 0, "cleanup unexpectedly entered a recovery-reconciliation hold");
+      assert(readJson(manifestPath).status === "merged", "preflight recovery hold must not journal cleanup_partial");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -13899,12 +14160,10 @@ try {
       assert(branchExists(fixture.root, fixture.branch), "cleanup deleted local branch before locked audit hold");
       assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup deleted remote branch before locked audit hold");
 
-      const partial = readJson(manifestPath);
-      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
-      assert(!partial.cleanup_completed_at, "audit-held cleanup must not record completion");
-      assert(partial.cleanup_target_evidence?.worktree?.state === "present", "audit-held evidence must record worktree presence");
-      assert(partial.cleanup_target_evidence?.localBranch?.state === "present", "audit-held evidence must record local branch presence");
-      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "audit-held evidence must record remote branch presence");
+      const unchanged = readJson(manifestPath);
+      assert(unchanged.status === "merged", `manifest status is ${unchanged.status}`);
+      assert(!unchanged.cleanup_completed_at, "audit-held cleanup must not record completion");
+      assert(!unchanged.cleanup_target_evidence, "audit-held cleanup must not record cleanup targets before preflight passes");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -16497,7 +16756,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const remoteRoot = `${fixtureRoot}-remote.git`;
   const stateRootFixture = join(fixtureRoot, "state");
   const fakeBin = join(fixtureRoot, "bin");
-  const branch = "codex/resumed-task";
+  const branch = options.branch || "codex/resumed-task";
   const worktree = join(stateRootFixture, "worktrees", "resumed-task");
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}`, CODEX_WORKSPACE_OWNER: "runner-a" };
   const repository = options.repository || { owner: "slaw-dawg", name: "fixture" };
