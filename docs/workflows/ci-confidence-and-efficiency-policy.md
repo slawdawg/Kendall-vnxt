@@ -216,6 +216,37 @@ check, or test command was removed or rerouted. Any shard split, cache change,
 or authority promotion needs a separate implementation change with the
 same-head, before/after, failure-rate, and rollback evidence required above.
 
+## Local delivery-profile alignment
+
+The local delivery command must not become a second, unplanned source of broad
+CI work.  In particular, a planner-proven supervisor, documentation, or other
+non-workspace change must not unconditionally wait for the aggregate
+`test:codex-workspace` suite merely because a delivery wrapper selects its
+historical `check` profile.  That duplicates unrelated confidence, extends the
+author feedback loop, and hides the actual risk owner.
+
+The migration path is deliberately evidence-first:
+
+1. retain the current aggregate local `check` profile while it is the effective
+   required behavior and record its component-level timing;
+2. add a delivery profile that consumes the same structured planner selection
+   as CI: `fast`, exactly the selected independent component bundle(s), and
+   the stable final fan-in;
+3. run the proposed profile and the existing aggregate profile on the same
+   representative heads, including a workspace change, a supervisor schema
+   change, a documentation-only change, and an unknown/shared path;
+4. prove equivalent required results, retained fail-closed escalation,
+   no duplicated expensive invocation, and no regression in first actionable
+   failure time; then promote the narrower delivery profile; and
+5. keep the aggregate workspace/full confidence on post-merge `dev`, scheduled
+   or manually elevated runs until its independent coverage is proven.
+
+Do not treat elapsed time alone as authority to skip a suite.  The acceptance
+packet must include the planner output, exact commands, same-head results,
+P50/P95 setup/queue/execution measurements, failure/flake/retry rate, and a
+rollback that restores the prior aggregate profile.  A long local delivery run
+is evidence for this migration, not permission to bypass it.
+
 ## Adoption roadmap
 
 1. Capture current timing baselines, including component command durations and
