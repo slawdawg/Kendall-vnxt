@@ -149,8 +149,7 @@ test("duplicate authority-policy JSON members fail closed before validation", ()
 
 test("active authority state governs Ollama source-VM eligibility", () => {
   assert.equal(authorityOnHold || authorityApproved, true);
-  assert.equal(activeAuthorityPolicy.status, "approved");
-  assert.equal(activeAuthorityPolicy.approvedSourceVm, "192.168.1.8");
+  assert.equal(activeAuthorityPolicy.approvedSourceVm, authorityApproved ? "192.168.1.8" : null);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityStatus, activeAuthorityPolicy.status);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityResolved, authorityApproved);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderEnablementApproved, enablementApproved);

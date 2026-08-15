@@ -48,6 +48,13 @@ function extractSection(source, startText, endText) {
   return source.slice(start, end);
 }
 
+function isFutureCanonicalExpiry(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+  const parsed = Date.parse(value);
+  const canonical = value.includes(".") ? value : value.replace(/Z$/, ".000Z");
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === canonical && parsed > Date.now();
+}
+
 const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
 const providerContract = extractSection(
   authorityBoundary,
@@ -139,11 +146,17 @@ assertAllIncludes(acceptedApproval, ["Approved caller/source: Kendall_vNxt VM at
 assertAllIncludes(acceptedCheckpoint, ["calls only from the Kendall_vNxt VM at `192.168.1.118`"], "Accepted checkpoint provenance", failures);
 assertAllIncludes(routedSourceObservation, ["`192.168.1.8` (current routed source observed 2026-07-18)"], "Current routed-source observation provenance", failures);
 assertAllIncludes(successorApproval, ["`192.168.1.8`", "Status: accepted operator decision; non-activating", "This decision selects only the source identity."], "Accepted successor approval provenance", failures);
+const enablementOnHold = authorityPolicy?.enablement?.status === "hold_requires_separate_review"
+  && authorityPolicy?.enablement?.claim === "separate_review_required"
+  && authorityPolicy?.enablement?.provenanceRef === null
+  && authorityPolicy?.enablement?.expiresAt === null;
+const enablementApproved = authorityPolicy?.enablement?.status === "approved"
+  && authorityPolicy?.enablement?.claim === "accepted_operator_enablement_approval"
+  && authorityPolicy?.enablement?.provenanceRef === "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md"
+  && isFutureCanonicalExpiry(authorityPolicy?.enablement?.expiresAt);
 assertCondition(
-  authorityPolicy?.enablement?.status === "hold_requires_separate_review"
-    && authorityPolicy?.enablement?.provenanceRef === null
-    && authorityPolicy?.enablement?.expiresAt === null,
-  "Authority policy must retain a separate non-activating enablement hold until a reviewed successor decision is recorded",
+  enablementOnHold || enablementApproved,
+  "Authority policy must retain a canonical non-activating enablement hold or a complete, expiring reviewed enablement record",
   failures,
 );
 
