@@ -13052,8 +13052,17 @@ try {
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
       const manifest = readJson(manifestPath);
-      manifest.pr_gate_evidence = { ...(manifest.pr_gate_evidence || {}), authorityProfile: "post-merge-recovery" };
-      delete manifest.merged_pr_reconciliation;
+      manifest.pr_gate_evidence = {
+        ...(manifest.pr_gate_evidence || {}),
+        authorityProfile: "post-merge-recovery",
+        checkedAt: "2026-06-20T00:00:00.000Z",
+      };
+      manifest.merged_pr_reconciliation = {
+        ready: true,
+        expectedHeadSha: manifest.pr_delivery_head_sha,
+        pr: { number: 123 },
+        preMergeGate: { checkedAt: "2026-06-19T00:00:00.000Z" },
+      };
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const result = runFixtureScript(
         fixture,
