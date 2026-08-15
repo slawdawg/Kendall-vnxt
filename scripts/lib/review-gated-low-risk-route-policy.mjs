@@ -4,6 +4,7 @@ const AUTHORITY_POLICY_PATH = new URL("../../docs/workflows/local-provider-autho
 const LOCAL_PROVIDER_AUTHORITY_UNRESOLVED = "ollama_authority_policy_unresolved";
 const LOCAL_PROVIDER_AUTHORITY_INVALID = "ollama_authority_policy_invalid";
 const LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED = "ollama_enablement_authority_unresolved";
+const LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED = "ollama_trusted_attestation_required";
 const LOCAL_PROVIDER_ENABLEMENT_APPROVAL = Object.freeze({
   claim: "accepted_operator_enablement_approval",
   provenanceRef: "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md",
@@ -40,8 +41,10 @@ export function evaluateBoundedReviewRoute(input = {}) {
     ? LOCAL_PROVIDER_AUTHORITY_INVALID
     : blockers.includes(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED)
       ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED
-      : blockers.includes(LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED)
-        ? LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED
+      : blockers.includes(LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED)
+        ? LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED
+        : blockers.includes(LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED)
+          ? LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED
         : null;
 
   return {
@@ -101,8 +104,8 @@ function validateOllamaRoute(route, blockers, authority) {
     blockers.push(LOCAL_PROVIDER_AUTHORITY_INVALID);
   } else if (authority.policy.status !== "approved" || authority.sourceVm === null) {
     blockers.push(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
-  } else if (!authority.enablementApproved) {
-    blockers.push(LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED);
+  } else if (!authority.trustedAttestationVerified) {
+    blockers.push(LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED);
   }
   rejectUnknownKeys(route, ["role", "provider", "endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "localHostVerified", "localHostVerificationRef", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed", "fallbackUsed", "primaryFailure"], blockers);
   if (text(route.provider).toLowerCase() !== "ollama") blockers.push("backup-review role requires Ollama");
@@ -380,7 +383,11 @@ function currentAuthorityPolicy() {
     endpoint: policyText(policy.route?.endpoint),
     model: policyText(policy.route?.model),
     sourceVm: policyText(policy.approvedSourceVm) || null,
-    enablementApproved: policy.enablement?.status === "approved",
+    // Policy v1 records source and enablement intent only. It cannot verify a
+    // trusted attestation-service receipt, so JavaScript must never turn an
+    // Ollama fallback route into a provider-eligible path.
+    enablementApproved: false,
+    trustedAttestationVerified: false,
     connectTimeoutSeconds: policy.route?.connectTimeoutSeconds,
     totalTimeoutSeconds: policy.route?.totalTimeoutSeconds,
   };
@@ -405,8 +412,8 @@ export function getBoundedRoutePolicyDefaults() {
       ? LOCAL_PROVIDER_AUTHORITY_INVALID
       : authority.policy.status !== "approved" || authority.sourceVm === null
         ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED
-        : !authority.enablementApproved
-          ? LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED
+        : !authority.trustedAttestationVerified
+          ? LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED
           : null,
     ollamaEndpoint: authority.endpoint,
     ollamaModel: authority.model,

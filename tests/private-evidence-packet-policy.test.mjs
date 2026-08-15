@@ -83,13 +83,13 @@ test("active authority state governs exact Ollama backup packets", () => {
       rollbackReady: true,
       routeProof: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
     }), { now: NOW });
-    const selected = ollamaEligible && sourceVm === activeAuthorityPolicy.approvedSourceVm;
+    const selected = false;
     assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
     assert.equal(packet.sendEligible, selected, sourceVm);
     if (!selected) {
       assert.ok(
         packet.blockers.includes(
-          authorityOnHold ? "ollama_authority_policy_unresolved" : enablementApproved ? "Ollama route proof is missing or outside the approved controls" : "ollama_enablement_authority_unresolved",
+          authorityOnHold ? "ollama_authority_policy_unresolved" : "ollama_trusted_attestation_required",
         ),
         sourceVm,
       );
@@ -139,7 +139,9 @@ test("long-lived private-evidence modules reload a revoked authority record for 
   try {
     writeFileSync(policyPath, JSON.stringify(approved), "utf8");
     const isolatedPolicy = await import(`${pathToFileURL(privateModulePath).href}?authority-reload=${Date.now()}`);
-    assert.equal(isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW }).status, "READY");
+    const beforeRevocation = isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW });
+    assert.equal(beforeRevocation.status, "HOLD");
+    assert.ok(beforeRevocation.blockers.includes("ollama_trusted_attestation_required"));
     writeFileSync(policyPath, JSON.stringify({ ...approved, status: "hold_conflicting_source_vm", approvedSourceVm: null }), "utf8");
     const revoked = isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW });
     assert.equal(revoked.status, "HOLD");
