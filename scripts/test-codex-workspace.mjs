@@ -12887,6 +12887,7 @@ try {
       assert(updated.pr_gate_evidence?.postMergeRecovery?.approval?.evidence === recoveryApproval, "bound recovery approval was not retained");
       assert(updated.pr_gate_evidence?.postMergeRecovery?.deliveryIdentity?.proof === recoveryDeliveryProof, "bound delivery identity proof was not retained");
       assert(updated.pr_gate_evidence?.authorityDecision?.authorityProfile === "post-merge-recovery", "recovery authority profile was not retained on the nested decision");
+      assert(updated.pr_gate_evidence?.requiredGates?.includes("delivery subagent audit recommends merge-ready for exact head"), "recovery gate omitted its mandatory delivery audit");
       assert(updated.events.some((event) => event.type === "post_merge_pr_gate_recovery_recorded"), "recovery event missing");
 
       // Losing the top-level packet later must not make this exceptional

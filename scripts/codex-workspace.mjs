@@ -5519,6 +5519,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     "all reported checks completed successfully or are exact-head documented non-required skips",
     "thread-aware review query returned no unresolved or pending review state",
     postMergeRecovery ? "operator authorization and live-PR delivery identity proof are retained for cleanup-only recovery" : "delivery subagent audit recommends merge-ready for exact head",
+    ...(postMergeRecovery ? ["delivery subagent audit recommends merge-ready for exact head"] : []),
     "exact-head diff-risk assessment and focused verification evidence are recorded",
     "planned exact-head merge command and bounded rollback path are recorded without cleanup flags",
   ];
@@ -5600,7 +5601,9 @@ function buildPrGateEvidence(manifest, context = {}) {
           ? postMergeRecovery
             ? "Record cleanup-only recovery evidence, then reconcile merged metadata before cleanup."
             : "Record PR gate evidence or proceed to exact-head merge only under the active delivery policy."
-          : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates.",
+          : postMergeRecovery
+            ? "Preserve the merged head, restore only the missing exact-head, CI, review, or operator-approval evidence, then rerun verify-pr-gates."
+            : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates.",
       recoveryPath: postMergeRecovery
         ? "No cleanup was performed. Preserve the merged worktree and rerun the recovery only after restoring exact-head, CI, review, and operator-approval evidence."
         : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
@@ -6302,9 +6305,9 @@ function shapePostMergeRecoveryApprovalEvidence(options = {}, manifest = {}, prN
 function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest = {}, pr = {}, expectedHeadSha) {
   const expected = `recovery-delivery-identity task=${manifest.task_id} branch=${manifest.branch} base=${manifest.base_branch} pr=${pr.number} head=${expectedHeadSha}`;
   // The proof is a deterministic composition of already bounded identity
-  // fields. Preserve its full expected length (up to a conservative evidence
-  // ceiling) so valid long managed identifiers remain usable.
-  const proof = safeMetadataText(options.recoveryDeliveryProof, Math.max(500, Math.min(expected.length, 1200)));
+  // fields. Preserve its full expected length so valid long managed
+  // identifiers remain usable; the equality comparison remains exact.
+  const proof = safeMetadataText(options.recoveryDeliveryProof, Math.max(500, expected.length));
   const standardDeliveryRecorded = hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha);
   const liveIdentityMatches = Boolean(
     manifest.task_id
