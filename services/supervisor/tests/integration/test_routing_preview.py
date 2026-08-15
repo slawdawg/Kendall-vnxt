@@ -1670,12 +1670,6 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
     assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
 
-
-def test_local_ipv4_address_enumeration_keeps_valid_interfaces_when_another_interface_has_no_ipv4(monkeypatch) -> None:
-    _reset_supervisor_modules()
-
-    from supervisor.application import service as service_module
-
     class FakeControlSocket:
         def __enter__(self):
             return self
