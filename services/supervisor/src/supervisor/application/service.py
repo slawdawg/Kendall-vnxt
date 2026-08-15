@@ -274,6 +274,7 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
                 or _approved_local_provider_enablement_expiry(enablement_expires_at) is None
             )
         )
+        or not isinstance(enablement_status, str)
         or enablement_status not in {"hold_requires_separate_review", "approved"}
     ):
         return _invalid_local_provider_authority_policy()
