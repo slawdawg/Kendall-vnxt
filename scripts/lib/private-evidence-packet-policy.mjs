@@ -67,8 +67,14 @@ export function evaluatePrivateEvidencePacket(input = {}, options = {}) {
     }
     validateClaudeProof(packet.routeProof, blockers);
   } else if (provider === "ollama") {
-    if (!routePolicyDefaults.localProviderAuthorityResolved) blockers.push(routePolicyDefaults.localProviderAuthorityDisabledReason);
-    if (!routePolicyDefaults.localProviderEnablementApproved) blockers.push(routePolicyDefaults.localProviderAuthorityDisabledReason);
+    // Keep this downstream packet consumer in lockstep with the route policy:
+    // source authority, enablement, and trusted-attestation holds are all
+    // independently fail-closed. Checking the rendered disabled reason also
+    // protects a future policy transition from silently skipping the final
+    // attestation hold.
+    if (routePolicyDefaults.localProviderAuthorityDisabledReason) {
+      blockers.push(routePolicyDefaults.localProviderAuthorityDisabledReason);
+    }
     if (routeRole !== "backup-review" || packet.fallbackUsed !== true || !isApprovedFallbackFailure(packet.primaryFailure)) blockers.push("Ollama private evidence requires an approved Claude fallback outcome");
     if (packet.endpoint !== routePolicyDefaults.ollamaEndpoint || packet.model !== routePolicyDefaults.ollamaModel) blockers.push("Ollama destination/model is outside the exact approved route");
     validateOllamaProof(packet.routeProof, blockers, routePolicyDefaults);

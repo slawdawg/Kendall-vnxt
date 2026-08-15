@@ -13,6 +13,11 @@ const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_sourc
 const authorityApproved = activeAuthorityPolicy.status === "approved" && typeof activeAuthorityPolicy.approvedSourceVm === "string";
 const enablementApproved = activeAuthorityPolicy.enablement?.status === "approved";
 const ollamaEligible = authorityApproved && enablementApproved;
+const activeAuthorityDisabledReason = authorityOnHold
+  ? "ollama_authority_policy_unresolved"
+  : !enablementApproved
+    ? "ollama_enablement_authority_unresolved"
+    : "ollama_trusted_attestation_required";
 
 function valid(overrides = {}) {
   return {
@@ -89,7 +94,7 @@ test("active authority state governs exact Ollama backup packets", () => {
     if (!selected) {
       assert.ok(
         packet.blockers.includes(
-          authorityOnHold ? "ollama_authority_policy_unresolved" : "ollama_trusted_attestation_required",
+          activeAuthorityDisabledReason,
         ),
         sourceVm,
       );

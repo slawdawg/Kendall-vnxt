@@ -1693,6 +1693,19 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
 
     assert service_module._local_ipv4_addresses() == {"192.168.1.8"}
 
+    # The gate test above substitutes the helper to prove its higher-level
+    # ordering. Restore that substitute before exercising the helper itself.
+    monkeypatch.undo()
+    original_import_module = service_module.importlib.import_module
+
+    def reject_fcntl(name, *args, **kwargs):
+        if name == "fcntl":
+            raise ImportError("fcntl is unavailable on this platform")
+        return original_import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(service_module.importlib, "import_module", reject_fcntl)
+    assert service_module._local_ipv4_addresses() == set()
+
 
 def test_ollama_provider_gate_fails_closed_when_authority_policy_parser_recurses(monkeypatch) -> None:
     _reset_supervisor_modules()

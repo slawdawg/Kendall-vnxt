@@ -104,6 +104,8 @@ function validateOllamaRoute(route, blockers, authority) {
     blockers.push(LOCAL_PROVIDER_AUTHORITY_INVALID);
   } else if (authority.policy.status !== "approved" || authority.sourceVm === null) {
     blockers.push(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
+  } else if (!authority.enablementApproved) {
+    blockers.push(LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED);
   } else if (!authority.trustedAttestationVerified) {
     blockers.push(LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED);
   }
@@ -383,10 +385,11 @@ function currentAuthorityPolicy() {
     endpoint: policyText(policy.route?.endpoint),
     model: policyText(policy.route?.model),
     sourceVm: policyText(policy.approvedSourceVm) || null,
-    // Policy v1 records source and enablement intent only. It cannot verify a
-    // trusted attestation-service receipt, so JavaScript must never turn an
-    // Ollama fallback route into a provider-eligible path.
-    enablementApproved: false,
+    // The policy parser accepts an enablement approval only when its bounded
+    // provenance and expiry contract is complete. That is still insufficient
+    // to make the route eligible: v1 cannot verify a trusted attestation-
+    // service receipt for the actual caller host.
+    enablementApproved: policy.enablement?.status === "approved",
     trustedAttestationVerified: false,
     connectTimeoutSeconds: policy.route?.connectTimeoutSeconds,
     totalTimeoutSeconds: policy.route?.totalTimeoutSeconds,
@@ -412,6 +415,8 @@ export function getBoundedRoutePolicyDefaults() {
       ? LOCAL_PROVIDER_AUTHORITY_INVALID
       : authority.policy.status !== "approved" || authority.sourceVm === null
         ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED
+        : !authority.enablementApproved
+          ? LOCAL_PROVIDER_ENABLEMENT_UNRESOLVED
         : !authority.trustedAttestationVerified
           ? LOCAL_PROVIDER_TRUSTED_ATTESTATION_REQUIRED
           : null,

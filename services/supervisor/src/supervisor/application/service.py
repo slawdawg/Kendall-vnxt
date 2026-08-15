@@ -1,5 +1,6 @@
 ﻿import asyncio
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -133,7 +134,7 @@ def _local_ipv4_addresses() -> set[str]:
     result; no provider request is made during this check.
     """
     try:
-        import fcntl
+        fcntl = importlib.import_module("fcntl")
         import struct
 
         addresses: set[str] = set()
@@ -156,7 +157,7 @@ def _local_ipv4_addresses() -> set[str]:
                     # that addresses obtained from other interfaces are wrong.
                     continue
                 addresses.add(socket.inet_ntoa(response[20:24]))
-    except OSError:
+    except (ImportError, NotImplementedError, OSError):
         return set()
     return addresses
 
