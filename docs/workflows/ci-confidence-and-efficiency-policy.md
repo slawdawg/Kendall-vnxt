@@ -72,6 +72,12 @@ must return structured, reviewable output containing:
 - selected and skipped gates with an explanatory reason; and
 - whether the result is known-safe, elevated, or fail-closed unknown.
 
+The planner inventory must also enumerate every baseline-only aggregate gate
+(including documentation-authority, installation, and other universal policy
+checks), its risk owner, trigger, and required execution owner. A proposed
+profile may not accidentally omit a gate merely because it is not represented
+as a selected component bundle.
+
 Unknown paths and shared/high-risk boundaries fail closed to an explicit broad
 policy. They must not accidentally trigger every unrelated component merely
 because the planner lacks a more precise mapping. The migration target is
@@ -104,6 +110,26 @@ a full-suite aggregate for integration/scheduled confidence. Sharding must not
 hide cross-shard state; shared-state behavior belongs in a named integration
 shard.
 
+### Protect long-leaf verification budgets
+
+The time budget for a long, resumable verification leaf belongs to that leaf,
+not to earlier work in a delivery packet. Earlier quick checks may consume the
+packet's ordinary budget and remain pause/resume candidates, but they must not
+silently reduce the selected long leaf below its declared, evidence-based
+timeout; the leaf receives that full timeout independently. This prevents a
+healthy, relevant suite from being killed merely
+because unrelated setup or prior checks ran first.
+
+The delivery runner must enforce that rule by starting a selected long leaf
+with its full per-leaf timeout after earlier packet work has elapsed. The
+protected `dev` runner and its focused contract test are the required
+implementation evidence; policy text alone never establishes this guarantee.
+
+Before increasing a timeout, first record the leaf's command, selected risk,
+recent wall-clock evidence, and whether sharding or duplicate removal would
+remove the delay. Raise the leaf budget only when it preserves required
+coverage; do not turn a timeout increase into an unbounded delivery packet.
+
 ### Prefer component runners to long shell chains
 
 Where many tiny checks share setup or fixtures, use a component runner that
@@ -116,24 +142,53 @@ simply to improve a duration number.
 - Use cancellation concurrency for superseded PR heads; avoid pushing several
   unvalidated intermediate revisions when one coherent, locally checked
   revision will do.
+- Treat an isolated long-running check as a scarce, single-use budget. While it
+  runs, perform only independent read-only analysis, review, or preparation;
+  do not start a duplicate run for the same head merely to obtain status.
+- When a long leaf fails, classify its first actionable failure and repair that
+  leaf before spending a dependent exact-head rerun. Re-run the failed leaf
+  when its scope is unchanged; reserve a wider graph for a changed risk surface
+  or the final exact-head fan-in. Record any exception that requires duplicate
+  execution or a broad retry.
 - Cache deterministic dependency stores and interpreter environments, but
   measure setup, restore, install, and test time separately before adding large
   artifact transfers or a new build system.
 - Prefer planner-selected matrices over one universal matrix. Parallelize
   independent components; serialize only shared-state, migration, or resource
   constrained checks.
+- Sequence enabling repairs before the work that depends on them. For example,
+  land a verified delivery-runner or CI-routing repair before asking dependent
+  migration or refactor lanes to repeat the same known-bad verification path.
+  A dependent lane's acceptance evidence must name the enabling repair's exact
+  commit and prove that commit is an ancestor of both the tested lane head and
+  its selected integration base; a planning dependency or merge order alone is
+  not proof that the repair was tested.
+  While it is in review, use otherwise-idle capacity for read-only inventory or
+  isolated work, rather than creating retry churn or competing changes.
 - Do not introduce a second task/build orchestrator solely for CI acceleration
   while the existing planner and package scripts can express the required graph.
   A new tool needs evidence that it removes more complexity than it creates.
 - Keep a stable final required check/fan-in surface so branch protection sees a
   comprehensible result rather than an incidental matrix layout.
+- Run an explicit **integration train** for independently prepared changes:
+  order merge-sensitive PRs by dependency, keep only the train head in an
+  exact-head protected-check cycle, and use the wait time for later cars only
+  for read-only review, conflict prediction, and focused local preparation.
+  A later car is created after it reaches the head, or receives a
+  non-rewriting base update before its one required exact-head cycle; it is
+  never force-pushed merely to enter the train. This avoids repeatedly
+  invalidating and rerunning expensive CI for every queued branch while
+  preserving fail-closed evidence for the revision that is actually merged.
 
 ## Integration and scheduled policy
 
-The protected integration branch is the current delivery baseline. Full
+The protected integration branch is the intended delivery baseline. Full
 repository confidence must run after changes reach that branch, not solely on a
 different branch that normal delivery does not target. Scheduled/manual full
 runs cover slow or environmental confidence that is unsuitable for every PR.
+Until that `dev`-targeting integration or scheduled/manual full route exists,
+the current conservative PR aggregate remains required; a `main`-only full run
+is not a replacement for it.
 
 If a merge queue is available and adopted, it may batch eligible PR heads for
 integration confidence. It must retain exact-head evidence, affected-domain
@@ -155,6 +210,50 @@ becomes the dominant critical-path job. A slow or flaky component may be
 quarantined only with an owner, exact replacement coverage, expiry, and an
 integration/scheduled fallback. It may not silently disappear from required
 confidence.
+
+Promotion evidence uses a declared paired measurement window, not one green
+run per example head. Each measured member must start from a clean committed
+tree, or record an immutable source snapshot digest that binds its staged,
+unstaged, and untracked input; both members of a pair must have the same input
+identity. For each planner selection vector in the acceptance
+packet's bounded covering set, collect at least 20 same-head
+baseline/proposed pairs over at least five UTC calendar days on the same runner
+class and lockfile/environment configuration. Every pair pins and records the
+exact base commit used by the planner and the exact tested head; the baseline
+and proposed members of a pair use those same commits. Record median and P95
+queue, setup, execution, and wall time; P95 first actionable-failure time; and
+failure, flake, and retry counts. When ordinary runs have zero actionable-
+failure samples, report their first-actionable-failure P95 as `N/A (zero
+samples)` rather than treating it as a passing latency result. For every
+selection vector, collect at least 20 paired deterministic controlled-failure
+samples to calculate and compare first-actionable-failure P95 while separately
+proving equivalent failure detection. Each
+pair must use equivalent isolated cache state, or run in
+randomized/counterbalanced order with the cache state recorded for both sides;
+one side must not consistently warm the other. Exceptional runner incidents
+remain in the primary distribution and are labeled rather than silently
+discarded. An acceptance packet may additionally report a predeclared,
+objective exclusion rule, but it must retain and compare the inclusive result.
+
+A proposed route may promote only when it has no loss of required failure
+detection, no increase in failure/flake/retry rates, no more than a 10% P95
+regression in **each** recorded duration metric versus the corresponding
+baseline, and P95 first actionable-failure time no slower than its baseline.
+Required failure detection and the failure/flake/retry criteria are
+non-waivable. The sole performance exception is a documented P95 duration
+regression, and it requires an accepted CI-optimization acceptance packet from
+the named delivery authority independent of the implementer. That packet must
+name the affected metric(s), comparison data, retained risk coverage, reason,
+scope, expiry, rollback, and the approval evidence; a self-authored
+justification is not approval. At expiry, the owner must either execute and
+record the named rollback or obtain and record fresh independent approval
+before the exception continues; an expired exception never silently rolls
+forward.
+
+For a synchronous local delivery profile, queue time is `N/A (no scheduler)`:
+it is recorded but excluded from the local duration-regression comparison.
+CI queue time remains a required measured metric. A report must never silently
+substitute zero or human wait time for either form of queue time.
 
 The following are prohibited without a short-lived compatibility record with an
 owner, removal condition, and expiry: new unconditional long PR suite, repeated
@@ -230,21 +329,47 @@ The migration path is deliberately evidence-first:
 1. retain the current aggregate local `check` profile while it is the effective
    required behavior and record its component-level timing;
 2. add a delivery profile that consumes the same structured planner selection
-   as CI: `fast`, exactly the selected independent component bundle(s), and
-   the stable final fan-in;
+   as CI: complete the planner quick-fail stage (`quickFailCommands` and
+   `jsonParseFiles`), then build an expanded, de-duplicated command graph from
+   `fast`'s integrity-only leaves, exactly the selected independent component
+   bundle(s), and the stable final fan-in. Each semantic command executes once;
+   dependent gates consume its result rather than rerunning it;
 3. run the proposed profile and the existing aggregate profile on the same
-   representative heads, including a workspace change, a supervisor schema
-   change, a documentation-only change, and an unknown/shared path;
-4. prove equivalent required results, retained fail-closed escalation,
-   no duplicated expensive invocation, and no regression in first actionable
-   failure time; then promote the narrower delivery profile; and
-5. keep the aggregate workspace/full confidence on post-merge `dev`, scheduled
-   or manually elevated runs until its independent coverage is proven.
+   representative heads for each independent planner surface: documentation
+   and baseline-only aggregate checks, JavaScript/dashboard-only, supervisor
+   and migration, every standalone static component (core, manager,
+   pipeline/dashboard, policy, workspace, and anti-churn), workflow changes,
+   and unknown/shared fail-closed escalation.
+   Cover every pairwise reachable mixed surface plus a named, risk-based set of
+   higher-order combinations (shared contracts, migrations, workflow changes,
+   and other planner-declared high-risk combinations). The acceptance packet
+   must list the planner version, exact planner base commit for every selected
+   vector, a bounded reachable-vector inventory of singleton surfaces,
+   pairwise reachable combinations, and named high-risk higher-order vectors,
+   the selected covering set, and the rationale for omitted higher-order
+   combinations; do not require the unbounded power set of ordinary mixed
+   paths;
+4. exercise a deterministic controlled failure for every selected component and
+   the unknown/shared escalation path, proving that the proposed profile and
+   final fan-in reject the same head as the aggregate route;
+5. meet the paired measurement-window requirements above and prove equivalent
+   required results, retained fail-closed escalation, no duplicated expensive
+   invocation, and P95 first actionable-failure time no slower than baseline;
+6. establish and record a successful full-confidence fallback that targets
+   post-merge `dev` (or an equivalent protected integration branch), or a
+   scheduled/manual route that explicitly verifies that merged baseline, before
+   promoting the narrower delivery profile; and
+7. keep the aggregate workspace/full confidence until that independent fallback
+   and the replacement coverage are proven.
 
-Do not treat elapsed time alone as authority to skip a suite.  The acceptance
-packet must include the planner output, exact commands, same-head results,
-P50/P95 setup/queue/execution measurements, failure/flake/retry rate, and a
-rollback that restores the prior aggregate profile.  A long local delivery run
+Do not treat elapsed time alone as authority to skip a suite. The acceptance
+packet must include planner output generated against the exact pinned base
+commit, `quickFailCommands`, `jsonParseFiles`, the exact base commit and tested
+head for every pair, the expanded de-duplicated command graph, exact commands,
+same-head results, P50/P95
+setup/queue/execution/wall and first-actionable-failure measurements, pair cache
+controls, failure/flake/retry rate, any independent performance exception, and
+a rollback that restores the prior aggregate profile. A long local delivery run
 is evidence for this migration, not permission to bypass it.
 
 ## Adoption roadmap
