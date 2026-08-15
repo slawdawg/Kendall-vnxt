@@ -1652,6 +1652,11 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     expired_enablement_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
     assert expired_enablement_state["disabled_reason"] == "ollama_authority_policy_invalid"
     policy["enablement"]["expiresAt"] = "2099-01-01T00:00:00Z"
+    policy["enablement"]["status"] = ["approved"]
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    policy["enablement"]["status"] = "approved"
     policy["unvalidatedExtra"] = float("nan")
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
