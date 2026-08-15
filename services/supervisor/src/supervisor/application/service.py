@@ -22242,7 +22242,11 @@ class SupervisorService:
                 else (
                     "Provider calls are enabled only for the explicit reviewed route and gates."
                     if ollama_gate_state["enabled"]
-                    else "Provider calls remain denied until the configured source VM is verified as local and the explicit gates are enabled."
+                    else (
+                        "Provider calls remain denied until a trusted attestation-service receipt is verified for the actual caller host."
+                        if ollama_gate_state["disabled_reason"] == "ollama_trusted_attestation_required"
+                        else "Provider calls remain denied until the configured source VM is verified as local and the explicit gates are enabled."
+                    )
                 )
             )
             return (
@@ -22250,7 +22254,7 @@ class SupervisorService:
                 "Stories 4.1-4.4 retain bounded metadata-only route evidence; the reviewed authority policy "
                 f"selects source VM {ollama_authority_source_vm}. "
                 + enablement_message,
-                "Ollama provider/model calls remain bound to the reviewed source VM, route, timeout, separate enablement authority, local-host identity, and explicit gates.",
+                "Ollama provider/model calls remain bound to the reviewed source VM, route, timeout, separate enablement authority, trusted local-host attestation, and explicit gates.",
             )
         if ollama_authority_status == "hold_conflicting_source_vm":
             return (
