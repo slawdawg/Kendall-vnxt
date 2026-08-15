@@ -14120,12 +14120,10 @@ try {
       assert(branchExists(fixture.root, fixture.branch), "cleanup deleted local branch before locked audit hold");
       assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup deleted remote branch before locked audit hold");
 
-      const partial = readJson(manifestPath);
-      assert(partial.status === "cleanup_partial", `manifest status is ${partial.status}`);
-      assert(!partial.cleanup_completed_at, "audit-held cleanup must not record completion");
-      assert(partial.cleanup_target_evidence?.worktree?.state === "present", "audit-held evidence must record worktree presence");
-      assert(partial.cleanup_target_evidence?.localBranch?.state === "present", "audit-held evidence must record local branch presence");
-      assert(partial.cleanup_target_evidence?.remoteBranch?.state === "present", "audit-held evidence must record remote branch presence");
+      const unchanged = readJson(manifestPath);
+      assert(unchanged.status === "merged", `manifest status is ${unchanged.status}`);
+      assert(!unchanged.cleanup_completed_at, "audit-held cleanup must not record completion");
+      assert(!unchanged.cleanup_target_evidence, "audit-held cleanup must not record cleanup targets before preflight passes");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
