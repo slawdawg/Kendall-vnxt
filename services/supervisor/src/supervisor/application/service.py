@@ -28138,59 +28138,79 @@ class SupervisorService:
                             fresh_ollama_state,
                         )
                     else:
-                        try:
-                            provider_result = await self.ollama_provider_adapter.explain(
-                                evidence_summary=provider_evidence_summary,
-                                evidence_count=len(events),
-                            )
-                        except Exception as exc:
+                        fresh_approval_validation = self._validate_local_provider_approval(
+                            approval,
+                            fresh_ollama_state,
+                            provider_evidence_summary,
+                            private_evidence_packet,
+                        )
+                        if not fresh_approval_validation.approved:
                             await self._finalize_external_launch_attempt(
                                 session,
                                 item,
                                 attempt,
-                                status=ExecutionAttemptStatus.FAILED.value,
+                                status=ExecutionAttemptStatus.REJECTED.value,
                                 operation="ollama_provider_explanation",
-                                failure_reason=f"provider_adapter_exception:{type(exc).__name__}",
+                                failure_reason=fresh_approval_validation.blockers[0],
                             )
-                            raise ValueError("Ollama provider execution failed after durable reservation.") from exc
-                        terminal_status = {
-                            "completed": ExecutionAttemptStatus.COMPLETED.value,
-                            "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
-                            "cancelled": ExecutionAttemptStatus.CANCELLED.value,
-                            "failed": ExecutionAttemptStatus.FAILED.value,
-                        }.get(provider_result.status, ExecutionAttemptStatus.FAILED.value)
-                        await self._finalize_external_launch_attempt(
-                            session,
-                            item,
-                            attempt,
-                            status=terminal_status,
-                            operation="ollama_provider_explanation",
-                            failure_reason=(
-                                None
-                                if terminal_status == ExecutionAttemptStatus.COMPLETED.value
-                                else f"ollama_provider_{provider_result.status}"
-                            ),
-                            evidence={
-                                "artifactType": "local_provider_attempt_metadata",
-                                "approvalId": approval_validation.approval_reference,
-                                "modelId": provider_result.model_id,
-                                "endpointFamily": provider_result.endpoint_family,
-                                "status": provider_result.status,
-                                "responseCharacterCount": provider_result.response_character_count,
-                                "reasoningCharacterCount": provider_result.reasoning_character_count,
-                                "sourceVm": fresh_ollama_state.get("authority_source_vm"),
-                                "contextBytes": len(provider_evidence_summary.encode("utf-8")),
-                                "contextDigest": hashlib.sha256(provider_evidence_summary.encode("utf-8")).hexdigest(),
-                                "contextDigestAlgorithm": "sha256",
-                                "retentionMode": "metadata-only",
-                                "rawPayloadRetained": False,
-                            },
-                        )
-                        provider_attempt = LocalProviderAttemptMetadataView(
-                            **provider_result.to_metadata(),
-                            approvalId=approval_validation.approval_reference,
-                            approvalStatus="policy-approved" if automatic_approval else "accepted",
-                        )
+                            provider_attempt = self._local_provider_rejected_attempt(
+                                fresh_approval_validation,
+                                fresh_ollama_state,
+                            )
+                        else:
+                            try:
+                                provider_result = await self.ollama_provider_adapter.explain(
+                                    evidence_summary=provider_evidence_summary,
+                                    evidence_count=len(events),
+                                )
+                            except Exception as exc:
+                                await self._finalize_external_launch_attempt(
+                                    session,
+                                    item,
+                                    attempt,
+                                    status=ExecutionAttemptStatus.FAILED.value,
+                                    operation="ollama_provider_explanation",
+                                    failure_reason=f"provider_adapter_exception:{type(exc).__name__}",
+                                )
+                                raise ValueError("Ollama provider execution failed after durable reservation.") from exc
+                            terminal_status = {
+                                "completed": ExecutionAttemptStatus.COMPLETED.value,
+                                "timed_out": ExecutionAttemptStatus.TIMED_OUT.value,
+                                "cancelled": ExecutionAttemptStatus.CANCELLED.value,
+                                "failed": ExecutionAttemptStatus.FAILED.value,
+                            }.get(provider_result.status, ExecutionAttemptStatus.FAILED.value)
+                            await self._finalize_external_launch_attempt(
+                                session,
+                                item,
+                                attempt,
+                                status=terminal_status,
+                                operation="ollama_provider_explanation",
+                                failure_reason=(
+                                    None
+                                    if terminal_status == ExecutionAttemptStatus.COMPLETED.value
+                                    else f"ollama_provider_{provider_result.status}"
+                                ),
+                                evidence={
+                                    "artifactType": "local_provider_attempt_metadata",
+                                    "approvalId": fresh_approval_validation.approval_reference,
+                                    "modelId": provider_result.model_id,
+                                    "endpointFamily": provider_result.endpoint_family,
+                                    "status": provider_result.status,
+                                    "responseCharacterCount": provider_result.response_character_count,
+                                    "reasoningCharacterCount": provider_result.reasoning_character_count,
+                                    "sourceVm": fresh_ollama_state.get("authority_source_vm"),
+                                    "contextBytes": len(provider_evidence_summary.encode("utf-8")),
+                                    "contextDigest": hashlib.sha256(provider_evidence_summary.encode("utf-8")).hexdigest(),
+                                    "contextDigestAlgorithm": "sha256",
+                                    "retentionMode": "metadata-only",
+                                    "rawPayloadRetained": False,
+                                },
+                            )
+                            provider_attempt = LocalProviderAttemptMetadataView(
+                                **provider_result.to_metadata(),
+                                approvalId=fresh_approval_validation.approval_reference,
+                                approvalStatus="policy-approved" if automatic_approval else "accepted",
+                            )
             else:
                 provider_attempt = self._local_provider_rejected_attempt(approval_validation, ollama_state)
         explanation = LocalEvidenceExplanationView(

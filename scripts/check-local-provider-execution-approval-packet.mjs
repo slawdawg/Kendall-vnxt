@@ -101,8 +101,6 @@ const localProviderRejectedAttempt = extractSection(
 
 assertCondition(authorityPolicy?.schemaVersion === 1, "Authority policy must use schemaVersion 1", failures);
 assertCondition(authorityPolicy?.authorityFamily === "local-provider-execution", "Authority policy must bind the local-provider-execution family", failures);
-assertCondition(authorityPolicy?.status === "hold_conflicting_source_vm", "Authority policy must hold the conflicting source VMs", failures);
-assertCondition(authorityPolicy?.approvedSourceVm === null, "Authority policy must not select an approved source VM", failures);
 assertCondition(agreedEndpoint === "http://192.168.1.128:11434/v1/chat/completions", "Authority policy must preserve the agreed endpoint metadata", failures);
 assertCondition(agreedModel === "qwen3:14b", "Authority policy must preserve the agreed model metadata", failures);
 assertCondition(authorityPolicy?.route?.connectTimeoutSeconds === 2, "Authority policy must preserve the 2 second connect timeout", failures);
@@ -119,6 +117,11 @@ const candidateSourceVmRows = Array.isArray(authorityPolicy?.candidateSourceVms)
 assertCondition(candidateSourceVmRows.length === 2, "Authority policy must contain exactly two candidate rows before source-VM de-duplication", failures);
 const candidateSourceVms = new Map(candidateSourceVmRows.map((candidate) => [candidate?.sourceVm, candidate]));
 assertCondition(candidateSourceVms.size === 2, "Authority policy must contain exactly the two conflicting source-VM candidates", failures);
+const authorityOnHold = authorityPolicy?.status === "hold_conflicting_source_vm" && authorityPolicy?.approvedSourceVm === null;
+const authorityApproved = authorityPolicy?.status === "approved"
+  && typeof authorityPolicy?.approvedSourceVm === "string"
+  && candidateSourceVms.has(authorityPolicy.approvedSourceVm);
+assertCondition(authorityOnHold || authorityApproved, "Authority policy must either hold with no selected VM or be explicitly approved for one recorded candidate VM", failures);
 assertCondition(
   candidateSourceVms.get("192.168.1.118")?.claim === "accepted_operator_approval"
     && candidateSourceVms.get("192.168.1.118")?.provenanceRef === "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
@@ -136,7 +139,7 @@ assertAllIncludes(acceptedCheckpoint, ["calls only from the Kendall_vNxt VM at `
 assertAllIncludes(routedSourceObservation, ["`192.168.1.8` (current routed source observed 2026-07-18)"], "Current routed-source observation provenance", failures);
 
 assertAllIncludes(providerContract, [
-  "Status: authority-conflict hold, non-executing",
+  ...(authorityOnHold ? ["Status: authority-conflict hold, non-executing"] : []),
   "Authority family: `local-provider-execution`",
   "Operation candidate: one bounded metadata-only Ollama provider operation",
   "`local-provider-authority-policy-v1.json`",
@@ -144,14 +147,14 @@ assertAllIncludes(providerContract, [
   `Agreed model metadata: \`${agreedModel}\``,
   "Retention: metadata-only event evidence and artifact references only.",
   "Do not call this provider from this packet alone.",
-  "neither is approved while the policy status is `hold_conflicting_source_vm`",
+  ...(authorityOnHold ? ["neither is approved while the policy status is `hold_conflicting_source_vm`"] : []),
   "Exact endpoint and model metadata are insufficient without one explicitly approved source VM.",
   "Keep broad local-provider, Ollama-specific, and automatic local-evidence gates disabled by default.",
   "Do not discover endpoints or models.",
   "Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.",
   "Do not read credentials or external sessions.",
   "Do not mutate source, launch processes, merge PRs, clean worktrees, or bypass failed checks.",
-], "Provider contract must preserve the unresolved local-provider authority boundary", failures);
+], "Provider contract must preserve the local-provider authority boundary", failures);
 
 assertAllIncludes(settingsSource, [
   "allow_local_provider_calls: bool = Field(default=False, alias=\"SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS\")",
@@ -201,11 +204,11 @@ assertAllIncludes(privateEvidencePolicySource, [
   "ollama_authority_policy_unresolved",
 ], "Private-evidence Ollama policy must inherit the unresolved authority hold", failures);
 assertAllIncludes(runbook, [
-  "Optional local Ollama review lane (authority hold)",
+  ...(authorityOnHold ? ["Optional local Ollama review lane (authority hold)"] : []),
   "All local-provider and automatic-consent gates default false.",
   "SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE=false",
   "ollama_authority_policy_unresolved",
-], "Runbook must preserve the unresolved authority stop line and rollback", failures);
+], "Runbook must preserve the authority stop line and rollback", failures);
 
 assertOrderedIncludes(localProviderApprovalSchema, [
   "class LocalProviderApprovalInstance(BaseModel):",
