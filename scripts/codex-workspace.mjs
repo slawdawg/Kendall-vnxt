@@ -3447,6 +3447,7 @@ function verifyPrGates(argv) {
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
     assertCurrentBranch(manifest);
+    reconcileManifest(manifest, { refreshPr: true });
     if (postMergeRecovery && manifest.pr_gate_evidence) {
       throw new Error("verify-pr-gates --post-merge-recovery changed under lock because gate evidence now exists.");
     }
@@ -6006,6 +6007,20 @@ function hasRecordedStandardDeliveryPrState(manifest, pr, expectedHeadSha) {
     && delivery?.pullRequestUrl === pr?.url;
 }
 
+function hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha) {
+  const delivery = manifest.pr_delivery_evidence;
+  return ["pr_open", "merged"].includes(manifest.status)
+    && delivery?.status === "recorded"
+    && delivery?.authorityProfile === "standard-delivery"
+    && delivery?.taskId === manifest.task_id
+    && delivery?.branch === manifest.branch
+    && delivery?.baseBranch === manifest.base_branch
+    && delivery?.headRevision === expectedHeadSha
+    && delivery?.pullRequestNumber === pr?.number
+    && delivery?.pullRequestUrl === pr?.url
+    && pr?.headRefName === manifest.branch;
+}
+
 function synchronizeStandardDeliveryEvidenceAfterHeadRebind(existing, packet) {
   if (!existing || existing.status !== "recorded" || existing.authorityProfile !== "standard-delivery") return existing || null;
   if (existing.headRevision !== packet.priorHeadSha) return existing;
@@ -6278,7 +6293,7 @@ function shapePostMergeRecoveryApprovalEvidence(options = {}, manifest = {}, prN
 function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest = {}, pr = {}, expectedHeadSha) {
   const expected = `recovery-delivery-identity task=${manifest.task_id} branch=${manifest.branch} base=${manifest.base_branch} pr=${pr.number} head=${expectedHeadSha}`;
   const proof = safeMetadataText(options.recoveryDeliveryProof, 500);
-  const standardDeliveryRecorded = hasRecordedStandardDeliveryPrState(manifest, pr, expectedHeadSha);
+  const standardDeliveryRecorded = hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha);
   const liveIdentityMatches = Boolean(
     manifest.task_id
     && manifest.branch
@@ -6330,7 +6345,7 @@ function prGateBlockers(manifest, pr, context) {
     blockers.push("PR number missing");
   }
   if (context.postMergeRecovery) {
-    if (pr.state !== "MERGED" || !pr.mergedAt) {
+    if (pr.state !== "MERGED" || !validMergedAtTimestamp(pr.mergedAt)) {
       blockers.push(`Post-merge recovery requires a merged PR, found ${pr.state || "unknown"}`);
     }
     blockers.push(...(context.recoveryApproval?.blockers || []));
@@ -11544,6 +11559,14 @@ function assertCleanupTargetsInspectable(targets) {
 }
 
 function cleanupDeliverySubagentAuditBlocker(manifest, pr, context = {}) {
+  const recoveryGate = manifest.pr_gate_evidence;
+  if (recoveryGate?.authorityProfile === "post-merge-recovery") {
+    const reconciliation = manifest.merged_pr_reconciliation;
+    const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
+    if (reconciliation?.ready !== true || reconciliation?.expectedHeadSha !== expectedHeadSha || reconciliation?.pr?.number !== pr?.number) {
+      return "Post-merge recovery requires matching merged-PR reconciliation evidence before cleanup";
+    }
+  }
   const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
   const audit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, context.options || {}, {
     expectedHeadSha,

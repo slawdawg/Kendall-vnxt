@@ -13047,6 +13047,28 @@ try {
     }
   });
 
+  test("cleanup-merged blocks recovery-backed cleanup until matching reconciliation is recorded", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_gate_evidence = { ...(manifest.pr_gate_evidence || {}), authorityProfile: "post-merge-recovery" };
+      delete manifest.merged_pr_reconciliation;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 0, `cleanupReady count is ${summary.counts.cleanupReady}`);
+      assert(summary.results[0].reason.includes("requires matching merged-PR reconciliation"), summary.results[0].reason);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("reconcile-merged-pr dry-run is read-only and reports a missing cleanup audit", () => {
     const fixture = createMergedCleanupFixture();
     try {
