@@ -12926,6 +12926,42 @@ try {
     }
   });
 
+  test("verify-pr-gates rejects an unvalidated recovery proof when standard delivery identity is retained", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.pr_gate_evidence;
+      manifest.status = "merged";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.state = "MERGED";
+      pr.mergedAt = "2026-07-02T00:00:00Z";
+      pr.mergeStateStatus = "UNKNOWN";
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const args = [
+        "verify-pr-gates", "resumed-task", "--post-merge-recovery", "--summary-json",
+        "--approval", `operator-authorized post-merge-recovery task=resumed-task pr=456 head=${expectedHead} scope=cleanup-only`,
+        "--recovery-delivery-proof", "unvalidated-proof",
+        "--owner", "runner-a", "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact merged head passed checks and review.",
+        "--diff-risk-summary", "Focused fixture change.", "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "Focused fixture passed.", "--diff-risk-verification-command", "node scripts/test-codex-workspace.mjs", "--diff-risk-verification-exit-code", "0",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`, "--rollback-path", "git revert -m 1 merged-commit", "--state-root", fixture.stateRoot,
+      ];
+      const blocked = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      const blockedPacket = JSON.parse(blocked.stdout);
+      assert(blockedPacket.postMergeRecovery?.deliveryIdentity?.status === "blocked", blocked.stdout);
+      assert(blockedPacket.postMergeRecovery?.deliveryIdentity?.proof === null, "unvalidated proof must not be retained");
+      assert(blockedPacket.blockers.some((entry) => entry.includes("rejects a supplied delivery proof")), blocked.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates rejects recovery identity beyond reconciliation capacity", () => {
     const longBranch = `codex/${Array.from({ length: 5 }, () => "branch-segment-".repeat(12)).join("/")}`;
     const longBase = `base-${"identity-component-".repeat(18)}`;

@@ -6310,10 +6310,6 @@ function shapePostMergeRecoveryApprovalEvidence(options = {}, manifest = {}, prN
 function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest = {}, pr = {}, expectedHeadSha) {
   const expected = `recovery-delivery-identity task=${manifest.task_id} branch=${manifest.branch} base=${manifest.base_branch} pr=${pr.number} head=${expectedHeadSha}`;
   const proofInput = typeof options.recoveryDeliveryProof === "string" ? options.recoveryDeliveryProof : "";
-  // The proof is a deterministic composition of already bounded identity
-  // fields. Preserve its full expected length so valid long managed
-  // identifiers remain usable; the equality comparison remains exact.
-  const proof = safeMetadataText(proofInput, Math.max(500, expected.length));
   const standardDeliveryRecorded = hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha);
   const liveIdentityMatches = Boolean(
     manifest.task_id
@@ -6325,20 +6321,27 @@ function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest =
     && pr.headRefOid === expectedHeadSha
   );
   const equivalentRecoveryProof = proofInput === expected && liveIdentityMatches;
+  // A proof is optional when retained standard-delivery evidence is valid, but
+  // a supplied value must still be the exact deterministic proof. Otherwise an
+  // unvalidated caller value could be retained as evidence despite being unused.
+  const suppliedProofAccepted = proofInput.length === 0 || proofInput === expected;
+  const standardDeliveryAccepted = standardDeliveryRecorded && suppliedProofAccepted;
   return {
     schemaVersion: 1,
-    status: standardDeliveryRecorded || equivalentRecoveryProof ? "recorded" : "blocked",
-    source: standardDeliveryRecorded ? "standard-delivery" : equivalentRecoveryProof ? "explicit-live-pr-recovery-proof" : "missing",
-    proof: proof || null,
+    status: standardDeliveryAccepted || equivalentRecoveryProof ? "recorded" : "blocked",
+    source: standardDeliveryAccepted ? "standard-delivery" : equivalentRecoveryProof ? "explicit-live-pr-recovery-proof" : "missing",
+    proof: equivalentRecoveryProof && !standardDeliveryRecorded ? expected : null,
     expectedProof: expected,
     taskId: manifest.task_id || null,
     branch: manifest.branch || null,
     baseBranch: manifest.base_branch || null,
     prNumber: Number.isSafeInteger(Number(pr.number)) ? Number(pr.number) : null,
     expectedHeadSha: exactGitObjectIdOrNull(expectedHeadSha) || null,
-    blockers: standardDeliveryRecorded || equivalentRecoveryProof
-      ? []
-      : ["Post-merge recovery requires retained standard-delivery identity or exact explicit live-PR recovery proof"],
+    blockers: standardDeliveryRecorded && !suppliedProofAccepted
+      ? ["Post-merge recovery rejects a supplied delivery proof unless it exactly matches the live PR identity"]
+      : standardDeliveryAccepted || equivalentRecoveryProof
+        ? []
+        : ["Post-merge recovery requires retained standard-delivery identity or exact explicit live-PR recovery proof"],
     metadataOnly: true,
     rawPayloadRetained: false,
   };
