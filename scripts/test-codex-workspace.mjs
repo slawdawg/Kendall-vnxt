@@ -12918,6 +12918,54 @@ try {
     }
   });
 
+  test("verify-pr-gates preserves an explicit long recovery identity proof", () => {
+    const longBranch = `codex/${Array.from({ length: 5 }, () => "branch-segment-".repeat(12)).join("/")}`;
+    const longBase = `base-${"identity-component-".repeat(18)}`;
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      repository: { owner: "slawdawg", name: "Kendall-vnxt" },
+      branch: longBranch,
+    });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = longBase;
+      delete manifest.pr_gate_evidence;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.state = "MERGED";
+      pr.mergedAt = "2026-07-02T00:00:00Z";
+      pr.mergeStateStatus = "UNKNOWN";
+      pr.baseRefName = longBase;
+      pr.headRefName = longBranch;
+      writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
+      const proof = `recovery-delivery-identity task=resumed-task branch=${longBranch} base=${longBase} pr=456 head=${expectedHead}`;
+      assert(proof.length > 1200, `fixture proof must exceed the historical cap, got ${proof.length}`);
+      const result = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--apply", "--post-merge-recovery",
+        "--approval", `operator-authorized post-merge-recovery task=resumed-task pr=456 head=${expectedHead} scope=cleanup-only`,
+        "--recovery-delivery-proof", proof,
+        "--owner", "runner-a",
+        "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "The exact merged head has successful checks and a clear review audit.",
+        "--diff-risk-summary", "Single fixture file change with focused verification.",
+        "--diff-risk-files", "feature.txt",
+        "--diff-risk-verification", "Focused fixture verification passed.",
+        "--diff-risk-verification-command", "node --test scripts/test-codex-workspace.mjs",
+        "--diff-risk-verification-exit-code", "0",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`,
+        "--rollback-path", "git revert -m 1 merged-commit",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readJson(manifestPath).pr_gate_evidence?.postMergeRecovery?.deliveryIdentity?.proof === proof, "long exact proof was not retained");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates keeps undocumented skipped checks blocking during post-merge recovery", () => {
     const fixture = createFinishPrExistingCommitFixture({
       existingPr: true,
@@ -16658,7 +16706,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   const remoteRoot = `${fixtureRoot}-remote.git`;
   const stateRootFixture = join(fixtureRoot, "state");
   const fakeBin = join(fixtureRoot, "bin");
-  const branch = "codex/resumed-task";
+  const branch = options.branch || "codex/resumed-task";
   const worktree = join(stateRootFixture, "worktrees", "resumed-task");
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}`, CODEX_WORKSPACE_OWNER: "runner-a" };
   const repository = options.repository || { owner: "slaw-dawg", name: "fixture" };
