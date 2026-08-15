@@ -6422,7 +6422,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "Agreed endpoint metadata: http://192.168.1.128:11434/v1/chat/completions." in ollama_item["evidence"]
     assert "Agreed model metadata: qwen3:14b." in ollama_item["evidence"]
     assert "cancel_requested -> request_abort_recorded" in ollama_item["evidence"]
-    assert any("bound to the reviewed source VM, route, timeout, separate enablement authority, local-host identity, and explicit gates" in stop_line for stop_line in ollama_item["stopLines"])
+    assert any("bound to the reviewed source VM, route, timeout, separate enablement authority, trusted local-host attestation, and explicit gates" in stop_line for stop_line in ollama_item["stopLines"])
     assert before_events_response.json()["data"] == after_events_response.json()["data"]
     assert missing_response.status_code == 404
 
