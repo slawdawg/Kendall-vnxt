@@ -6304,10 +6304,11 @@ function shapePostMergeRecoveryApprovalEvidence(options = {}, manifest = {}, prN
 
 function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest = {}, pr = {}, expectedHeadSha) {
   const expected = `recovery-delivery-identity task=${manifest.task_id} branch=${manifest.branch} base=${manifest.base_branch} pr=${pr.number} head=${expectedHeadSha}`;
+  const proofInput = typeof options.recoveryDeliveryProof === "string" ? options.recoveryDeliveryProof : "";
   // The proof is a deterministic composition of already bounded identity
   // fields. Preserve its full expected length so valid long managed
   // identifiers remain usable; the equality comparison remains exact.
-  const proof = safeMetadataText(options.recoveryDeliveryProof, Math.max(500, expected.length));
+  const proof = safeMetadataText(proofInput, Math.max(500, expected.length));
   const standardDeliveryRecorded = hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha);
   const liveIdentityMatches = Boolean(
     manifest.task_id
@@ -6318,7 +6319,7 @@ function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest =
     && pr.baseRefName === manifest.base_branch
     && pr.headRefOid === expectedHeadSha
   );
-  const equivalentRecoveryProof = proof === expected && liveIdentityMatches;
+  const equivalentRecoveryProof = proofInput === expected && liveIdentityMatches;
   return {
     schemaVersion: 1,
     status: standardDeliveryRecorded || equivalentRecoveryProof ? "recorded" : "blocked",
@@ -6365,6 +6366,14 @@ function prGateBlockers(manifest, pr, context) {
     }
     blockers.push(...(context.recoveryApproval?.blockers || []));
     blockers.push(...(context.recoveryDeliveryIdentity?.blockers || []));
+    // Do not record a one-time recovery that the mandatory reconciliation
+    // step cannot consume; it validates these same provider branch limits.
+    if (!validProviderBranchName(manifest.base_branch, MAX_BASE_BRANCH_LENGTH)) {
+      blockers.push("Post-merge recovery requires a reconciliation-valid managed base branch");
+    }
+    if (!validProviderBranchName(manifest.branch, 250)) {
+      blockers.push("Post-merge recovery requires a reconciliation-valid managed head branch");
+    }
   } else if (pr.state !== "OPEN") {
     blockers.push(`PR state is ${pr.state || "unknown"}, expected OPEN`);
   }
@@ -8652,7 +8661,7 @@ function cleanupMerged(argv, mode = {}) {
     }
 
     const cleanupAuditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr, { options });
-    if (cleanupAuditBlocker && (options.summaryJson || options.dryRun || !apply)) {
+    if (cleanupAuditBlocker) {
       if (options.summaryJson) {
         summaryResults.push(
           cleanupMergedSkipSummary(manifest, "skipped_delivery_audit_missing", cleanupAuditBlocker, {
@@ -8663,8 +8672,13 @@ function cleanupMerged(argv, mode = {}) {
         );
         continue;
       }
-      console.log(`SKIP ${manifest.task_id}: ${cleanupAuditBlocker}`);
-      continue;
+      if (options.dryRun || !apply) {
+        console.log(`SKIP ${manifest.task_id}: ${cleanupAuditBlocker}`);
+        continue;
+      }
+      // A recovery-reconciliation hold is a no-mutation prerequisite. Do not
+      // enter the cleanup lock or create a cleanup_partial journal for it.
+      throw new Error(`Cleanup preflight blocked for ${manifest.task_id}: ${cleanupAuditBlocker}`);
     }
 
     const plan = cleanupMergedPlan(manifest, pr, { cleanupCwd, deleteRemote });

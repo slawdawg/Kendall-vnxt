@@ -12873,6 +12873,10 @@ try {
       const preview = runFixtureScript(fixture, previewArgs, { cwd: fixture.worktree, env: fixture.env });
       assert(preview.code === 0, preview.stderr || preview.stdout);
       assert(JSON.parse(preview.stdout).postMergeRecovery?.status === "ready", "dry-run recovery must not claim to be recorded");
+      const trailingProofArgs = recoveryArgs.map((arg) => arg === recoveryDeliveryProof ? `${arg} trailing-data` : arg);
+      const trailingProof = runFixtureScript(fixture, trailingProofArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(trailingProof.code !== 0, "recovery unexpectedly accepted a proof with trailing data");
+      assert(trailingProof.stderr.includes("requires retained standard-delivery identity or exact explicit live-PR recovery proof"), trailingProof.stderr || trailingProof.stdout);
       const result = runFixtureScript(
         fixture,
         recoveryArgs,
@@ -12918,7 +12922,7 @@ try {
     }
   });
 
-  test("verify-pr-gates preserves an explicit long recovery identity proof", () => {
+  test("verify-pr-gates rejects recovery identity beyond reconciliation capacity", () => {
     const longBranch = `codex/${Array.from({ length: 5 }, () => "branch-segment-".repeat(12)).join("/")}`;
     const longBase = `base-${"identity-component-".repeat(18)}`;
     const fixture = createFinishPrExistingCommitFixture({
@@ -12959,8 +12963,9 @@ try {
         "--rollback-path", "git revert -m 1 merged-commit",
         "--state-root", fixture.stateRoot,
       ], { cwd: fixture.worktree, env: fixture.env });
-      assert(result.code === 0, result.stderr || result.stdout);
-      assert(readJson(manifestPath).pr_gate_evidence?.postMergeRecovery?.deliveryIdentity?.proof === proof, "long exact proof was not retained");
+      assert(result.code !== 0, "recovery unexpectedly accepted a branch reconciliation cannot consume");
+      assert(result.stderr.includes("reconciliation-valid managed head branch"), result.stderr || result.stdout);
+      assert(!readJson(manifestPath).pr_gate_evidence, "blocked recovery must not record a one-time gate");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -13137,6 +13142,13 @@ try {
       const summary = JSON.parse(result.stdout);
       assert(summary.counts.cleanupReady === 0, `cleanupReady count is ${summary.counts.cleanupReady}`);
       assert(summary.results[0].reason.includes("requires matching merged-PR reconciliation"), summary.results[0].reason);
+      const apply = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(apply.code !== 0, "cleanup unexpectedly entered a recovery-reconciliation hold");
+      assert(readJson(manifestPath).status === "merged", "preflight recovery hold must not journal cleanup_partial");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
