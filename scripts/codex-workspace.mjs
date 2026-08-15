@@ -6285,12 +6285,17 @@ function shapeExactHeadMergePlanEvidence(options = {}, context = {}) {
 
 function shapePostMergeRecoveryApprovalEvidence(options = {}, manifest = {}, prNumber, expectedHeadSha) {
   const expected = `operator-authorized post-merge-recovery task=${manifest.task_id} pr=${prNumber} head=${expectedHeadSha} scope=cleanup-only`;
-  const evidence = safeMetadataText(options.approval, 500);
-  const authorized = evidence === expected;
+  // This is capability-bearing operator evidence, not display metadata.
+  // Compare bounded raw bytes so whitespace normalization cannot authorize a
+  // different token.
+  const supplied = typeof options.approval === "string" && options.approval.length <= expected.length
+    ? options.approval
+    : "";
+  const authorized = supplied === expected;
   return {
     schemaVersion: 1,
     status: authorized ? "authorized" : "blocked",
-    evidence: evidence || null,
+    evidence: authorized ? expected : null,
     expectedEvidence: expected,
     taskId: manifest.task_id || null,
     prNumber: Number.isSafeInteger(Number(prNumber)) ? Number(prNumber) : null,

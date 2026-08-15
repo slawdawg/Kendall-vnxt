@@ -12877,6 +12877,10 @@ try {
       const trailingProof = runFixtureScript(fixture, trailingProofArgs, { cwd: fixture.worktree, env: fixture.env });
       assert(trailingProof.code !== 0, "recovery unexpectedly accepted a proof with trailing data");
       assert(trailingProof.stderr.includes("requires retained standard-delivery identity or exact explicit live-PR recovery proof"), trailingProof.stderr || trailingProof.stdout);
+      const whitespaceApprovalArgs = recoveryArgs.map((arg) => arg === recoveryApproval ? ` ${arg}` : arg);
+      const whitespaceApproval = runFixtureScript(fixture, whitespaceApprovalArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(whitespaceApproval.code !== 0, "recovery unexpectedly accepted normalized approval evidence");
+      assert(whitespaceApproval.stderr.includes("requires exact operator authorization"), whitespaceApproval.stderr || whitespaceApproval.stdout);
       const result = runFixtureScript(
         fixture,
         recoveryArgs,
