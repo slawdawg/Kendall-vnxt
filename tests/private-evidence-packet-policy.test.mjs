@@ -11,6 +11,13 @@ const NOW = "2026-07-18T20:00:00.000Z";
 const activeAuthorityPolicy = JSON.parse(readFileSync(new URL("../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url), "utf8"));
 const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_source_vm" && activeAuthorityPolicy.approvedSourceVm === null;
 const authorityApproved = activeAuthorityPolicy.status === "approved" && typeof activeAuthorityPolicy.approvedSourceVm === "string";
+const enablementApproved = activeAuthorityPolicy.enablement?.status === "approved";
+const ollamaEligible = authorityApproved && enablementApproved;
+const activeAuthorityDisabledReason = authorityOnHold
+  ? "ollama_authority_policy_unresolved"
+  : !enablementApproved
+    ? "ollama_enablement_authority_unresolved"
+    : "ollama_trusted_attestation_required";
 
 function valid(overrides = {}) {
   return {
@@ -64,6 +71,7 @@ test("allows explicitly consented bounded private work-item evidence for Claude"
 
 test("active authority state governs exact Ollama backup packets", () => {
   assert.equal(authorityOnHold || authorityApproved, true);
+  assert.equal(activeAuthorityPolicy.approvedSourceVm, authorityApproved ? "192.168.1.8" : null);
   for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
     const packet = evaluatePrivateEvidencePacket(valid({
       provider: "ollama",
@@ -80,13 +88,13 @@ test("active authority state governs exact Ollama backup packets", () => {
       rollbackReady: true,
       routeProof: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
     }), { now: NOW });
-    const selected = authorityApproved && sourceVm === activeAuthorityPolicy.approvedSourceVm;
+    const selected = false;
     assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
     assert.equal(packet.sendEligible, selected, sourceVm);
     if (!selected) {
       assert.ok(
         packet.blockers.includes(
-          authorityOnHold ? "ollama_authority_policy_unresolved" : "Ollama route proof is missing or outside the approved controls",
+          activeAuthorityDisabledReason,
         ),
         sourceVm,
       );
@@ -109,23 +117,36 @@ test("long-lived private-evidence modules reload a revoked authority record for 
     schemaVersion: 1,
     authorityFamily: "local-provider-execution",
     status: "approved",
-    approvedSourceVm: "192.168.1.118",
+    approvedSourceVm: "192.168.1.8",
     candidateSourceVms: [
       { sourceVm: "192.168.1.118", claim: "accepted_operator_approval", provenanceRef: "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" },
-      { sourceVm: "192.168.1.8", claim: "current_routed_source_observation", provenanceRef: "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md" },
+      { sourceVm: "192.168.1.8", claim: "accepted_operator_successor_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md" },
     ],
     route: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, retentionMode: "metadata-only" },
     defaults: { allowLocalProviderCalls: false, allowOllamaProviderCalls: false, allowAutomaticOllamaLocalEvidence: false },
+    enablement: { status: "approved", claim: "accepted_operator_enablement_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", expiresAt: "2099-01-01T00:00:00Z" },
+    decisionRequired: ["A reviewed successor is required before local-provider enablement."],
+    stopLines: ["Do not make a provider call until enablement is reviewed."],
+    rollback: {
+      environment: {
+        SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS: "false",
+        SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS: "false",
+        SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE: "false",
+      },
+      verification: "Confirm the disabled state and zero adapter calls.",
+    },
   };
   const packet = valid({
     provider: "ollama", routeRole: "backup-review", fallbackUsed: true, primaryFailure: "HTTP 429",
     endpoint: approved.route.endpoint, model: approved.route.model, destinationAllowlist: ["ollama"],
-    routeProof: { endpoint: approved.route.endpoint, model: approved.route.model, sourceVm: approved.approvedSourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
+    routeProof: { endpoint: approved.route.endpoint, model: approved.route.model, sourceVm: approved.approvedSourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, localHostVerified: true, localHostVerificationRef: "local-host:runtime-interface-attested", metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
   });
   try {
     writeFileSync(policyPath, JSON.stringify(approved), "utf8");
     const isolatedPolicy = await import(`${pathToFileURL(privateModulePath).href}?authority-reload=${Date.now()}`);
-    assert.equal(isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW }).status, "READY");
+    const beforeRevocation = isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW });
+    assert.equal(beforeRevocation.status, "HOLD");
+    assert.ok(beforeRevocation.blockers.includes("ollama_trusted_attestation_required"));
     writeFileSync(policyPath, JSON.stringify({ ...approved, status: "hold_conflicting_source_vm", approvedSourceVm: null }), "utf8");
     const revoked = isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW });
     assert.equal(revoked.status, "HOLD");

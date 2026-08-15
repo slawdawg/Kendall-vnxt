@@ -12,6 +12,15 @@ import { BOUNDED_ROUTE_POLICY_DEFAULTS, evaluateBoundedReviewRoute, parseJsonRej
 const activeAuthorityPolicy = JSON.parse(readFileSync(new URL("../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url), "utf8"));
 const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_source_vm" && activeAuthorityPolicy.approvedSourceVm === null;
 const authorityApproved = activeAuthorityPolicy.status === "approved" && typeof activeAuthorityPolicy.approvedSourceVm === "string";
+const enablementApproved = activeAuthorityPolicy.enablement?.status === "approved";
+const ollamaEligible = authorityApproved
+  && enablementApproved
+  && BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityDisabledReason === null;
+const activeAuthorityDisabledReason = authorityOnHold
+  ? "ollama_authority_policy_unresolved"
+  : !enablementApproved
+    ? "ollama_enablement_authority_unresolved"
+    : "ollama_trusted_attestation_required";
 
 function validOllamaBackup(sourceVm) {
   return {
@@ -22,6 +31,8 @@ function validOllamaBackup(sourceVm) {
     sourceVm,
     connectTimeoutSeconds: 2,
     totalTimeoutSeconds: 120,
+    localHostVerified: true,
+    localHostVerificationRef: "local-host:runtime-interface-attested",
     metadataOnly: true,
     rawPayloadRetained: false,
     publicExposure: false,
@@ -40,27 +51,44 @@ function approvedAuthorityPolicy() {
     schemaVersion: 1,
     authorityFamily: "local-provider-execution",
     status: "approved",
-    approvedSourceVm: "192.168.1.118",
+    approvedSourceVm: "192.168.1.8",
     candidateSourceVms: [
       { sourceVm: "192.168.1.118", claim: "accepted_operator_approval", provenanceRef: "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" },
-      { sourceVm: "192.168.1.8", claim: "current_routed_source_observation", provenanceRef: "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md" },
+      { sourceVm: "192.168.1.8", claim: "accepted_operator_successor_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md" },
     ],
     route: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, retentionMode: "metadata-only" },
     defaults: { allowLocalProviderCalls: false, allowOllamaProviderCalls: false, allowAutomaticOllamaLocalEvidence: false },
+    enablement: { status: "approved", claim: "accepted_operator_enablement_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", expiresAt: "2099-01-01T00:00:00Z" },
+    decisionRequired: ["A reviewed successor is required before local-provider enablement."],
+    stopLines: ["Do not make a provider call until enablement is reviewed."],
+    rollback: {
+      environment: {
+        SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS: "false",
+        SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS: "false",
+        SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE: "false",
+      },
+      verification: "Confirm the disabled state and zero adapter calls.",
+    },
   };
 }
 
 test("only a complete reviewed authority policy can select a source VM", () => {
   const validApprovedPolicy = approvedAuthorityPolicy();
-  assert.equal(parseLocalProviderAuthorityPolicy(validApprovedPolicy).approvedSourceVm, "192.168.1.118");
+  assert.equal(parseLocalProviderAuthorityPolicy(validApprovedPolicy).approvedSourceVm, "192.168.1.8");
   for (const malformed of [
     { ...validApprovedPolicy, candidateSourceVms: [validApprovedPolicy.candidateSourceVms[0], validApprovedPolicy.candidateSourceVms[0]] },
     { ...validApprovedPolicy, candidateSourceVms: [{ ...validApprovedPolicy.candidateSourceVms[0], sourceVm: " 192.168.1.118 " }, validApprovedPolicy.candidateSourceVms[1]] },
     { ...validApprovedPolicy, approvedSourceVm: "192.168.1.9" },
+    { ...validApprovedPolicy, approvedSourceVm: "192.168.1.118" },
     { ...validApprovedPolicy, approvedSourceVm: " 192.168.1.118 " },
     { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, endpoint: " http://192.168.1.128:11434/v1/chat/completions " } },
     { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, totalTimeoutSeconds: 121 } },
+    { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, unreviewedEndpoint: "http://127.0.0.1" } },
     { ...validApprovedPolicy, defaults: { ...validApprovedPolicy.defaults, allowOllamaProviderCalls: true } },
+    { ...validApprovedPolicy, enablement: { ...validApprovedPolicy.enablement, automaticConsent: true } },
+    { ...validApprovedPolicy, enablement: { status: "hold_requires_separate_review", claim: "separate_review_required" } },
+    { ...validApprovedPolicy, enablement: { ...validApprovedPolicy.enablement, expiresAt: "2000-01-01T00:00:00Z" } },
+    { ...validApprovedPolicy, unreviewedActivation: true },
   ]) {
     const parsed = parseLocalProviderAuthorityPolicy(malformed);
     assert.equal(parsed.status, "invalid");
@@ -89,10 +117,16 @@ test("long-lived route policy modules reload a revoked authority record for ever
   try {
     writeFileSync(policyPath, JSON.stringify(approvedAuthorityPolicy()), "utf8");
     const isolatedPolicy = await import(`${pathToFileURL(modulePath).href}?authority-reload=${Date.now()}`);
-    assert.equal(isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.118")).status, "READY");
+    const beforeRevocation = isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.8"));
+    assert.equal(beforeRevocation.status, "HOLD");
+    assert.equal(beforeRevocation.disabledReason, "ollama_trusted_attestation_required");
+    const missingAttestation = validOllamaBackup("192.168.1.8");
+    delete missingAttestation.localHostVerified;
+    delete missingAttestation.localHostVerificationRef;
+    assert.equal(isolatedPolicy.evaluateBoundedReviewRoute(missingAttestation).status, "HOLD");
     const revoked = { ...approvedAuthorityPolicy(), status: "hold_conflicting_source_vm", approvedSourceVm: null };
     writeFileSync(policyPath, JSON.stringify(revoked), "utf8");
-    const packet = isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.118"));
+    const packet = isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.8"));
     assert.equal(packet.status, "HOLD");
     assert.equal(packet.disabledReason, "ollama_authority_policy_unresolved");
   } finally {
@@ -125,21 +159,23 @@ test("duplicate authority-policy JSON members fail closed before validation", ()
 
 test("active authority state governs Ollama source-VM eligibility", () => {
   assert.equal(authorityOnHold || authorityApproved, true);
+  assert.equal(activeAuthorityPolicy.approvedSourceVm, authorityApproved ? "192.168.1.8" : null);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityStatus, activeAuthorityPolicy.status);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityResolved, authorityApproved);
+  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderEnablementApproved, enablementApproved);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm, authorityApproved ? activeAuthorityPolicy.approvedSourceVm : null);
   for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
     const packet = evaluateBoundedReviewRoute(validOllamaBackup(sourceVm));
-    const selected = authorityApproved && sourceVm === activeAuthorityPolicy.approvedSourceVm;
+    const selected = false;
     assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
     assert.equal(packet.reviewEligible, selected, sourceVm);
     assert.equal(packet.activationEligible, false, sourceVm);
     assert.equal(packet.allowed, selected, sourceVm);
-    assert.equal(packet.disabledReason, authorityOnHold ? "ollama_authority_policy_unresolved" : null, sourceVm);
+    assert.equal(packet.disabledReason, activeAuthorityDisabledReason, sourceVm);
     if (!selected) {
       assert.ok(
         packet.blockers.includes(
-          authorityOnHold ? "ollama_authority_policy_unresolved" : "Ollama source VM is not approved by the authority policy",
+          activeAuthorityDisabledReason,
         ),
         sourceVm,
       );
@@ -224,11 +260,11 @@ test("ordered selection follows the active Ollama authority state", () => {
   };
   assert.equal(selectOrderedReviewRoute({ primary, backup }).selected, "claude");
   const fallback = selectOrderedReviewRoute({ primary, backup, primaryFailure: "rate-limited" });
-  assert.equal(fallback.status, authorityApproved ? "READY" : "HOLD");
-  assert.equal(fallback.selected, authorityApproved ? "ollama" : null);
-  assert.equal(fallback.fallbackUsed, authorityApproved);
+  assert.equal(fallback.status, ollamaEligible ? "READY" : "HOLD");
+  assert.equal(fallback.selected, ollamaEligible ? "ollama" : null);
+  assert.equal(fallback.fallbackUsed, ollamaEligible);
   if (authorityOnHold) assert.ok(fallback.backup.blockers.includes("ollama_authority_policy_unresolved"));
-  assert.equal(selectOrderedReviewRoute({ primary, backup, primaryFailure: "HTTP 429" }).status, authorityApproved ? "READY" : "HOLD");
+  assert.equal(selectOrderedReviewRoute({ primary, backup, primaryFailure: "HTTP 429" }).status, ollamaEligible ? "READY" : "HOLD");
   assert.equal(selectOrderedReviewRoute({ primary, backup, primaryFailure: "malformed" }).status, "HOLD");
 });
 
@@ -258,6 +294,8 @@ test("ordered Claude and Ollama routes are governed review models but cannot gra
         sourceVm: model !== "claude" ? BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm : undefined,
         connectTimeoutSeconds: model !== "claude" ? 2 : undefined,
         totalTimeoutSeconds: model !== "claude" ? 120 : undefined,
+        localHostVerified: model !== "claude" ? true : undefined,
+        localHostVerificationRef: model !== "claude" ? "local-host:runtime-interface-attested" : undefined,
         publicExposure: model !== "claude" ? false : undefined,
         credentialsRead: model !== "claude" ? false : undefined,
         modelDiscovery: model !== "claude" ? false : undefined,
@@ -316,11 +354,14 @@ test("ordered Claude and Ollama routes are governed review models but cannot gra
       destinationAllowlist: [model === "claude" ? "claude" : "ollama"],
       routeProof: model === "claude"
         ? { model: "claude", executable: "claude", mode: "print", authenticated: true, maxBudgetUsd: 1, allowedTools: ["Read", "Grep", "Glob"], disallowedTools: ["Edit", "Write", "Bash", "WebFetch", "WebSearch"], sourceScope: "named-evidence-only", metadataOnly: true, rawPayloadRetained: false, reviewPass: false, activationAllowed: false }
-        : { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm: "192.168.1.8", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
+        : { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm: "192.168.1.8", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, localHostVerified: true, localHostVerificationRef: "local-host:runtime-interface-attested", metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
     };
     const packet = evaluateGovernedReadOnlyReview(input, { now: "2026-07-18T12:00:00.000Z" });
-    assert.equal(packet.status, model === "claude" ? "eligible" : "hold", model);
+    assert.equal(packet.status, model === "claude" || ollamaEligible ? "eligible" : "hold", model);
     assert.equal(packet.authorityDecision.allowed, false);
+    if (model === "qwen3:14b") {
+      assert.equal(packet.blockers.includes("Ollama route requires a runtime local-host verification attestation"), false);
+    }
   }
 });
 

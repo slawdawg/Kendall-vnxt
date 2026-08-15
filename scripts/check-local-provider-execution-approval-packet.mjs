@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseJsonRejectingDuplicateKeys } from "./lib/review-gated-low-risk-route-policy.mjs";
+import { parseJsonRejectingDuplicateKeys, parseLocalProviderAuthorityPolicy } from "./lib/review-gated-low-risk-route-policy.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -39,6 +39,18 @@ function assertOrderedIncludes(source, texts, scope, failures) {
   }
 }
 
+function markdownFieldValues(source, label) {
+  const expression = new RegExp(`^${label}:\\s*(.+?)\\s*$`, "gm");
+  return [...source.matchAll(expression)].map((match) => match[1]);
+}
+
+function assertExactlyOneMarkdownField(source, label, expected, scope, failures) {
+  const values = markdownFieldValues(source, label);
+  if (values.length !== 1 || values[0] !== expected) {
+    failures.push(`${scope}: ${label} must appear exactly once as ${expected}`);
+  }
+}
+
 function extractSection(source, startText, endText) {
   const start = source.indexOf(startText);
   const end = source.indexOf(endText, start + startText.length);
@@ -46,6 +58,13 @@ function extractSection(source, startText, endText) {
     return "";
   }
   return source.slice(start, end);
+}
+
+function isFutureCanonicalExpiry(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+  const parsed = Date.parse(value);
+  const canonical = value.includes(".") ? value : value.replace(/Z$/, ".000Z");
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === canonical && parsed > Date.now();
 }
 
 const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
@@ -65,6 +84,8 @@ const runbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 const acceptedApproval = readWorkspaceFile("docs/architecture/kendall-vnxt-execution-authority-approval-packet-2026-06-09.md");
 const acceptedCheckpoint = readWorkspaceFile("docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md");
 const routedSourceObservation = readWorkspaceFile("docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md");
+const successorApproval = readWorkspaceFile("docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md");
+const enablementApproval = readWorkspaceFile("docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md");
 const routePolicySource = readWorkspaceFile("scripts/lib/review-gated-low-risk-route-policy.mjs");
 const privateEvidencePolicySource = readWorkspaceFile("scripts/lib/private-evidence-packet-policy.mjs");
 const routePolicyTests = readWorkspaceFile("tests/review-gated-low-risk-route-policy.test.mjs");
@@ -79,6 +100,7 @@ try {
 }
 const agreedEndpoint = authorityPolicy?.route?.endpoint;
 const agreedModel = authorityPolicy?.route?.model;
+const normalizedAuthorityPolicy = authorityPolicy ? parseLocalProviderAuthorityPolicy(authorityPolicy) : null;
 const localProviderApprovalSchema = extractSection(
   apiSchemaSource,
   "class LocalProviderApprovalInstance(BaseModel):",
@@ -102,6 +124,12 @@ const localProviderRejectedAttempt = extractSection(
 
 assertCondition(authorityPolicy?.schemaVersion === 1, "Authority policy must use schemaVersion 1", failures);
 assertCondition(authorityPolicy?.authorityFamily === "local-provider-execution", "Authority policy must bind the local-provider-execution family", failures);
+assertCondition(
+  normalizedAuthorityPolicy?.status === authorityPolicy?.status
+    && normalizedAuthorityPolicy?.approvedSourceVm === authorityPolicy?.approvedSourceVm,
+  "Authority policy must satisfy the shared closed parser used by JavaScript route consumers",
+  failures,
+);
 assertCondition(agreedEndpoint === "http://192.168.1.128:11434/v1/chat/completions", "Authority policy must preserve the agreed endpoint metadata", failures);
 assertCondition(agreedModel === "qwen3:14b", "Authority policy must preserve the agreed model metadata", failures);
 assertCondition(authorityPolicy?.route?.connectTimeoutSeconds === 2, "Authority policy must preserve the 2 second connect timeout", failures);
@@ -120,9 +148,8 @@ const candidateSourceVms = new Map(candidateSourceVmRows.map((candidate) => [can
 assertCondition(candidateSourceVms.size === 2, "Authority policy must contain exactly the two conflicting source-VM candidates", failures);
 const authorityOnHold = authorityPolicy?.status === "hold_conflicting_source_vm" && authorityPolicy?.approvedSourceVm === null;
 const authorityApproved = authorityPolicy?.status === "approved"
-  && typeof authorityPolicy?.approvedSourceVm === "string"
-  && candidateSourceVms.has(authorityPolicy.approvedSourceVm);
-assertCondition(authorityOnHold || authorityApproved, "Authority policy must either hold with no selected VM or be explicitly approved for one recorded candidate VM", failures);
+  && authorityPolicy?.approvedSourceVm === "192.168.1.8";
+assertCondition(authorityOnHold || authorityApproved, "Authority policy must either hold with no selected VM or approve only the accepted 192.168.1.8 successor VM", failures);
 assertCondition(
   candidateSourceVms.get("192.168.1.118")?.claim === "accepted_operator_approval"
     && candidateSourceVms.get("192.168.1.118")?.provenanceRef === "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
@@ -130,14 +157,58 @@ assertCondition(
   failures,
 );
 assertCondition(
-  candidateSourceVms.get("192.168.1.8")?.claim === "current_routed_source_observation"
-    && candidateSourceVms.get("192.168.1.8")?.provenanceRef === "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md",
-  "Authority policy must preserve observed 192.168.1.8 provenance without promoting it to approval",
+  candidateSourceVms.get("192.168.1.8")?.claim === "accepted_operator_successor_approval"
+    && candidateSourceVms.get("192.168.1.8")?.provenanceRef === "docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md",
+  "Authority policy must preserve accepted 192.168.1.8 successor provenance",
   failures,
 );
 assertAllIncludes(acceptedApproval, ["Approved caller/source: Kendall_vNxt VM at 192.168.1.118 only."], "Accepted approval provenance", failures);
 assertAllIncludes(acceptedCheckpoint, ["calls only from the Kendall_vNxt VM at `192.168.1.118`"], "Accepted checkpoint provenance", failures);
 assertAllIncludes(routedSourceObservation, ["`192.168.1.8` (current routed source observed 2026-07-18)"], "Current routed-source observation provenance", failures);
+assertAllIncludes(successorApproval, ["`192.168.1.8`", "Status: accepted operator decision; non-activating", "This decision selects only the source identity."], "Accepted successor approval provenance", failures);
+const enablementOnHold = authorityPolicy?.enablement?.status === "hold_requires_separate_review"
+  && authorityPolicy?.enablement?.claim === "separate_review_required"
+  && authorityPolicy?.enablement?.provenanceRef === null
+  && authorityPolicy?.enablement?.expiresAt === null;
+const enablementApproved = authorityPolicy?.enablement?.status === "approved"
+  && authorityPolicy?.enablement?.claim === "accepted_operator_enablement_approval"
+  && authorityPolicy?.enablement?.provenanceRef === "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md"
+  && isFutureCanonicalExpiry(authorityPolicy?.enablement?.expiresAt);
+assertCondition(
+  enablementOnHold || enablementApproved,
+  "Authority policy must retain a canonical non-activating enablement hold or a complete, expiring reviewed enablement record",
+  failures,
+);
+assertAllIncludes(enablementApproval, [
+  "# Local Provider Enablement Approval Record v1",
+  "Authority family: `local-provider-execution`",
+], "Local-provider enablement provenance record", failures);
+if (enablementOnHold) {
+  assertExactlyOneMarkdownField(
+    enablementApproval,
+    "Status",
+    "no enablement approved",
+    "Held local-provider enablement provenance record",
+    failures,
+  );
+  assertAllIncludes(enablementApproval, ["does not permit a provider call"], "Held local-provider enablement provenance record", failures);
+} else if (enablementApproved) {
+  const approvedRecordFields = [
+    ["Status", "accepted operator enablement decision"],
+    ["Operation", "`one bounded Ollama provider operation`"],
+    ["Source VM", `\`${authorityPolicy.approvedSourceVm}\``],
+    ["Endpoint", `\`${agreedEndpoint}\``],
+    ["Model", `\`${agreedModel}\``],
+    ["Enablement gates", "`SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=true`; `SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS=true`; `SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE=false`"],
+    ["Local interface verification", "`trusted attestation-service receipt bound to the actual caller host`"],
+    ["Expiry", `\`${authorityPolicy.enablement.expiresAt}\``],
+    ["Retention", "`metadata-only`"],
+    ["Rollback", "set all three provider and automatic-consent gates to `false` and verify zero adapter calls."],
+  ];
+  for (const [label, expected] of approvedRecordFields) {
+    assertExactlyOneMarkdownField(enablementApproval, label, expected, "Approved local-provider enablement provenance record", failures);
+  }
+}
 
 assertAllIncludes(providerContract, [
   authorityOnHold
@@ -167,7 +238,7 @@ assertAllIncludes(settingsSource, [
   "allow_automatic_ollama_local_evidence: bool = Field(default=False, alias=\"SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE\")",
   `ollama_endpoint_url: str | None = Field(\n        default=\"${agreedEndpoint}\"`,
   `ollama_model_id: str | None = Field(default=\"${agreedModel}\"`,
-  "ollama_approved_source_vm: str = Field(default=\"\"",
+  "ollama_approved_source_vm: str | None = Field(default=None",
   `default="${agreedEndpoint}"`,
   "alias=\"SUPERVISOR_OLLAMA_APPROVED_ENDPOINT_URL\"",
   `ollama_approved_model_id: str = Field(default="${agreedModel}", alias="SUPERVISOR_OLLAMA_APPROVED_MODEL_ID")`,
@@ -188,6 +259,10 @@ assertAllIncludes(serviceSource, [
   "ollama_authority_policy_unresolved",
   "ollama_authority_policy_invalid",
   "authority_resolved",
+  "enablement_status",
+  "local_source_vm_verified",
+  "ollama_enablement_authority_unresolved",
+  "ollama_source_vm_not_local",
   "endpoint_approved = endpoint_url == approved_endpoint_url",
   "model_id_approved = model_id == approved_model_id",
   "self.settings.ollama_connect_timeout_seconds != authority_connect_timeout_seconds",
@@ -204,11 +279,13 @@ assertAllIncludes(routePolicySource, [
   "ollama_authority_policy_unresolved",
   "ollama_authority_policy_invalid",
   "localProviderAuthorityResolved",
+  "localProviderEnablementApproved",
+  "ollama_enablement_authority_unresolved",
   "approvedSourceVm",
 ], "JavaScript route policy must consume and fail closed on the authority record", failures);
 assertAllIncludes(privateEvidencePolicySource, [
-  "localProviderAuthorityResolved",
-  "localProviderAuthorityDisabledReason",
+  "routePolicyDefaults.localProviderAuthorityDisabledReason",
+  "trusted-attestation hold",
 ], "Private-evidence Ollama policy must inherit the authority record's fail-closed reason", failures);
 assertAllIncludes(runbook, [
   authorityOnHold
@@ -310,10 +387,6 @@ assertAllIncludes(localProviderRejectedAttempt, [
 assertAllIncludes(supervisorTests, [
   "test_ollama_settings_default_provider_and_automatic_gates_false",
   "test_ollama_provider_gate_holds_both_source_vm_candidates_despite_exact_endpoint_and_model",
-  "test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch",
-  "test_ollama_local_evidence_explanation_holds_unresolved_authority_before_adapter_call",
-  "test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unresolved_source_vm",
-  "test_ollama_local_evidence_explanation_rejects_operator_approval_while_authority_is_unresolved",
   "test_ollama_provider_request_uses_connect_timeout_without_global_socket_mutation",
   "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS",
   "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS",
@@ -321,11 +394,28 @@ assertAllIncludes(supervisorTests, [
   "192.168.1.118",
   "192.168.1.8",
   "ollama_authority_policy_unresolved",
-  "Ollama adapter must not run while source-VM authority is unresolved.",
-  "Automatic approval must not be created while source-VM authority is unresolved.",
   agreedEndpoint,
   agreedModel,
-], "Supervisor tests must prove unresolved authority is non-executing", failures);
+  ...(authorityOnHold
+    ? [
+      "test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch",
+      "test_ollama_local_evidence_explanation_holds_unresolved_authority_before_adapter_call",
+      "test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unresolved_source_vm",
+      "test_ollama_local_evidence_explanation_rejects_operator_approval_while_authority_is_unresolved",
+      "Ollama adapter must not run while source-VM authority is unresolved.",
+      "Automatic approval must not be created while source-VM authority is unresolved.",
+    ]
+    : [
+      "test_ollama_provider_gate_reports_enablement_hold_before_endpoint_mismatch",
+      "test_ollama_local_evidence_explanation_requires_instance_approval_before_adapter_call",
+      "test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unapproved_source_vm",
+      "test_ollama_local_evidence_explanation_accepts_exact_approval_after_authority_decision",
+      "Ollama adapter must not run for an unapproved source VM.",
+      "Automatic approval must not be created for an unapproved source VM.",
+    ]),
+], authorityOnHold
+  ? "Supervisor tests must prove unresolved authority is non-executing"
+  : "Supervisor tests must prove approved authority remains gate and approval bound", failures);
 
 assertAllIncludes(routePolicyTests, [
   "active authority state governs Ollama source-VM eligibility",
@@ -343,8 +433,12 @@ assertAllIncludes(privateEvidenceTests, [
 assertAllIncludes(storyIndex, [
   "The following implementation evidence labels are source-owned anchors for runtime reports and drift checks. They are labels only, not required Git-tracked story files.",
   "Local provider execution: `docs/workflows/execution-authority-boundary.md#local-provider-execution-contract`",
-  "source-VM authority is held by `local-provider-authority-policy-v1.json`",
-  "The agreed endpoint/model metadata are insufficient to enable Ollama while the source-VM authority conflict remains unresolved.",
+  authorityOnHold
+    ? "source-VM authority is held by `local-provider-authority-policy-v1.json`"
+    : `\`local-provider-authority-policy-v1.json\` records \`${authorityPolicy.approvedSourceVm}\` as the explicitly approved source VM`,
+  authorityOnHold
+    ? "The agreed endpoint/model metadata are insufficient to enable Ollama while the source-VM authority conflict remains unresolved."
+    : "The agreed endpoint/model metadata and selected source VM are insufficient to enable Ollama while the provider and automatic-consent gates remain disabled by default.",
   "14-2-pin-local-provider-approval-packet-to-drift-checks.md",
 ], "Implementation evidence boundary must preserve local-provider authority status and label semantics", failures);
 

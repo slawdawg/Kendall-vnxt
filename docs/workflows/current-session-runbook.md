@@ -104,18 +104,26 @@ asks for takeover.
 Autonomous best-judgment choices must be recorded through metadata-only heartbeat decision evidence.
 Include the decision, rationale, and next safe action before the runner continues.
 
-## Optional local Ollama review lane (authority hold)
+## Optional local Ollama review lane (reviewed source-VM approval)
 
 The endpoint `http://192.168.1.128:11434/v1/chat/completions` and model
 `qwen3:14b` are agreed route metadata, but they do not authorize a call. The
-accepted approval records source VM `192.168.1.118`; a later routed-source
-observation records `192.168.1.8`. The versioned
+accepted 2026-06 approval records source VM `192.168.1.118`; the explicit
+2026-08-15 successor authority decision selects only `192.168.1.8`. The versioned
 [`local-provider-authority-policy-v1.json`](./local-provider-authority-policy-v1.json)
-record therefore holds both candidates with no approved source VM.
+record retains both as provenance while allowing only `192.168.1.8` as the
+source VM for this exact bounded route.
 
-All local-provider and automatic-consent gates default false. Do not enable the
-lane, probe the provider, or set an approved source VM until a reviewed authority
-decision updates the policy record:
+The reviewed authority policy selects source VM `192.168.1.8`.
+
+All local-provider and automatic-consent gates default false. Do not
+enable the lane or probe the provider: source selection is not gate enablement.
+Any future enablement requires a separate reviewed authority decision and a
+runtime check that the configured source VM is a local interface. That decision
+must include a machine-readable expiry. The default Docker Compose bridge
+profile is not an approved local-host topology because the supervisor observes
+container interfaces, not host `192.168.1.8`; use an explicitly reviewed
+host-native or host-network deployment for any future pilot:
 
 ```bash
 export SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=false
@@ -125,10 +133,15 @@ export SUPERVISOR_OLLAMA_ENDPOINT_URL=http://192.168.1.128:11434/v1/chat/complet
 export SUPERVISOR_OLLAMA_MODEL_ID=qwen3:14b
 ```
 
-The local evidence explanation endpoint reports
-`ollama_authority_policy_unresolved` and does not create automatic approval or
-call the adapter. To roll back any later policy experiment, restore the three
-flags above to `false`, restart the supervisor, and verify zero adapter calls.
+Only after that separate enablement decision is approved, set
+`SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM=192.168.1.8` on the verified local host.
+Do not set it in a bridge-container deployment or use it to bypass the runtime
+local-interface check.
+
+The local evidence explanation endpoint reports the applicable disabled-gate
+reason and does not create automatic approval or call the adapter. To roll back
+the source decision, restore the conflict-hold policy, keep the three flags
+above `false`, restart the supervisor, and verify zero adapter calls.
 
 Run `pnpm run check:fast` before long local or CI-style gates when changes touch
 workflow policy, workspace delivery, sandbox-boundary handling, anti-churn

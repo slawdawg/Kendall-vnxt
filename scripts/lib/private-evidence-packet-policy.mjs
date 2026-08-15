@@ -67,7 +67,14 @@ export function evaluatePrivateEvidencePacket(input = {}, options = {}) {
     }
     validateClaudeProof(packet.routeProof, blockers);
   } else if (provider === "ollama") {
-    if (!routePolicyDefaults.localProviderAuthorityResolved) blockers.push(routePolicyDefaults.localProviderAuthorityDisabledReason);
+    // Keep this downstream packet consumer in lockstep with the route policy:
+    // source authority, enablement, and trusted-attestation holds are all
+    // independently fail-closed. Checking the rendered disabled reason also
+    // protects a future policy transition from silently skipping the final
+    // attestation hold.
+    if (routePolicyDefaults.localProviderAuthorityDisabledReason) {
+      blockers.push(routePolicyDefaults.localProviderAuthorityDisabledReason);
+    }
     if (routeRole !== "backup-review" || packet.fallbackUsed !== true || !isApprovedFallbackFailure(packet.primaryFailure)) blockers.push("Ollama private evidence requires an approved Claude fallback outcome");
     if (packet.endpoint !== routePolicyDefaults.ollamaEndpoint || packet.model !== routePolicyDefaults.ollamaModel) blockers.push("Ollama destination/model is outside the exact approved route");
     validateOllamaProof(packet.routeProof, blockers, routePolicyDefaults);
@@ -132,8 +139,8 @@ function validateClaudeProof(proof, blockers) {
 }
 
 function validateOllamaProof(proof, blockers, routePolicyDefaults) {
-  rejectUnknownKeys(proof, ["endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed"], blockers, "routeProof");
-  if (!proof || proof.endpoint !== routePolicyDefaults.ollamaEndpoint || proof.model !== routePolicyDefaults.ollamaModel || proof.sourceVm !== routePolicyDefaults.ollamaSourceVm || proof.connectTimeoutSeconds !== 2 || proof.totalTimeoutSeconds !== 120 || proof.metadataOnly !== true || proof.rawPayloadRetained !== false || proof.publicExposure !== false || proof.credentialsRead !== false || proof.modelDiscovery !== false || proof.endpointDiscovery !== false || proof.reviewPass !== false || proof.activationAllowed !== false) {
+  rejectUnknownKeys(proof, ["endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "localHostVerified", "localHostVerificationRef", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed"], blockers, "routeProof");
+  if (!proof || proof.endpoint !== routePolicyDefaults.ollamaEndpoint || proof.model !== routePolicyDefaults.ollamaModel || proof.sourceVm !== routePolicyDefaults.ollamaSourceVm || proof.connectTimeoutSeconds !== 2 || proof.totalTimeoutSeconds !== 120 || proof.localHostVerified !== true || !safeTypedRef(proof.localHostVerificationRef, "local-host:", 160) || proof.metadataOnly !== true || proof.rawPayloadRetained !== false || proof.publicExposure !== false || proof.credentialsRead !== false || proof.modelDiscovery !== false || proof.endpointDiscovery !== false || proof.reviewPass !== false || proof.activationAllowed !== false) {
     blockers.push("Ollama route proof is missing or outside the approved controls");
   }
 }

@@ -6,7 +6,7 @@ Local BMAD packets, planning notes, PRDs, epics, stories, research, and handoffs
 
 ## Local Provider Execution Contract
 
-Status: authority-conflict hold, non-executing
+Status: reviewed source-VM approval, bounded non-executing
 
 Authority family: `local-provider-execution`
 
@@ -15,8 +15,9 @@ Operation candidate: one bounded metadata-only Ollama provider operation
 It does not call Ollama, discover models, expand provider support, mutate source,
 or retain raw provider content. The versioned
 [`local-provider-authority-policy-v1.json`](./local-provider-authority-policy-v1.json)
-record is the machine-readable authority source. Its unresolved status disables
-automatic local policy approval and every Ollama adapter path.
+record is the machine-readable authority source. It selects the reviewed source
+VM below; the disabled-by-default gates keep automatic local policy approval
+and every Ollama adapter path non-activating.
 
 Agreed endpoint metadata: `http://192.168.1.128:11434/v1/chat/completions`
 
@@ -28,17 +29,19 @@ Do not call this provider from this packet alone.
 
 Required controls:
 
-- The accepted 2026-06 approval records `192.168.1.118`, while the later routed-source observation records `192.168.1.8`; neither is approved while the policy status is `hold_conflicting_source_vm`.
+- The accepted 2026-06 approval records `192.168.1.118`. The explicit 2026-08-15 successor authority decision selects only `192.168.1.8`; retain `192.168.1.118` as historical provenance, not a permitted source.
+- Approved source VM: `192.168.1.8` via reviewed authority policy.
 - Exact endpoint and model metadata are insufficient without one explicitly approved source VM.
 - Connect timeout is 2 seconds and total timeout is 120 seconds.
 - Keep public exposure, endpoint/model discovery, credentials, and raw payload retention disabled.
 - Keep broad local-provider, Ollama-specific, and automatic local-evidence gates disabled by default.
-- No Ollama route is READY while provider authority is unresolved.
+- The approved source is still non-activating while the three provider and automatic-evidence gates remain disabled by default.
 
 Stop lines:
 
 - Do not call any endpoint other than the exact bounded route from an approved pilot.
-- Do not infer approval from either candidate source VM or from current settings.
+- Do not infer activation from the approved source VM or from current settings; separate gate enablement requires a reviewed successor decision with machine-readable expiry, and runtime must verify that the configured source VM is a local interface before any adapter becomes ready.
+- The Docker Compose bridge profile is not a local-host identity proof: its supervisor sees container interfaces rather than the host `192.168.1.8`. Any future pilot must use an explicitly reviewed host-native or host-network topology where that address is visible to the supervisor; otherwise the adapter remains denied.
 - Do not discover endpoints or models.
 - Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.
 - Do not read credentials or external sessions.
@@ -61,15 +64,18 @@ sanitized diff text is never retained locally after provider dispatch.
 
 Claude is the default primary-review route for every review workflow and has no
 repository per-run dollar cap. The exact qwen3:14b Ollama backup shape remains
-documented, but it cannot receive a packet while local-provider authority is
-unresolved; internal BMAD is the final local fallback.
+documented. Source-VM authority selects `192.168.1.8`, but it cannot receive a
+packet until a separate enablement authority is approved, the configured VM is
+verified as local, and the explicit provider gates are enabled; internal BMAD
+is the final local fallback.
 Credentials, secrets, tokens, MFA/account-security data, excluded vault
 folders, customer/production data, broad repository/vault dumps, raw prompts,
 raw completions, and raw provider payloads remain forbidden.
 
 This exception permits packet send eligibility only. The local Ollama evidence
 explanation path is a separate `local-policy-review` capability, but automatic
-local-policy consent is disabled while the source-VM authority conflict remains.
+local-policy consent and provider enablement remain disabled pending their
+separate reviewed authority decision.
 It is not the Claude-to-Ollama ordered review route and cannot claim a Claude
 fallback. It does not activate a review, authorize source mutation, delivery,
 merge, cleanup, or persistent provider memory.

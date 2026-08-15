@@ -1,10 +1,12 @@
 ﻿import asyncio
 import hashlib
+import importlib
 import json
 import os
 import re
 import shutil
 import sqlite3
+import socket
 import subprocess
 import tempfile
 import uuid
@@ -37,10 +39,15 @@ LOCAL_PROVIDER_AUTHORITY_CANDIDATE_PROVENANCE = {
         "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
     ),
     "192.168.1.8": (
-        "current_routed_source_observation",
-        "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md",
+        "accepted_operator_successor_approval",
+        "docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md",
     ),
 }
+LOCAL_PROVIDER_ENABLEMENT_APPROVAL = (
+    "accepted_operator_enablement_approval",
+    "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md",
+)
+LOCAL_PROVIDER_APPROVED_SOURCE_VM = "192.168.1.8"
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -55,6 +62,7 @@ def _invalid_local_provider_authority_policy() -> dict[str, object]:
     return {
         "status": "invalid",
         "approved_source_vm": None,
+        "enablement_status": "invalid",
         "endpoint": None,
         "model": None,
         "connect_timeout_seconds": None,
@@ -88,6 +96,18 @@ def _matches_canonical_timeout(value: object, expected: int) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == expected
 
 
+def _has_exact_keys(value: object, expected: set[str]) -> bool:
+    return isinstance(value, dict) and set(value) == expected
+
+
+def _is_nonempty_exact_string_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(entry, str) and bool(entry) and entry.strip() == entry for entry in value)
+    )
+
+
 def _json_document_exceeds_depth_limit(value: object, maximum_depth: int = MAX_LOCAL_PROVIDER_AUTHORITY_POLICY_DEPTH) -> bool:
     """Reject policy inputs that one independent consumer cannot parse safely.
 
@@ -106,6 +126,60 @@ def _json_document_exceeds_depth_limit(value: object, maximum_depth: int = MAX_L
     return False
 
 
+def _local_ipv4_addresses() -> set[str]:
+    """Return only addresses actually bound to this supervisor host.
+
+    The source-VM setting is a claimed deployment identity, never proof by
+    itself.  Failure to enumerate an address is deliberately a failed-closed
+    result; no provider request is made during this check.
+    """
+    try:
+        fcntl = importlib.import_module("fcntl")
+        import struct
+
+        addresses: set[str] = set()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control_socket:
+            for _index, interface_name in socket.if_nameindex():
+                try:
+                    encoded_name = interface_name.encode("ascii")
+                except UnicodeEncodeError:
+                    continue
+                if len(encoded_name) >= 256:
+                    continue
+                try:
+                    response = fcntl.ioctl(
+                        control_socket.fileno(),
+                        0x8915,  # Linux SIOCGIFADDR: return the bound IPv4 address.
+                        struct.pack("256s", encoded_name),
+                    )
+                except OSError:
+                    # A bridge, down, or IPv6-only interface does not prove
+                    # that addresses obtained from other interfaces are wrong.
+                    continue
+                addresses.add(socket.inet_ntoa(response[20:24]))
+    except (ImportError, NotImplementedError, OSError):
+        return set()
+    return addresses
+
+
+def _trusted_local_provider_attestation_verified() -> bool:
+    """v1 has no receipt verifier for the selected attestation-service topology."""
+    return False
+
+
+def _approved_local_provider_enablement_expiry(value: object) -> str | None:
+    """Return a canonical, unexpired reviewed-enablement expiry or fail closed."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value):
+        return None
+    try:
+        expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if expiry <= datetime.now(timezone.utc):
+        return None
+    return value
+
+
 def _load_local_provider_authority_policy() -> dict[str, object]:
     """Load the versioned authority record as a closed, fail-closed contract."""
     try:
@@ -116,7 +190,22 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
         return _invalid_local_provider_authority_policy()
-    if not isinstance(raw_policy, dict):
+    if not _has_exact_keys(
+        raw_policy,
+        {
+            "schemaVersion",
+            "authorityFamily",
+            "status",
+            "approvedSourceVm",
+            "candidateSourceVms",
+            "route",
+            "defaults",
+            "enablement",
+            "decisionRequired",
+            "stopLines",
+            "rollback",
+        },
+    ):
         return _invalid_local_provider_authority_policy()
     if _json_document_exceeds_depth_limit(raw_policy):
         return _invalid_local_provider_authority_policy()
@@ -131,10 +220,10 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
         return _invalid_local_provider_authority_policy()
     candidate_by_source: dict[str, dict[str, object]] = {}
     for candidate in candidates:
-        if not isinstance(candidate, dict):
+        if not _has_exact_keys(candidate, {"sourceVm", "claim", "provenanceRef"}):
             return _invalid_local_provider_authority_policy()
         source_vm = candidate.get("sourceVm")
-        if not isinstance(source_vm, str) or not source_vm.strip() or source_vm in candidate_by_source:
+        if not isinstance(source_vm, str) or not source_vm or source_vm.strip() != source_vm or source_vm in candidate_by_source:
             return _invalid_local_provider_authority_policy()
         candidate_by_source[source_vm] = candidate
     if set(candidate_by_source) != set(LOCAL_PROVIDER_AUTHORITY_CANDIDATE_PROVENANCE):
@@ -146,17 +235,69 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
 
     route = raw_policy.get("route")
     defaults = raw_policy.get("defaults")
+    enablement = raw_policy.get("enablement")
     if (
-        not isinstance(route, dict)
+        not _has_exact_keys(route, {"endpoint", "model", "connectTimeoutSeconds", "totalTimeoutSeconds", "retentionMode"})
         or route.get("endpoint") != CANONICAL_OLLAMA_ENDPOINT
         or route.get("model") != CANONICAL_OLLAMA_MODEL
         or not _matches_canonical_timeout(route.get("connectTimeoutSeconds"), CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS)
         or not _matches_canonical_timeout(route.get("totalTimeoutSeconds"), CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS)
         or route.get("retentionMode") != "metadata-only"
-        or not isinstance(defaults, dict)
+        or not _has_exact_keys(defaults, {"allowLocalProviderCalls", "allowOllamaProviderCalls", "allowAutomaticOllamaLocalEvidence"})
         or defaults.get("allowLocalProviderCalls") is not False
         or defaults.get("allowOllamaProviderCalls") is not False
         or defaults.get("allowAutomaticOllamaLocalEvidence") is not False
+        or not _has_exact_keys(enablement, {"status", "claim", "provenanceRef", "expiresAt"})
+        or not _is_nonempty_exact_string_list(raw_policy.get("decisionRequired"))
+        or not _is_nonempty_exact_string_list(raw_policy.get("stopLines"))
+    ):
+        return _invalid_local_provider_authority_policy()
+
+    enablement_status = enablement.get("status")
+    enablement_claim = enablement.get("claim")
+    enablement_provenance_ref = enablement.get("provenanceRef")
+    enablement_expires_at = enablement.get("expiresAt")
+    if (
+        (
+            enablement_status == "hold_requires_separate_review"
+            and (
+                enablement_claim != "separate_review_required"
+                or enablement_provenance_ref is not None
+                or enablement_expires_at is not None
+            )
+        )
+        or (
+            enablement_status == "approved"
+            and (
+                enablement_claim != LOCAL_PROVIDER_ENABLEMENT_APPROVAL[0]
+                or enablement_provenance_ref != LOCAL_PROVIDER_ENABLEMENT_APPROVAL[1]
+                or _approved_local_provider_enablement_expiry(enablement_expires_at) is None
+            )
+        )
+        or not isinstance(enablement_status, str)
+        or enablement_status not in {"hold_requires_separate_review", "approved"}
+    ):
+        return _invalid_local_provider_authority_policy()
+
+    rollback = raw_policy.get("rollback")
+    if (
+        not _has_exact_keys(rollback, {"environment", "verification"})
+        or not isinstance(rollback, dict)
+        or not _has_exact_keys(
+            rollback.get("environment"),
+            {
+                "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS",
+                "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS",
+                "SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE",
+            },
+        )
+        or not isinstance(rollback["environment"], dict)
+        or rollback["environment"].get("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS") != "false"
+        or rollback["environment"].get("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS") != "false"
+        or rollback["environment"].get("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE") != "false"
+        or not isinstance(rollback.get("verification"), str)
+        or not rollback["verification"]
+        or rollback["verification"].strip() != rollback["verification"]
     ):
         return _invalid_local_provider_authority_policy()
 
@@ -164,13 +305,18 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
     approved_source_vm = raw_policy.get("approvedSourceVm")
     if status == "hold_conflicting_source_vm" and approved_source_vm is None:
         selected_source_vm: str | None = None
-    elif status == "approved" and isinstance(approved_source_vm, str) and approved_source_vm in candidate_by_source:
+    elif (
+        status == "approved"
+        and isinstance(approved_source_vm, str)
+        and approved_source_vm == LOCAL_PROVIDER_APPROVED_SOURCE_VM
+    ):
         selected_source_vm = approved_source_vm
     else:
         return _invalid_local_provider_authority_policy()
     return {
         "status": status,
         "approved_source_vm": selected_source_vm,
+        "enablement_status": enablement_status,
         "endpoint": route["endpoint"],
         "model": route["model"],
         "connect_timeout_seconds": route["connectTimeoutSeconds"],
@@ -21729,13 +21875,14 @@ class SupervisorService:
         authority_model = authority_policy["model"]
         authority_connect_timeout_seconds = authority_policy["connect_timeout_seconds"]
         authority_total_timeout_seconds = authority_policy["total_timeout_seconds"]
+        enablement_status = authority_policy["enablement_status"]
         broad_gate_enabled = self.settings.allow_local_provider_calls
         provider_gate_enabled = self.settings.allow_ollama_provider_calls
         endpoint_url = (self.settings.ollama_endpoint_url or "").strip()
         approved_endpoint_url = self.settings.ollama_approved_endpoint_url.strip()
         model_id = (self.settings.ollama_model_id or "").strip()
         approved_model_id = self.settings.ollama_approved_model_id.strip()
-        configured_source_vm = self.settings.ollama_approved_source_vm.strip()
+        configured_source_vm = (self.settings.ollama_approved_source_vm or "").strip()
         endpoint_configured = bool(endpoint_url)
         endpoint_approved = endpoint_url == approved_endpoint_url
         model_id_configured = bool(model_id)
@@ -21745,6 +21892,7 @@ class SupervisorService:
             and isinstance(authority_source_vm, str)
             and bool(authority_source_vm)
         )
+        local_source_vm_verified = authority_resolved and configured_source_vm in _local_ipv4_addresses()
 
         effective_source_vm = authority_source_vm if authority_resolved else None
         route_policy_mismatch = (
@@ -21764,6 +21912,22 @@ class SupervisorService:
         elif not authority_resolved:
             registry_state = "authority_policy_unresolved"
             disabled_reason = "ollama_authority_policy_unresolved"
+            adapter_ready = False
+        elif enablement_status != "approved":
+            registry_state = "enablement_authority_unresolved"
+            disabled_reason = "ollama_enablement_authority_unresolved"
+            adapter_ready = False
+        elif not local_source_vm_verified:
+            registry_state = "source_vm_not_local"
+            disabled_reason = "ollama_source_vm_not_local"
+            adapter_ready = False
+        elif not _trusted_local_provider_attestation_verified():
+            # Source-VM selection and a future enablement record do not prove
+            # the caller's host identity. v1 has no verifier for the existing
+            # trusted-attestation-service receipt, so it must never activate
+            # a provider from caller/configuration self-attestation alone.
+            registry_state = "trusted_attestation_required"
+            disabled_reason = "ollama_trusted_attestation_required"
             adapter_ready = False
         elif route_policy_mismatch:
             registry_state = "disabled"
@@ -21813,6 +21977,9 @@ class SupervisorService:
             "authority_status": authority_status,
             "authority_source_vm": effective_source_vm,
             "authority_resolved": authority_resolved,
+            "enablement_status": enablement_status,
+            "enablement_approved": enablement_status == "approved",
+            "local_source_vm_verified": local_source_vm_verified,
             "registry_state": registry_state,
             "disabled_reason": disabled_reason,
             "adapter_ready": adapter_ready,
@@ -22069,16 +22236,26 @@ class SupervisorService:
         ollama_authority_status = ollama_gate_state["authority_status"]
         ollama_authority_source_vm = ollama_gate_state["authority_source_vm"]
         if ollama_gate_state["authority_resolved"]:
+            enablement_message = (
+                "Provider calls remain denied until the separate enablement authority is approved, "
+                "the configured source VM is verified as local, and the explicit gates are enabled."
+                if not ollama_gate_state["enablement_approved"]
+                else (
+                    "Provider calls are enabled only for the explicit reviewed route and gates."
+                    if ollama_gate_state["enabled"]
+                    else (
+                        "Provider calls remain denied until a trusted attestation-service receipt is verified for the actual caller host."
+                        if ollama_gate_state["disabled_reason"] == "ollama_trusted_attestation_required"
+                        else "Provider calls remain denied until the configured source VM is verified as local and the explicit gates are enabled."
+                    )
+                )
+            )
             return (
                 "Ollama reviewed authority lane",
                 "Stories 4.1-4.4 retain bounded metadata-only route evidence; the reviewed authority policy "
                 f"selects source VM {ollama_authority_source_vm}. "
-                + (
-                    "Provider calls are enabled only for the explicit reviewed route and gates."
-                    if ollama_gate_state["enabled"]
-                    else "Provider calls remain denied until the explicit gates are enabled."
-                ),
-                "Ollama provider/model calls remain bound to the reviewed source VM, route, timeout, and explicit gates.",
+                + enablement_message,
+                "Ollama provider/model calls remain bound to the reviewed source VM, route, timeout, separate enablement authority, trusted local-host attestation, and explicit gates.",
             )
         if ollama_authority_status == "hold_conflicting_source_vm":
             return (
@@ -27607,7 +27784,12 @@ class SupervisorService:
                     f"Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model "
                     f"{self.settings.ollama_approved_model_id} only."
                     if bool(ollama_state["enabled"])
-                    else "Ollama provider calls remain disabled until a reviewed authority policy selects one source VM and the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                    else (
+                        "Ollama source-VM authority is selected, but calls remain disabled until the separate enablement authority, "
+                        "local-host verification, broad gate, provider gate, exact approved endpoint, and exact approved model are satisfied."
+                        if bool(ollama_state["authority_resolved"])
+                        else "Ollama provider calls remain disabled until a reviewed authority policy selects one source VM and the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                    )
                 ),
                 f"Credential policy: {threat_boundary.credentialPolicy}.",
             ],
@@ -28332,7 +28514,12 @@ class SupervisorService:
                     f"Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model "
                     f"{self.settings.ollama_approved_model_id} only."
                     if bool(ollama_state["enabled"])
-                    else "Ollama provider calls remain disabled until a reviewed authority policy selects one source VM and the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                    else (
+                        "Ollama source-VM authority is selected, but calls remain disabled until the separate enablement authority, "
+                        "local-host verification, broad gate, provider gate, exact approved endpoint, and exact approved model are satisfied."
+                        if bool(ollama_state["authority_resolved"])
+                        else "Ollama provider calls remain disabled until a reviewed authority policy selects one source VM and the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                    )
                 ),
                 f"Credential policy: {threat_boundary.credentialPolicy}.",
             ],
