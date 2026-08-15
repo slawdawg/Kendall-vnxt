@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { evaluatePrivateEvidencePacket, PRIVATE_EVIDENCE_POLICY_DEFAULTS } from "../scripts/lib/private-evidence-packet-policy.mjs";
 
 const NOW = "2026-07-18T20:00:00.000Z";
+const activeAuthorityPolicy = JSON.parse(readFileSync(new URL("../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url), "utf8"));
+const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_source_vm" && activeAuthorityPolicy.approvedSourceVm === null;
+const authorityApproved = activeAuthorityPolicy.status === "approved" && typeof activeAuthorityPolicy.approvedSourceVm === "string";
 
 function valid(overrides = {}) {
   return {
@@ -55,7 +59,8 @@ test("allows explicitly consented bounded private work-item evidence for Claude"
   assert.equal(packet.execution.providerCall, false);
 });
 
-test("holds exact Ollama backup packets for both unresolved source-VM candidates", () => {
+test("active authority state governs exact Ollama backup packets", () => {
+  assert.equal(authorityOnHold || authorityApproved, true);
   for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
     const packet = evaluatePrivateEvidencePacket(valid({
       provider: "ollama",
@@ -72,9 +77,10 @@ test("holds exact Ollama backup packets for both unresolved source-VM candidates
       rollbackReady: true,
       routeProof: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
     }), { now: NOW });
-    assert.equal(packet.status, "HOLD", sourceVm);
-    assert.equal(packet.sendEligible, false, sourceVm);
-    assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
+    const selected = authorityApproved && sourceVm === activeAuthorityPolicy.approvedSourceVm;
+    assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
+    assert.equal(packet.sendEligible, selected, sourceVm);
+    if (!selected) assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
   }
 });
 

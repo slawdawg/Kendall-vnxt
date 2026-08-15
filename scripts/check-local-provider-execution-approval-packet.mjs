@@ -139,7 +139,9 @@ assertAllIncludes(acceptedCheckpoint, ["calls only from the Kendall_vNxt VM at `
 assertAllIncludes(routedSourceObservation, ["`192.168.1.8` (current routed source observed 2026-07-18)"], "Current routed-source observation provenance", failures);
 
 assertAllIncludes(providerContract, [
-  ...(authorityOnHold ? ["Status: authority-conflict hold, non-executing"] : []),
+  authorityOnHold
+    ? "Status: authority-conflict hold, non-executing"
+    : "Status: reviewed source-VM approval, bounded non-executing",
   "Authority family: `local-provider-execution`",
   "Operation candidate: one bounded metadata-only Ollama provider operation",
   "`local-provider-authority-policy-v1.json`",
@@ -147,7 +149,9 @@ assertAllIncludes(providerContract, [
   `Agreed model metadata: \`${agreedModel}\``,
   "Retention: metadata-only event evidence and artifact references only.",
   "Do not call this provider from this packet alone.",
-  ...(authorityOnHold ? ["neither is approved while the policy status is `hold_conflicting_source_vm`"] : []),
+  ...(authorityOnHold
+    ? ["neither is approved while the policy status is `hold_conflicting_source_vm`"]
+    : [`Approved source VM: \`${authorityPolicy.approvedSourceVm}\` via reviewed authority policy.`]),
   "Exact endpoint and model metadata are insufficient without one explicitly approved source VM.",
   "Keep broad local-provider, Ollama-specific, and automatic local-evidence gates disabled by default.",
   "Do not discover endpoints or models.",
@@ -206,11 +210,23 @@ assertAllIncludes(privateEvidencePolicySource, [
   "localProviderAuthorityDisabledReason",
 ], "Private-evidence Ollama policy must inherit the authority record's fail-closed reason", failures);
 assertAllIncludes(runbook, [
-  ...(authorityOnHold ? ["Optional local Ollama review lane (authority hold)"] : []),
+  authorityOnHold
+    ? "Optional local Ollama review lane (authority hold)"
+    : "Optional local Ollama review lane (reviewed source-VM approval)",
   "All local-provider and automatic-consent gates default false.",
   "SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE=false",
-  "ollama_authority_policy_unresolved",
+  ...(authorityOnHold
+    ? ["ollama_authority_policy_unresolved"]
+    : [`The reviewed authority policy selects source VM \`${authorityPolicy.approvedSourceVm}\`.`]),
 ], "Runbook must preserve the authority stop line and rollback", failures);
+if (authorityApproved) {
+  assertCondition(
+    !providerContract.includes("neither is approved while the policy status is `hold_conflicting_source_vm`")
+      && !runbook.includes("authority hold"),
+    "Approved authority policy must not retain unresolved source-VM instructions in source-owned documentation",
+    failures,
+  );
+}
 
 assertOrderedIncludes(localProviderApprovalSchema, [
   "class LocalProviderApprovalInstance(BaseModel):",
@@ -311,16 +327,16 @@ assertAllIncludes(supervisorTests, [
 ], "Supervisor tests must prove unresolved authority is non-executing", failures);
 
 assertAllIncludes(routePolicyTests, [
-  "unresolved authority holds both Ollama source-VM candidates despite exact endpoint and model",
+  "active authority state governs Ollama source-VM eligibility",
   "192.168.1.118",
   "192.168.1.8",
-  "ollama_authority_policy_unresolved",
+  "authorityApproved",
 ], "JavaScript route-policy tests must reject both source-VM candidates", failures);
 assertAllIncludes(privateEvidenceTests, [
-  "holds exact Ollama backup packets for both unresolved source-VM candidates",
+  "active authority state governs exact Ollama backup packets",
   "192.168.1.118",
   "192.168.1.8",
-  "ollama_authority_policy_unresolved",
+  "authorityApproved",
 ], "Private-evidence tests must reject both source-VM candidates", failures);
 
 assertAllIncludes(storyIndex, [

@@ -1,9 +1,36 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { buildFakeReviewInput } from "../scripts/lib/review-gated-low-risk-fake-adapter.mjs";
 import { evaluateGovernedReadOnlyReview } from "../scripts/lib/review-gated-low-risk-read-only-review.mjs";
 import { BOUNDED_ROUTE_POLICY_DEFAULTS, evaluateBoundedReviewRoute, parseLocalProviderAuthorityPolicy, selectOrderedReviewRoute } from "../scripts/lib/review-gated-low-risk-route-policy.mjs";
+
+const activeAuthorityPolicy = JSON.parse(readFileSync(new URL("../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url), "utf8"));
+const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_source_vm" && activeAuthorityPolicy.approvedSourceVm === null;
+const authorityApproved = activeAuthorityPolicy.status === "approved" && typeof activeAuthorityPolicy.approvedSourceVm === "string";
+
+function validOllamaBackup(sourceVm) {
+  return {
+    role: "backup-review",
+    provider: "ollama",
+    endpoint: BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaEndpoint,
+    model: BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaModel,
+    sourceVm,
+    connectTimeoutSeconds: 2,
+    totalTimeoutSeconds: 120,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    publicExposure: false,
+    credentialsRead: false,
+    modelDiscovery: false,
+    endpointDiscovery: false,
+    reviewPass: false,
+    activationAllowed: false,
+    fallbackUsed: true,
+    primaryFailure: "rate-limited",
+  };
+}
 
 test("only a complete reviewed authority policy can select a source VM", () => {
   const validApprovedPolicy = {
@@ -34,36 +61,20 @@ test("only a complete reviewed authority policy can select a source VM", () => {
   }
 });
 
-test("unresolved authority holds both Ollama source-VM candidates despite exact endpoint and model", () => {
-  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityStatus, "hold_conflicting_source_vm");
-  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityResolved, false);
-  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm, null);
+test("active authority state governs Ollama source-VM eligibility", () => {
+  assert.equal(authorityOnHold || authorityApproved, true);
+  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityStatus, activeAuthorityPolicy.status);
+  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityResolved, authorityApproved);
+  assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm, authorityApproved ? activeAuthorityPolicy.approvedSourceVm : null);
   for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
-    const packet = evaluateBoundedReviewRoute({
-      role: "backup-review",
-      provider: "ollama",
-      endpoint: BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaEndpoint,
-      model: BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaModel,
-      sourceVm,
-      connectTimeoutSeconds: 2,
-      totalTimeoutSeconds: 120,
-      metadataOnly: true,
-      rawPayloadRetained: false,
-      publicExposure: false,
-      credentialsRead: false,
-      modelDiscovery: false,
-      endpointDiscovery: false,
-      reviewPass: false,
-      activationAllowed: false,
-      fallbackUsed: true,
-      primaryFailure: "rate-limited",
-    });
-    assert.equal(packet.status, "HOLD", sourceVm);
-    assert.equal(packet.reviewEligible, false, sourceVm);
+    const packet = evaluateBoundedReviewRoute(validOllamaBackup(sourceVm));
+    const selected = authorityApproved && sourceVm === activeAuthorityPolicy.approvedSourceVm;
+    assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
+    assert.equal(packet.reviewEligible, selected, sourceVm);
     assert.equal(packet.activationEligible, false, sourceVm);
-    assert.equal(packet.allowed, false, sourceVm);
-    assert.equal(packet.disabledReason, "ollama_authority_policy_unresolved", sourceVm);
-    assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
+    assert.equal(packet.allowed, selected, sourceVm);
+    assert.equal(packet.disabledReason, selected ? null : "ollama_authority_policy_unresolved", sourceVm);
+    if (!selected) assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
   }
 });
 
@@ -129,7 +140,7 @@ test("Claude primary route requires explicit no-fallback metadata", () => {
   assert.equal(evaluateBoundedReviewRoute({ ...base, fallbackUsed: false }).status, "READY");
 });
 
-test("ordered selection prefers Claude and holds Ollama fallback while authority is unresolved", () => {
+test("ordered selection follows the active Ollama authority state", () => {
   const primary = {
     provider: "claude", model: "claude", executable: "claude", mode: "print", authenticated: true, maxBudgetUsd: 1,
     allowedTools: ["Read", "Grep", "Glob"], disallowedTools: ["Edit", "Write", "Bash", "WebFetch", "WebSearch"],
@@ -138,17 +149,17 @@ test("ordered selection prefers Claude and holds Ollama fallback while authority
   };
   const backup = {
     provider: "ollama", endpoint: BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaEndpoint, model: BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaModel,
-    sourceVm: "192.168.1.8", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120,
+    sourceVm: authorityApproved ? activeAuthorityPolicy.approvedSourceVm : "192.168.1.8", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120,
     metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false,
     modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false,
   };
   assert.equal(selectOrderedReviewRoute({ primary, backup }).selected, "claude");
   const fallback = selectOrderedReviewRoute({ primary, backup, primaryFailure: "rate-limited" });
-  assert.equal(fallback.status, "HOLD");
-  assert.equal(fallback.selected, null);
-  assert.equal(fallback.fallbackUsed, false);
-  assert.ok(fallback.backup.blockers.includes("ollama_authority_policy_unresolved"));
-  assert.equal(selectOrderedReviewRoute({ primary, backup, primaryFailure: "HTTP 429" }).status, "HOLD");
+  assert.equal(fallback.status, authorityApproved ? "READY" : "HOLD");
+  assert.equal(fallback.selected, authorityApproved ? "ollama" : null);
+  assert.equal(fallback.fallbackUsed, authorityApproved);
+  if (authorityOnHold) assert.ok(fallback.backup.blockers.includes("ollama_authority_policy_unresolved"));
+  assert.equal(selectOrderedReviewRoute({ primary, backup, primaryFailure: "HTTP 429" }).status, authorityApproved ? "READY" : "HOLD");
   assert.equal(selectOrderedReviewRoute({ primary, backup, primaryFailure: "malformed" }).status, "HOLD");
 });
 

@@ -64,6 +64,17 @@ def _invalid_local_provider_authority_policy() -> dict[str, object]:
     }
 
 
+def _matches_canonical_timeout(value: object, expected: int) -> bool:
+    """Accept JSON's integral numeric spelling, but never booleans or fractions.
+
+    JavaScript's JSON parser normalizes `2.0` to the same number as `2`; Python
+    retains it as a float.  Treating both integral spellings identically keeps
+    the independently parsed policy contract fail-closed without creating a
+    cross-runtime authority divergence.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == expected
+
+
 def _load_local_provider_authority_policy() -> dict[str, object]:
     """Load the versioned authority record as a closed, fail-closed contract."""
     try:
@@ -103,10 +114,8 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
         not isinstance(route, dict)
         or route.get("endpoint") != CANONICAL_OLLAMA_ENDPOINT
         or route.get("model") != CANONICAL_OLLAMA_MODEL
-        or type(route.get("connectTimeoutSeconds")) is not int
-        or route.get("connectTimeoutSeconds") != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS
-        or type(route.get("totalTimeoutSeconds")) is not int
-        or route.get("totalTimeoutSeconds") != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS
+        or not _matches_canonical_timeout(route.get("connectTimeoutSeconds"), CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS)
+        or not _matches_canonical_timeout(route.get("totalTimeoutSeconds"), CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS)
         or route.get("retentionMode") != "metadata-only"
         or not isinstance(defaults, dict)
         or defaults.get("allowLocalProviderCalls") is not False
