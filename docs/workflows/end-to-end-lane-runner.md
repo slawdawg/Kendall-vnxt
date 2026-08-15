@@ -380,6 +380,57 @@ pull requests because it is integration-branch coverage, while `javascript`
 and `supervisor` remain non-required only when their changed-area selectors do
 not require them.
 
+### Exceptional Post-Merge Gate-Evidence Recovery
+
+Use this once-only, metadata-only procedure only when an already merged
+managed PR has **no** `pr_gate_evidence` record. It repairs neither source nor
+GitHub state, never merges a PR, and never removes a worktree. Its sole next
+step after a successful record is `reconcile-merged-pr`, followed by the normal
+merged-worktree cleanup gate.
+
+Prerequisites are a clean retained worktree whose local head still exactly
+matches the merged PR head, an exact live PR branch/base/head identity, a
+recorded merge timestamp, complete thread-aware review evidence with no
+unresolved or pending review state, and terminal successful checks. Every
+terminal `SKIPPED` check must still be named under
+[Documented Non-Required Checks](#documented-non-required-checks) with its
+source-owned policy reference; recovery does not waive skipped, failed, or
+neutral checks.
+
+The operator must record these two exact, bounded strings for the live values;
+the command validates and retains both bindings:
+
+```text
+operator-authorized post-merge-recovery task=<lane> pr=<number> head=<sha> scope=cleanup-only
+recovery-delivery-identity task=<lane> branch=<branch> base=<base> pr=<number> head=<sha>
+```
+
+First inspect without `--apply`, then record only if the packet is passed:
+
+```bash
+node ./scripts/codex-workspace.mjs verify-pr-gates <lane> \
+  --post-merge-recovery \
+  --approval "operator-authorized post-merge-recovery task=<lane> pr=<number> head=<sha> scope=cleanup-only" \
+  --recovery-delivery-proof "recovery-delivery-identity task=<lane> branch=<branch> base=<base> pr=<number> head=<sha>" \
+  --non-required-checks <only-observed-policy-approved-skips> \
+  --non-required-check-policy docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks \
+  --delivery-audit-agent <auditor> --delivery-audit-status merge-ready \
+  --delivery-audit-summary "<exact-head audit>" \
+  --diff-risk-summary "<exact-head assessment>" --diff-risk-files <paths> \
+  --diff-risk-verification "<result>" --diff-risk-verification-command "<command>" \
+  --diff-risk-verification-exit-code 0 \
+  --merge-method "gh pr merge <number> --merge --match-head-commit <sha>" \
+  --rollback-path "<bounded revert path>" --summary-json
+```
+
+If any field, check, identity, review thread, or head drift blocks the packet,
+preserve the worktree and correct the underlying evidence; do not retry with
+broader skips, a generic approval, manual manifest edits, or cleanup flags.
+If ordinary standard-delivery identity is retained, the tool records that fact;
+otherwise the explicit live-PR identity proof is the auditable recovery
+equivalent. A recorded recovery packet still does not authorize cleanup; do
+not delete a merged workspace until reconciliation independently passes.
+
 ### Explicit Delivery-Head Refresh
 
 When a managed lane has a recorded delivery head and a later verified push has
