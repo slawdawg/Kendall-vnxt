@@ -7968,7 +7968,7 @@ try {
       assert(Boolean(manifest.last_verified_at), "finish-pr did not record successful verification time");
       assert(manifest.status === "pr_open", `unexpected manifest status ${manifest.status}`);
       const source = readFileSync(scriptPath, "utf8");
-      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 600_000;"), "codex-workspace profile must retain its reviewed fixed 600s budget");
+      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 900_000;"), "codex-workspace profile must retain its reviewed fixed 900s budget");
       assert(source.includes('if (profile === "codex-workspace") return codexWorkspaceVerificationTimeoutMs;'), "codex-workspace timeout selection must remain fixed in source");
       const boundedRunner = source.match(/function runBoundedVerification[\s\S]*?function verificationOutcome/);
       assert(boundedRunner, "bounded verification runner missing");
@@ -8072,7 +8072,7 @@ try {
       assert(diagnostic.schema_version === 2, JSON.stringify(diagnostic));
       assert(diagnostic.profile === "codex-workspace", JSON.stringify(diagnostic));
       assert(diagnostic.outcome === "nonzero-exit", JSON.stringify(diagnostic));
-      assert(diagnostic.execution?.timeout_ms === 600_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
+      assert(diagnostic.execution?.timeout_ms === 900_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
       assert(diagnostic.child?.output === "sanitized-tail-v1", JSON.stringify(diagnostic));
       assert(diagnostic.child?.stdout_tail?.bytes > 2_048 && diagnostic.child.stdout_tail.truncated === true, JSON.stringify(diagnostic));
       assert(diagnostic.child.stdout_tail.retained_bytes <= 2_048, JSON.stringify(diagnostic));
@@ -8197,6 +8197,25 @@ try {
       const completed = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       assert(completed.check_verification_packet?.status === "passed", JSON.stringify(completed.check_verification_packet));
       assert(completed.pr_delivery_evidence, "completed packet did not enter the existing delivery path");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr gives a long resumable leaf its fixed budget after packet elapsed time", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, ["test:manager-control-plane"]);
+      const timeoutLog = installFixtureResumableCheckLongLeafTimeoutCaptureSeam(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === "test:manager-control-plane", "long leaf did not execute");
+      assert(readFileSync(timeoutLog, "utf8").trim() === "test:manager-control-plane:900000", "long leaf did not receive its fixed budget");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -17158,7 +17177,7 @@ function activeFixtureTaskLock(taskId) {
 
 function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {
   const source = readFileSync(fixture.script, "utf8");
-  const original = "const codexWorkspaceVerificationTimeoutMs = 600_000;";
+  const original = "const codexWorkspaceVerificationTimeoutMs = 900_000;";
   assert(source.includes(original), "fixture did not contain the reviewed codex-workspace timeout literal");
   writeFileSync(fixture.script, source.replace(original, `const codexWorkspaceVerificationTimeoutMs = ${timeoutMs};`));
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
@@ -17311,8 +17330,9 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
   const invocationBudget = "    const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;";
-  const remaining = "    const remainingMs = invocationBudgetMs - (Date.now() - started);";
-  assert(source.includes(started) && source.includes(invocationBudget) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
+  const elapsed = "    const elapsedMs = Date.now() - started;";
+  const remaining = "      : invocationBudgetMs - elapsedMs;";
+  assert(source.includes(started) && source.includes(invocationBudget) && source.includes(elapsed) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
   const patched = source
     .replace(
       started,
@@ -17327,11 +17347,37 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
         "  const started = fixturePacketNow();",
       ].join("\n"),
     )
-    .replace(remaining, "    const remainingMs = invocationBudgetMs - (fixturePacketNow() - started);");
+    .replace(elapsed, "    const elapsedMs = fixturePacketNow() - started;");
   writeFileSync(fixture.script, patched);
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pause clock"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_PAUSE_AFTER_STAGE: "1" };
+}
+
+function installFixtureResumableCheckLongLeafTimeoutCaptureSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const started = "  const started = Date.now();";
+  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
+  assert(source.includes(started) && source.includes(invocation), "fixture did not contain the long-leaf timeout seams");
+  const timeoutLog = join(fixture.stateRoot, "resumable-check-timeouts.log");
+  const patched = source
+    .replace(started, '  const started = process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_CAPTURE === "1" ? Date.now() - 300_000 : Date.now();')
+    .replace(
+      invocation,
+      [
+        '    if (process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG) writeFileSync(process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG, `${stage}:${timeout}\\n`, { flag: "a" });',
+        invocation,
+      ].join("\n"),
+    );
+  writeFileSync(fixture.script, patched);
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable long leaf budget"]);
+  fixture.env = {
+    ...fixture.env,
+    CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_CAPTURE: "1",
+    CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG: timeoutLog,
+  };
+  return timeoutLog;
 }
 
 function installFixtureResumableCheckSupervisorReserveSeam(fixture) {

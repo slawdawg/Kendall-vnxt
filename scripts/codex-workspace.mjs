@@ -39,7 +39,7 @@ const defaultBaseBranch = "dev";
 const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
-const codexWorkspaceVerificationTimeoutMs = 600_000;
+const codexWorkspaceVerificationTimeoutMs = 900_000;
 const dashboardVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
 const verificationDiagnosticSchemaVersion = 2;
@@ -13087,7 +13087,14 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
   for (let index = packet.stages.length; index < plan.stages.length; index += 1) {
     const stage = plan.stages[index];
     const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
-    const remainingMs = invocationBudgetMs - (Date.now() - started);
+    // A long leaf has its own reviewed budget. Subtracting the elapsed packet
+    // time here gave test:codex-workspace less than its 900s allowance merely
+    // because earlier bounded leaves had already produced evidence. Ordinary
+    // leaves retain the packet-level 180s pause/resume behavior below.
+    const elapsedMs = Date.now() - started;
+    const remainingMs = resumableCheckLongLeafStages.has(stage)
+      ? invocationBudgetMs
+      : invocationBudgetMs - elapsedMs;
     const needsSupervisorLeafReserve = resumableCheckSupervisorLeafSet.has(stage);
     const executionReserveMs = needsSupervisorLeafReserve
       ? resumableCheckSupervisorLeafExecutionReserveMs
