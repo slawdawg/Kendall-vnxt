@@ -577,38 +577,34 @@ async def _ensure_sqlite_memory_proposals_schema(connection) -> None:
         )
 
 
-async def init_db() -> None:
-    from supervisor.infrastructure.db import models  # noqa: F401
+async def _apply_legacy_schema_compatibility(connection) -> None:
+    """Apply the historical compatibility baseline as migration revision 0002."""
 
-    async with engine.begin() as connection:
-        dialect = connection.dialect.name
-        if dialect == "sqlite":
-            await _begin_sqlite_schema_migration(connection)
-        await connection.run_sync(Base.metadata.create_all)
-        if dialect == "sqlite":
+    dialect = connection.dialect.name
+    if dialect == "sqlite":
             await _ensure_sqlite_memory_inbox_manifest_ownership(connection)
             await _ensure_sqlite_memory_inbox_revision_states(connection)
             await _sqlite_add_columns(connection, "memory_inbox_cost_policy_receipts", MEMORY_INBOX_COST_POLICY_RECEIPT_SQLITE_COLUMNS)
-        elif dialect == "postgresql":
+    elif dialect == "postgresql":
             await _ensure_postgres_memory_inbox_manifest_ownership(connection)
             await _ensure_postgres_memory_inbox_revision_states(connection)
             for column_name, column_type in MEMORY_INBOX_COST_POLICY_RECEIPT_POSTGRES_COLUMNS:
                 await connection.execute(
                     text(f"ALTER TABLE memory_inbox_cost_policy_receipts ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
                 )
-        await connection.execute(
+    await connection.execute(
             text(
                 "INSERT INTO admission_locks (scope, generation) VALUES ('execute', 0) "
                 "ON CONFLICT (scope) DO NOTHING"
             )
         )
-        await connection.execute(
+    await connection.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_retry_intents_pending_work_item "
                 "ON verification_retry_intents(work_item_id) WHERE status = 'pending'"
             )
         )
-        if dialect == "postgresql":
+    if dialect == "postgresql":
             for column_name, column_type in DASHBOARD_OPERATOR_POSTGRES_COLUMNS:
                 await connection.execute(text(f"ALTER TABLE dashboard_operators ADD COLUMN IF NOT EXISTS {column_name} {column_type}"))
             for column_name, column_type in DASHBOARD_SESSION_POSTGRES_COLUMNS:
@@ -693,7 +689,7 @@ async def init_db() -> None:
                 "ON local_dogfood_attestation_receipt_decisions(authorization_id) WHERE accepted"
             ))
             await _ensure_postgres_memory_proposals_schema(connection)
-        elif dialect == "sqlite":
+    elif dialect == "sqlite":
             await _sqlite_add_columns(connection, "dashboard_operators", DASHBOARD_OPERATOR_SQLITE_COLUMNS)
             await _sqlite_add_columns(connection, "dashboard_sessions", DASHBOARD_SESSION_SQLITE_COLUMNS)
             await connection.execute(
@@ -813,17 +809,28 @@ async def init_db() -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_local_dogfood_accepted_receipt_per_authorization "
                 "ON local_dogfood_attestation_receipt_decisions(authorization_id) WHERE accepted = 1"
             ))
-        # Seed the singleton after dialect-specific migrations so this is also
-        # safe for an older database that needs the revision column added first.
-        # The conflict clause makes repeated startup and concurrent first
-        # initialization idempotent on both supported dialects.
-        await connection.execute(
-            text(
-                "INSERT INTO supervisor_control (id, mode, revision, updated_at) "
-                "VALUES (1, 'running', 1, CURRENT_TIMESTAMP) "
-                "ON CONFLICT (id) DO NOTHING"
-            )
+    # Seed the singleton after dialect-specific migrations so this is also
+    # safe for an older database that needs the revision column added first.
+    # The conflict clause makes repeated startup and concurrent first
+    # initialization idempotent on both supported dialects.
+    await connection.execute(
+        text(
+            "INSERT INTO supervisor_control (id, mode, revision, updated_at) "
+            "VALUES (1, 'running', 1, CURRENT_TIMESTAMP) "
+            "ON CONFLICT (id) DO NOTHING"
         )
+    )
+
+
+async def init_db() -> None:
+    """Upgrade the database to the current explicit schema revision."""
+
+    from supervisor.infrastructure.db.migrations import upgrade_database
+
+    async with engine.begin() as connection:
+        if connection.dialect.name == "sqlite":
+            await _begin_sqlite_schema_migration(connection)
+        await upgrade_database(connection)
 
 
 async def get_session() -> AsyncSession:
