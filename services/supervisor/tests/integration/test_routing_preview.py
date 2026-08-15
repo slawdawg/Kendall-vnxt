@@ -1784,7 +1784,9 @@ def test_runtime_evidence_navigator_reflects_resolved_authority_policy(tmp_path,
 
     assert label == "Ollama reviewed authority lane"
     assert "selects source VM 192.168.1.8" in summary
+    assert "trusted attestation-service receipt" in summary
     assert "remain bound to the reviewed source VM" in stop_line
+    assert "trusted local-host attestation" in stop_line
 
 
 def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_policy(tmp_path, monkeypatch) -> None:
