@@ -80,7 +80,14 @@ test("active authority state governs exact Ollama backup packets", () => {
     const selected = authorityApproved && sourceVm === activeAuthorityPolicy.approvedSourceVm;
     assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
     assert.equal(packet.sendEligible, selected, sourceVm);
-    if (!selected) assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
+    if (!selected) {
+      assert.ok(
+        packet.blockers.includes(
+          authorityOnHold ? "ollama_authority_policy_unresolved" : "Ollama route proof is missing or outside the approved controls",
+        ),
+        sourceVm,
+      );
+    }
   }
 });
 

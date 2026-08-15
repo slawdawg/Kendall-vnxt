@@ -196,7 +196,7 @@ assertAllIncludes(serviceSource, [
   "\"model_calls_allowed\": enabled",
 ], "Supervisor service must preserve the unresolved local-provider runtime gate", failures);
 assertAllIncludes(supervisorDockerfile, [
-  "COPY docs/workflows/local-provider-authority-policy-v1.json ./docs/workflows/local-provider-authority-policy-v1.json",
+  "COPY docs/workflows/local-provider-authority-policy-v1.json /usr/local/docs/workflows/local-provider-authority-policy-v1.json",
 ], "Supervisor image must package the versioned authority policy", failures);
 
 assertAllIncludes(routePolicySource, [

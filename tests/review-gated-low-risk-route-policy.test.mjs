@@ -76,7 +76,7 @@ test("duplicate authority-policy JSON members fail closed before validation", ()
   );
   assert.equal(
     parseLocalProviderAuthorityPolicyDocument(JSON.stringify(activeAuthorityPolicy).replace('"schemaVersion":1', '"schemaVersion":1.0')).status,
-    "hold_conflicting_source_vm",
+    activeAuthorityPolicy.status,
   );
   assert.equal(
     parseLocalProviderAuthorityPolicyDocument(JSON.stringify(activeAuthorityPolicy).replace('{', '{\u00a0')).status,
@@ -96,8 +96,15 @@ test("active authority state governs Ollama source-VM eligibility", () => {
     assert.equal(packet.reviewEligible, selected, sourceVm);
     assert.equal(packet.activationEligible, false, sourceVm);
     assert.equal(packet.allowed, selected, sourceVm);
-    assert.equal(packet.disabledReason, selected ? null : "ollama_authority_policy_unresolved", sourceVm);
-    if (!selected) assert.ok(packet.blockers.includes("ollama_authority_policy_unresolved"), sourceVm);
+    assert.equal(packet.disabledReason, authorityOnHold ? "ollama_authority_policy_unresolved" : null, sourceVm);
+    if (!selected) {
+      assert.ok(
+        packet.blockers.includes(
+          authorityOnHold ? "ollama_authority_policy_unresolved" : "Ollama source VM is not approved by the authority policy",
+        ),
+        sourceVm,
+      );
+    }
   }
 });
 
