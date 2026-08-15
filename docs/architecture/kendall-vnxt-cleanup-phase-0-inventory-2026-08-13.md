@@ -1,7 +1,7 @@
 # Kendall vNxt Cleanup Phase 0 Inventory
 
 Date: 2026-08-13
-Status: active baseline under the accepted holistic cleanup mandate
+Status: Phase 0 inventory/freeze completed 2026-08-15; retained as the Phase 1+ baseline
 Scope: lifecycle convergence, retirement safety, CI/tooling, persistence,
 documentation, and workspace metadata
 
@@ -250,3 +250,24 @@ not implied by an evidence-only contract.
   alias is added without an explicit short-lived compatibility record.
 - The cleanup program and this inventory remain the current architecture
   navigation, while historical documents remain reachable for provenance.
+
+## Phase 0 exit audit — 2026-08-15
+
+Phase 0 is complete as an evidence and freeze phase. This does **not** claim
+that every `migrate then delete` item has been removed: those changes remain
+the deliberately sequenced work of Phases 1–5.
+
+| Requirement | Evidence | Result / handoff |
+| --- | --- | --- |
+| Each inventory item has a disposition and safe next action. | The lifecycle, retirement, safety/delivery, ordered-queue, and lane-contract sections above name `keep`, `migrate`, `archive`, `retain`, or `decision-needed` outcomes with replacement, proof, or rollback targets. | Complete; later phases execute only the named bounded slices. |
+| Lifecycle truth has an initial canonical compatibility slice. | PR [#822](https://github.com/slawdawg/Kendall-vnxt/pull/822), merged as `dabe3928`, projects canonical packet list/detail data through the dashboard runtime and retains only the narrow legacy compatibility path. | Phase 2 owns removal of the remaining V0/legacy surface. |
+| Authority drift is represented by a single fail-closed record. | PR [#827](https://github.com/slawdawg/Kendall-vnxt/pull/827), merged as `4f0abc84`, adds the versioned authority policy, cross-language drift checks, revocation/depth regressions, and a final successful exact-head run [`31863328519`](https://github.com/slawdawg/Kendall-vnxt/actions/runs/31863328519). | The policy remains `hold_conflicting_source_vm`; no source VM or provider execution was enabled by this closeout. Phase 1 requires an explicit reviewed authority decision before any transition to `approved`. |
+| CI/tooling evidence precedes topology reduction. | PR [#824](https://github.com/slawdawg/Kendall-vnxt/pull/824), merged as `be068262`, records timing and coverage evidence; PR #827 preserves the 12-minute child-suite bound while giving the supervisor job setup/teardown margin. | Phase 1/5 may change CI topology only with the policy’s equivalence, timing, and post-merge evidence. |
+| Persistence has a target design and focused initial safety evidence. | The P1 SQLite-default/versioned-migration direction is recorded in the program; PR [#825](https://github.com/slawdawg/Kendall-vnxt/pull/825), merged as `c45260e4`, adds SQLite startup parent-restriction regression coverage. | Phase 1 owns migration baseline, upgrade/rollback fixtures, and any active PostgreSQL exception. |
+| Retirement and documentation decisions have preservation or rollback evidence. | PR [#826](https://github.com/slawdawg/Kendall-vnxt/pull/826), merged as `b839e6ed`, removes the isolated legacy runtime after archive tag `archive/runtime-scaffold-2026-08-14` (`be068262`); PR [#823](https://github.com/slawdawg/Kendall-vnxt/pull/823) removes the unreachable UI asset; PR [#828](https://github.com/slawdawg/Kendall-vnxt/pull/828) archives the historical Epic 6 report classification. | Restore `runtime/` only from the tag through a new product decision and reviewed PR. Keep `/pipeline/demo` as the supported fixture-only flow until authoritative supersession. |
+| Workspace and delivery evidence remain governed. | PR [#821](https://github.com/slawdawg/Kendall-vnxt/pull/821) records the Phase 0 evidence/coordination contract; the managed-workspace doctor confirms the Phase 0 lanes are registered consistently. | Phase 5 owns evidence-based closeout/reduction; no worktree, branch, lease, or retained record was deleted by hand. |
+| No Phase 0 delivery weakened review, CI, or rollback gates. | Every merged Phase 0 PR was reviewed and merged only after exact-head gates; #827 additionally had zero unresolved review threads and passed `changes`, `fast`, selected static bundles, `javascript`, `supervisor`, `static`, and aggregate `check`. | Complete. Revert the individual merge commit for a bounded rollback; use `git revert -m 1 <merge-commit>` for each merge commit. |
+
+The completed Phase 0 delivery set is PRs #821–#828. There are no open Phase 0
+delivery PRs at this closeout. The active cleanup program remains the source of
+truth for Phase 1 and later work; this inventory remains its evidence baseline.
