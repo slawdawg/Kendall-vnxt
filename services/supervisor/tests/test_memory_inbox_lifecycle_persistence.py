@@ -21,6 +21,7 @@ from supervisor.domain.memory_inbox import (
 )
 from supervisor.infrastructure.db import database
 from supervisor.infrastructure.db.database import Base, _ensure_sqlite_memory_inbox_manifest_ownership, _ensure_sqlite_memory_inbox_revision_states
+from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE
 from supervisor.infrastructure.db import models  # noqa: F401
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult
 from supervisor.infrastructure.db.models import MemoryInboxManifest, MemoryInboxProposalAggregate, MemoryInboxProposalRevision, MemoryInboxSource, MemoryInboxSourceRevision
@@ -172,6 +173,14 @@ async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_up
         await database.init_db()
 
         async with engine.begin() as connection:
+            applied_revisions = tuple(
+                (await connection.execute(text(
+                    f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
+                ))).scalars()
+            )
+        assert applied_revisions == tuple(revision for revision, _ in MIGRATIONS)
+
+        async with engine.begin() as connection:
             trigger_names = set((await connection.execute(text(
                 "SELECT name FROM sqlite_master WHERE type = 'trigger' "
                 "AND tbl_name IN ('memory_inbox_source_revisions', 'memory_inbox_proposal_revisions')"
@@ -235,6 +244,14 @@ async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_up
                     "UPDATE memory_inbox_proposal_revisions SET id = 'proposal-revision:renamed' "
                     "WHERE id = 'proposal-revision:default'"
                 ))
+
+        # A second startup must read the applied revisions, not replay the
+        # compatibility DDL or lose the data written after the upgrade.
+        await database.init_db()
+        async with engine.begin() as connection:
+            assert (await connection.scalar(text(
+                "SELECT COUNT(*) FROM memory_inbox_manifests WHERE id = 'manifest:default'"
+            ))) == 1
     finally:
         await engine.dispose()
 
