@@ -22,6 +22,7 @@ test("only a complete reviewed authority policy can select a source VM", () => {
   for (const malformed of [
     { ...validApprovedPolicy, candidateSourceVms: [validApprovedPolicy.candidateSourceVms[0], validApprovedPolicy.candidateSourceVms[0]] },
     { ...validApprovedPolicy, approvedSourceVm: "192.168.1.9" },
+    { ...validApprovedPolicy, approvedSourceVm: " 192.168.1.118 " },
     { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, totalTimeoutSeconds: 121 } },
     { ...validApprovedPolicy, defaults: { ...validApprovedPolicy.defaults, allowOllamaProviderCalls: true } },
   ]) {

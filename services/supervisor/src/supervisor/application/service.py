@@ -21582,7 +21582,11 @@ class SupervisorService:
                     (
                         f"Reviewed local-provider authority selects source VM: {ollama_state['authority_source_vm']}."
                         if bool(ollama_state["authority_resolved"])
-                        else "Local-provider authority is unresolved; neither candidate source VM is approved."
+                        else (
+                            "Local-provider authority policy is invalid or unavailable; restore a valid policy record before any provider call."
+                            if ollama_state["authority_status"] == "invalid"
+                            else "Local-provider authority is unresolved; neither candidate source VM is approved."
+                        )
                     ),
                     f"SUPERVISOR_OLLAMA_MODEL_ID defaults to {self.settings.ollama_model_id or self.settings.ollama_approved_model_id} and must match the approved model before adapter readiness.",
                     "SUPERVISOR_OLLAMA_ENDPOINT_URL must match the agreed VM-to-host endpoint, but endpoint/model parity alone grants no authority.",
@@ -21699,12 +21703,18 @@ class SupervisorService:
         route_policy_mismatch = (
             approved_endpoint_url != authority_endpoint
             or approved_model_id != authority_model
-            or (authority_resolved and configured_source_vm and configured_source_vm != authority_source_vm)
+            # This is the deployment's source identity, not an optional policy
+            # override. A reviewed policy cannot authorize an unknown VM.
+            or (authority_resolved and configured_source_vm != authority_source_vm)
             or self.settings.ollama_connect_timeout_seconds != authority_connect_timeout_seconds
             or self.settings.ollama_total_timeout_seconds != authority_total_timeout_seconds
         )
 
-        if not authority_resolved:
+        if authority_status == "invalid":
+            registry_state = "authority_policy_invalid"
+            disabled_reason = "ollama_authority_policy_invalid"
+            adapter_ready = False
+        elif not authority_resolved:
             registry_state = "authority_policy_unresolved"
             disabled_reason = "ollama_authority_policy_unresolved"
             adapter_ready = False

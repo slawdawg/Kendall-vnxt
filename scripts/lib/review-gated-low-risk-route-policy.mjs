@@ -189,7 +189,9 @@ export function parseLocalProviderAuthorityPolicy(policy) {
     || defaults.allowAutomaticOllamaLocalEvidence !== false
   ) return invalidAuthorityPolicy();
 
-  const approvedSourceVm = policyText(policy.approvedSourceVm);
+  // Authority values are identifiers, not display text. Do not trim here:
+  // Python and the policy checker require an exact candidate match as well.
+  const approvedSourceVm = typeof policy.approvedSourceVm === "string" ? policy.approvedSourceVm : null;
   if (policy.status === "hold_conflicting_source_vm" && policy.approvedSourceVm === null) {
     return { ...policy, approvedSourceVm: null, route: { ...route } };
   }

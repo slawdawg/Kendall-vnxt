@@ -1539,6 +1539,7 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
 
     _reset_supervisor_modules()
 
@@ -1560,9 +1561,47 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
 
     policy["schemaVersion"] = True
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
-    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["disabled_reason"] == "ollama_authority_policy_unresolved"
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    assert invalid_state["registry_state"] == "authority_policy_invalid"
     policy_path.write_bytes(b"\xff")
-    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["disabled_reason"] == "ollama_authority_policy_unresolved"
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    assert invalid_state["registry_state"] == "authority_policy_invalid"
+
+
+def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_policy(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "approved"
+    policy["approvedSourceVm"] = "192.168.1.118"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    for source_vm in ("", "192.168.1.8"):
+        monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", source_vm)
+        state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+        assert state["authority_resolved"] is True
+        assert state["enabled"] is False
+        assert state["disabled_reason"] == "ollama_approved_route_policy_mismatch"
+
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["enabled"] is True
 
 
 def test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch(tmp_path, monkeypatch) -> None:

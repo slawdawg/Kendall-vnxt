@@ -42,6 +42,6 @@
       "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS": "false",
       "SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE": "false"
     },
-    "verification": "Confirm ollama_authority_policy_unresolved and zero adapter calls."
+    "verification": "To restore the conflict hold, revert this record to status hold_conflicting_source_vm with approvedSourceVm null, then confirm ollama_authority_policy_unresolved and zero adapter calls. If only the environment gates are disabled, confirm the disabled-gate reason and zero adapter calls instead."
   }
 }
