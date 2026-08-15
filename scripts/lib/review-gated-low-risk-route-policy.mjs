@@ -167,7 +167,8 @@ function hasOnlyKeys(value, allowedKeys) {
   return Boolean(value)
     && typeof value === "object"
     && !Array.isArray(value)
-    && Object.keys(value).every((key) => allowedKeys.includes(key));
+    && Object.keys(value).length === allowedKeys.length
+    && allowedKeys.every((key) => Object.hasOwn(value, key));
 }
 
 function isExactNonemptyStringArray(value) {
