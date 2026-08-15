@@ -109,7 +109,9 @@ test("long-lived route policy modules reload a revoked authority record for ever
   try {
     writeFileSync(policyPath, JSON.stringify(approvedAuthorityPolicy()), "utf8");
     const isolatedPolicy = await import(`${pathToFileURL(modulePath).href}?authority-reload=${Date.now()}`);
-    assert.equal(isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.8")).status, "READY");
+    const beforeRevocation = isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.8"));
+    assert.equal(beforeRevocation.status, "HOLD");
+    assert.equal(beforeRevocation.disabledReason, "ollama_trusted_attestation_required");
     const missingAttestation = validOllamaBackup("192.168.1.8");
     delete missingAttestation.localHostVerified;
     delete missingAttestation.localHostVerificationRef;
@@ -156,16 +158,16 @@ test("active authority state governs Ollama source-VM eligibility", () => {
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm, authorityApproved ? activeAuthorityPolicy.approvedSourceVm : null);
   for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
     const packet = evaluateBoundedReviewRoute(validOllamaBackup(sourceVm));
-    const selected = ollamaEligible && sourceVm === activeAuthorityPolicy.approvedSourceVm;
+    const selected = false;
     assert.equal(packet.status, selected ? "READY" : "HOLD", sourceVm);
     assert.equal(packet.reviewEligible, selected, sourceVm);
     assert.equal(packet.activationEligible, false, sourceVm);
     assert.equal(packet.allowed, selected, sourceVm);
-    assert.equal(packet.disabledReason, authorityOnHold ? "ollama_authority_policy_unresolved" : enablementApproved ? null : "ollama_enablement_authority_unresolved", sourceVm);
+    assert.equal(packet.disabledReason, authorityOnHold ? "ollama_authority_policy_unresolved" : "ollama_trusted_attestation_required", sourceVm);
     if (!selected) {
       assert.ok(
         packet.blockers.includes(
-          authorityOnHold ? "ollama_authority_policy_unresolved" : enablementApproved ? "Ollama source VM is not approved by the authority policy" : "ollama_enablement_authority_unresolved",
+          authorityOnHold ? "ollama_authority_policy_unresolved" : "ollama_trusted_attestation_required",
         ),
         sourceVm,
       );

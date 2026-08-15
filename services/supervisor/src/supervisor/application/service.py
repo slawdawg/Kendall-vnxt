@@ -161,6 +161,11 @@ def _local_ipv4_addresses() -> set[str]:
     return addresses
 
 
+def _trusted_local_provider_attestation_verified() -> bool:
+    """v1 has no receipt verifier for the selected attestation-service topology."""
+    return False
+
+
 def _approved_local_provider_enablement_expiry(value: object) -> str | None:
     """Return a canonical, unexpired reviewed-enablement expiry or fail closed."""
     if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value):
@@ -21909,6 +21914,14 @@ class SupervisorService:
         elif enablement_status != "approved":
             registry_state = "enablement_authority_unresolved"
             disabled_reason = "ollama_enablement_authority_unresolved"
+            adapter_ready = False
+        elif not _trusted_local_provider_attestation_verified():
+            # Source-VM selection and a future enablement record do not prove
+            # the caller's host identity. v1 has no verifier for the existing
+            # trusted-attestation-service receipt, so it must never activate
+            # a provider from caller/configuration self-attestation alone.
+            registry_state = "trusted_attestation_required"
+            disabled_reason = "ollama_trusted_attestation_required"
             adapter_ready = False
         elif not local_source_vm_verified:
             registry_state = "source_vm_not_local"
