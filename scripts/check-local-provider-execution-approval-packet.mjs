@@ -121,9 +121,8 @@ const candidateSourceVms = new Map(candidateSourceVmRows.map((candidate) => [can
 assertCondition(candidateSourceVms.size === 2, "Authority policy must contain exactly the two conflicting source-VM candidates", failures);
 const authorityOnHold = authorityPolicy?.status === "hold_conflicting_source_vm" && authorityPolicy?.approvedSourceVm === null;
 const authorityApproved = authorityPolicy?.status === "approved"
-  && typeof authorityPolicy?.approvedSourceVm === "string"
-  && candidateSourceVms.has(authorityPolicy.approvedSourceVm);
-assertCondition(authorityOnHold || authorityApproved, "Authority policy must either hold with no selected VM or be explicitly approved for one recorded candidate VM", failures);
+  && authorityPolicy?.approvedSourceVm === "192.168.1.8";
+assertCondition(authorityOnHold || authorityApproved, "Authority policy must either hold with no selected VM or approve only the accepted 192.168.1.8 successor VM", failures);
 assertCondition(
   candidateSourceVms.get("192.168.1.118")?.claim === "accepted_operator_approval"
     && candidateSourceVms.get("192.168.1.118")?.provenanceRef === "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
@@ -141,7 +140,9 @@ assertAllIncludes(acceptedCheckpoint, ["calls only from the Kendall_vNxt VM at `
 assertAllIncludes(routedSourceObservation, ["`192.168.1.8` (current routed source observed 2026-07-18)"], "Current routed-source observation provenance", failures);
 assertAllIncludes(successorApproval, ["`192.168.1.8`", "Status: accepted operator decision; non-activating", "This decision selects only the source identity."], "Accepted successor approval provenance", failures);
 assertCondition(
-  authorityPolicy?.enablement?.status === "hold_requires_separate_review" && authorityPolicy?.enablement?.provenanceRef === null,
+  authorityPolicy?.enablement?.status === "hold_requires_separate_review"
+    && authorityPolicy?.enablement?.provenanceRef === null
+    && authorityPolicy?.enablement?.expiresAt === null,
   "Authority policy must retain a separate non-activating enablement hold until a reviewed successor decision is recorded",
   failures,
 );

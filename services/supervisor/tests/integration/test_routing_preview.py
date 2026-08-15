@@ -1554,8 +1554,8 @@ def test_ollama_provider_gate_ignores_runtime_authority_policy_path_override(tmp
         )
     )
     policy["status"] = "approved"
-    policy["approvedSourceVm"] = "192.168.1.118"
-    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md"}
+    policy["approvedSourceVm"] = "192.168.1.8"
+    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", "expiresAt": "2099-01-01T00:00:00Z"}
     unreviewed_policy_path.write_text(json.dumps(policy), encoding="utf-8")
     monkeypatch.setenv("SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", unreviewed_policy_path.as_posix())
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
@@ -1587,14 +1587,14 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
         )
     )
     policy["status"] = "approved"
-    policy["approvedSourceVm"] = "192.168.1.118"
-    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md"}
+    policy["approvedSourceVm"] = "192.168.1.8"
+    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", "expiresAt": "2099-01-01T00:00:00Z"}
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
-    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.8")
 
     _reset_supervisor_modules()
 
@@ -1604,16 +1604,16 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     from supervisor.infrastructure.streaming.bus import EventBus
 
     monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
-    monkeypatch.setattr(service_module, "_local_ipv4_addresses", lambda: {"192.168.1.118"})
+    monkeypatch.setattr(service_module, "_local_ipv4_addresses", lambda: {"192.168.1.8"})
     state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
 
     assert state["authority_status"] == "approved"
-    assert state["authority_source_vm"] == "192.168.1.118"
+    assert state["authority_source_vm"] == "192.168.1.8"
     assert state["authority_resolved"] is True
     assert state["enabled"] is True
     assert state["disabled_reason"] is None
     checks = {check.checkId: check for check in SupervisorService(Settings(), EventBus()).get_execution_configuration_checks().checks}
-    assert "Reviewed local-provider authority selects source VM: 192.168.1.118." in checks["ollama-provider-gate"].evidence
+    assert "Reviewed local-provider authority selects source VM: 192.168.1.8." in checks["ollama-provider-gate"].evidence
 
     policy["schemaVersion"] = True
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -1640,6 +1640,16 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     integral_schema_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
     assert integral_schema_state["enabled"] is True
     policy["schemaVersion"] = 1
+    policy["approvedSourceVm"] = "192.168.1.118"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    rejected_successor_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert rejected_successor_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    policy["approvedSourceVm"] = "192.168.1.8"
+    policy["enablement"]["expiresAt"] = "2000-01-01T00:00:00Z"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    expired_enablement_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert expired_enablement_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    policy["enablement"]["expiresAt"] = "2099-01-01T00:00:00Z"
     policy["unvalidatedExtra"] = float("nan")
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
@@ -1659,6 +1669,33 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     )
     invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
     assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+
+
+def test_local_ipv4_address_enumeration_keeps_valid_interfaces_when_another_interface_has_no_ipv4(monkeypatch) -> None:
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+
+    class FakeControlSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def fileno(self) -> int:
+            return 7
+
+    def ioctl(_fd: int, _request: int, packed_name: bytes) -> bytes:
+        if packed_name.startswith(b"bridge"):
+            raise OSError("interface has no IPv4 address")
+        return b"\x00" * 20 + socket.inet_aton("192.168.1.8")
+
+    monkeypatch.setattr(service_module.socket, "if_nameindex", lambda: [(1, "bridge"), (2, "eth0")])
+    monkeypatch.setattr(service_module.socket, "socket", lambda *_args: FakeControlSocket())
+    monkeypatch.setitem(sys.modules, "fcntl", SimpleNamespace(ioctl=ioctl))
+
+    assert service_module._local_ipv4_addresses() == {"192.168.1.8"}
 
 
 def test_ollama_provider_gate_fails_closed_when_authority_policy_parser_recurses(monkeypatch) -> None:
@@ -1713,14 +1750,14 @@ def test_runtime_evidence_navigator_reflects_resolved_authority_policy(tmp_path,
         )
     )
     policy["status"] = "approved"
-    policy["approvedSourceVm"] = "192.168.1.118"
-    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md"}
+    policy["approvedSourceVm"] = "192.168.1.8"
+    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", "expiresAt": "2099-01-01T00:00:00Z"}
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
-    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.8")
 
     _reset_supervisor_modules()
 
@@ -1730,14 +1767,14 @@ def test_runtime_evidence_navigator_reflects_resolved_authority_policy(tmp_path,
     from supervisor.infrastructure.streaming.bus import EventBus
 
     monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
-    monkeypatch.setattr(service_module, "_local_ipv4_addresses", lambda: {"192.168.1.118"})
+    monkeypatch.setattr(service_module, "_local_ipv4_addresses", lambda: {"192.168.1.8"})
 
     service = SupervisorService(Settings(), EventBus())
 
     label, summary, stop_line = service._runtime_evidence_ollama_navigator_content()
 
     assert label == "Ollama reviewed authority lane"
-    assert "selects source VM 192.168.1.118" in summary
+    assert "selects source VM 192.168.1.8" in summary
     assert "remain bound to the reviewed source VM" in stop_line
 
 
@@ -1749,8 +1786,8 @@ def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_polic
         )
     )
     policy["status"] = "approved"
-    policy["approvedSourceVm"] = "192.168.1.118"
-    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md"}
+    policy["approvedSourceVm"] = "192.168.1.8"
+    policy["enablement"] = {"status": "approved", "claim": "accepted_operator_enablement_approval", "provenanceRef": "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", "expiresAt": "2099-01-01T00:00:00Z"}
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
@@ -1765,15 +1802,15 @@ def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_polic
     from supervisor.infrastructure.streaming.bus import EventBus
 
     monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
-    monkeypatch.setattr(service_module, "_local_ipv4_addresses", lambda: {"192.168.1.118"})
-    for source_vm in ("", "192.168.1.8"):
+    monkeypatch.setattr(service_module, "_local_ipv4_addresses", lambda: {"192.168.1.8"})
+    for source_vm in ("", "192.168.1.118"):
         monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", source_vm)
         state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
         assert state["authority_resolved"] is True
         assert state["enabled"] is False
         assert state["disabled_reason"] == "ollama_source_vm_not_local"
 
-    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.8")
     assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["enabled"] is True
 
 
