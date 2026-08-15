@@ -8910,6 +8910,66 @@ try {
     }
   });
 
+  test("finish-pr --stage-all discards a structurally safe stale partial packet and restarts the plan", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const completedAt = new Date(Date.now() - 500).toISOString();
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        head: "f".repeat(40),
+        stages: [{ stage: stages[0], completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }],
+        next_stage: stages[1],
+        updated_at: completedAt,
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "stale partial packet did not restart from the first stage");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("stale partial")), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all rejects a forged stale partial packet", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        head: "f".repeat(40),
+        raw_output: "fixture-packet-secret",
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "forged stale partial packet unexpectedly recovered");
+      assert(!result.stderr.includes("fixture-packet-secret"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "forged stale partial packet launched verification");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "forged stale partial packet reached delivery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr --stage-all migrates a safely owned obsolete supervisor aggregate packet into the full current plan", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -9320,7 +9380,7 @@ try {
       { name: "implicit", args: [], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) }), expected: "binding changed" },
       { name: "legacy missing staged snapshot implicit", args: [], packet: (fixture, stages) => { const packet = fixtureFailedResumableCheckPacket(fixture, stages); delete packet.staged_input_digest; return packet; }, expected: "staged input binding is malformed" },
       { name: "unrecognized historical plan", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64), head: "f".repeat(40) }), expected: "plan digest is not current or a recognized legacy plan" },
-      { name: "partial", args: ["--stage-all"], packet: (fixture, stages) => fixtureResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64) }), expected: "explicit recovery requires a terminal packet" },
+      { name: "malformed partial", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64) }), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },
       { name: "owner", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { owner: "other-runner" }), expected: "binding changed" },
       { name: "malformed", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureFailedResumableCheckPacket(fixture, stages), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },
       { name: "failed history", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[0], completed_at: new Date(Date.now() - 800).toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }, { stage: stages[1], completed_at: new Date(Date.now() - 700).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }] }), expected: "failed packet stage is malformed" },
@@ -9350,7 +9410,7 @@ try {
         );
 
         assert(result.code !== 0, `${scenario.name} packet reset unexpectedly ran`);
-        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        assert(`${result.stdout}\n${result.stderr}`.includes(scenario.expected), `${scenario.name}: ${result.stderr || result.stdout}`);
         assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} packet reset ran a stage`);
         assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} packet reset reached git push`);
         assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.name} packet reset reached PR creation`);

@@ -13070,6 +13070,8 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
         packet = prior;
       } else if (discardRecoverableTerminalCheckPacket(manifest, manifestPath, prior, expected, options)) {
         packet = null;
+      } else if (discardRecoverableStalePartialCheckPacket(manifest, manifestPath, prior, expected, options)) {
+        packet = null;
       } else {
         throw error;
       }
@@ -13330,6 +13332,7 @@ function completeEnvironmentPreflightRetry(manifest, manifestPath, expected, sta
 
 function discardRecoverableTerminalCheckPacket(manifest, manifestPath, packet, expected, options = {}) {
   if (!options.allowTerminalPacketRecovery) return false;
+  if (packet?.status === "partial") return false;
   validateTerminalCheckPacketForDiscard(packet, expected);
   if (packet.head === expected.head && packet.plan_digest === expected.plan.digest && packet.staged_input_digest === expected.stagedInputDigest) return false;
   appendTaskEvent(
@@ -13340,6 +13343,63 @@ function discardRecoverableTerminalCheckPacket(manifest, manifestPath, packet, e
   manifest.check_verification_packet = null;
   writeManifest(manifestPath, manifest);
   return true;
+}
+
+function discardRecoverableStalePartialCheckPacket(manifest, manifestPath, packet, expected, options = {}) {
+  if (!options.allowTerminalPacketRecovery) return false;
+  if (packet?.status !== "partial") return false;
+  validateStalePartialCheckPacketForDiscard(packet, expected);
+  if (
+    packet.head === expected.head
+    && packet.plan_digest === expected.plan.digest
+    && packet.staged_input_digest === expected.stagedInputDigest
+  ) return false;
+  appendTaskEvent(
+    manifest,
+    "check_verification_packet_discarded",
+    "explicit-stage-all stale partial packet discarded after head-plan-or-staged-input binding changed",
+  );
+  manifest.check_verification_packet = null;
+  writeManifest(manifestPath, manifest);
+  return true;
+}
+
+function validateStalePartialCheckPacketForDiscard(packet, expected) {
+  const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at"];
+  if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
+  if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
+  if (packet.task_id !== expected.taskId || packet.owner !== expected.owner) invalid("binding changed");
+  if (
+    typeof packet.head !== "string" || !/^[a-f0-9]{40,64}$/i.test(packet.head)
+    || typeof packet.plan_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.plan_digest)
+    || typeof packet.staged_input_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.staged_input_digest)
+  ) invalid("packet binding is malformed");
+  if (packet.status !== "partial") invalid("stale recovery requires a partial packet");
+  if (typeof packet.next_stage !== "string" || !/^[A-Za-z0-9:_-]{1,120}$/.test(packet.next_stage)) invalid("partial packet next stage is invalid");
+  const timestamp = (value, label) => {
+    if (typeof value !== "string" || value.length > 80 || !Number.isFinite(Date.parse(value))) invalid(`${label} is malformed`);
+    return Date.parse(value);
+  };
+  const createdAt = timestamp(packet.created_at, "created_at");
+  const updatedAt = timestamp(packet.updated_at, "updated_at");
+  const expiresAt = timestamp(packet.expires_at, "expires_at");
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
+  const seenStages = new Set();
+  let previousCompletedAt = createdAt;
+  for (const evidence of packet.stages) {
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) invalid("stage evidence is malformed");
+    const allowedEvidenceKeys = ["completed_at", "error_code", "output", "signal", "stage", "status"];
+    if (Object.keys(evidence).some((key) => !allowedEvidenceKeys.includes(key))) invalid("stage evidence contains unbounded fields");
+    if (typeof evidence.stage !== "string" || !/^[A-Za-z0-9:_-]{1,120}$/.test(evidence.stage) || seenStages.has(evidence.stage)) invalid("stage evidence stage is malformed");
+    seenStages.add(evidence.stage);
+    const completedAt = timestamp(evidence.completed_at, "stage completed_at");
+    if (completedAt < previousCompletedAt || completedAt > updatedAt || completedAt > expiresAt) invalid("stage evidence is malformed");
+    if (evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null || evidence.output !== "omitted") invalid("stage evidence is not a successful metadata-only result");
+    previousCompletedAt = completedAt;
+  }
 }
 
 function validateTerminalCheckPacketForDiscard(packet, expected) {
