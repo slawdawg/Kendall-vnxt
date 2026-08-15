@@ -297,6 +297,10 @@ true stop-class blockers.
   contract changes, and integration sequential.
 - Prefer several small PRs with non-overlapping ownership over one large
   cleanup branch.
+- Sequence shared enabling repairs ahead of dependent lanes. A verified CI or
+  delivery-runner repair should land before dependent migration/refactor lanes
+  rerun that path; use the wait for read-only inventory or isolated work rather
+  than parallel retries against a known bottleneck.
 - Do not build a new repository orchestration layer to coordinate cleanup; use
   the existing Codex session, governed worktrees, the cleanup inventory, and
   concise lane evidence.
