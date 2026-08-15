@@ -113,14 +113,14 @@ test("long-lived private-evidence modules reload a revoked authority record for 
     schemaVersion: 1,
     authorityFamily: "local-provider-execution",
     status: "approved",
-    approvedSourceVm: "192.168.1.118",
+    approvedSourceVm: "192.168.1.8",
     candidateSourceVms: [
       { sourceVm: "192.168.1.118", claim: "accepted_operator_approval", provenanceRef: "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" },
       { sourceVm: "192.168.1.8", claim: "accepted_operator_successor_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-source-vm-approval-2026-08-15.md" },
     ],
     route: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, retentionMode: "metadata-only" },
     defaults: { allowLocalProviderCalls: false, allowOllamaProviderCalls: false, allowAutomaticOllamaLocalEvidence: false },
-    enablement: { status: "approved", claim: "accepted_operator_enablement_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md" },
+    enablement: { status: "approved", claim: "accepted_operator_enablement_approval", provenanceRef: "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md", expiresAt: "2099-01-01T00:00:00Z" },
     decisionRequired: ["A reviewed successor is required before local-provider enablement."],
     stopLines: ["Do not make a provider call until enablement is reviewed."],
     rollback: {

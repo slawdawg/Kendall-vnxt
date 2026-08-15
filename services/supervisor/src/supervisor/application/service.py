@@ -46,6 +46,7 @@ LOCAL_PROVIDER_ENABLEMENT_APPROVAL = (
     "accepted_operator_enablement_approval",
     "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md",
 )
+LOCAL_PROVIDER_APPROVED_SOURCE_VM = "192.168.1.8"
 EXECUTABLE_CONTROL_TEXT_RE = re.compile(
     r"\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b",
     re.IGNORECASE,
@@ -138,18 +139,39 @@ def _local_ipv4_addresses() -> set[str]:
         addresses: set[str] = set()
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control_socket:
             for _index, interface_name in socket.if_nameindex():
-                encoded_name = interface_name.encode("ascii")
+                try:
+                    encoded_name = interface_name.encode("ascii")
+                except UnicodeEncodeError:
+                    continue
                 if len(encoded_name) >= 256:
                     continue
-                response = fcntl.ioctl(
-                    control_socket.fileno(),
-                    0x8915,  # Linux SIOCGIFADDR: return the bound IPv4 address.
-                    struct.pack("256s", encoded_name),
-                )
+                try:
+                    response = fcntl.ioctl(
+                        control_socket.fileno(),
+                        0x8915,  # Linux SIOCGIFADDR: return the bound IPv4 address.
+                        struct.pack("256s", encoded_name),
+                    )
+                except OSError:
+                    # A bridge, down, or IPv6-only interface does not prove
+                    # that addresses obtained from other interfaces are wrong.
+                    continue
                 addresses.add(socket.inet_ntoa(response[20:24]))
-    except (OSError, UnicodeEncodeError):
+    except OSError:
         return set()
     return addresses
+
+
+def _approved_local_provider_enablement_expiry(value: object) -> str | None:
+    """Return a canonical, unexpired reviewed-enablement expiry or fail closed."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value):
+        return None
+    try:
+        expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if expiry <= datetime.now(timezone.utc):
+        return None
+    return value
 
 
 def _load_local_provider_authority_policy() -> dict[str, object]:
@@ -219,7 +241,7 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
         or defaults.get("allowLocalProviderCalls") is not False
         or defaults.get("allowOllamaProviderCalls") is not False
         or defaults.get("allowAutomaticOllamaLocalEvidence") is not False
-        or not _has_exact_keys(enablement, {"status", "claim", "provenanceRef"})
+        or not _has_exact_keys(enablement, {"status", "claim", "provenanceRef", "expiresAt"})
         or not _is_nonempty_exact_string_list(raw_policy.get("decisionRequired"))
         or not _is_nonempty_exact_string_list(raw_policy.get("stopLines"))
     ):
@@ -228,13 +250,22 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
     enablement_status = enablement.get("status")
     enablement_claim = enablement.get("claim")
     enablement_provenance_ref = enablement.get("provenanceRef")
+    enablement_expires_at = enablement.get("expiresAt")
     if (
-        (enablement_status == "hold_requires_separate_review" and (enablement_claim != "separate_review_required" or enablement_provenance_ref is not None))
+        (
+            enablement_status == "hold_requires_separate_review"
+            and (
+                enablement_claim != "separate_review_required"
+                or enablement_provenance_ref is not None
+                or enablement_expires_at is not None
+            )
+        )
         or (
             enablement_status == "approved"
             and (
                 enablement_claim != LOCAL_PROVIDER_ENABLEMENT_APPROVAL[0]
                 or enablement_provenance_ref != LOCAL_PROVIDER_ENABLEMENT_APPROVAL[1]
+                or _approved_local_provider_enablement_expiry(enablement_expires_at) is None
             )
         )
         or enablement_status not in {"hold_requires_separate_review", "approved"}
@@ -270,9 +301,7 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
     elif (
         status == "approved"
         and isinstance(approved_source_vm, str)
-        and bool(approved_source_vm)
-        and approved_source_vm.strip() == approved_source_vm
-        and approved_source_vm in candidate_by_source
+        and approved_source_vm == LOCAL_PROVIDER_APPROVED_SOURCE_VM
     ):
         selected_source_vm = approved_source_vm
     else:

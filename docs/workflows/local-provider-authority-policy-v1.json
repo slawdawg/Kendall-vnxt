@@ -30,7 +30,8 @@
   "enablement": {
     "status": "hold_requires_separate_review",
     "claim": "separate_review_required",
-    "provenanceRef": null
+    "provenanceRef": null,
+    "expiresAt": null
   },
   "decisionRequired": [
     "Any change to the disabled-by-default local-provider or automatic-consent gates requires a separate reviewed authority decision.",

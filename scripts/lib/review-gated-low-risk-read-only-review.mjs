@@ -232,6 +232,7 @@ function validateOrderedRoute(route, blockers) {
     const policy = evaluateBoundedReviewRoute({
       role: "backup-review", provider, endpoint: route.endpoint, model: route.model, sourceVm: route.sourceVm,
       connectTimeoutSeconds: route.connectTimeoutSeconds, totalTimeoutSeconds: route.totalTimeoutSeconds,
+      localHostVerified: route.localHostVerified, localHostVerificationRef: route.localHostVerificationRef,
       metadataOnly: route.metadataOnly, rawPayloadRetained: route.rawPayloadRetained, publicExposure: route.publicExposure,
       credentialsRead: route.credentialsRead, modelDiscovery: route.modelDiscovery, endpointDiscovery: route.endpointDiscovery,
       reviewPass: route.reviewPass, activationAllowed: route.activationAllowed, fallbackUsed: route.fallbackUsed,

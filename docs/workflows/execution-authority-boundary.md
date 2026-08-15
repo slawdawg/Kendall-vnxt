@@ -40,7 +40,8 @@ Required controls:
 Stop lines:
 
 - Do not call any endpoint other than the exact bounded route from an approved pilot.
-- Do not infer activation from the approved source VM or from current settings; separate gate enablement requires a reviewed successor decision, and runtime must verify that the configured source VM is a local interface before any adapter becomes ready.
+- Do not infer activation from the approved source VM or from current settings; separate gate enablement requires a reviewed successor decision with machine-readable expiry, and runtime must verify that the configured source VM is a local interface before any adapter becomes ready.
+- The Docker Compose bridge profile is not a local-host identity proof: its supervisor sees container interfaces rather than the host `192.168.1.8`. Any future pilot must use an explicitly reviewed host-native or host-network topology where that address is visible to the supervisor; otherwise the adapter remains denied.
 - Do not discover endpoints or models.
 - Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.
 - Do not read credentials or external sessions.

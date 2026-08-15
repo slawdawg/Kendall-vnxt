@@ -8,6 +8,7 @@ const LOCAL_PROVIDER_ENABLEMENT_APPROVAL = Object.freeze({
   claim: "accepted_operator_enablement_approval",
   provenanceRef: "docs/architecture/kendall-vnxt-local-provider-enablement-approval-v1.md",
 });
+const LOCAL_PROVIDER_APPROVED_SOURCE_VM = "192.168.1.8";
 const MAX_AUTHORITY_POLICY_JSON_DEPTH = 64;
 const CLAUDE_ALLOWED_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const FALLBACK_FAILURES = new Set(["unavailable", "empty", "rate-limited"]);
@@ -311,13 +312,18 @@ export function parseLocalProviderAuthorityPolicy(policy) {
   ) return invalidAuthorityPolicy();
 
   const enablement = policy.enablement;
-  if (!hasOnlyKeys(enablement, ["status", "claim", "provenanceRef"])) return invalidAuthorityPolicy();
+  if (!hasOnlyKeys(enablement, ["status", "claim", "provenanceRef", "expiresAt"])) return invalidAuthorityPolicy();
   const enablementStatus = policyExactText(enablement.status);
   const enablementClaim = policyExactText(enablement.claim);
   const enablementProvenanceRef = enablement.provenanceRef === null ? null : policyExactText(enablement.provenanceRef);
+  const enablementExpiresAt = enablement.expiresAt === null ? null : policyExactText(enablement.expiresAt);
   if (
-    (enablementStatus === "hold_requires_separate_review" && (enablementClaim !== "separate_review_required" || enablementProvenanceRef !== null))
-    || (enablementStatus === "approved" && (enablementClaim !== LOCAL_PROVIDER_ENABLEMENT_APPROVAL.claim || enablementProvenanceRef !== LOCAL_PROVIDER_ENABLEMENT_APPROVAL.provenanceRef))
+    (enablementStatus === "hold_requires_separate_review" && (enablementClaim !== "separate_review_required" || enablementProvenanceRef !== null || enablementExpiresAt !== null))
+    || (enablementStatus === "approved" && (
+      enablementClaim !== LOCAL_PROVIDER_ENABLEMENT_APPROVAL.claim
+      || enablementProvenanceRef !== LOCAL_PROVIDER_ENABLEMENT_APPROVAL.provenanceRef
+      || !isFutureCanonicalExpiry(enablementExpiresAt)
+    ))
     || !["hold_requires_separate_review", "approved"].includes(enablementStatus)
   ) return invalidAuthorityPolicy();
 
@@ -350,10 +356,17 @@ export function parseLocalProviderAuthorityPolicy(policy) {
   if (policy.status === "hold_conflicting_source_vm" && policy.approvedSourceVm === null) {
     return { ...policy, approvedSourceVm: null, route: { ...route }, enablement: { ...enablement } };
   }
-  if (policy.status === "approved" && approvedSourceVm && candidateByVm.has(approvedSourceVm)) {
+  if (policy.status === "approved" && approvedSourceVm === LOCAL_PROVIDER_APPROVED_SOURCE_VM && candidateByVm.has(approvedSourceVm)) {
     return { ...policy, approvedSourceVm, route: { ...route }, enablement: { ...enablement } };
   }
   return invalidAuthorityPolicy();
+}
+
+function isFutureCanonicalExpiry(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value || "")) return false;
+  const parsed = Date.parse(value);
+  const canonicalValue = value.includes(".") ? value : value.replace(/Z$/, ".000Z");
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === canonicalValue && parsed > Date.now();
 }
 
 function invalidAuthorityPolicy() {

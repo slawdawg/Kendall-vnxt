@@ -119,7 +119,11 @@ The reviewed authority policy selects source VM `192.168.1.8`.
 All local-provider and automatic-consent gates default false. Do not
 enable the lane or probe the provider: source selection is not gate enablement.
 Any future enablement requires a separate reviewed authority decision and a
-runtime check that the configured source VM is a local interface:
+runtime check that the configured source VM is a local interface. That decision
+must include a machine-readable expiry. The default Docker Compose bridge
+profile is not an approved local-host topology because the supervisor observes
+container interfaces, not host `192.168.1.8`; use an explicitly reviewed
+host-native or host-network deployment for any future pilot:
 
 ```bash
 export SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=false
@@ -128,6 +132,11 @@ export SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE=false
 export SUPERVISOR_OLLAMA_ENDPOINT_URL=http://192.168.1.128:11434/v1/chat/completions
 export SUPERVISOR_OLLAMA_MODEL_ID=qwen3:14b
 ```
+
+Only after that separate enablement decision is approved, set
+`SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM=192.168.1.8` on the verified local host.
+Do not set it in a bridge-container deployment or use it to bypass the runtime
+local-interface check.
 
 The local evidence explanation endpoint reports the applicable disabled-gate
 reason and does not create automatic approval or call the adapter. To roll back
