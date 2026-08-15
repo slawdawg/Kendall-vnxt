@@ -64,6 +64,8 @@ test("allows explicitly consented bounded private work-item evidence for Claude"
 
 test("active authority state governs exact Ollama backup packets", () => {
   assert.equal(authorityOnHold || authorityApproved, true);
+  assert.equal(activeAuthorityPolicy.status, "approved");
+  assert.equal(activeAuthorityPolicy.approvedSourceVm, "192.168.1.8");
   for (const sourceVm of ["192.168.1.118", "192.168.1.8"]) {
     const packet = evaluatePrivateEvidencePacket(valid({
       provider: "ollama",

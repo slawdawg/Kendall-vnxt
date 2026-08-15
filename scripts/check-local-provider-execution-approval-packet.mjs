@@ -132,7 +132,7 @@ assertCondition(
 assertCondition(
   candidateSourceVms.get("192.168.1.8")?.claim === "current_routed_source_observation"
     && candidateSourceVms.get("192.168.1.8")?.provenanceRef === "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md",
-  "Authority policy must preserve observed 192.168.1.8 provenance without promoting it to approval",
+  "Authority policy must preserve observed 192.168.1.8 provenance",
   failures,
 );
 assertAllIncludes(acceptedApproval, ["Approved caller/source: Kendall_vNxt VM at 192.168.1.118 only."], "Accepted approval provenance", failures);
@@ -167,7 +167,7 @@ assertAllIncludes(settingsSource, [
   "allow_automatic_ollama_local_evidence: bool = Field(default=False, alias=\"SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE\")",
   `ollama_endpoint_url: str | None = Field(\n        default=\"${agreedEndpoint}\"`,
   `ollama_model_id: str | None = Field(default=\"${agreedModel}\"`,
-  "ollama_approved_source_vm: str = Field(default=\"\"",
+  `ollama_approved_source_vm: str = Field(default=\"${authorityApproved ? authorityPolicy.approvedSourceVm : ""}\"`,
   `default="${agreedEndpoint}"`,
   "alias=\"SUPERVISOR_OLLAMA_APPROVED_ENDPOINT_URL\"",
   `ollama_approved_model_id: str = Field(default="${agreedModel}", alias="SUPERVISOR_OLLAMA_APPROVED_MODEL_ID")`,
@@ -310,10 +310,6 @@ assertAllIncludes(localProviderRejectedAttempt, [
 assertAllIncludes(supervisorTests, [
   "test_ollama_settings_default_provider_and_automatic_gates_false",
   "test_ollama_provider_gate_holds_both_source_vm_candidates_despite_exact_endpoint_and_model",
-  "test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch",
-  "test_ollama_local_evidence_explanation_holds_unresolved_authority_before_adapter_call",
-  "test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unresolved_source_vm",
-  "test_ollama_local_evidence_explanation_rejects_operator_approval_while_authority_is_unresolved",
   "test_ollama_provider_request_uses_connect_timeout_without_global_socket_mutation",
   "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS",
   "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS",
@@ -321,11 +317,28 @@ assertAllIncludes(supervisorTests, [
   "192.168.1.118",
   "192.168.1.8",
   "ollama_authority_policy_unresolved",
-  "Ollama adapter must not run while source-VM authority is unresolved.",
-  "Automatic approval must not be created while source-VM authority is unresolved.",
   agreedEndpoint,
   agreedModel,
-], "Supervisor tests must prove unresolved authority is non-executing", failures);
+  ...(authorityOnHold
+    ? [
+      "test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch",
+      "test_ollama_local_evidence_explanation_holds_unresolved_authority_before_adapter_call",
+      "test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unresolved_source_vm",
+      "test_ollama_local_evidence_explanation_rejects_operator_approval_while_authority_is_unresolved",
+      "Ollama adapter must not run while source-VM authority is unresolved.",
+      "Automatic approval must not be created while source-VM authority is unresolved.",
+    ]
+    : [
+      "test_ollama_provider_gate_rejects_endpoint_mismatch_after_authority_approval",
+      "test_ollama_local_evidence_explanation_requires_instance_approval_before_adapter_call",
+      "test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unapproved_source_vm",
+      "test_ollama_local_evidence_explanation_accepts_exact_approval_after_authority_decision",
+      "Ollama adapter must not run for an unapproved source VM.",
+      "Automatic approval must not be created for an unapproved source VM.",
+    ]),
+], authorityOnHold
+  ? "Supervisor tests must prove unresolved authority is non-executing"
+  : "Supervisor tests must prove approved authority remains gate and approval bound", failures);
 
 assertAllIncludes(routePolicyTests, [
   "active authority state governs Ollama source-VM eligibility",
@@ -343,8 +356,12 @@ assertAllIncludes(privateEvidenceTests, [
 assertAllIncludes(storyIndex, [
   "The following implementation evidence labels are source-owned anchors for runtime reports and drift checks. They are labels only, not required Git-tracked story files.",
   "Local provider execution: `docs/workflows/execution-authority-boundary.md#local-provider-execution-contract`",
-  "source-VM authority is held by `local-provider-authority-policy-v1.json`",
-  "The agreed endpoint/model metadata are insufficient to enable Ollama while the source-VM authority conflict remains unresolved.",
+  authorityOnHold
+    ? "source-VM authority is held by `local-provider-authority-policy-v1.json`"
+    : `\`local-provider-authority-policy-v1.json\` records \`${authorityPolicy.approvedSourceVm}\` as the explicitly approved source VM`,
+  authorityOnHold
+    ? "The agreed endpoint/model metadata are insufficient to enable Ollama while the source-VM authority conflict remains unresolved."
+    : "The agreed endpoint/model metadata and selected source VM are insufficient to enable Ollama while the provider and automatic-consent gates remain disabled by default.",
   "14-2-pin-local-provider-approval-packet-to-drift-checks.md",
 ], "Implementation evidence boundary must preserve local-provider authority status and label semantics", failures);
 

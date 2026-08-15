@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         default="http://192.168.1.128:11434/v1/chat/completions",
         alias="SUPERVISOR_OLLAMA_APPROVED_ENDPOINT_URL",
     )
-    ollama_approved_source_vm: str = Field(default="", alias="SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM")
+    ollama_approved_source_vm: str = Field(default="192.168.1.8", alias="SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM")
     ollama_model_id: str | None = Field(default="qwen3:14b", alias="SUPERVISOR_OLLAMA_MODEL_ID")
     ollama_approved_model_id: str = Field(default="qwen3:14b", alias="SUPERVISOR_OLLAMA_APPROVED_MODEL_ID")
     # Keep canonical route values bounded and parseable from string-valued env
