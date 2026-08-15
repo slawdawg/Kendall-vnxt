@@ -12869,6 +12869,10 @@ try {
           "--rollback-path", "git revert -m 1 merged-commit",
           "--state-root", fixture.stateRoot,
         ];
+      const previewArgs = recoveryArgs.map((arg) => arg === "--apply" ? "--summary-json" : arg);
+      const preview = runFixtureScript(fixture, previewArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).postMergeRecovery?.status === "ready", "dry-run recovery must not claim to be recorded");
       const result = runFixtureScript(
         fixture,
         recoveryArgs,
@@ -12879,8 +12883,10 @@ try {
       assert(updated.pr_gate_evidence?.status === "passed", "recovery gate was not recorded as passed");
       assert(updated.pr_gate_evidence?.authorityProfile === "post-merge-recovery", "recovery authority profile was not retained");
       assert(updated.pr_gate_evidence?.postMergeRecovery?.scope === "cleanup-only", "recovery scope was not retained");
+      assert(updated.pr_gate_evidence?.postMergeRecovery?.status === "recorded", "applied recovery was not marked recorded");
       assert(updated.pr_gate_evidence?.postMergeRecovery?.approval?.evidence === recoveryApproval, "bound recovery approval was not retained");
       assert(updated.pr_gate_evidence?.postMergeRecovery?.deliveryIdentity?.proof === recoveryDeliveryProof, "bound delivery identity proof was not retained");
+      assert(updated.pr_gate_evidence?.authorityDecision?.authorityProfile === "post-merge-recovery", "recovery authority profile was not retained on the nested decision");
       assert(updated.events.some((event) => event.type === "post_merge_pr_gate_recovery_recorded"), "recovery event missing");
 
       // Losing the top-level packet later must not make this exceptional

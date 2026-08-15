@@ -5541,7 +5541,9 @@ function buildPrGateEvidence(manifest, context = {}) {
       : managedGate ? "standard-delivery" : "unmanaged-pr-evidence",
     postMergeRecovery: postMergeRecovery
       ? {
-        status: "recorded",
+        // A dry run (including --summary-json) proves readiness only. It must
+        // never claim the one-time recovery was persisted before --apply.
+        status: blockers.length ? "blocked" : context.options?.apply ? "recorded" : "ready",
         scope: "cleanup-only",
         approval: recoveryApproval,
         deliveryIdentity: recoveryDeliveryIdentity,
@@ -5579,6 +5581,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     authorityDecision: shapeAuthorityDecisionEvidence({
       operation: postMergeRecovery ? "verify-pr-gates-post-merge-recovery" : "verify-pr-gates",
       authorityFamily: "delivery-gate",
+      authorityProfile: postMergeRecovery ? "post-merge-recovery" : managedGate ? "standard-delivery" : "unmanaged-pr-evidence",
       decision: status,
       allowed: blockers.length === 0,
       requiredGates,
@@ -6298,7 +6301,10 @@ function shapePostMergeRecoveryApprovalEvidence(options = {}, manifest = {}, prN
 
 function shapePostMergeRecoveryDeliveryIdentityEvidence(options = {}, manifest = {}, pr = {}, expectedHeadSha) {
   const expected = `recovery-delivery-identity task=${manifest.task_id} branch=${manifest.branch} base=${manifest.base_branch} pr=${pr.number} head=${expectedHeadSha}`;
-  const proof = safeMetadataText(options.recoveryDeliveryProof, 500);
+  // The proof is a deterministic composition of already bounded identity
+  // fields. Preserve its full expected length (up to a conservative evidence
+  // ceiling) so valid long managed identifiers remain usable.
+  const proof = safeMetadataText(options.recoveryDeliveryProof, Math.max(500, Math.min(expected.length, 1200)));
   const standardDeliveryRecorded = hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha);
   const liveIdentityMatches = Boolean(
     manifest.task_id
