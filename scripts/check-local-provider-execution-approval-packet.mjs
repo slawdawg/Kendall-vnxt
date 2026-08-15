@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseJsonRejectingDuplicateKeys } from "./lib/review-gated-low-risk-route-policy.mjs";
+import { parseJsonRejectingDuplicateKeys, parseLocalProviderAuthorityPolicy } from "./lib/review-gated-low-risk-route-policy.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -100,6 +100,7 @@ try {
 }
 const agreedEndpoint = authorityPolicy?.route?.endpoint;
 const agreedModel = authorityPolicy?.route?.model;
+const normalizedAuthorityPolicy = authorityPolicy ? parseLocalProviderAuthorityPolicy(authorityPolicy) : null;
 const localProviderApprovalSchema = extractSection(
   apiSchemaSource,
   "class LocalProviderApprovalInstance(BaseModel):",
@@ -123,6 +124,12 @@ const localProviderRejectedAttempt = extractSection(
 
 assertCondition(authorityPolicy?.schemaVersion === 1, "Authority policy must use schemaVersion 1", failures);
 assertCondition(authorityPolicy?.authorityFamily === "local-provider-execution", "Authority policy must bind the local-provider-execution family", failures);
+assertCondition(
+  normalizedAuthorityPolicy?.status === authorityPolicy?.status
+    && normalizedAuthorityPolicy?.approvedSourceVm === authorityPolicy?.approvedSourceVm,
+  "Authority policy must satisfy the shared closed parser used by JavaScript route consumers",
+  failures,
+);
 assertCondition(agreedEndpoint === "http://192.168.1.128:11434/v1/chat/completions", "Authority policy must preserve the agreed endpoint metadata", failures);
 assertCondition(agreedModel === "qwen3:14b", "Authority policy must preserve the agreed model metadata", failures);
 assertCondition(authorityPolicy?.route?.connectTimeoutSeconds === 2, "Authority policy must preserve the 2 second connect timeout", failures);

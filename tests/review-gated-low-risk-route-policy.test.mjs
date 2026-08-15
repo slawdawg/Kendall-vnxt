@@ -13,7 +13,9 @@ const activeAuthorityPolicy = JSON.parse(readFileSync(new URL("../docs/workflows
 const authorityOnHold = activeAuthorityPolicy.status === "hold_conflicting_source_vm" && activeAuthorityPolicy.approvedSourceVm === null;
 const authorityApproved = activeAuthorityPolicy.status === "approved" && typeof activeAuthorityPolicy.approvedSourceVm === "string";
 const enablementApproved = activeAuthorityPolicy.enablement?.status === "approved";
-const ollamaEligible = authorityApproved && enablementApproved;
+const ollamaEligible = authorityApproved
+  && enablementApproved
+  && BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityDisabledReason === null;
 const activeAuthorityDisabledReason = authorityOnHold
   ? "ollama_authority_policy_unresolved"
   : !enablementApproved
@@ -84,6 +86,7 @@ test("only a complete reviewed authority policy can select a source VM", () => {
     { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, unreviewedEndpoint: "http://127.0.0.1" } },
     { ...validApprovedPolicy, defaults: { ...validApprovedPolicy.defaults, allowOllamaProviderCalls: true } },
     { ...validApprovedPolicy, enablement: { ...validApprovedPolicy.enablement, automaticConsent: true } },
+    { ...validApprovedPolicy, enablement: { status: "hold_requires_separate_review", claim: "separate_review_required" } },
     { ...validApprovedPolicy, enablement: { ...validApprovedPolicy.enablement, expiresAt: "2000-01-01T00:00:00Z" } },
     { ...validApprovedPolicy, unreviewedActivation: true },
   ]) {
