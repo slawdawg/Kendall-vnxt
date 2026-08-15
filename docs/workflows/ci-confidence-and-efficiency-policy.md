@@ -73,10 +73,12 @@ must return structured, reviewable output containing:
 - whether the result is known-safe, elevated, or fail-closed unknown.
 
 The planner inventory must also enumerate every baseline-only aggregate gate
-(including documentation-authority, installation, and other universal policy
-checks), its risk owner, trigger, and required execution owner. A proposed
-profile may not accidentally omit a gate merely because it is not represented
-as a selected component bundle.
+(including documentation-authority, installation, clean-install, and other
+universal policy checks), its risk owner, trigger, and required execution
+owner. The delivery graph must materialize those inventory entries as mandatory
+baseline nodes before planner-selected component bundles are deduplicated or
+the final fan-in is assembled. A proposed profile may not accidentally omit a
+gate merely because it is not represented as a selected component bundle.
 
 Unknown paths and shared/high-risk boundaries fail closed to an explicit broad
 policy. They must not accidentally trigger every unrelated component merely
@@ -341,11 +343,13 @@ The migration path is deliberately evidence-first:
 1. retain the current aggregate local `check` profile while it is the effective
    required behavior and record its component-level timing;
 2. add a delivery profile that consumes the same structured planner selection
-   as CI: complete the planner quick-fail stage (`quickFailCommands` and
-   `jsonParseFiles`), then build an expanded, de-duplicated command graph from
-   `fast`'s integrity-only leaves, exactly the selected independent component
-   bundle(s), and the stable final fan-in. Each semantic command executes once;
-   dependent gates consume its result rather than rerunning it;
+as CI: complete the planner quick-fail stage (`quickFailCommands` and
+`jsonParseFiles`), materialize every baseline-only inventory gate as an
+explicit mandatory graph node, then build an expanded, de-duplicated command
+graph from those baseline nodes, `fast`'s integrity-only leaves, exactly the
+selected independent component bundle(s), and the stable final fan-in. Each
+semantic command executes once; dependent gates consume its result rather than
+rerunning it;
 3. run the proposed profile and the existing aggregate profile on the same
    representative heads for each independent planner surface: documentation
    and baseline-only aggregate checks, JavaScript/dashboard-only, supervisor
