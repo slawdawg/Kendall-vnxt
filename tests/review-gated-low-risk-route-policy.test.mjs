@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { buildFakeReviewInput } from "../scripts/lib/review-gated-low-risk-fake-adapter.mjs";
@@ -32,8 +35,8 @@ function validOllamaBackup(sourceVm) {
   };
 }
 
-test("only a complete reviewed authority policy can select a source VM", () => {
-  const validApprovedPolicy = {
+function approvedAuthorityPolicy() {
+  return {
     schemaVersion: 1,
     authorityFamily: "local-provider-execution",
     status: "approved",
@@ -45,6 +48,10 @@ test("only a complete reviewed authority policy can select a source VM", () => {
     route: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, retentionMode: "metadata-only" },
     defaults: { allowLocalProviderCalls: false, allowOllamaProviderCalls: false, allowAutomaticOllamaLocalEvidence: false },
   };
+}
+
+test("only a complete reviewed authority policy can select a source VM", () => {
+  const validApprovedPolicy = approvedAuthorityPolicy();
   assert.equal(parseLocalProviderAuthorityPolicy(validApprovedPolicy).approvedSourceVm, "192.168.1.118");
   for (const malformed of [
     { ...validApprovedPolicy, candidateSourceVms: [validApprovedPolicy.candidateSourceVms[0], validApprovedPolicy.candidateSourceVms[0]] },
@@ -58,6 +65,38 @@ test("only a complete reviewed authority policy can select a source VM", () => {
     const parsed = parseLocalProviderAuthorityPolicy(malformed);
     assert.equal(parsed.status, "invalid");
     assert.equal(parsed.approvedSourceVm, null);
+  }
+});
+
+test("authority policy parsing rejects excessive nesting before consumers can diverge", () => {
+  let nested = null;
+  for (let depth = 0; depth < 65; depth += 1) nested = { ignored: nested };
+  assert.equal(
+    parseLocalProviderAuthorityPolicyDocument(JSON.stringify({ ...approvedAuthorityPolicy(), ignored: nested })).status,
+    "invalid",
+  );
+});
+
+test("long-lived route policy modules reload a revoked authority record for every decision", async () => {
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "kendall-authority-policy-"));
+  const policyDirectory = join(temporaryRoot, "docs", "workflows");
+  const moduleDirectory = join(temporaryRoot, "scripts", "lib");
+  const policyPath = join(policyDirectory, "local-provider-authority-policy-v1.json");
+  const modulePath = join(moduleDirectory, "review-gated-low-risk-route-policy.mjs");
+  mkdirSync(policyDirectory, { recursive: true });
+  mkdirSync(moduleDirectory, { recursive: true });
+  copyFileSync(new URL("../scripts/lib/review-gated-low-risk-route-policy.mjs", import.meta.url), modulePath);
+  try {
+    writeFileSync(policyPath, JSON.stringify(approvedAuthorityPolicy()), "utf8");
+    const isolatedPolicy = await import(`${pathToFileURL(modulePath).href}?authority-reload=${Date.now()}`);
+    assert.equal(isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.118")).status, "READY");
+    const revoked = { ...approvedAuthorityPolicy(), status: "hold_conflicting_source_vm", approvedSourceVm: null };
+    writeFileSync(policyPath, JSON.stringify(revoked), "utf8");
+    const packet = isolatedPolicy.evaluateBoundedReviewRoute(validOllamaBackup("192.168.1.118"));
+    assert.equal(packet.status, "HOLD");
+    assert.equal(packet.disabledReason, "ollama_authority_policy_unresolved");
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
   }
 });
 

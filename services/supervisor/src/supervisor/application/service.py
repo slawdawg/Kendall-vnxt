@@ -27,6 +27,7 @@ CANONICAL_OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions"
 CANONICAL_OLLAMA_MODEL = "qwen3:14b"
 CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS = 2
 CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS = 120
+MAX_LOCAL_PROVIDER_AUTHORITY_POLICY_DEPTH = 64
 LOCAL_PROVIDER_AUTHORITY_POLICY_PATH = (
     Path(__file__).resolve().parents[5] / "docs/workflows/local-provider-authority-policy-v1.json"
 )
@@ -87,6 +88,24 @@ def _matches_canonical_timeout(value: object, expected: int) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == expected
 
 
+def _json_document_exceeds_depth_limit(value: object, maximum_depth: int = MAX_LOCAL_PROVIDER_AUTHORITY_POLICY_DEPTH) -> bool:
+    """Reject policy inputs that one independent consumer cannot parse safely.
+
+    Use an explicit stack rather than recursive traversal so this check itself
+    remains reliable for hostile, deeply nested unknown JSON members.
+    """
+    pending: list[tuple[object, int]] = [(value, 1)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > maximum_depth:
+            return True
+        if isinstance(current, dict):
+            pending.extend((nested, depth + 1) for nested in current.values())
+        elif isinstance(current, list):
+            pending.extend((nested, depth + 1) for nested in current)
+    return False
+
+
 def _load_local_provider_authority_policy() -> dict[str, object]:
     """Load the versioned authority record as a closed, fail-closed contract."""
     try:
@@ -98,6 +117,8 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
         return _invalid_local_provider_authority_policy()
     if not isinstance(raw_policy, dict):
+        return _invalid_local_provider_authority_policy()
+    if _json_document_exceeds_depth_limit(raw_policy):
         return _invalid_local_provider_authority_policy()
 
     candidates = raw_policy.get("candidateSourceVms")

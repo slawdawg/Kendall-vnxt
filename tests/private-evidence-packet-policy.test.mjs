@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { evaluatePrivateEvidencePacket, PRIVATE_EVIDENCE_POLICY_DEFAULTS } from "../scripts/lib/private-evidence-packet-policy.mjs";
@@ -88,6 +91,47 @@ test("active authority state governs exact Ollama backup packets", () => {
         sourceVm,
       );
     }
+  }
+});
+
+test("long-lived private-evidence modules reload a revoked authority record for every decision", async () => {
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "kendall-private-authority-policy-"));
+  const policyDirectory = join(temporaryRoot, "docs", "workflows");
+  const moduleDirectory = join(temporaryRoot, "scripts", "lib");
+  const policyPath = join(policyDirectory, "local-provider-authority-policy-v1.json");
+  const routeModulePath = join(moduleDirectory, "review-gated-low-risk-route-policy.mjs");
+  const privateModulePath = join(moduleDirectory, "private-evidence-packet-policy.mjs");
+  mkdirSync(policyDirectory, { recursive: true });
+  mkdirSync(moduleDirectory, { recursive: true });
+  copyFileSync(new URL("../scripts/lib/review-gated-low-risk-route-policy.mjs", import.meta.url), routeModulePath);
+  copyFileSync(new URL("../scripts/lib/private-evidence-packet-policy.mjs", import.meta.url), privateModulePath);
+  const approved = {
+    schemaVersion: 1,
+    authorityFamily: "local-provider-execution",
+    status: "approved",
+    approvedSourceVm: "192.168.1.118",
+    candidateSourceVms: [
+      { sourceVm: "192.168.1.118", claim: "accepted_operator_approval", provenanceRef: "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" },
+      { sourceVm: "192.168.1.8", claim: "current_routed_source_observation", provenanceRef: "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md" },
+    ],
+    route: { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, retentionMode: "metadata-only" },
+    defaults: { allowLocalProviderCalls: false, allowOllamaProviderCalls: false, allowAutomaticOllamaLocalEvidence: false },
+  };
+  const packet = valid({
+    provider: "ollama", routeRole: "backup-review", fallbackUsed: true, primaryFailure: "HTTP 429",
+    endpoint: approved.route.endpoint, model: approved.route.model, destinationAllowlist: ["ollama"],
+    routeProof: { endpoint: approved.route.endpoint, model: approved.route.model, sourceVm: approved.approvedSourceVm, connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
+  });
+  try {
+    writeFileSync(policyPath, JSON.stringify(approved), "utf8");
+    const isolatedPolicy = await import(`${pathToFileURL(privateModulePath).href}?authority-reload=${Date.now()}`);
+    assert.equal(isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW }).status, "READY");
+    writeFileSync(policyPath, JSON.stringify({ ...approved, status: "hold_conflicting_source_vm", approvedSourceVm: null }), "utf8");
+    const revoked = isolatedPolicy.evaluatePrivateEvidencePacket(packet, { now: NOW });
+    assert.equal(revoked.status, "HOLD");
+    assert.ok(revoked.blockers.includes("ollama_authority_policy_unresolved"));
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
   }
 });
 

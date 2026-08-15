@@ -1659,6 +1659,34 @@ def test_ollama_provider_gate_fails_closed_when_authority_policy_parser_recurses
     assert policy["approved_source_vm"] is None
 
 
+def test_ollama_provider_gate_rejects_authority_policy_exceeding_shared_depth_limit(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    nested: object = None
+    for _ in range(65):
+        nested = {"ignored": nested}
+    policy["ignored"] = nested
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+
+    assert state["authority_status"] == "invalid"
+    assert state["enabled"] is False
+    assert state["disabled_reason"] == "ollama_authority_policy_invalid"
+
+
 def test_runtime_evidence_navigator_reflects_resolved_authority_policy(tmp_path, monkeypatch) -> None:
     policy_path = tmp_path / "local-provider-authority-policy-v1.json"
     policy = json.loads(
