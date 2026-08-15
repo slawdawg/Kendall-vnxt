@@ -12853,9 +12853,7 @@ try {
       pr.mergeStateStatus = "UNKNOWN";
       writeFileSync(prStatePath, `${JSON.stringify(pr, null, 2)}\n`);
 
-      const result = runFixtureScript(
-        fixture,
-        [
+      const recoveryArgs = [
           "verify-pr-gates", "resumed-task", "--apply", "--post-merge-recovery",
           "--approval", recoveryApproval,
           "--recovery-delivery-proof", recoveryDeliveryProof,
@@ -12870,7 +12868,10 @@ try {
           "--merge-method", `gh pr merge 456 --merge --match-head-commit ${expectedHead}`,
           "--rollback-path", "git revert -m 1 merged-commit",
           "--state-root", fixture.stateRoot,
-        ],
+        ];
+      const result = runFixtureScript(
+        fixture,
+        recoveryArgs,
         { cwd: fixture.worktree, env: fixture.env },
       );
       assert(result.code === 0, result.stderr || result.stdout);
@@ -12881,6 +12882,14 @@ try {
       assert(updated.pr_gate_evidence?.postMergeRecovery?.approval?.evidence === recoveryApproval, "bound recovery approval was not retained");
       assert(updated.pr_gate_evidence?.postMergeRecovery?.deliveryIdentity?.proof === recoveryDeliveryProof, "bound delivery identity proof was not retained");
       assert(updated.events.some((event) => event.type === "post_merge_pr_gate_recovery_recorded"), "recovery event missing");
+
+      // Losing the top-level packet later must not make this exceptional
+      // recovery repeatable: immutable history is the once-only guard.
+      delete updated.pr_gate_evidence;
+      writeFileSync(manifestPath, `${JSON.stringify(updated, null, 2)}\n`);
+      const replay = runFixtureScript(fixture, recoveryArgs, { cwd: fixture.worktree, env: fixture.env });
+      assert(replay.code !== 0, "post-merge recovery unexpectedly replayed after retained history");
+      assert(replay.stderr.includes("once-only"), replay.stderr || replay.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
