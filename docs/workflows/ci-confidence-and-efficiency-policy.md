@@ -235,6 +235,18 @@ remain in the primary distribution and are labeled rather than silently
 discarded. An acceptance packet may additionally report a predeclared,
 objective exclusion rule, but it must retain and compare the inclusive result.
 
+Use one deterministic metric convention for every packet: sort finite numeric
+observations and take nearest-rank P95 at rank `ceil(0.95 * n)`, with P50 at
+rank `ceil(0.50 * n)`; round reported durations to the nearest millisecond
+after calculating the percentile. Duration metrics use the same units and
+rounding on both sides of a pair. Failure, flake, and retry rates use the
+number of ordinary baseline/proposed runs for the selected vector as their
+denominator; the required controlled-failure cohort is reported separately
+and is not counted as an ordinary product failure. A failed ordinary run is a
+failure, a rerun whose outcome changes from failure to success (or success to
+failure) is a flake observation, and each automatic rerun invocation is a
+retry; the packet must report the raw counts and denominator before rates.
+
 A proposed route may promote only when it has no loss of required failure
 detection, no increase in failure/flake/retry rates, no more than a 10% P95
 regression in **each** recorded duration metric versus the corresponding
