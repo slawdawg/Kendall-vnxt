@@ -1,8 +1,9 @@
-const OLLAMA_ENDPOINT = "http://192.168.1.128:11434/v1/chat/completions";
-const OLLAMA_MODEL = "qwen3:14b";
-const OLLAMA_SOURCE_VM = "192.168.1.8";
-const OLLAMA_CONNECT_TIMEOUT_SECONDS = 2;
-const OLLAMA_TOTAL_TIMEOUT_SECONDS = 120;
+import { readFileSync } from "node:fs";
+
+const AUTHORITY_POLICY_PATH = new URL("../../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url);
+const LOCAL_PROVIDER_AUTHORITY_UNRESOLVED = "ollama_authority_policy_unresolved";
+const LOCAL_PROVIDER_AUTHORITY_INVALID = "ollama_authority_policy_invalid";
+const MAX_AUTHORITY_POLICY_JSON_DEPTH = 64;
 const CLAUDE_ALLOWED_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const FALLBACK_FAILURES = new Set(["unavailable", "empty", "rate-limited"]);
 
@@ -14,9 +15,10 @@ export function evaluateBoundedReviewRoute(input = {}) {
   const source = input && typeof input === "object" ? input : {};
   const role = text(source.role).toLowerCase();
   const blockers = [];
+  const authority = currentAuthorityPolicy();
 
   if (role === "backup-review") {
-    validateOllamaRoute(source, blockers);
+    validateOllamaRoute(source, blockers, authority);
     if (source.fallbackUsed !== true || !isApprovedFallbackFailure(source.primaryFailure)) {
       blockers.push("Ollama backup requires an approved Claude fallback outcome");
     }
@@ -28,6 +30,11 @@ export function evaluateBoundedReviewRoute(input = {}) {
 
   const eligible = blockers.length === 0;
   const reviewEligible = eligible;
+  const authorityDisabledReason = blockers.includes(LOCAL_PROVIDER_AUTHORITY_INVALID)
+    ? LOCAL_PROVIDER_AUTHORITY_INVALID
+    : blockers.includes(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED)
+      ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED
+      : null;
 
   return {
     schemaVersion: 2,
@@ -40,6 +47,8 @@ export function evaluateBoundedReviewRoute(input = {}) {
     activationEligible: false,
     allowed: eligible,
     blockers: unique(blockers),
+    authorityStatus: role === "backup-review" ? authority.policy.status : null,
+    disabledReason: authorityDisabledReason,
     metadataOnly: true,
     rawPayloadRetained: false,
     execution: {
@@ -79,14 +88,19 @@ export function selectOrderedReviewRoute({ primary = {}, backup = {}, primaryFai
   };
 }
 
-function validateOllamaRoute(route, blockers) {
+function validateOllamaRoute(route, blockers, authority) {
+  if (authority.policy.status === "invalid") {
+    blockers.push(LOCAL_PROVIDER_AUTHORITY_INVALID);
+  } else if (authority.policy.status !== "approved" || authority.sourceVm === null) {
+    blockers.push(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
+  }
   rejectUnknownKeys(route, ["role", "provider", "endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed", "fallbackUsed", "primaryFailure"], blockers);
   if (text(route.provider).toLowerCase() !== "ollama") blockers.push("backup-review role requires Ollama");
-  if (text(route.endpoint) !== OLLAMA_ENDPOINT) blockers.push("Ollama endpoint is outside the approved VM-to-host boundary");
-  if (text(route.model) !== OLLAMA_MODEL) blockers.push("Ollama model must remain qwen3:14b");
-  if (text(route.sourceVm) !== OLLAMA_SOURCE_VM) blockers.push("Ollama source VM is not the approved Kendall VM");
-  if (route.connectTimeoutSeconds !== OLLAMA_CONNECT_TIMEOUT_SECONDS) blockers.push("Ollama connect timeout must remain 2 seconds");
-  if (route.totalTimeoutSeconds !== OLLAMA_TOTAL_TIMEOUT_SECONDS) blockers.push("Ollama total timeout must remain 120 seconds");
+  if (text(route.endpoint) !== authority.endpoint) blockers.push("Ollama endpoint is outside the approved VM-to-host boundary");
+  if (text(route.model) !== authority.model) blockers.push("Ollama model must remain qwen3:14b");
+  if (text(route.sourceVm) !== authority.sourceVm) blockers.push("Ollama source VM is not approved by the authority policy");
+  if (route.connectTimeoutSeconds !== authority.connectTimeoutSeconds) blockers.push("Ollama connect timeout must remain 2 seconds");
+  if (route.totalTimeoutSeconds !== authority.totalTimeoutSeconds) blockers.push("Ollama total timeout must remain 120 seconds");
   if (route.metadataOnly !== true || route.rawPayloadRetained !== false) blockers.push("Ollama route must retain metadata only");
   if (route.publicExposure !== false || route.credentialsRead !== false || route.modelDiscovery !== false || route.endpointDiscovery !== false) blockers.push("Ollama safety controls must be explicit false");
   if (route.reviewPass !== false || route.activationAllowed !== false) blockers.push("backup-review authority controls must be explicit false");
@@ -125,6 +139,199 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function policyText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function policyExactText(value) {
+  return typeof value === "string" && value.length > 0 && value.trim() === value ? value : null;
+}
+
+function loadAuthorityPolicy() {
+  try {
+    return parseLocalProviderAuthorityPolicyDocument(readFileSync(AUTHORITY_POLICY_PATH, "utf8"));
+  } catch {
+    return invalidAuthorityPolicy();
+  }
+}
+
+/** Parse JSON without permitting duplicate object members to overwrite policy fields. */
+export function parseJsonRejectingDuplicateKeys(source) {
+  let index = 0;
+  let depth = 0;
+
+  const skipWhitespace = () => {
+    while (/[ \t\r\n]/.test(source[index] ?? "")) index += 1;
+  };
+  const expect = (token) => {
+    if (source[index] !== token) throw new SyntaxError(`Expected ${token}`);
+    index += 1;
+  };
+  const parseString = () => {
+    const start = index;
+    expect('"');
+    while (index < source.length) {
+      if (source[index] === "\\") {
+        index += 2;
+      } else if (source[index] === '"') {
+        index += 1;
+        return JSON.parse(source.slice(start, index));
+      } else {
+        index += 1;
+      }
+    }
+    throw new SyntaxError("Unterminated JSON string");
+  };
+  const parsePrimitive = () => {
+    const start = index;
+    while (index < source.length && !/[ \t\r\n,}\]]/.test(source[index])) index += 1;
+    return JSON.parse(source.slice(start, index));
+  };
+  const parseArray = () => {
+    const values = [];
+    depth += 1;
+    if (depth > MAX_AUTHORITY_POLICY_JSON_DEPTH) throw new RangeError("Authority policy nesting exceeds the supported limit");
+    expect("[");
+    skipWhitespace();
+    if (source[index] === "]") {
+      index += 1;
+      depth -= 1;
+      return values;
+    }
+    while (true) {
+      values.push(parseValue());
+      skipWhitespace();
+      if (source[index] === "]") {
+        index += 1;
+        depth -= 1;
+        return values;
+      }
+      expect(",");
+      skipWhitespace();
+    }
+  };
+  const parseObject = () => {
+    const result = Object.create(null);
+    const keys = new Set();
+    depth += 1;
+    if (depth > MAX_AUTHORITY_POLICY_JSON_DEPTH) throw new RangeError("Authority policy nesting exceeds the supported limit");
+    expect("{");
+    skipWhitespace();
+    if (source[index] === "}") {
+      index += 1;
+      depth -= 1;
+      return result;
+    }
+    while (true) {
+      if (source[index] !== '"') throw new SyntaxError("Expected JSON object key");
+      const key = parseString();
+      if (keys.has(key)) throw new SyntaxError(`Duplicate JSON object key: ${key}`);
+      keys.add(key);
+      skipWhitespace();
+      expect(":");
+      skipWhitespace();
+      result[key] = parseValue();
+      skipWhitespace();
+      if (source[index] === "}") {
+        index += 1;
+        depth -= 1;
+        return result;
+      }
+      expect(",");
+      skipWhitespace();
+    }
+  };
+  const parseValue = () => {
+    skipWhitespace();
+    if (source[index] === "{") return parseObject();
+    if (source[index] === "[") return parseArray();
+    if (source[index] === '"') return parseString();
+    return parsePrimitive();
+  };
+
+  const value = parseValue();
+  skipWhitespace();
+  if (index !== source.length) throw new SyntaxError("Unexpected trailing JSON data");
+  return value;
+}
+
+export function parseLocalProviderAuthorityPolicyDocument(source) {
+  try {
+    return parseLocalProviderAuthorityPolicy(parseJsonRejectingDuplicateKeys(source));
+  } catch {
+    return invalidAuthorityPolicy();
+  }
+}
+
+/**
+ * Parse the versioned policy as a closed contract. A future reviewed policy
+ * transition may select a candidate VM, but malformed or partial "approved"
+ * data can never turn the route on.
+ */
+export function parseLocalProviderAuthorityPolicy(policy) {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return invalidAuthorityPolicy();
+  const candidates = Array.isArray(policy.candidateSourceVms) ? policy.candidateSourceVms : [];
+  if (policy.schemaVersion !== 1 || policy.authorityFamily !== "local-provider-execution" || candidates.length !== 2) {
+    return invalidAuthorityPolicy();
+  }
+
+  const candidateByVm = new Map();
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return invalidAuthorityPolicy();
+    const sourceVm = policyExactText(candidate.sourceVm);
+    if (!sourceVm || candidateByVm.has(sourceVm)) return invalidAuthorityPolicy();
+    candidateByVm.set(sourceVm, candidate);
+  }
+  if (
+    candidateByVm.get("192.168.1.118")?.claim !== "accepted_operator_approval"
+    || candidateByVm.get("192.168.1.118")?.provenanceRef !== "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"
+    || candidateByVm.get("192.168.1.8")?.claim !== "current_routed_source_observation"
+    || candidateByVm.get("192.168.1.8")?.provenanceRef !== "docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md"
+  ) return invalidAuthorityPolicy();
+
+  const route = policy.route;
+  const defaults = policy.defaults;
+  if (
+    !route || typeof route !== "object" || Array.isArray(route)
+    || policyExactText(route.endpoint) !== "http://192.168.1.128:11434/v1/chat/completions"
+    || policyExactText(route.model) !== "qwen3:14b"
+    || route.connectTimeoutSeconds !== 2
+    || route.totalTimeoutSeconds !== 120
+    || route.retentionMode !== "metadata-only"
+    || !defaults || typeof defaults !== "object" || Array.isArray(defaults)
+    || defaults.allowLocalProviderCalls !== false
+    || defaults.allowOllamaProviderCalls !== false
+    || defaults.allowAutomaticOllamaLocalEvidence !== false
+  ) return invalidAuthorityPolicy();
+
+  // Authority values are identifiers, not display text. Do not trim here:
+  // Python and the policy checker require an exact candidate match as well.
+  const approvedSourceVm = typeof policy.approvedSourceVm === "string" ? policy.approvedSourceVm : null;
+  if (policy.status === "hold_conflicting_source_vm" && policy.approvedSourceVm === null) {
+    return { ...policy, approvedSourceVm: null, route: { ...route } };
+  }
+  if (policy.status === "approved" && approvedSourceVm && candidateByVm.has(approvedSourceVm)) {
+    return { ...policy, approvedSourceVm, route: { ...route } };
+  }
+  return invalidAuthorityPolicy();
+}
+
+function invalidAuthorityPolicy() {
+  return { status: "invalid", approvedSourceVm: null, route: {} };
+}
+
+function currentAuthorityPolicy() {
+  const policy = loadAuthorityPolicy();
+  return {
+    policy,
+    endpoint: policyText(policy.route?.endpoint),
+    model: policyText(policy.route?.model),
+    sourceVm: policyText(policy.approvedSourceVm) || null,
+    connectTimeoutSeconds: policy.route?.connectTimeoutSeconds,
+    totalTimeoutSeconds: policy.route?.totalTimeoutSeconds,
+  };
+}
+
 function unique(values) {
   return [...new Set(values)];
 }
@@ -134,13 +341,31 @@ export function isApprovedFallbackFailure(value) {
   return FALLBACK_FAILURES.has(normalized) || normalized === "429" || normalized === "http 429";
 }
 
-export const BOUNDED_ROUTE_POLICY_DEFAULTS = Object.freeze({
-  ollamaEndpoint: OLLAMA_ENDPOINT,
-  ollamaModel: OLLAMA_MODEL,
-  ollamaSourceVm: OLLAMA_SOURCE_VM,
-  ollamaConnectTimeoutSeconds: OLLAMA_CONNECT_TIMEOUT_SECONDS,
-  ollamaTotalTimeoutSeconds: OLLAMA_TOTAL_TIMEOUT_SECONDS,
-  claudeAllowedTools: [...CLAUDE_ALLOWED_TOOLS],
-  claudeMaxBudgetUsd: 1,
-  orderedRoles: Object.freeze({ primary: "primary-review", backup: "backup-review" }),
-});
+export function getBoundedRoutePolicyDefaults() {
+  const authority = currentAuthorityPolicy();
+  return {
+    localProviderAuthorityStatus: authority.policy.status,
+    localProviderAuthorityResolved: authority.policy.status === "approved" && authority.sourceVm !== null,
+    localProviderAuthorityDisabledReason: authority.policy.status === "invalid"
+      ? LOCAL_PROVIDER_AUTHORITY_INVALID
+      : LOCAL_PROVIDER_AUTHORITY_UNRESOLVED,
+    ollamaEndpoint: authority.endpoint,
+    ollamaModel: authority.model,
+    ollamaSourceVm: authority.sourceVm,
+    ollamaConnectTimeoutSeconds: authority.connectTimeoutSeconds,
+    ollamaTotalTimeoutSeconds: authority.totalTimeoutSeconds,
+    claudeAllowedTools: [...CLAUDE_ALLOWED_TOOLS],
+    claudeMaxBudgetUsd: 1,
+    orderedRoles: Object.freeze({ primary: "primary-review", backup: "backup-review" }),
+  };
+}
+
+export const BOUNDED_ROUTE_POLICY_DEFAULTS = Object.freeze(Object.defineProperties(
+  {},
+  Object.fromEntries(
+    Object.keys(getBoundedRoutePolicyDefaults()).map((key) => [key, {
+      enumerable: true,
+      get: () => getBoundedRoutePolicyDefaults()[key],
+    }]),
+  ),
+));

@@ -148,13 +148,31 @@ def _uds_request(socket_path: Path, path: str, *, method: str = "POST", payload:
         client.sendall(
             f"{method} {path} HTTP/1.1\r\nHost: supervisor\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode("ascii") + body
         )
-        chunks = []
+        response = bytearray()
+        header_end = None
+        content_length = None
         while True:
             chunk = client.recv(65536)
             if not chunk:
                 break
-            chunks.append(chunk)
-    raw = b"".join(chunks).decode("utf8")
+            response.extend(chunk)
+            if header_end is None:
+                header_end = response.find(b"\r\n\r\n")
+                if header_end == -1:
+                    header_end = None
+                    continue
+                header = bytes(response[:header_end]).decode("iso-8859-1")
+                header_values = {
+                    name.strip().lower(): value.strip()
+                    for line in header.split("\r\n")[1:]
+                    if ":" in line
+                    for name, value in [line.split(":", 1)]
+                }
+                if "content-length" in header_values:
+                    content_length = int(header_values["content-length"])
+            if content_length is not None and len(response) - (header_end + 4) >= content_length:
+                break
+    raw = bytes(response).decode("utf8")
     header, text = raw.split("\r\n\r\n", 1)
     return _HttpResponse(int(header.split()[1]), json.loads(text), text)
 

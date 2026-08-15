@@ -104,31 +104,31 @@ asks for takeover.
 Autonomous best-judgment choices must be recorded through metadata-only heartbeat decision evidence.
 Include the decision, rationale, and next safe action before the runner continues.
 
-## Optional local Ollama review lane
+## Optional local Ollama review lane (authority hold)
 
-The approved LAN route is `http://192.168.1.128:11434/v1/chat/completions` using
-`qwen3:14b`, from the current VM source `192.168.1.8`. Ollama must be running on
-the host and reachable on TCP port `11434` before enabling the lane. The
-supervisor enables the exact local Ollama gates by default in this local profile.
-Automatic local-policy consent replaces a per-call operator prompt for this
-local-only explanation capability; it is separate from the Claude-primary,
-Ollama-backup review route and never fabricates a Claude fallback. The exact
-route, metadata-only boundary, redaction, size, timeout, and rollback guards
-remain mandatory. Set the two `SUPERVISOR_ALLOW_*` gates or
-`SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE` to `false` to disable it:
+The endpoint `http://192.168.1.128:11434/v1/chat/completions` and model
+`qwen3:14b` are agreed route metadata, but they do not authorize a call. The
+accepted approval records source VM `192.168.1.118`; a later routed-source
+observation records `192.168.1.8`. The versioned
+[`local-provider-authority-policy-v1.json`](./local-provider-authority-policy-v1.json)
+record therefore holds both candidates with no approved source VM.
+
+All local-provider and automatic-consent gates default false. Do not enable the
+lane, probe the provider, or set an approved source VM until a reviewed authority
+decision updates the policy record:
 
 ```bash
 export SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=false
 export SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS=false
+export SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE=false
 export SUPERVISOR_OLLAMA_ENDPOINT_URL=http://192.168.1.128:11434/v1/chat/completions
 export SUPERVISOR_OLLAMA_MODEL_ID=qwen3:14b
-export SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM=192.168.1.8
 ```
 
-The local evidence explanation endpoint can run under the automatic policy when
-the request records its workflow event. Response bodies, prompts, completions,
-and reasoning are not retained. Disable the gates or automatic policy flag to
-roll back the lane.
+The local evidence explanation endpoint reports
+`ollama_authority_policy_unresolved` and does not create automatic approval or
+call the adapter. To roll back any later policy experiment, restore the three
+flags above to `false`, restart the supervisor, and verify zero adapter calls.
 
 Run `pnpm run check:fast` before long local or CI-style gates when changes touch
 workflow policy, workspace delivery, sandbox-boundary handling, anti-churn

@@ -6,19 +6,21 @@ Local BMAD packets, planning notes, PRDs, epics, stories, research, and handoffs
 
 ## Local Provider Execution Contract
 
-Status: approval-required, non-executing packet
+Status: authority-conflict hold, non-executing
 
 Authority family: `local-provider-execution`
 
 Operation candidate: one bounded metadata-only Ollama provider operation
 
-It does not call Ollama, discover models, expand provider support, mutate source, or retain raw provider content. Automatic local policy approval is a separate
-runtime path guarded by the exact settings, packet redaction, timeout, and
-rollback controls below.
+It does not call Ollama, discover models, expand provider support, mutate source,
+or retain raw provider content. The versioned
+[`local-provider-authority-policy-v1.json`](./local-provider-authority-policy-v1.json)
+record is the machine-readable authority source. Its unresolved status disables
+automatic local policy approval and every Ollama adapter path.
 
-Endpoint: `http://192.168.1.128:11434/v1/chat/completions`
+Agreed endpoint metadata: `http://192.168.1.128:11434/v1/chat/completions`
 
-Model: `qwen3:14b`
+Agreed model metadata: `qwen3:14b`
 
 Retention: metadata-only event evidence and artifact references only.
 
@@ -26,14 +28,17 @@ Do not call this provider from this packet alone.
 
 Required controls:
 
-- Source VM metadata must be `192.168.1.8`; the endpoint and model must match exactly.
+- The accepted 2026-06 approval records `192.168.1.118`, while the later routed-source observation records `192.168.1.8`; neither is approved while the policy status is `hold_conflicting_source_vm`.
+- Exact endpoint and model metadata are insufficient without one explicitly approved source VM.
 - Connect timeout is 2 seconds and total timeout is 120 seconds.
 - Keep public exposure, endpoint/model discovery, credentials, and raw payload retention disabled.
-- A READY route is not a review PASS and cannot activate a pilot.
+- Keep broad local-provider, Ollama-specific, and automatic local-evidence gates disabled by default.
+- No Ollama route is READY while provider authority is unresolved.
 
 Stop lines:
 
 - Do not call any endpoint other than the exact bounded route from an approved pilot.
+- Do not infer approval from either candidate source VM or from current settings.
 - Do not discover endpoints or models.
 - Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.
 - Do not read credentials or external sessions.
@@ -55,20 +60,19 @@ digest, byte count, and allowlisted repository-relative paths; transient
 sanitized diff text is never retained locally after provider dispatch.
 
 Claude is the default primary-review route for every review workflow and has no
-repository per-run dollar cap. Ollama may receive a packet only as the exact
-qwen3:14b backup after a typed Claude unavailable, vetoed, scope-rejected,
-empty, or bounded-failure result; internal BMAD is the final local fallback.
+repository per-run dollar cap. The exact qwen3:14b Ollama backup shape remains
+documented, but it cannot receive a packet while local-provider authority is
+unresolved; internal BMAD is the final local fallback.
 Credentials, secrets, tokens, MFA/account-security data, excluded vault
 folders, customer/production data, broad repository/vault dumps, raw prompts,
 raw completions, and raw provider payloads remain forbidden.
 
 This exception permits packet send eligibility only. The local Ollama evidence
-explanation path is a separate `local-policy-review` capability: it may use
-the recorded automatic local-policy consent after the exact safety gates pass,
-but it is not the Claude-to-Ollama ordered review route and cannot claim a
-Claude fallback. It does not activate a review, authorize source mutation,
-delivery, merge, cleanup, or persistent provider memory. Revocation or either
-disabled gate stops the path and preserves only the metadata receipt.
+explanation path is a separate `local-policy-review` capability, but automatic
+local-policy consent is disabled while the source-VM authority conflict remains.
+It is not the Claude-to-Ollama ordered review route and cannot claim a Claude
+fallback. It does not activate a review, authorize source mutation, delivery,
+merge, cleanup, or persistent provider memory.
 
 ## Premium Execution Contract
 

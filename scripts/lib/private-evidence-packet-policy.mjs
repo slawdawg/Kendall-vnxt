@@ -1,4 +1,4 @@
-import { BOUNDED_ROUTE_POLICY_DEFAULTS, isApprovedFallbackFailure } from "./review-gated-low-risk-route-policy.mjs";
+import { getBoundedRoutePolicyDefaults, isApprovedFallbackFailure } from "./review-gated-low-risk-route-policy.mjs";
 
 const MAX_CONTEXT_BYTES = 1024 * 1024;
 const MAX_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -14,6 +14,7 @@ const SENSITIVE = /(?:credential|secret|token|password|mfa|account[\s/\\:._-]*se
 export function evaluatePrivateEvidencePacket(input = {}, options = {}) {
   const packet = input && typeof input === "object" ? input : {};
   const blockers = [];
+  const routePolicyDefaults = getBoundedRoutePolicyDefaults();
   const now = parseTimestamp(options.now);
   const provider = text(packet.provider).toLowerCase();
   const routeRole = text(packet.routeRole).toLowerCase();
@@ -66,9 +67,10 @@ export function evaluatePrivateEvidencePacket(input = {}, options = {}) {
     }
     validateClaudeProof(packet.routeProof, blockers);
   } else if (provider === "ollama") {
+    if (!routePolicyDefaults.localProviderAuthorityResolved) blockers.push(routePolicyDefaults.localProviderAuthorityDisabledReason);
     if (routeRole !== "backup-review" || packet.fallbackUsed !== true || !isApprovedFallbackFailure(packet.primaryFailure)) blockers.push("Ollama private evidence requires an approved Claude fallback outcome");
-    if (packet.endpoint !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaEndpoint || packet.model !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaModel) blockers.push("Ollama destination/model is outside the exact approved route");
-    validateOllamaProof(packet.routeProof, blockers);
+    if (packet.endpoint !== routePolicyDefaults.ollamaEndpoint || packet.model !== routePolicyDefaults.ollamaModel) blockers.push("Ollama destination/model is outside the exact approved route");
+    validateOllamaProof(packet.routeProof, blockers, routePolicyDefaults);
   }
 
   const eligible = blockers.length === 0;
@@ -129,9 +131,9 @@ function validateClaudeProof(proof, blockers) {
   }
 }
 
-function validateOllamaProof(proof, blockers) {
+function validateOllamaProof(proof, blockers, routePolicyDefaults) {
   rejectUnknownKeys(proof, ["endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed"], blockers, "routeProof");
-  if (!proof || proof.endpoint !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaEndpoint || proof.model !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaModel || proof.sourceVm !== BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm || proof.connectTimeoutSeconds !== 2 || proof.totalTimeoutSeconds !== 120 || proof.metadataOnly !== true || proof.rawPayloadRetained !== false || proof.publicExposure !== false || proof.credentialsRead !== false || proof.modelDiscovery !== false || proof.endpointDiscovery !== false || proof.reviewPass !== false || proof.activationAllowed !== false) {
+  if (!proof || proof.endpoint !== routePolicyDefaults.ollamaEndpoint || proof.model !== routePolicyDefaults.ollamaModel || proof.sourceVm !== routePolicyDefaults.ollamaSourceVm || proof.connectTimeoutSeconds !== 2 || proof.totalTimeoutSeconds !== 120 || proof.metadataOnly !== true || proof.rawPayloadRetained !== false || proof.publicExposure !== false || proof.credentialsRead !== false || proof.modelDiscovery !== false || proof.endpointDiscovery !== false || proof.reviewPass !== false || proof.activationAllowed !== false) {
     blockers.push("Ollama route proof is missing or outside the approved controls");
   }
 }

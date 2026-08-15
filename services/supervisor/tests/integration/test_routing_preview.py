@@ -8,6 +8,7 @@ import subprocess
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -1256,10 +1257,10 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
         "local.vllm.disabled",
         "local.llamacpp.disabled",
     }
-    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_provider_gate_not_enabled"
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_authority_policy_unresolved"
     assert checks["ollama-provider-gate"]["affectedWorkers"] == ["local.ollama.disabled"]
     assert any(
-        "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to true" in evidence
+        "automatic local-evidence gates default to false" in evidence
         for evidence in checks["ollama-provider-gate"]["evidence"]
     )
     assert any(
@@ -1333,7 +1334,7 @@ def test_ollama_provider_gate_stays_non_executing_when_broad_gate_is_enabled(tmp
     assert response.status_code == 200
     checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
     assert checks["ollama-provider-gate"]["enabled"] is False
-    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_provider_gate_not_enabled"
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_authority_policy_unresolved"
     assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 
@@ -1343,7 +1344,7 @@ def test_ollama_provider_gate_stays_non_executing_when_broad_gate_is_enabled(tmp
     assert ollama["providerSpecificGateEnabled"] is False
     assert ollama["modelIdConfigured"] is False
     assert ollama["adapterReady"] is False
-    assert ollama["registryState"] == "disabled"
+    assert ollama["registryState"] == "authority_policy_unresolved"
     assert ollama["httpCallsAttempted"] is False
     assert ollama["modelCallsAttempted"] is False
 
@@ -1367,7 +1368,7 @@ def test_ollama_provider_gate_stays_disabled_when_broad_gate_is_disabled(tmp_pat
     assert response.status_code == 200
     checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
     assert checks["ollama-provider-gate"]["enabled"] is False
-    assert checks["ollama-provider-gate"]["disabledReason"] == "local_provider_http_calls_not_enabled"
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_authority_policy_unresolved"
     assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 
@@ -1377,7 +1378,7 @@ def test_ollama_provider_gate_stays_disabled_when_broad_gate_is_disabled(tmp_pat
     assert ollama["providerSpecificGateEnabled"] is True
     assert ollama["modelIdConfigured"] is True
     assert ollama["adapterReady"] is False
-    assert ollama["registryState"] == "disabled"
+    assert ollama["registryState"] == "authority_policy_unresolved"
     assert ollama["httpCallsAttempted"] is False
     assert ollama["modelCallsAttempted"] is False
 
@@ -1402,7 +1403,7 @@ def test_ollama_provider_gate_requires_model_id_before_adapter_readiness(tmp_pat
     assert response.status_code == 200
     checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
     assert checks["ollama-provider-gate"]["enabled"] is False
-    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_model_id_not_configured"
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_authority_policy_unresolved"
     assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 
@@ -1412,7 +1413,7 @@ def test_ollama_provider_gate_requires_model_id_before_adapter_readiness(tmp_pat
     assert ollama["providerSpecificGateEnabled"] is True
     assert ollama["modelIdConfigured"] is False
     assert ollama["adapterReady"] is False
-    assert ollama["registryState"] == "configured_ollama_gate_missing_model"
+    assert ollama["registryState"] == "authority_policy_unresolved"
 
 
 def test_ollama_timeout_settings_require_canonical_values(monkeypatch) -> None:
@@ -1424,6 +1425,26 @@ def test_ollama_timeout_settings_require_canonical_values(monkeypatch) -> None:
 
     settings = Settings()
     assert settings.ollama_connect_timeout_seconds == 3
+
+
+def test_ollama_settings_default_provider_and_automatic_gates_false(monkeypatch) -> None:
+    for name in (
+        "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS",
+        "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS",
+        "SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE",
+        "SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    _reset_supervisor_modules()
+
+    from supervisor.config.settings import Settings
+
+    settings = Settings()
+    assert settings.allow_local_provider_calls is False
+    assert settings.allow_ollama_provider_calls is False
+    assert settings.allow_automatic_ollama_local_evidence is False
+    assert settings.ollama_approved_source_vm == ""
 
 
 def test_ollama_provider_gate_requires_approved_endpoint_before_execution(tmp_path, monkeypatch) -> None:
@@ -1446,7 +1467,7 @@ def test_ollama_provider_gate_requires_approved_endpoint_before_execution(tmp_pa
     assert response.status_code == 200
     checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
     assert checks["ollama-provider-gate"]["enabled"] is False
-    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_endpoint_not_configured"
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_authority_policy_unresolved"
     assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 
@@ -1456,16 +1477,260 @@ def test_ollama_provider_gate_requires_approved_endpoint_before_execution(tmp_pa
     assert ollama["providerSpecificGateEnabled"] is True
     assert ollama["modelIdConfigured"] is True
     assert ollama["adapterReady"] is False
-    assert ollama["registryState"] == "configured_ollama_gate_missing_endpoint"
-    assert ollama["disabledReason"] == "ollama_endpoint_not_configured"
+    assert ollama["registryState"] == "authority_policy_unresolved"
+    assert ollama["disabledReason"] == "ollama_authority_policy_unresolved"
     assert ollama["httpCallsAttempted"] is False
     assert ollama["modelCallsAttempted"] is False
 
 
-def test_ollama_provider_gate_enables_only_approved_host_endpoint_and_model(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "ollama-provider-gate-approved-host.db").as_posix()
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+@pytest.mark.parametrize("source_vm", ["192.168.1.118", "192.168.1.8"])
+def test_ollama_provider_gate_holds_both_source_vm_candidates_despite_exact_endpoint_and_model(
+    tmp_path,
+    monkeypatch,
+    source_vm,
+) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "hold_conflicting_source_vm"
+    policy["approvedSourceVm"] = None
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", source_vm)
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    service = SupervisorService(Settings(), EventBus())
+    ollama_state = service._ollama_provider_gate_state()
+    checks = {check.checkId: check for check in service.get_execution_configuration_checks().checks}
+    proofs = {proof.workerId: proof for proof in service.list_disabled_provider_proofs()}
+
+    assert ollama_state["authority_status"] == "hold_conflicting_source_vm"
+    assert ollama_state["authority_resolved"] is False
+    assert ollama_state["enabled"] is False
+    assert ollama_state["disabled_reason"] == "ollama_authority_policy_unresolved"
+    assert checks["ollama-provider-gate"].enabled is False
+    assert checks["ollama-provider-gate"].disabledReason == "ollama_authority_policy_unresolved"
+    assert checks["ollama-provider-gate"].providerCallsAllowed is False
+    assert checks["ollama-provider-gate"].modelCallsAllowed is False
+    assert "Agreed endpoint metadata: http://192.168.1.128:11434/v1/chat/completions." in checks["ollama-provider-gate"].evidence
+    assert "Agreed model metadata: qwen3:14b." in checks["ollama-provider-gate"].evidence
+
+    ollama = proofs["local.ollama.disabled"]
+    assert ollama.registryState == "authority_policy_unresolved"
+    assert ollama.disabledReason == "ollama_authority_policy_unresolved"
+    assert ollama.httpCallsAttempted is False
+    assert ollama.modelCallsAttempted is False
+    assert ollama.connectTimeoutSeconds == 2
+    assert ollama.totalTimeoutSeconds == 120
+
+
+def test_ollama_provider_gate_ignores_runtime_authority_policy_path_override(tmp_path, monkeypatch) -> None:
+    unreviewed_policy_path = tmp_path / "unreviewed-local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "approved"
+    policy["approvedSourceVm"] = "192.168.1.118"
+    unreviewed_policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", unreviewed_policy_path.as_posix())
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+
+    assert state["authority_status"] == "hold_conflicting_source_vm"
+    assert state["authority_resolved"] is False
+    assert state["enabled"] is False
+    assert state["disabled_reason"] == "ollama_authority_policy_unresolved"
+
+
+def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "approved"
+    policy["approvedSourceVm"] = "192.168.1.118"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+
+    assert state["authority_status"] == "approved"
+    assert state["authority_source_vm"] == "192.168.1.118"
+    assert state["authority_resolved"] is True
+    assert state["enabled"] is True
+    assert state["disabled_reason"] is None
+    checks = {check.checkId: check for check in SupervisorService(Settings(), EventBus()).get_execution_configuration_checks().checks}
+    assert "Reviewed local-provider authority selects source VM: 192.168.1.118." in checks["ollama-provider-gate"].evidence
+
+    policy["schemaVersion"] = True
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    assert invalid_state["registry_state"] == "authority_policy_invalid"
+    policy_path.write_bytes(b"\xff")
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    assert invalid_state["registry_state"] == "authority_policy_invalid"
+    policy["schemaVersion"] = 1
+    policy["route"]["connectTimeoutSeconds"] = 2.0
+    policy["route"]["totalTimeoutSeconds"] = 120.0
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    integral_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert integral_state["enabled"] is True
+    policy["route"]["connectTimeoutSeconds"] = 2.5
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    policy["route"]["connectTimeoutSeconds"] = 2
+    policy["schemaVersion"] = 1.0
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    integral_schema_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert integral_schema_state["enabled"] is True
+    policy["schemaVersion"] = 1
+    policy["unvalidatedExtra"] = float("nan")
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+    del policy["unvalidatedExtra"]
+    policy_path.write_text(
+        json.dumps(policy).replace(
+            '"status": "approved"',
+            '"status": "hold_conflicting_source_vm", "status": "approved"',
+        ),
+        encoding="utf-8",
+    )
+    invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert invalid_state["disabled_reason"] == "ollama_authority_policy_invalid"
+
+
+def test_ollama_provider_gate_fails_closed_when_authority_policy_parser_recurses(monkeypatch) -> None:
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+
+    def raise_recursion(*_args, **_kwargs):
+        raise RecursionError("authority policy nesting exhausted")
+
+    monkeypatch.setattr(service_module.json, "loads", raise_recursion)
+
+    policy = service_module._load_local_provider_authority_policy()
+
+    assert policy["status"] == "invalid"
+    assert policy["approved_source_vm"] is None
+
+
+def test_ollama_provider_gate_rejects_authority_policy_exceeding_shared_depth_limit(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    nested: object = None
+    for _ in range(65):
+        nested = {"ignored": nested}
+    policy["ignored"] = nested
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+
+    assert state["authority_status"] == "invalid"
+    assert state["enabled"] is False
+    assert state["disabled_reason"] == "ollama_authority_policy_invalid"
+
+
+def test_runtime_evidence_navigator_reflects_resolved_authority_policy(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "approved"
+    policy["approvedSourceVm"] = "192.168.1.118"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+
+    _reset_supervisor_modules()
+
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
+
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+
+    service = SupervisorService(Settings(), EventBus())
+
+    label, summary, stop_line = service._runtime_evidence_ollama_navigator_content()
+
+    assert label == "Ollama reviewed authority lane"
+    assert "selects source VM 192.168.1.118" in summary
+    assert "remain bound to the reviewed source VM" in stop_line
+
+
+def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_policy(tmp_path, monkeypatch) -> None:
+    policy_path = tmp_path / "local-provider-authority-policy-v1.json"
+    policy = json.loads(
+        (Path(__file__).resolve().parents[4] / "docs/workflows/local-provider-authority-policy-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["status"] = "approved"
+    policy["approvedSourceVm"] = "192.168.1.118"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
@@ -1473,32 +1738,24 @@ def test_ollama_provider_gate_enables_only_approved_host_endpoint_and_model(tmp_
 
     _reset_supervisor_modules()
 
-    from supervisor.api.main import app
+    from supervisor.application import service as service_module
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
 
-    with TestClient(app) as client:
-        response = client.get("/supervisor/execution-configuration-checks")
-        proofs_response = client.get("/supervisor/disabled-provider-proofs")
+    monkeypatch.setattr(service_module, "LOCAL_PROVIDER_AUTHORITY_POLICY_PATH", policy_path)
+    for source_vm in ("", "192.168.1.8"):
+        monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", source_vm)
+        state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+        assert state["authority_resolved"] is True
+        assert state["enabled"] is False
+        assert state["disabled_reason"] == "ollama_approved_route_policy_mismatch"
 
-    assert response.status_code == 200
-    checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
-    assert checks["ollama-provider-gate"]["enabled"] is True
-    assert checks["ollama-provider-gate"]["disabledReason"] is None
-    assert checks["ollama-provider-gate"]["providerCallsAllowed"] is True
-    assert checks["ollama-provider-gate"]["modelCallsAllowed"] is True
-    assert "Approved endpoint: http://192.168.1.128:11434/v1/chat/completions." in checks["ollama-provider-gate"]["evidence"]
-    assert "Approved model id: qwen3:14b." in checks["ollama-provider-gate"]["evidence"]
-
-    proofs = {proof["workerId"]: proof for proof in proofs_response.json()["data"]}
-    ollama = proofs["local.ollama.disabled"]
-    assert ollama["registryState"] == "enabled_approved_host_endpoint"
-    assert ollama["disabledReason"] == "ollama_provider_enabled_for_approved_host_endpoint"
-    assert ollama["httpCallsAttempted"] is True
-    assert ollama["modelCallsAttempted"] is True
-    assert ollama["connectTimeoutSeconds"] == 2
-    assert ollama["totalTimeoutSeconds"] == 120
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.118")
+    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["enabled"] is True
 
 
-def test_ollama_provider_gate_rejects_unapproved_endpoint(tmp_path, monkeypatch) -> None:
+def test_ollama_provider_gate_reports_authority_hold_before_endpoint_mismatch(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-provider-gate-unapproved-endpoint.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -1517,7 +1774,7 @@ def test_ollama_provider_gate_rejects_unapproved_endpoint(tmp_path, monkeypatch)
     assert response.status_code == 200
     checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
     assert checks["ollama-provider-gate"]["enabled"] is False
-    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_endpoint_not_approved"
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_authority_policy_unresolved"
     assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 
@@ -1552,7 +1809,7 @@ def _accepted_local_provider_approval(**overrides):
     return approval
 
 
-def test_ollama_local_evidence_explanation_rejects_missing_approval_before_adapter_call(tmp_path, monkeypatch) -> None:
+def test_ollama_local_evidence_explanation_holds_unresolved_authority_before_adapter_call(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-local-evidence-missing-approval.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -1585,60 +1842,135 @@ def test_ollama_local_evidence_explanation_rejects_missing_approval_before_adapt
     assert response.status_code == 200
     explanation = response.json()["data"]
     assert adapter_calls["count"] == 0
-    assert explanation["providerAttempt"]["status"] == "rejected"
-    assert explanation["providerAttempt"]["approvalStatus"] == "rejected"
-    assert explanation["providerAttempt"]["rejectionReason"] == "approval-instance-missing"
-    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
-    assert explanation["providerAttempt"]["promptCharacterCount"] == 0
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
 
     events = events_response.json()["data"]
     recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
-    assert recorded["payload"]["providerAttempt"]["status"] == "rejected"
-    assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "approval-instance-missing"
+    assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
 
 
-def test_ollama_local_evidence_explanation_runs_with_policy_approval_by_default(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "ollama-local-evidence-automatic.db").as_posix()
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+@pytest.mark.parametrize("source_vm", ["192.168.1.118", "192.168.1.8"])
+def test_ollama_local_evidence_explanation_creates_no_automatic_approval_for_unresolved_source_vm(
+    monkeypatch,
+    source_vm,
+) -> None:
     monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
     monkeypatch.setenv("SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE", "true")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
     monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", source_vm)
     _reset_supervisor_modules()
 
-    from supervisor.api.main import app
-    from supervisor.domain.ollama_provider_adapter import OllamaProviderResult
+    from supervisor.api.schemas import (
+        RoutingDecisionView,
+        RoutingPreviewView,
+        RoutingProfileView,
+        WorkItemLocalEvidenceExplanationRequest,
+    )
+    from supervisor.application.service import SupervisorService
+    from supervisor.config.settings import Settings
+    from supervisor.infrastructure.streaming.bus import EventBus
 
-    async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
-        return OllamaProviderResult(
-            status="completed", model_id="qwen3:14b", endpoint_family="approved_vm_to_host_ollama_openai_compatible",
-            finish_reason="stop", prompt_summary="Synthetic metadata-only prompt.",
-            response_summary="Synthetic response metadata; raw text redacted.", response_character_count=2,
-            reasoning_character_count=0, prompt_character_count=len(evidence_summary), completion_tokens=1,
-            prompt_tokens=1, total_tokens=2, redaction_applied=True, raw_payload_retained=False,
-            timeout_state="completed_before_total_timeout", cancellation_state="not_cancelled",
+    adapter_calls = {"count": 0}
+    automatic_approval_calls = {"count": 0}
+
+    async def fake_explain(*, evidence_summary, evidence_count, cancellation_event=None):
+        adapter_calls["count"] += 1
+        raise AssertionError("Ollama adapter must not run while source-VM authority is unresolved.")
+
+    def fake_automatic_approval(work_item_id, decision_id):
+        automatic_approval_calls["count"] += 1
+        raise AssertionError("Automatic approval must not be created while source-VM authority is unresolved.")
+
+    service = SupervisorService(Settings(), EventBus())
+    monkeypatch.setattr(service.ollama_provider_adapter, "explain", fake_explain)
+    monkeypatch.setattr(service, "_automatic_local_provider_approval", fake_automatic_approval)
+
+    profile = RoutingProfileView(
+        workItemId="work-item-authority-hold",
+        stepId="evidence-step",
+        taskKind="evidence_summary",
+        phase="queued",
+        riskLevel="low",
+        privacyLevel="internal",
+        writeScope="none",
+        allowedPaths=[],
+        contextNeed="bounded",
+        reasoningNeed="low",
+        determinismNeed="high",
+        validationExpectations=[],
+        preferredLanes=["local_readonly"],
+        forbiddenLanes=[],
+        escalationTriggers=[],
+    )
+    decision = RoutingDecisionView(
+        decisionId="decision-authority-hold",
+        workItemId="work-item-authority-hold",
+        stepId="evidence-step",
+        createdAt=datetime.now(timezone.utc),
+        profileSnapshot=profile,
+        selectedLane="local_readonly",
+        selectedWorkerId="local.readonly.mock",
+        authorityMode="read_only",
+        confidenceScore=1.0,
+        confidenceBand="high",
+        reasonCodes=["bounded-local-evidence"],
+        rejectedLanes=[],
+        rejectedWorkers=[],
+        permissionSummary="Read only.",
+        escalationPath=[],
+        humanExplanation="Bounded local evidence.",
+    )
+    preview = RoutingPreviewView(profile=profile, decision=decision)
+    item = SimpleNamespace(
+        id="work-item-authority-hold",
+        title="Authority hold",
+        requested_outcome="No provider call.",
+        blocked_reason=None,
+    )
+
+    class Session:
+        async def get(self, *_args, **_kwargs):
+            return item
+
+        async def refresh(self, *_args, **_kwargs):
+            return None
+
+        async def rollback(self):
+            return None
+
+    async def acquire_lock(_session):
+        return None
+
+    async def routing_preview(_session, _work_item_id, _payload):
+        return preview
+
+    async def events(_session, _work_item_id):
+        return []
+
+    monkeypatch.setattr(service, "_acquire_execute_admission_lock", acquire_lock)
+    monkeypatch.setattr(service, "get_routing_preview", routing_preview)
+    monkeypatch.setattr(service, "list_work_item_events", events)
+
+    explanation = asyncio.run(
+        service.get_local_evidence_explanation(
+            Session(),
+            item.id,
+            WorkItemLocalEvidenceExplanationRequest(taskKind="evidence_summary", recordEvent=False),
         )
+    )
 
-    monkeypatch.setattr("supervisor.domain.ollama_provider_adapter.OllamaProviderAdapter.explain", fake_explain)
-    with TestClient(app) as client:
-        work_item_id = _create_routing_work_item(client)
-        response = client.post(
-            f"/work-items/{work_item_id}/local-evidence-explanation",
-            json={"taskKind": "evidence_summary", "recordEvent": True},
-        )
-
-    assert response.status_code == 200
-    explanation = response.json()["data"]
-    assert explanation["providerAttempt"]["status"] == "completed"
-    assert explanation["providerAttempt"]["approvalStatus"] == "policy-approved"
-    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+    assert explanation is not None
+    assert adapter_calls["count"] == 0
+    assert automatic_approval_calls["count"] == 0
+    assert explanation.providerAttempt.rejectionReason == "ollama_authority_policy_unresolved"
+    assert service._ollama_provider_gate_state()["disabled_reason"] == "ollama_authority_policy_unresolved"
 
 
-def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider_text(tmp_path, monkeypatch) -> None:
+def test_ollama_local_evidence_explanation_rejects_operator_approval_while_authority_is_unresolved(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-local-evidence-explanation.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -1652,9 +1984,10 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     from supervisor.api.main import app
     from supervisor.domain.ollama_provider_adapter import OllamaProviderResult
 
-    captured_provider_prompt = {"reservation": None}
+    captured_provider_prompt = {"count": 0, "reservation": None}
 
     async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
+        captured_provider_prompt["count"] += 1
         captured_provider_prompt["evidence_summary"] = evidence_summary
         captured_provider_prompt["evidence_count"] = evidence_count
         with sqlite3.connect(db_path) as connection:
@@ -1697,41 +2030,22 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
 
     assert response.status_code == 200
     explanation = response.json()["data"]
-    assert explanation["providerAttempt"]["status"] == "completed"
-    assert explanation["providerAttempt"]["modelId"] == "qwen3:14b"
-    assert explanation["providerAttempt"]["approvalId"] == "local-provider-approval-test-001"
-    assert explanation["providerAttempt"]["approvalStatus"] == "accepted"
-    assert explanation["providerAttempt"]["responseCharacterCount"] == 3
-    assert explanation["providerAttempt"]["reasoningCharacterCount"] == 42
-    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
-    assert captured_provider_prompt["reservation"] == (
-        "running",
-        "ollama.local.provider",
-        "operator_approved_bounded_provider_call",
-    )
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
+    assert captured_provider_prompt["count"] == 0
+    assert captured_provider_prompt["reservation"] is None
     attempts = attempts_response.json()["data"]
-    assert attempts[0]["status"] == "completed"
-    assert attempts[0]["workerId"] == "ollama.local.provider"
-    assert (
-        "Ollama approved endpoint: http://192.168.1.128:11434/v1/chat/completions with model qwen3:14b only."
-        in explanation["boundaries"]
-    )
+    assert attempts == []
     assert "OK." not in str(explanation)
     assert "Okay, the user wants" not in str(explanation)
-    assert captured_provider_prompt["evidence_count"] == len(explanation["evidence"])
-    assert "Approved workflow event summaries:" in captured_provider_prompt["evidence_summary"]
-    assert "work_item.queued" in captured_provider_prompt["evidence_summary"]
-    assert "recipe.selected" in captured_provider_prompt["evidence_summary"]
 
     events = events_response.json()["data"]
     recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
-    assert recorded["payload"]["providerAttempt"]["approvalStatus"] == "accepted"
-    assert recorded["payload"]["providerAttempt"]["rawPayloadRetained"] is False
+    assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
 
 
-def test_ollama_local_evidence_explanation_rejects_mismatched_or_expired_approval(tmp_path, monkeypatch) -> None:
+def test_ollama_local_evidence_explanation_authority_hold_precedes_mismatched_approval(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-local-evidence-bad-approval.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -1769,14 +2083,10 @@ def test_ollama_local_evidence_explanation_rejects_mismatched_or_expired_approva
     assert response.status_code == 200
     explanation = response.json()["data"]
     assert adapter_calls["count"] == 0
-    assert explanation["providerAttempt"]["status"] == "rejected"
-    assert explanation["providerAttempt"]["approvalStatus"] == "rejected"
-    assert "approval-endpoint-mismatch" in explanation["providerAttempt"]["rejectionReasons"]
-    assert "approval-expired" in explanation["providerAttempt"]["rejectionReasons"]
-    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
 
 
-def test_ollama_local_evidence_explanation_rejects_unsafe_placeholder_approval_text(tmp_path, monkeypatch) -> None:
+def test_ollama_local_evidence_explanation_authority_hold_precedes_unsafe_approval(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-local-evidence-placeholder-approval.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -1814,13 +2124,7 @@ def test_ollama_local_evidence_explanation_rejects_unsafe_placeholder_approval_t
     assert response.status_code == 200
     explanation = response.json()["data"]
     assert adapter_calls["count"] == 0
-    assert explanation["providerAttempt"]["status"] == "rejected"
-    assert "approval-redaction-policy-mismatch" in explanation["providerAttempt"]["rejectionReasons"]
-    assert "approval-rollback-mismatch" in explanation["providerAttempt"]["rejectionReasons"]
-    assert "approval-stop-lines-endpoint-missing" in explanation["providerAttempt"]["rejectionReasons"]
-    assert "approval-stop-lines-model-missing" in explanation["providerAttempt"]["rejectionReasons"]
-    assert "approval-stop-lines-retention-missing" in explanation["providerAttempt"]["rejectionReasons"]
-    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+    assert explanation["providerAttempt"]["rejectionReason"] == "ollama_authority_policy_unresolved"
 
 
 def test_ollama_provider_request_uses_connect_timeout_without_global_socket_mutation(monkeypatch) -> None:
@@ -3577,7 +3881,7 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
     }
     for proof in proofs:
         if proof["workerId"] == "local.ollama.disabled":
-            assert proof["disabledReason"] == "ollama_provider_gate_not_enabled"
+            assert proof["disabledReason"] == "ollama_authority_policy_unresolved"
         else:
             assert proof["disabledReason"].endswith("_local_provider_not_enabled")
         assert proof["endpointFamily"].endswith("_openai_compatible_localhost")
@@ -3592,7 +3896,7 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
         assert proof["retentionPolicy"].startswith("disabled_fixture_forbids")
 
     ollama = next(proof for proof in proofs if proof["workerId"] == "local.ollama.disabled")
-    assert ollama["registryState"] == "disabled"
+    assert ollama["registryState"] == "authority_policy_unresolved"
     assert ollama["broadGateEnabled"] is False
     assert ollama["providerSpecificGateEnabled"] is False
     assert ollama["modelIdConfigured"] is False
@@ -3729,6 +4033,7 @@ def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, mon
     assert any("Do not include secrets" in note for note in packet["redactionNotes"])
     assert any("file writes are not allowed" in boundary for boundary in packet["boundaries"])
     assert any("Provider endpoints policy: deny_all" in boundary for boundary in packet["boundaries"])
+    assert any("reviewed authority policy selects one source VM" in boundary for boundary in packet["boundaries"])
     assert any("Credential policy: forbid_worker_access" in boundary for boundary in packet["boundaries"])
 
 
@@ -3807,6 +4112,7 @@ def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeyp
     assert explanation["commandsAllowed"] is False
     assert explanation["evidence"]
     assert any("Read-only" in boundary for boundary in explanation["boundaries"])
+    assert any("reviewed authority policy selects one source VM" in boundary for boundary in explanation["boundaries"])
     assert explanation["nextStepSuggestions"]
     assert before_item == after_item
     assert before_events == after_events
@@ -6040,10 +6346,11 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert any("not execution-authority approval" in stop_line for stop_line in authority_item["stopLines"])
     ollama_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-ollama-no-call-prep")
     assert "GET /supervisor/disabled-provider-proofs" in ollama_item["relatedReports"]
-    assert "Approved endpoint: http://192.168.1.128:11434/v1/chat/completions." in ollama_item["evidence"]
-    assert "Approved model id: qwen3:14b." in ollama_item["evidence"]
+    assert ollama_item["label"] == "Ollama authority-conflict hold lane"
+    assert "Agreed endpoint metadata: http://192.168.1.128:11434/v1/chat/completions." in ollama_item["evidence"]
+    assert "Agreed model metadata: qwen3:14b." in ollama_item["evidence"]
     assert "cancel_requested -> request_abort_recorded" in ollama_item["evidence"]
-    assert any("approved host endpoint and qwen3:14b model" in stop_line for stop_line in ollama_item["stopLines"])
+    assert any("remain denied until a reviewed authority policy selects one source VM" in stop_line for stop_line in ollama_item["stopLines"])
     assert before_events_response.json()["data"] == after_events_response.json()["data"]
     assert missing_response.status_code == 404
 

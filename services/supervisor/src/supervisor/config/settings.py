@@ -52,9 +52,9 @@ class Settings(BaseSettings):
         default="",
         alias="SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS",
     )
-    allow_local_provider_calls: bool = Field(default=True, alias="SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS")
-    allow_ollama_provider_calls: bool = Field(default=True, alias="SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS")
-    allow_automatic_ollama_local_evidence: bool = Field(default=True, alias="SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE")
+    allow_local_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS")
+    allow_ollama_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS")
+    allow_automatic_ollama_local_evidence: bool = Field(default=False, alias="SUPERVISOR_ALLOW_AUTOMATIC_OLLAMA_LOCAL_EVIDENCE")
     ollama_endpoint_url: str | None = Field(
         default="http://192.168.1.128:11434/v1/chat/completions",
         alias="SUPERVISOR_OLLAMA_ENDPOINT_URL",
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         default="http://192.168.1.128:11434/v1/chat/completions",
         alias="SUPERVISOR_OLLAMA_APPROVED_ENDPOINT_URL",
     )
-    ollama_approved_source_vm: str = Field(default="192.168.1.8", alias="SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM")
+    ollama_approved_source_vm: str = Field(default="", alias="SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM")
     ollama_model_id: str | None = Field(default="qwen3:14b", alias="SUPERVISOR_OLLAMA_MODEL_ID")
     ollama_approved_model_id: str = Field(default="qwen3:14b", alias="SUPERVISOR_OLLAMA_APPROVED_MODEL_ID")
     # Keep canonical route values bounded and parseable from string-valued env
