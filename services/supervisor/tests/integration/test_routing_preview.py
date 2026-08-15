@@ -1610,8 +1610,8 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     assert state["authority_status"] == "approved"
     assert state["authority_source_vm"] == "192.168.1.8"
     assert state["authority_resolved"] is True
-    assert state["enabled"] is True
-    assert state["disabled_reason"] is None
+    assert state["enabled"] is False
+    assert state["disabled_reason"] == "ollama_trusted_attestation_required"
     checks = {check.checkId: check for check in SupervisorService(Settings(), EventBus()).get_execution_configuration_checks().checks}
     assert "Reviewed local-provider authority selects source VM: 192.168.1.8." in checks["ollama-provider-gate"].evidence
 
@@ -1629,7 +1629,8 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     policy["route"]["totalTimeoutSeconds"] = 120.0
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     integral_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
-    assert integral_state["enabled"] is True
+    assert integral_state["enabled"] is False
+    assert integral_state["disabled_reason"] == "ollama_trusted_attestation_required"
     policy["route"]["connectTimeoutSeconds"] = 2.5
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     invalid_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
@@ -1638,7 +1639,8 @@ def test_ollama_provider_gate_consumes_a_complete_reviewed_authority_policy(tmp_
     policy["schemaVersion"] = 1.0
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     integral_schema_state = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
-    assert integral_schema_state["enabled"] is True
+    assert integral_schema_state["enabled"] is False
+    assert integral_schema_state["disabled_reason"] == "ollama_trusted_attestation_required"
     policy["schemaVersion"] = 1
     policy["approvedSourceVm"] = "192.168.1.118"
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -1805,7 +1807,9 @@ def test_ollama_provider_gate_requires_runtime_source_vm_to_match_approved_polic
         assert state["disabled_reason"] == "ollama_source_vm_not_local"
 
     monkeypatch.setenv("SUPERVISOR_OLLAMA_APPROVED_SOURCE_VM", "192.168.1.8")
-    assert SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()["enabled"] is True
+    trusted_hold = SupervisorService(Settings(), EventBus())._ollama_provider_gate_state()
+    assert trusted_hold["enabled"] is False
+    assert trusted_hold["disabled_reason"] == "ollama_trusted_attestation_required"
 
 
 def test_ollama_provider_gate_reports_enablement_hold_before_endpoint_mismatch(tmp_path, monkeypatch) -> None:

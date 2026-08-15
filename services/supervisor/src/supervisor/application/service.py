@@ -21915,6 +21915,10 @@ class SupervisorService:
             registry_state = "enablement_authority_unresolved"
             disabled_reason = "ollama_enablement_authority_unresolved"
             adapter_ready = False
+        elif not local_source_vm_verified:
+            registry_state = "source_vm_not_local"
+            disabled_reason = "ollama_source_vm_not_local"
+            adapter_ready = False
         elif not _trusted_local_provider_attestation_verified():
             # Source-VM selection and a future enablement record do not prove
             # the caller's host identity. v1 has no verifier for the existing
@@ -21922,10 +21926,6 @@ class SupervisorService:
             # a provider from caller/configuration self-attestation alone.
             registry_state = "trusted_attestation_required"
             disabled_reason = "ollama_trusted_attestation_required"
-            adapter_ready = False
-        elif not local_source_vm_verified:
-            registry_state = "source_vm_not_local"
-            disabled_reason = "ollama_source_vm_not_local"
             adapter_ready = False
         elif route_policy_mismatch:
             registry_state = "disabled"
