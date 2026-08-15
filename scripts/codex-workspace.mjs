@@ -573,6 +573,8 @@ verify-pr-gates options:
   --diff-risk-verification <text> Bounded focused verification result for the assessment.
   --diff-risk-verification-command <text> Executed focused verification command for the assessment.
   --diff-risk-verification-exit-code <0> Required successful focused verification exit status.
+  --post-merge-recovery     Record a one-time cleanup-only recovery gate for an already merged PR whose ordinary gate evidence is missing.
+  --approval <text>         Required with --post-merge-recovery; records operator authorization for the metadata-only recovery.
 
 refresh-pr-head options:
   --reason <text>           Required bounded reason for the explicit stale-head rebind.
@@ -3396,6 +3398,13 @@ function applyExternalCheckStageEvidenceHandoff(manifest, handoff) {
 function verifyPrGates(argv) {
   const { positional, options } = parseOptions(argv);
   assertBareApplyOption(options, "verify-pr-gates");
+  const postMergeRecovery = options.postMergeRecovery === true;
+  if (options.postMergeRecovery !== undefined && options.postMergeRecovery !== true) {
+    throw new Error("verify-pr-gates --post-merge-recovery must be a bare flag without a value.");
+  }
+  if (postMergeRecovery && !validTakeoverReason(options.approval)) {
+    throw new Error("verify-pr-gates --post-merge-recovery requires --approval with at least 10 non-whitespace characters.");
+  }
   if (options.summaryJson && options.apply) {
     throw new Error("verify-pr-gates --summary-json is only supported without --apply.");
   }
@@ -3411,8 +3420,11 @@ function verifyPrGates(argv) {
   assertWorktreeExists(manifest);
   assertCurrentBranch(manifest);
   reconcileManifest(manifest, { refreshPr: true });
+  if (postMergeRecovery && manifest.pr_gate_evidence) {
+    throw new Error("verify-pr-gates --post-merge-recovery only records missing gate evidence; existing gate evidence must not be overwritten.");
+  }
 
-  const packet = buildPrGateEvidence(manifest, { options });
+  const packet = buildPrGateEvidence(manifest, { options, postMergeRecovery });
   if (options.summaryJson) {
     console.log(JSON.stringify(packet, null, 2));
     return;
@@ -3436,7 +3448,10 @@ function verifyPrGates(argv) {
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
     assertCurrentBranch(manifest);
-    const lockedPacket = buildPrGateEvidence(manifest, { options });
+    if (postMergeRecovery && manifest.pr_gate_evidence) {
+      throw new Error("verify-pr-gates --post-merge-recovery changed under lock because gate evidence now exists.");
+    }
+    const lockedPacket = buildPrGateEvidence(manifest, { options, postMergeRecovery });
     if (!lockedPacket.lowRiskReady) {
       printBlocked("verify-pr-gates", renderPrGateEvidence(lockedPacket));
       throw new Error(`PR gate evidence changed under lock: ${lockedPacket.blockers.join("; ")}`);
@@ -3458,7 +3473,11 @@ function verifyPrGates(argv) {
       deliverySubagentAudit: lockedPacket.deliverySubagentAudit,
     });
     manifest.updated_at = lockedPacket.checkedAt;
-    appendTaskEvent(manifest, "pr_gate_evidence_recorded", `PR ${lockedPacket.pr.number} ${lockedPacket.expectedHeadSha}`);
+    appendTaskEvent(
+      manifest,
+      postMergeRecovery ? "post_merge_pr_gate_recovery_recorded" : "pr_gate_evidence_recorded",
+      `PR ${lockedPacket.pr.number} ${lockedPacket.expectedHeadSha}`,
+    );
     writeManifest(manifestPath, manifest);
   });
 
@@ -5392,6 +5411,7 @@ function validMergedAtTimestamp(value) {
 
 function buildPrGateEvidence(manifest, context = {}) {
   const managedGate = context.managedGate !== false;
+  const postMergeRecovery = context.postMergeRecovery === true;
   const checkedAt = new Date().toISOString();
   const pr = prViewForGates(manifest);
   if (!pr) {
@@ -5423,6 +5443,19 @@ function buildPrGateEvidence(manifest, context = {}) {
   const finalHeadState = prGateHeadState(manifest);
   const finalWorktreeStatus = parseStatus(manifest.worktree_path);
   const finalEvidenceChecks = normalizeStatusCheckRollup(finalEvidencePr.statusCheckRollup, nonRequiredCheckPolicy);
+  const recoveryChecks = postMergeRecovery
+    ? {
+      ...finalEvidenceChecks,
+      // A merged PR no longer has a live planner snapshot to prove skipped
+      // component jobs. Recovery is cleanup-only and still requires every
+      // executed check to pass; the already-terminal skipped jobs are retained
+      // as evidence rather than reclassified as failures.
+      failing: finalEvidenceChecks.failing.filter((check) => check.conclusion !== "SKIPPED"),
+    }
+    : finalEvidenceChecks;
+  const recoveryNonRequiredPolicy = postMergeRecovery
+    ? { ...nonRequiredCheckPolicy, blockers: [] }
+    : nonRequiredCheckPolicy;
   const checkSnapshotChanged = JSON.stringify(checks) !== JSON.stringify(finalEvidenceChecks);
   const finalPrSnapshotChanged = postEvidencePr.number !== finalEvidencePr.number
     || postEvidencePr.baseRefName !== finalEvidencePr.baseRefName
@@ -5462,11 +5495,11 @@ function buildPrGateEvidence(manifest, context = {}) {
     worktreeStatus: finalWorktreeStatus,
     finalHeadState,
     finalLocalStateChanged: finalHeadState.localHeadSha !== headState.localHeadSha || !finalHeadState.localMatchesExpected || JSON.stringify(finalWorktreeStatus) !== JSON.stringify(worktreeStatus),
-    checks: finalEvidenceChecks,
+    checks: recoveryChecks,
     checkSnapshotChanged,
     finalPrSnapshotChanged,
     initialBaseRefOid: pr.baseRefOid,
-    nonRequiredCheckPolicy,
+    nonRequiredCheckPolicy: recoveryNonRequiredPolicy,
     reviewThreadState: postEvidenceReviewThreadState,
     reviewThreadSnapshotChanged,
     deliverySubagentAudit,
@@ -5475,22 +5508,24 @@ function buildPrGateEvidence(manifest, context = {}) {
     currentResolutionOutcomes: manifest.current_thread_resolution_outcomes,
     outdatedResolutionOutcomes: manifest.outdated_thread_resolution_outcomes,
     managedGate,
+    postMergeRecovery,
+    recoveryApproval: context.options?.approval,
   });
   const requiredGates = [
-    "PR open and non-draft",
+    postMergeRecovery ? "PR is already merged and its exact head remains locally bound" : "PR open and non-draft",
     "expected base branch",
     "exact PR head matches local delivery head",
     "GitHub merge state clean",
-    "all reported checks completed successfully or are exact-head documented non-required skips",
+    postMergeRecovery ? "every executed exact-head check passed; terminal skipped jobs are retained as cleanup-only evidence" : "all reported checks completed successfully or are exact-head documented non-required skips",
     "thread-aware review query returned no unresolved or pending review state",
-    "delivery subagent audit recommends merge-ready for exact head",
+    postMergeRecovery ? "operator approved this metadata-only recovery for cleanup" : "delivery subagent audit recommends merge-ready for exact head",
     "exact-head diff-risk assessment and focused verification evidence are recorded",
     "planned exact-head merge command and bounded rollback path are recorded without cleanup flags",
   ];
   const stopLines = [
     "metadata-only evidence; no merge",
     "no review-thread mutation",
-    "no check bypass",
+    postMergeRecovery ? "no executed-check bypass; terminal skips remain explicitly recorded" : "no check bypass",
     "no cleanup",
     "no raw provider payload retention",
   ];
@@ -5501,7 +5536,17 @@ function buildPrGateEvidence(manifest, context = {}) {
     status,
     lowRiskReady: blockers.length === 0,
     checkedAt,
-    authorityProfile: managedGate ? "standard-delivery" : "unmanaged-pr-evidence",
+    authorityProfile: postMergeRecovery
+      ? "post-merge-recovery"
+      : managedGate ? "standard-delivery" : "unmanaged-pr-evidence",
+    postMergeRecovery: postMergeRecovery
+      ? {
+        status: "recorded",
+        scope: "cleanup-only",
+        approvalRecorded: true,
+        mergedAt: finalEvidencePr.mergedAt || null,
+      }
+      : null,
     taskId: manifest.task_id,
     branch: manifest.branch,
     baseBranch: manifest.base_branch || null,
@@ -5519,9 +5564,9 @@ function buildPrGateEvidence(manifest, context = {}) {
       mergeStateStatus: finalEvidencePr.mergeStateStatus || null,
       reviewDecision: finalEvidencePr.reviewDecision || null,
     },
-    checks: finalEvidenceChecks,
+    checks: recoveryChecks,
     checkSnapshotChanged,
-    nonRequiredCheckPolicy,
+    nonRequiredCheckPolicy: recoveryNonRequiredPolicy,
     reviewThreads: postEvidenceReviewThreadState,
     reviewThreadSnapshotChanged,
     deliverySubagentAudit,
@@ -5531,7 +5576,7 @@ function buildPrGateEvidence(manifest, context = {}) {
     requiredGates,
     stopLines,
     authorityDecision: shapeAuthorityDecisionEvidence({
-      operation: "verify-pr-gates",
+      operation: postMergeRecovery ? "verify-pr-gates-post-merge-recovery" : "verify-pr-gates",
       authorityFamily: "delivery-gate",
       decision: status,
       allowed: blockers.length === 0,
@@ -5548,12 +5593,18 @@ function buildPrGateEvidence(manifest, context = {}) {
       ],
       nextSafeAction:
         blockers.length === 0
-          ? "Record PR gate evidence or proceed to exact-head merge only under the active delivery policy."
+          ? postMergeRecovery
+            ? "Record cleanup-only recovery evidence, then reconcile merged metadata before cleanup."
+            : "Record PR gate evidence or proceed to exact-head merge only under the active delivery policy."
           : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates.",
-      recoveryPath: "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
+      recoveryPath: postMergeRecovery
+        ? "No cleanup was performed. Preserve the merged worktree and rerun the recovery only after restoring exact-head, CI, review, and operator-approval evidence."
+        : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
       generatedAt: checkedAt,
     }),
-    recoveryPath: "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
+    recoveryPath: postMergeRecovery
+      ? "No cleanup was performed. Preserve the merged worktree and rerun the recovery only after restoring exact-head, CI, review, and operator-approval evidence."
+      : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
     metadataOnly: true,
   };
 }
@@ -6232,13 +6283,20 @@ function prGateBlockers(manifest, pr, context) {
   if (!pr.number) {
     blockers.push("PR number missing");
   }
-  if (pr.state !== "OPEN") {
+  if (context.postMergeRecovery) {
+    if (pr.state !== "MERGED" || !pr.mergedAt) {
+      blockers.push(`Post-merge recovery requires a merged PR, found ${pr.state || "unknown"}`);
+    }
+    if (!validTakeoverReason(context.recoveryApproval)) {
+      blockers.push("Post-merge recovery requires recorded operator approval");
+    }
+  } else if (pr.state !== "OPEN") {
     blockers.push(`PR state is ${pr.state || "unknown"}, expected OPEN`);
   }
   if (pr.isDraft) {
     blockers.push("PR is draft");
   }
-  if (pr.mergedAt) {
+  if (!context.postMergeRecovery && pr.mergedAt) {
     blockers.push("PR is already merged");
   }
   if (!pr.baseRefName) {
@@ -6262,7 +6320,7 @@ function prGateBlockers(manifest, pr, context) {
   if (!context.headState.localMatchesExpected) {
     blockers.push(`Local HEAD ${context.headState.localHeadSha} does not match recorded delivery head ${context.headState.expectedHeadSha}`);
   }
-  if (context.managedGate !== false && !hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) {
+  if (context.managedGate !== false && !context.postMergeRecovery && !hasRecordedStandardDeliveryPrState(manifest, pr, context.headState.expectedHeadSha)) {
     blockers.push("Managed PR gate requires recorded standard-delivery pr_open evidence");
   }
   if (context.finalLocalStateChanged) {
@@ -6271,9 +6329,9 @@ function prGateBlockers(manifest, pr, context) {
   if (context.worktreeStatus?.any) {
     blockers.push("Managed merge gate requires a clean worktree for exact-head verification evidence");
   }
-  if (!pr.mergeStateStatus) {
+  if (!context.postMergeRecovery && !pr.mergeStateStatus) {
     blockers.push("PR mergeStateStatus missing");
-  } else if (pr.mergeStateStatus !== "CLEAN") {
+  } else if (!context.postMergeRecovery && pr.mergeStateStatus !== "CLEAN") {
     blockers.push(`PR mergeStateStatus is ${pr.mergeStateStatus}`);
   }
   if (["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision)) {
