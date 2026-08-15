@@ -180,6 +180,7 @@ assertAllIncludes(serviceSource, [
   "authority_status = authority_policy[\"status\"]",
   "authority_source_vm = authority_policy[\"approved_source_vm\"]",
   "ollama_authority_policy_unresolved",
+  "ollama_authority_policy_invalid",
   "authority_resolved",
   "endpoint_approved = endpoint_url == approved_endpoint_url",
   "model_id_approved = model_id == approved_model_id",
@@ -196,13 +197,14 @@ assertAllIncludes(supervisorDockerfile, [
 assertAllIncludes(routePolicySource, [
   "local-provider-authority-policy-v1.json",
   "ollama_authority_policy_unresolved",
+  "ollama_authority_policy_invalid",
   "localProviderAuthorityResolved",
   "approvedSourceVm",
 ], "JavaScript route policy must consume and fail closed on the authority record", failures);
 assertAllIncludes(privateEvidencePolicySource, [
   "localProviderAuthorityResolved",
-  "ollama_authority_policy_unresolved",
-], "Private-evidence Ollama policy must inherit the unresolved authority hold", failures);
+  "localProviderAuthorityDisabledReason",
+], "Private-evidence Ollama policy must inherit the authority record's fail-closed reason", failures);
 assertAllIncludes(runbook, [
   ...(authorityOnHold ? ["Optional local Ollama review lane (authority hold)"] : []),
   "All local-provider and automatic-consent gates default false.",

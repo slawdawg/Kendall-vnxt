@@ -21,8 +21,10 @@ test("only a complete reviewed authority policy can select a source VM", () => {
   assert.equal(parseLocalProviderAuthorityPolicy(validApprovedPolicy).approvedSourceVm, "192.168.1.118");
   for (const malformed of [
     { ...validApprovedPolicy, candidateSourceVms: [validApprovedPolicy.candidateSourceVms[0], validApprovedPolicy.candidateSourceVms[0]] },
+    { ...validApprovedPolicy, candidateSourceVms: [{ ...validApprovedPolicy.candidateSourceVms[0], sourceVm: " 192.168.1.118 " }, validApprovedPolicy.candidateSourceVms[1]] },
     { ...validApprovedPolicy, approvedSourceVm: "192.168.1.9" },
     { ...validApprovedPolicy, approvedSourceVm: " 192.168.1.118 " },
+    { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, endpoint: " http://192.168.1.128:11434/v1/chat/completions " } },
     { ...validApprovedPolicy, route: { ...validApprovedPolicy.route, totalTimeoutSeconds: 121 } },
     { ...validApprovedPolicy, defaults: { ...validApprovedPolicy.defaults, allowOllamaProviderCalls: true } },
   ]) {

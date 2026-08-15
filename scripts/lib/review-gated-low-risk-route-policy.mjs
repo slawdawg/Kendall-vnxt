@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 const AUTHORITY_POLICY_PATH = new URL("../../docs/workflows/local-provider-authority-policy-v1.json", import.meta.url);
 const LOCAL_PROVIDER_AUTHORITY_UNRESOLVED = "ollama_authority_policy_unresolved";
+const LOCAL_PROVIDER_AUTHORITY_INVALID = "ollama_authority_policy_invalid";
 const LOCAL_PROVIDER_AUTHORITY_POLICY = loadAuthorityPolicy();
 const OLLAMA_ENDPOINT = policyText(LOCAL_PROVIDER_AUTHORITY_POLICY.route?.endpoint);
 const OLLAMA_MODEL = policyText(LOCAL_PROVIDER_AUTHORITY_POLICY.route?.model);
@@ -33,7 +34,11 @@ export function evaluateBoundedReviewRoute(input = {}) {
 
   const eligible = blockers.length === 0;
   const reviewEligible = eligible;
-  const authorityUnresolved = blockers.includes(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
+  const authorityDisabledReason = blockers.includes(LOCAL_PROVIDER_AUTHORITY_INVALID)
+    ? LOCAL_PROVIDER_AUTHORITY_INVALID
+    : blockers.includes(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED)
+      ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED
+      : null;
 
   return {
     schemaVersion: 2,
@@ -47,7 +52,7 @@ export function evaluateBoundedReviewRoute(input = {}) {
     allowed: eligible,
     blockers: unique(blockers),
     authorityStatus: role === "backup-review" ? LOCAL_PROVIDER_AUTHORITY_POLICY.status : null,
-    disabledReason: authorityUnresolved ? LOCAL_PROVIDER_AUTHORITY_UNRESOLVED : null,
+    disabledReason: authorityDisabledReason,
     metadataOnly: true,
     rawPayloadRetained: false,
     execution: {
@@ -88,7 +93,9 @@ export function selectOrderedReviewRoute({ primary = {}, backup = {}, primaryFai
 }
 
 function validateOllamaRoute(route, blockers) {
-  if (LOCAL_PROVIDER_AUTHORITY_POLICY.status !== "approved" || OLLAMA_SOURCE_VM === null) {
+  if (LOCAL_PROVIDER_AUTHORITY_POLICY.status === "invalid") {
+    blockers.push(LOCAL_PROVIDER_AUTHORITY_INVALID);
+  } else if (LOCAL_PROVIDER_AUTHORITY_POLICY.status !== "approved" || OLLAMA_SOURCE_VM === null) {
     blockers.push(LOCAL_PROVIDER_AUTHORITY_UNRESOLVED);
   }
   rejectUnknownKeys(route, ["role", "provider", "endpoint", "model", "sourceVm", "connectTimeoutSeconds", "totalTimeoutSeconds", "metadataOnly", "rawPayloadRetained", "publicExposure", "credentialsRead", "modelDiscovery", "endpointDiscovery", "reviewPass", "activationAllowed", "fallbackUsed", "primaryFailure"], blockers);
@@ -140,6 +147,10 @@ function policyText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function policyExactText(value) {
+  return typeof value === "string" && value.length > 0 && value.trim() === value ? value : null;
+}
+
 function loadAuthorityPolicy() {
   try {
     return parseLocalProviderAuthorityPolicy(JSON.parse(readFileSync(AUTHORITY_POLICY_PATH, "utf8")));
@@ -163,7 +174,7 @@ export function parseLocalProviderAuthorityPolicy(policy) {
   const candidateByVm = new Map();
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return invalidAuthorityPolicy();
-    const sourceVm = policyText(candidate.sourceVm);
+    const sourceVm = policyExactText(candidate.sourceVm);
     if (!sourceVm || candidateByVm.has(sourceVm)) return invalidAuthorityPolicy();
     candidateByVm.set(sourceVm, candidate);
   }
@@ -178,8 +189,8 @@ export function parseLocalProviderAuthorityPolicy(policy) {
   const defaults = policy.defaults;
   if (
     !route || typeof route !== "object" || Array.isArray(route)
-    || policyText(route.endpoint) !== "http://192.168.1.128:11434/v1/chat/completions"
-    || policyText(route.model) !== "qwen3:14b"
+    || policyExactText(route.endpoint) !== "http://192.168.1.128:11434/v1/chat/completions"
+    || policyExactText(route.model) !== "qwen3:14b"
     || route.connectTimeoutSeconds !== 2
     || route.totalTimeoutSeconds !== 120
     || route.retentionMode !== "metadata-only"
@@ -217,6 +228,9 @@ export function isApprovedFallbackFailure(value) {
 export const BOUNDED_ROUTE_POLICY_DEFAULTS = Object.freeze({
   localProviderAuthorityStatus: LOCAL_PROVIDER_AUTHORITY_POLICY.status,
   localProviderAuthorityResolved: LOCAL_PROVIDER_AUTHORITY_POLICY.status === "approved" && OLLAMA_SOURCE_VM !== null,
+  localProviderAuthorityDisabledReason: LOCAL_PROVIDER_AUTHORITY_POLICY.status === "invalid"
+    ? LOCAL_PROVIDER_AUTHORITY_INVALID
+    : LOCAL_PROVIDER_AUTHORITY_UNRESOLVED,
   ollamaEndpoint: OLLAMA_ENDPOINT,
   ollamaModel: OLLAMA_MODEL,
   ollamaSourceVm: OLLAMA_SOURCE_VM,

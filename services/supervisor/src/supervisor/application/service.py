@@ -103,7 +103,9 @@ def _load_local_provider_authority_policy() -> dict[str, object]:
         not isinstance(route, dict)
         or route.get("endpoint") != CANONICAL_OLLAMA_ENDPOINT
         or route.get("model") != CANONICAL_OLLAMA_MODEL
+        or type(route.get("connectTimeoutSeconds")) is not int
         or route.get("connectTimeoutSeconds") != CANONICAL_OLLAMA_CONNECT_TIMEOUT_SECONDS
+        or type(route.get("totalTimeoutSeconds")) is not int
         or route.get("totalTimeoutSeconds") != CANONICAL_OLLAMA_TOTAL_TIMEOUT_SECONDS
         or route.get("retentionMode") != "metadata-only"
         or not isinstance(defaults, dict)
