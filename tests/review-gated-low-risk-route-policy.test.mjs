@@ -125,6 +125,8 @@ test("duplicate authority-policy JSON members fail closed before validation", ()
 
 test("active authority state governs Ollama source-VM eligibility", () => {
   assert.equal(authorityOnHold || authorityApproved, true);
+  assert.equal(activeAuthorityPolicy.status, "approved");
+  assert.equal(activeAuthorityPolicy.approvedSourceVm, "192.168.1.8");
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityStatus, activeAuthorityPolicy.status);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.localProviderAuthorityResolved, authorityApproved);
   assert.equal(BOUNDED_ROUTE_POLICY_DEFAULTS.ollamaSourceVm, authorityApproved ? activeAuthorityPolicy.approvedSourceVm : null);
@@ -319,7 +321,7 @@ test("ordered Claude and Ollama routes are governed review models but cannot gra
         : { endpoint: "http://192.168.1.128:11434/v1/chat/completions", model: "qwen3:14b", sourceVm: "192.168.1.8", connectTimeoutSeconds: 2, totalTimeoutSeconds: 120, metadataOnly: true, rawPayloadRetained: false, publicExposure: false, credentialsRead: false, modelDiscovery: false, endpointDiscovery: false, reviewPass: false, activationAllowed: false },
     };
     const packet = evaluateGovernedReadOnlyReview(input, { now: "2026-07-18T12:00:00.000Z" });
-    assert.equal(packet.status, model === "claude" ? "eligible" : "hold", model);
+    assert.equal(packet.status, model === "claude" || authorityApproved ? "eligible" : "hold", model);
     assert.equal(packet.authorityDecision.allowed, false);
   }
 });

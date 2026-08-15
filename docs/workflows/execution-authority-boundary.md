@@ -6,7 +6,7 @@ Local BMAD packets, planning notes, PRDs, epics, stories, research, and handoffs
 
 ## Local Provider Execution Contract
 
-Status: authority-conflict hold, non-executing
+Status: reviewed source-VM approval, bounded non-executing
 
 Authority family: `local-provider-execution`
 
@@ -15,8 +15,9 @@ Operation candidate: one bounded metadata-only Ollama provider operation
 It does not call Ollama, discover models, expand provider support, mutate source,
 or retain raw provider content. The versioned
 [`local-provider-authority-policy-v1.json`](./local-provider-authority-policy-v1.json)
-record is the machine-readable authority source. Its unresolved status disables
-automatic local policy approval and every Ollama adapter path.
+record is the machine-readable authority source. It selects the reviewed source
+VM below; the disabled-by-default gates keep automatic local policy approval
+and every Ollama adapter path non-activating.
 
 Agreed endpoint metadata: `http://192.168.1.128:11434/v1/chat/completions`
 
@@ -28,17 +29,18 @@ Do not call this provider from this packet alone.
 
 Required controls:
 
-- The accepted 2026-06 approval records `192.168.1.118`, while the later routed-source observation records `192.168.1.8`; neither is approved while the policy status is `hold_conflicting_source_vm`.
+- The accepted 2026-06 approval records `192.168.1.118`, while the later routed-source observation records `192.168.1.8`. The explicit 2026-08-15 authority decision selects only `192.168.1.8`; retain `192.168.1.118` as historical provenance, not a permitted source.
+- Approved source VM: `192.168.1.8` via reviewed authority policy.
 - Exact endpoint and model metadata are insufficient without one explicitly approved source VM.
 - Connect timeout is 2 seconds and total timeout is 120 seconds.
 - Keep public exposure, endpoint/model discovery, credentials, and raw payload retention disabled.
 - Keep broad local-provider, Ollama-specific, and automatic local-evidence gates disabled by default.
-- No Ollama route is READY while provider authority is unresolved.
+- The approved source is still non-activating while the three provider and automatic-evidence gates remain disabled by default.
 
 Stop lines:
 
 - Do not call any endpoint other than the exact bounded route from an approved pilot.
-- Do not infer approval from either candidate source VM or from current settings.
+- Do not infer activation from the approved source VM or from current settings; separate gate enablement requires a reviewed successor decision.
 - Do not discover endpoints or models.
 - Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.
 - Do not read credentials or external sessions.
