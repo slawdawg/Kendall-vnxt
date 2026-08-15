@@ -109,8 +109,7 @@ Include the decision, rationale, and next safe action before the runner continue
 The endpoint `http://192.168.1.128:11434/v1/chat/completions` and model
 `qwen3:14b` are agreed route metadata, but they do not authorize a call. The
 accepted 2026-06 approval records source VM `192.168.1.118`; the explicit
-2026-08-15 authority decision selects only the later routed-source observation
-`192.168.1.8`. The versioned
+2026-08-15 successor authority decision selects only `192.168.1.8`. The versioned
 [`local-provider-authority-policy-v1.json`](./local-provider-authority-policy-v1.json)
 record retains both as provenance while allowing only `192.168.1.8` as the
 source VM for this exact bounded route.
@@ -119,7 +118,8 @@ The reviewed authority policy selects source VM `192.168.1.8`.
 
 All local-provider and automatic-consent gates default false. Do not
 enable the lane or probe the provider: source selection is not gate enablement.
-Any future enablement requires a separate reviewed authority decision:
+Any future enablement requires a separate reviewed authority decision and a
+runtime check that the configured source VM is a local interface:
 
 ```bash
 export SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS=false
