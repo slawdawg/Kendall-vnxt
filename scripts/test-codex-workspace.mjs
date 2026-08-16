@@ -8259,11 +8259,23 @@ try {
     const supervisorLeaves = supervisorCheckLeaves;
     try {
       const stageLog = installFixtureResumableCheckPlan(fixture, supervisorLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
-      const result = runFixtureScript(
+      let result = runFixtureScript(
         fixture,
         ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
+
+      // The production packet intentionally pauses before beginning a leaf
+      // when its bounded invocation window is exhausted. This aggregate has
+      // many mocked leaves, so a slower CI runner may validly require the one
+      // documented resume rather than treating elapsed wall time as failure.
+      if (result.code !== 0 && result.stderr.includes("packet paused")) {
+        result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+      }
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === supervisorLeaves.join(","), "supervisor aggregate was not expanded into its fixed leaf order");
