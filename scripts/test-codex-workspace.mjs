@@ -11804,6 +11804,48 @@ try {
     }
   });
 
+  test("refresh-pr-head hashes non-UTF-8 recovery patch paths as raw bytes", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["config", "core.quotePath", "false"]);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      const recordedPath = Buffer.concat([Buffer.from(`${fixture.root}/bad-`, "utf8"), Buffer.from([0x80]), Buffer.from(".txt", "utf8")]);
+      writeFileSync(recordedPath, "same content\n");
+      runGit(fixture.root, ["add", "-A"]);
+      runGit(fixture.root, ["commit", "-q", "-m", "record non-UTF-8 path"]);
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+
+      const livePath = Buffer.concat([Buffer.from(`${fixture.worktree}/bad-`, "utf8"), Buffer.from([0x81]), Buffer.from(".txt", "utf8")]);
+      writeFileSync(livePath, "same content\n");
+      runGit(fixture.worktree, ["add", "-A"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "replay at a distinct non-UTF-8 path"]);
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Distinct non-UTF-8 path bytes must not prove recovery equivalence.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.patchSeriesMatch === -1, JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("refresh-pr-head matches a rebased patch series only after the current PR base", () => {
     const fixture = createCanonicalManagedPrFixture({ existingPr: true });
     try {

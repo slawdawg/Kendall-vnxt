@@ -3958,12 +3958,20 @@ function gitRecoveryFirstParentCommits(base, head, cwd) {
 }
 
 function gitRecoveryPatchIdentity(commit, cwd) {
-  const patch = gitRecoveryProof(["show", "--format=", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", commit], cwd, { preserveStdout: true });
-  if (patch.code !== 0) return { patchId: null, error: patch.stderr || patch.stdout || `cannot render recovery patch for ${commit}` };
+  const patch = spawnSync("git", ["--no-replace-objects", "show", "--format=", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", commit], {
+    cwd,
+    encoding: "buffer",
+    stdio: "pipe",
+    timeout: defaultVerificationTimeoutMs,
+  });
+  const stdout = Buffer.isBuffer(patch.stdout) ? patch.stdout : Buffer.from(patch.stdout || "");
+  const stderr = Buffer.isBuffer(patch.stderr) ? patch.stderr.toString("utf8") : String(patch.stderr || "");
+  if (patch.status !== 0) return { patchId: null, error: stderr || stdout.toString("utf8") || `cannot render recovery patch for ${commit}` };
   // This is intentionally stricter than `git patch-id`: preserve every byte
   // Git emits, including file and hunk locations. An edit replayed into a
-  // different repeated region must not authorize a delivery-head rebind.
-  const patchId = createHash("sha256").update(patch.stdout).digest("hex");
+  // different repeated region or a distinct non-UTF-8 pathname must not
+  // authorize a delivery-head rebind.
+  const patchId = createHash("sha256").update(stdout).digest("hex");
   return /^[a-f0-9]{64}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `recovery patch identity for ${commit} is malformed` };
 }
 
