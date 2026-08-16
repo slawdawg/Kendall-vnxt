@@ -650,8 +650,11 @@ do not treat an operator authorization as a bypass.
    ordered carry-forward patch arguments. Its dry run rejects untracked or
    ignored files, renamed, copied, malformed, non-UTF-8, any whole-index hidden
    assume-unchanged/skip-worktree entry,
-   filtered, encoded, or drifting paths; it also rejects transient Git object
-   store overrides. The exact current manifest owner must run it—dirty-lane
+   filtered, text/eol-normalized, mode-hidden, encoded, or drifting paths; it
+   forces dirty-submodule visibility and rejects every ambient Git index,
+   repository/worktree, common-directory, or object-store override. Snapshot
+   objects and their ref are written with Git's loose-object/reference
+   durability enabled before reset. The exact current manifest owner must run it—dirty-lane
    takeover is a separate governed operation. Its apply re-reads the exact
    porcelain set under lock, stages only those named paths in a temporary
    index, and repeats the porcelain/tree proof immediately before reset. The
@@ -666,8 +669,9 @@ do not treat an operator authorization as a bypass.
    is a hard stop line. A crash or blocked post-reset check leaves immutable
    pending evidence. Re-run the same proof with
    `preserve-dirty-superseded <task> --resume-pending --apply` and fresh
-   approval/reason: it settles only an exact re-read clean source or an exact
-   still-dirty snapshot, and otherwise makes no reset. Generic
+   approval/reason (which is retained with the resumed reset): it settles only
+   an exact re-read clean source or an exact still-dirty snapshot, and otherwise
+   makes no reset. Generic
    `cleanup-merged`, `cleanup-current`, `cleanup-integrated`, and branch
    cleanup deliberately refuse a lane with this evidence; only the final
    `cleanup-superseded` route may remove its local resources.
