@@ -11568,10 +11568,7 @@ function dirtySupersededPreservationPlan(record, state, context) {
 
 function dirtySupersededTrackedPaths(worktreePath) {
   assertNoDirtySupersededHiddenIndexFlags(worktreePath);
-  const fileMode = git(["config", "--bool", "core.fileMode"], { cwd: worktreePath });
-  if (fileMode.code === 0 && fileMode.stdout.trim() === "false") {
-    throw new Error("dirty superseded preservation refuses core.fileMode=false because mode-only edits would be hidden");
-  }
+  assertDirtySupersededStatusConfiguration(worktreePath);
   const autocrlf = git(["config", "--bool", "core.autocrlf"], { cwd: worktreePath });
   if (autocrlf.code === 0 && ["true", "input"].includes(autocrlf.stdout.trim())) {
     throw new Error("dirty superseded preservation refuses core.autocrlf because staged snapshot bytes could be normalized");
@@ -11593,8 +11590,8 @@ function dirtySupersededTrackedPaths(worktreePath) {
     if (indexEntry.code !== 0 || /^160000\s/.test(String(indexEntry.stdout || ""))) {
       throw new Error("dirty superseded preservation refuses recursive submodule gitlinks");
     }
-    const attributes = git(["check-attr", "filter", "working-tree-encoding", "text", "eol", "ident", "--", path], { cwd: worktreePath });
-    if (attributes.code !== 0 || String(attributes.stdout || "").split(/\r?\n/).some((line) => line && !line.endsWith(": filter: unspecified") && !line.endsWith(": working-tree-encoding: unspecified") && !line.endsWith(": text: unspecified") && !line.endsWith(": text: unset") && !line.endsWith(": eol: unspecified") && !line.endsWith(": ident: unspecified") && !line.endsWith(": ident: unset"))) {
+    const attributes = git(["check-attr", "filter", "working-tree-encoding", "text", "eol", "ident", "crlf", "--", path], { cwd: worktreePath });
+    if (attributes.code !== 0 || String(attributes.stdout || "").split(/\r?\n/).some((line) => line && !line.endsWith(": filter: unspecified") && !line.endsWith(": working-tree-encoding: unspecified") && !line.endsWith(": text: unspecified") && !line.endsWith(": text: unset") && !line.endsWith(": eol: unspecified") && !line.endsWith(": ident: unspecified") && !line.endsWith(": ident: unset") && !line.endsWith(": crlf: unspecified") && !line.endsWith(": crlf: unset"))) {
       throw new Error("dirty superseded preservation refuses paths with clean filters, working-tree encodings, text/eol normalization, or ident expansion");
     }
     paths.push({ path, status });
@@ -11638,10 +11635,8 @@ function dirtySupersededStatusRecords(worktreePath) {
   // Recheck trustctime here rather than only during plan construction: an
   // operator can flip it between the initial plan and a reset-adjacent or
   // cleanup validation, where a restored-mtime edit would otherwise hide.
-  const trustCtime = git(["config", "--bool", "core.trustctime"], { cwd: worktreePath });
-  if (trustCtime.code === 0 && trustCtime.stdout.trim() === "false") {
-    throw new Error("dirty superseded preservation refuses core.trustctime=false because restored-mtime edits could be hidden");
-  }
+  assertDirtySupersededStatusConfiguration(worktreePath);
+  assertNoDirtySupersededConversionAttributes(worktreePath);
   const result = spawnSync("git", ["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"], { cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes });
   if (result.status !== 0) throw new Error(String(result.stderr || "could not inspect dirty superseded worktree").trim());
   const raw = Buffer.from(result.stdout || []); const records = [];
@@ -11653,6 +11648,24 @@ function dirtySupersededStatusRecords(worktreePath) {
     records.push(`${record.subarray(0, 3).toString("ascii")}${path}`);
   }
   return records;
+}
+
+function assertNoDirtySupersededConversionAttributes(worktreePath) {
+  const listed = git(["ls-files", "-z"], { cwd: worktreePath, preserveStdout: true });
+  if (listed.code !== 0) throw new Error("dirty superseded preservation could not inventory tracked attributes");
+  for (const path of String(listed.stdout || "").split("\0").filter(Boolean)) {
+    const attributes = git(["check-attr", "filter", "working-tree-encoding", "text", "eol", "ident", "crlf", "--", path], { cwd: worktreePath });
+    if (attributes.code !== 0 || String(attributes.stdout || "").split(/\r?\n/).some((line) => line && !line.endsWith(": filter: unspecified") && !line.endsWith(": working-tree-encoding: unspecified") && !line.endsWith(": text: unspecified") && !line.endsWith(": text: unset") && !line.endsWith(": eol: unspecified") && !line.endsWith(": ident: unspecified") && !line.endsWith(": ident: unset") && !line.endsWith(": crlf: unspecified") && !line.endsWith(": crlf: unset"))) throw new Error("dirty superseded preservation refuses tracked conversion attributes before destructive status proof");
+  }
+}
+
+function assertDirtySupersededStatusConfiguration(worktreePath) {
+  const checks = [["core.fileMode", "mode-only edits would be hidden"], ["core.trustctime", "restored-mtime edits could be hidden"], ["core.ignoreCase", "case-folded aliases could be hidden"]];
+  for (const [name, reason] of checks) {
+    const value = git(["config", "--bool", name], { cwd: worktreePath });
+    if (value.code === 0 && value.stdout.trim() === "false" && name !== "core.ignoreCase") throw new Error(`dirty superseded preservation refuses ${name}=false because ${reason}`);
+    if (value.code === 0 && value.stdout.trim() === "true" && name === "core.ignoreCase") throw new Error(`dirty superseded preservation refuses ${name}=true because ${reason}`);
+  }
 }
 
 function assertDurablePreservationGitEnvironment() {
@@ -11668,6 +11681,9 @@ function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
   const rawRef = `refs/codex-preservation/${manifest.task_id}/dirty-superseded`;
   const ref = rawRef;
   if (git(["check-ref-format", ref], { cwd: plan.worktreePath }).code !== 0) throw new Error("dirty superseded preservation task id cannot form a safe Git snapshot ref");
+  const symbolic = git(["symbolic-ref", "-q", ref], { cwd: plan.worktreePath });
+  if (symbolic.code === 0) throw new Error("dirty superseded preservation refuses symbolic snapshot refs");
+  if (symbolic.code !== 1) throw new Error("dirty superseded preservation could not prove snapshot ref is non-symbolic");
   if (git(["show-ref", "--verify", "--quiet", ref], { cwd: plan.worktreePath }).code === 0) throw new Error("dirty superseded preservation ref already exists; re-read or recover it instead of overwriting evidence");
   const tree = dirtySupersededSnapshotTree(plan);
   const digest = createHash("sha256").update(JSON.stringify({ sourceHead: plan.expectedHeadSha, tree, paths: plan.dirty.paths })).digest("hex");
@@ -11678,7 +11694,7 @@ function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
   const commit = requireExactGitObjectId(runChecked("git", [...durableGit, "commit-tree", tree, "-p", plan.expectedHeadSha, "-m", `preserve-dirty-superseded:${manifest.task_id}:${digest}`], { cwd: plan.worktreePath, env: immutableGitEnvironment }).stdout.trim(), "dirty preservation commit");
   const objectFormat = git(["rev-parse", "--show-object-format"], { cwd: plan.worktreePath });
   const nullOid = objectFormat.code === 0 && objectFormat.stdout.trim() === "sha256" ? "0".repeat(64) : "0".repeat(40);
-  runChecked("git", [...durableGit, "update-ref", ref, commit, nullOid], { cwd: plan.worktreePath, env: immutableGitEnvironment });
+  runChecked("git", [...durableGit, "update-ref", "--no-deref", ref, commit, nullOid], { cwd: plan.worktreePath, env: immutableGitEnvironment });
   const paths = plan.dirty.paths.map((entry) => {
     const entryTree = scopedTreeEntries(tree, [entry.path], plan.worktreePath);
     if (entryTree.error || entryTree.entries.length > 1) throw new Error(`dirty preservation snapshot has ambiguous path: ${entry.path}`);

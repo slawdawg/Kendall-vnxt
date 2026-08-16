@@ -17383,6 +17383,39 @@ try {
     } finally { cleanupSupersededCleanupFixture(fixture); }
   });
 
+  test("preserve-dirty-superseded rejects legacy crlf attributes, ignoreCase, and symbolic snapshot refs", () => {
+    const cases = [
+      ["legacy crlf", (fixture) => writeFileSync(join(fixture.worktree, ".gitattributes"), "carried.txt crlf\n"), "conversion attributes"],
+      ["ignoreCase", (fixture) => runGit(fixture.worktree, ["config", "core.ignoreCase", "true"]), "core.ignoreCase=true"],
+      ["symbolic ref", (fixture) => runGit(fixture.worktree, ["symbolic-ref", "refs/codex-preservation/superseded-task/dirty-superseded", "refs/heads/main"]), "symbolic snapshot refs"],
+    ];
+    for (const [name, setup, expected] of cases) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+      try {
+        setup(fixture); writeFileSync(join(fixture.worktree, "carried.txt"), `${name} unsafe dirty bytes\n`);
+        const result = runFixtureScript(fixture, name === "symbolic ref" ? [...args.slice(0, -1), "--apply", "--approval", "operator approved symbolic-ref regression", "--reason", "symbolic ref must not be dereferenced"] : args, { env: fixture.env });
+        assert(name === "symbolic ref" ? result.code !== 0 && (result.stderr || result.stdout).includes(expected) : result.code === 0 && JSON.parse(result.stdout).ready === false && JSON.parse(result.stdout).reason.includes(expected), `${name}: ${result.stderr || result.stdout}`);
+        assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, `${name} reset source bytes`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("cleanup-superseded rechecks fileMode and conversion attributes after preservation", () => {
+    for (const [name, setup] of [["fileMode", (fixture) => runGit(fixture.worktree, ["config", "core.fileMode", "false"])], ["filter", (fixture) => writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt filter=drop\n")]]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved preservation", "--reason", "final cleanup must recheck configuration"];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), "preserved bytes\n");
+        assert(runFixtureScript(fixture, preserve, { env: fixture.env }).code === 0, name);
+        setup(fixture);
+        const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+        assert(name === "fileMode" ? cleanup.code !== 0 && (cleanup.stderr || cleanup.stdout).includes("core.fileMode=false") : cleanup.code !== 0 && (cleanup.stderr || cleanup.stdout).includes("conversion attributes"), `${name}: ${cleanup.stderr || cleanup.stdout}`);
+        assert(existsSync(fixture.worktree), `${name} allowed cleanup`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
   test("preserve-dirty-superseded blocks a post-plan trustctime flip before reset or cleanup", () => {
     const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
     const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "status settings must remain safe through reset-adjacent proof"];

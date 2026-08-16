@@ -652,11 +652,15 @@ do not treat an operator authorization as a bypass.
    metacharacters, active replacement refs, any whole-index hidden
    assume-unchanged/skip-worktree entry (including the combined lowercase
    `s` `git ls-files -v` representation),
-   filtered, text/eol-normalized, ident-expanded, mode-hidden, encoded, or
-   drifting paths; it
-   disables Git fsmonitor for every status proof, refuses `core.trustctime=false`,
-   and persists dirty paths in UTF-8 byte order rather than host-locale order.
-   forces dirty-submodule visibility and rejects every ambient Git index,
+   filtered, text/eol-normalized, legacy `crlf`-normalized, ident-expanded,
+   mode-hidden, encoded, or drifting paths; it
+   disables Git fsmonitor for every status proof, refuses `core.trustctime=false`
+   and `core.ignoreCase=true`, and repeats the configuration and conversion-
+   attribute checks at the final cleanup boundary. Its preservation ref must be
+   a direct, non-symbolic ref and is written without dereferencing, so a
+   pre-existing symbolic ref cannot redirect the snapshot. It persists dirty
+   paths in UTF-8 byte order rather than host-locale order, forces
+   dirty-submodule visibility, and rejects every ambient Git index,
    repository/worktree, common-directory, or object-store override. Snapshot
    blobs, tree, commit, and ref are written with Git's loose-object/reference
    durability enabled before reset. The exact current manifest owner must run it—dirty-lane
