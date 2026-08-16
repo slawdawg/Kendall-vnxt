@@ -45,6 +45,16 @@ const checkVerificationTimeoutMs = 900_000;
 const verificationDiagnosticSchemaVersion = 2;
 const verificationDiagnosticTailMaxBytes = 2_048;
 const verificationDiagnosticCaptureMaxBytes = 4 * 1024 * 1024;
+// Recovery proof is intentionally bounded: Git patch output is untrusted
+// process output, but the documented recovery must support ordinary binary or
+// generated changes larger than Node's 1 MiB default capture.
+const recoveryPatchCaptureMaxBytes = 16 * 1024 * 1024;
+// Rebased-head proof is deliberately a small exceptional path. Bound its
+// aggregate work as well as each child process so a long history cannot turn
+// a read-only preview into an unbounded CPU, memory, or process-time sink.
+const recoveryPatchSeriesMaxCommits = 128;
+const recoveryPatchSeriesCaptureMaxBytes = 64 * 1024 * 1024;
+const recoveryPatchSeriesTimeoutMs = 5 * 60 * 1000;
 const resumableCheckInvocationBudgetMs = 180_000;
 // Every ordinary leaf must start with enough time to produce useful evidence.
 // Otherwise a short, healthy command can be killed solely because a prior leaf
@@ -582,6 +592,8 @@ refresh-pr-head options:
   --reason <text>           Required bounded reason for the explicit stale-head rebind.
   --non-ancestral-recovery-authorization <text>
                              Required only for the one literal, audited PR #723 historical-rewrite recovery.
+  --rebased-recovery-authorization <text>
+                             Required only for an operator-authorized, patch-equivalent rebased PR head recovery.
   --apply                   Record the rebind under the task lock. Without this, print a dry-run plan.
   --summary-json            Without --apply, print the bounded rebind evidence packet.
   Supports --non-required-checks and --non-required-check-policy for exact-head documented skipped checks.
@@ -3565,6 +3577,15 @@ function refreshPrHead(argv) {
       locked.pr_delivery_evidence,
       lockedPacket,
     );
+    if (lockedPacket.nonAncestralRecovery?.status === "authorized") {
+      // A non-ancestral rebind changes the tested base as well as the head.
+      // None of the prior delivery-result fields can prove this new object,
+      // even when its patch series is exact. Keep only stale identity/audit
+      // metadata and require the normal exact-head verification path again.
+      locked.last_verified_at = null;
+      locked.last_verification_command = null;
+      locked.check_verification_packet = null;
+    }
     locked.pr_url = lockedPacket.pr.url || locked.pr_url;
     locked.pr_number = lockedPacket.pr.number || locked.pr_number;
     locked.pr_head_rebinds = [...copyJsonArray(locked.pr_head_rebinds), rebind];
@@ -3654,10 +3675,15 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   if (postAuditRefsChanged) blockers.push("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit");
   if (!localHeadSha || localHeadSha !== pr?.headRefOid) blockers.push("Local worktree HEAD does not match the live PR head");
   if (!remoteHeadSha || remoteHeadSha !== pr?.headRefOid) blockers.push("origin branch HEAD does not match the live PR head");
-  const fastForward = priorHeadSha && pr?.headRefOid
-    ? git(["merge-base", "--is-ancestor", priorHeadSha, pr.headRefOid], { cwd: manifest.worktree_path }).code === 0
+  // Classifying a refresh as ordinary fast-forward is itself recovery-proof
+  // authority. Do not let local replace refs or grafts route a rewritten head
+  // around the non-ancestral recovery contracts.
+  const recoveryPatchBudget = createRecoveryPatchSeriesBudget();
+  const recoveryGitState = inspectRecoveryProofGitState(manifest.worktree_path, { budget: recoveryPatchBudget });
+  const fastForward = priorHeadSha && pr?.headRefOid && recoveryGitState.status === "clean"
+    ? gitRecoveryCommitIsAncestor(priorHeadSha, pr.headRefOid, manifest.worktree_path, { budget: recoveryPatchBudget, phase: "classification" })
     : false;
-  const nonAncestralRecovery = shapePr723NonAncestralRefreshRecoveryEvidence(manifest, {
+  const nonAncestralRecovery = shapeNonAncestralRefreshRecoveryEvidence(manifest, {
     options,
     priorHeadSha,
     localHeadSha,
@@ -3665,7 +3691,44 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     repository,
     pr,
     fastForward,
+    recoveryGitState,
+    recoveryPatchBudget,
   });
+  // Patch identity can require bounded-but-material Git output. Re-read every
+  // mutable delivery eligibility gate after that proof so the rebind cannot
+  // authorize a PR, check, review, lock, local, or origin snapshot observed
+  // before hashing completed.
+  const postRecoveryPr = prViewForGates(manifest);
+  const postRecoveryReviewThreads = postRecoveryPr?.number
+    ? fetchReviewThreadState(manifest, repositoryRef, postRecoveryPr.number)
+    : emptyReviewThreadState();
+  // The paginated review audit itself is mutable work. Capture the final PR
+  // and every other dynamic gate only after it completes, rather than
+  // comparing an earlier pre-thread-audit PR/check snapshot.
+  const postRecoveryFinalPr = prViewForGates(manifest);
+  const postRecoveryFinalChecks = normalizeStatusCheckRollup(postRecoveryFinalPr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const postRecoveryLockInspection = inspectTaskLock(workspaceState(options), manifest.task_id);
+  const postRecoveryGitState = inspectRecoveryProofGitState(manifest.worktree_path, { budget: recoveryPatchBudget });
+  const postRecoveryLocalHeadResult = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
+  const postRecoveryLocalHeadSha = postRecoveryLocalHeadResult.code === 0 ? exactGitObjectIdOrNull(postRecoveryLocalHeadResult.stdout.trim()) : null;
+  const postRecoveryRemoteHeadResult = git(["rev-parse", `origin/${manifest.branch}`], { cwd: manifest.worktree_path });
+  const postRecoveryRemoteHeadSha = postRecoveryRemoteHeadResult.code === 0 ? exactGitObjectIdOrNull(postRecoveryRemoteHeadResult.stdout.trim()) : null;
+  const postRecoverySnapshotChanged = JSON.stringify(deliveryEligibilitySnapshot(postRecoveryFinalPr, postRecoveryFinalChecks))
+    !== JSON.stringify(deliveryEligibilitySnapshot(pr, checks));
+  const postRecoveryThreadSnapshotChanged = reviewThreadStateSnapshotFingerprint(postRecoveryReviewThreads)
+    !== reviewThreadStateSnapshotFingerprint(reviewThreads);
+  const lockedRefresh = lockInspection.status === "owned";
+  const postRecoveryLockChanged = deliveryLockEligibilitySnapshot(postRecoveryLockInspection, manifest, options, lockedRefresh)
+    !== deliveryLockEligibilitySnapshot(lockInspection, manifest, options, lockedRefresh);
+  const postRecoveryGitStateChanged = JSON.stringify(postRecoveryGitState) !== JSON.stringify(recoveryGitState);
+  const postRecoveryRefsChanged = postRecoveryLocalHeadSha !== localHeadSha || postRecoveryRemoteHeadSha !== remoteHeadSha;
+  if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Delivery-head refresh requires a clean local Git replacement and graft state");
+  if (recoveryPatchSeriesRemainingRuntimeMs(recoveryPatchBudget) <= 0) blockers.push(recoveryPatchSeriesRuntimeError(recoveryPatchBudget));
+  if (postRecoverySnapshotChanged) blockers.push("Live PR eligibility or status checks changed while calculating the recovery patch proof");
+  if (postRecoveryThreadSnapshotChanged) blockers.push("Review-thread state changed while calculating the recovery patch proof");
+  if (postRecoveryLockChanged) blockers.push("Task-lock eligibility changed while calculating the recovery patch proof");
+  if (postRecoveryGitStateChanged) blockers.push("Local Git replacement or graft state changed while calculating the recovery patch proof");
+  if (postRecoveryRefsChanged) blockers.push("Local HEAD or origin branch refs changed while calculating the recovery patch proof");
   if (!fastForward && nonAncestralRecovery.status !== "authorized") {
     blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
   }
@@ -3687,11 +3750,11 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     "canonical Kendall_Nxt repository and matching managed PR identity",
     "open non-draft PR at one exact local, origin, and GitHub head",
     "terminal successful checks or canonical policy-bound non-required skipped checks",
-    "complete thread-aware review audit with no pending review request",
+    "complete thread-aware review audit with no pending review request before and after recovery proof",
     "explicit prior/new head and reason retained as metadata only",
   ];
   if (!fastForward) {
-    requiredGates.push("PR #723-only non-ancestral recovery contract with exact prior head, authorized anchor ancestry, documented merge base, and operator evidence");
+    requiredGates.push("an explicit PR #723 historical-rewrite contract or operator-authorized patch-equivalent rebased-head recovery");
   }
   const ready = blockers.length === 0;
   return {
@@ -3707,6 +3770,8 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     remoteHeadSha,
     postAuditLocalHeadSha,
     postAuditRemoteHeadSha,
+    postRecoveryLocalHeadSha,
+    postRecoveryRemoteHeadSha,
     repository,
     pr: {
       number: pr?.number || null,
@@ -3737,9 +3802,9 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
         "explicit metadata-only manifest rebind; no source, review-thread, merge, or cleanup mutation",
         "active, stale, or ambiguous task locks block refresh",
         "remote/local/PR identity mismatch, pending or failing checks, or incomplete review evidence block refresh",
-        "non-ancestral history is blocked unless every literal PR #723 recovery binding and the exact operator authorization match",
+        "non-ancestral history is blocked unless the literal PR #723 contract or every patch-equivalent rebased-head recovery gate and exact operator authorization match",
       ],
-      evidenceRefs: [`task:${manifest.task_id}`, `repository:${repository.fullName}`, pr?.number ? `pr:${pr.number}` : "", priorHeadSha ? `prior-head:${priorHeadSha}` : "", pr?.headRefOid ? `new-head:${pr.headRefOid}` : "", nonAncestralRecovery.status === "authorized" ? `recovery-anchor:${nonAncestralRecovery.authorizedAnchorHeadSha}` : "", nonAncestralRecovery.status === "authorized" ? `recovery-merge-base:${nonAncestralRecovery.observedMergeBaseSha}` : ""],
+      evidenceRefs: [`task:${manifest.task_id}`, `repository:${repository.fullName}`, pr?.number ? `pr:${pr.number}` : "", priorHeadSha ? `prior-head:${priorHeadSha}` : "", pr?.headRefOid ? `new-head:${pr.headRefOid}` : "", nonAncestralRecovery.status === "authorized" && nonAncestralRecovery.authorizedAnchorHeadSha ? `recovery-anchor:${nonAncestralRecovery.authorizedAnchorHeadSha}` : "", nonAncestralRecovery.status === "authorized" ? `recovery-merge-base:${nonAncestralRecovery.observedMergeBaseSha}` : "", nonAncestralRecovery.status === "authorized" && nonAncestralRecovery.priorPatchSeries?.digest ? `recovery-patch-series:${nonAncestralRecovery.priorPatchSeries.digest}` : ""],
       nextSafeAction: ready ? "Apply the one explicit delivery-head rebind under lock, then rerun the normal thread adjudication workflow." : "Do not alter the manifest manually; fix the named evidence mismatch and rerun refresh-pr-head.",
       recoveryPath: "Keep the prior delivery-head binding unchanged. Re-run the read-only refresh packet after the ambiguous state is resolved.",
       generatedAt: checkedAt,
@@ -3749,8 +3814,437 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   };
 }
 
+function shapeNonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
+  const pr723Authorization = context.options?.nonAncestralRecoveryAuthorization;
+  const rebasedAuthorization = context.options?.rebasedRecoveryAuthorization;
+  const hasPr723Authorization = typeof pr723Authorization === "string" && pr723Authorization.length > 0;
+  const hasRebasedAuthorization = typeof rebasedAuthorization === "string" && rebasedAuthorization.length > 0;
+  // Resolve the literal exception before the generic route.  The #723 proof is
+  // intentionally source-governed; it must never be weakened by a generic
+  // patch-equivalence token, even when the latter is otherwise well formed.
+  const pr723Recovery = !context.fastForward
+    ? shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context)
+    : null;
+
+  if (hasPr723Authorization && hasRebasedAuthorization) {
+    return {
+      schemaVersion: 1,
+      status: "blocked",
+      kind: "ambiguous",
+      blockers: ["Only one non-ancestral recovery authorization may be supplied"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (pr723Recovery?.literalBindingMatches && hasRebasedAuthorization) {
+    return {
+      ...pr723Recovery,
+      status: "blocked",
+      blockers: [...(pr723Recovery.blockers || []), "Rebased-head recovery authorization is not permitted for the literal PR #723 recovery binding"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  if (hasRebasedAuthorization) return shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context);
+  if (hasPr723Authorization) return shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context);
+  if (!context.fastForward) {
+    return pr723Recovery.literalBindingMatches
+      ? pr723Recovery
+      : shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context);
+  }
+  return {
+    schemaVersion: 1,
+    status: "not-required",
+    kind: "none",
+    blockers: [],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
+  const rawAuthorization = context.options?.rebasedRecoveryAuthorization;
+  // This is an exact operator binding, not general metadata. Do not trim or
+  // normalize it: any byte change must fail closed.
+  const authorization = typeof rawAuthorization === "string" && rawAuthorization.length <= 750
+    ? rawAuthorization
+    : "";
+  const liveHeadSha = exactGitObjectIdOrNull(context.pr?.headRefOid) || null;
+  const baseHeadSha = exactGitObjectIdOrNull(context.pr?.baseRefOid) || null;
+  const recoveryGitState = context.recoveryGitState || inspectRecoveryProofGitState(manifest.worktree_path);
+  const patchBudget = context.recoveryPatchBudget || createRecoveryPatchSeriesBudget();
+  const mergeBaseResult = context.priorHeadSha && liveHeadSha
+    ? gitRecoveryProof(["merge-base", context.priorHeadSha, liveHeadSha], manifest.worktree_path, { budget: patchBudget })
+    : null;
+  const observedMergeBaseSha = mergeBaseResult?.code === 0
+    ? exactGitObjectIdOrNull(mergeBaseResult.stdout.trim())
+    : null;
+  const mergeBaseError = mergeBaseResult?.code !== 0
+    ? safeMetadataText(mergeBaseResult?.stderr || mergeBaseResult?.stdout || "", 500)
+    : "";
+  const priorPatchSeries = observedMergeBaseSha && context.priorHeadSha
+    ? gitStablePatchSeries(observedMergeBaseSha, context.priorHeadSha, manifest.worktree_path, { requireNoMerges: true, budget: patchBudget })
+    : { digest: null, commits: [], patchIds: [], error: mergeBaseError || "cannot determine the prior rebased patch series" };
+  // The live series is intentionally scoped to the current PR base.  A
+  // rebased base can already contain historical patches; matching against the
+  // older prior/live merge base would incorrectly authorize a head that only
+  // inherited those patches from its base and did not replay them in the PR.
+  const livePatchSeries = priorPatchSeries.error
+    ? { digest: null, commits: [], patchIds: [], error: "cannot determine the live rebased patch series after the prior recovery series failed" }
+    : baseHeadSha && liveHeadSha
+    ? gitStablePatchSeries(baseHeadSha, liveHeadSha, manifest.worktree_path, { requireNoMerges: true, budget: patchBudget })
+    : { digest: null, commits: [], patchIds: [], error: "cannot determine the live rebased patch series" };
+  const patchSeriesMatch = priorPatchSeries.error || livePatchSeries.error
+    ? null
+    : contiguousSubsequenceStart(priorPatchSeries.patchIds, livePatchSeries.patchIds);
+  const patchSeriesExactlyEqual = patchSeriesMatch === 0
+    && priorPatchSeries.patchIds.length === livePatchSeries.patchIds.length;
+  const expectedAuthorization = (
+    context.priorHeadSha && liveHeadSha && baseHeadSha && observedMergeBaseSha && priorPatchSeries.digest
+      ? `operator-authorized recovery=rebased-head task=${manifest.task_id} pr=${context.pr?.number} prior=${context.priorHeadSha} head=${liveHeadSha} base=${baseHeadSha} merge-base=${observedMergeBaseSha} patch-series=${priorPatchSeries.digest}`
+      : null
+  );
+  const baseIsAncestorOfLiveHead = baseHeadSha && liveHeadSha
+    ? gitRecoveryCommitIsAncestor(baseHeadSha, liveHeadSha, manifest.worktree_path, { budget: patchBudget })
+    : false;
+  const recoveryProofRuntimeExceeded = recoveryPatchSeriesRemainingRuntimeMs(patchBudget) <= 0;
+  const blockers = [];
+
+  if (context.fastForward) {
+    if (authorization) blockers.push("Rebased-head recovery authorization is only valid when the recorded delivery head is not an ancestor of the live PR head");
+    return {
+      schemaVersion: 1,
+      status: authorization ? "blocked" : "not-required",
+      kind: "rebased-head",
+      expectedAuthorization,
+      authorization: authorization || null,
+      priorHeadSha: context.priorHeadSha || null,
+      liveHeadSha,
+      baseHeadSha,
+      observedMergeBaseSha,
+      priorPatchSeries,
+      livePatchSeries,
+      patchSeriesMatch,
+      patchSeriesExactlyEqual,
+      baseIsAncestorOfLiveHead,
+      patchBudget: recoveryPatchSeriesBudgetEvidence(patchBudget),
+      recoveryGitState,
+      blockers,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+
+  if (!liveHeadSha || !baseHeadSha || !context.priorHeadSha) blockers.push("Rebased-head recovery requires exact prior, live, and PR-base commit identities");
+  if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Rebased-head recovery requires a clean local Git replacement and graft state");
+  if (!observedMergeBaseSha) blockers.push("Rebased-head recovery could not reproduce an exact merge base");
+  if (!baseIsAncestorOfLiveHead) blockers.push("Rebased-head recovery requires the live PR head to descend from the exact PR base head");
+  if (recoveryProofRuntimeExceeded) blockers.push(recoveryPatchSeriesRuntimeError(patchBudget));
+  if (priorPatchSeries.error) blockers.push(`Rebased-head recovery prior patch series is unavailable: ${priorPatchSeries.error}`);
+  if (livePatchSeries.error) blockers.push(`Rebased-head recovery live patch series is unavailable: ${livePatchSeries.error}`);
+  if (!patchSeriesExactlyEqual) blockers.push("Rebased-head recovery requires the full base-to-live patch series to exactly equal the prior delivery patch series, with no extra, reordered, or reverted commits");
+  if (authorization !== expectedAuthorization) blockers.push("Rebased-head recovery requires exact operator evidence bound to task, PR, prior/live/base heads, merge base, and prior patch-series digest");
+  if (!context.localHeadSha || context.localHeadSha !== liveHeadSha) blockers.push("Rebased-head recovery requires exact local-head evidence for the live PR head");
+  if (!context.remoteHeadSha || context.remoteHeadSha !== liveHeadSha) blockers.push("Rebased-head recovery requires exact origin-head evidence for the live PR head");
+
+  return {
+    schemaVersion: 1,
+    status: blockers.length ? "blocked" : "authorized",
+    kind: "rebased-head",
+    expectedAuthorization,
+    authorization: authorization || null,
+    taskId: manifest.task_id,
+    prNumber: context.pr?.number || null,
+    priorHeadSha: context.priorHeadSha || null,
+    liveHeadSha,
+    baseHeadSha,
+    observedMergeBaseSha,
+    priorPatchSeries,
+    livePatchSeries,
+    patchSeriesMatch,
+    patchSeriesExactlyEqual,
+    baseIsAncestorOfLiveHead,
+    patchBudget: recoveryPatchSeriesBudgetEvidence(patchBudget),
+    recoveryGitState,
+    localHeadSha: context.localHeadSha || null,
+    remoteHeadSha: context.remoteHeadSha || null,
+    blockers,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function gitRecoveryProof(commandArguments, cwd, options = {}) {
+  const budget = options.budget || null;
+  const remainingRuntimeMs = budget ? recoveryPatchSeriesRemainingRuntimeMs(budget) : null;
+  if (budget && remainingRuntimeMs <= 0) {
+    return {
+      code: 1,
+      status: 1,
+      signal: null,
+      errorCode: "ETIMEDOUT",
+      errorMessage: "recovery patch series aggregate runtime exhausted",
+      stdout: "",
+      stderr: `recovery patch series exceeds the bounded ${budget.maxRuntimeMs / 1000}s aggregate runtime`,
+    };
+  }
+  const result = git(["--no-replace-objects", ...commandArguments], {
+    ...options,
+    budget: undefined,
+    timeout: budget ? Math.min(defaultVerificationTimeoutMs, remainingRuntimeMs) : options.timeout,
+    cwd,
+    // Replace refs can rewrite commit parents and therefore change every
+    // ancestry, rev-list, and show proof below. Recovery evidence must always
+    // inspect the literal objects named by the recorded GitHub SHAs.
+  });
+  // Test-only seam for the post-command boundary: it simulates the clock
+  // crossing the shared deadline while a successful final proof command ran.
+  if (budget
+    && result.code === 0
+    && process.env.CODEX_WORKSPACE_TEST_MODE === "1"
+    && process.env.CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_IS_ANCESTOR === "1"
+    && options.phase !== "classification"
+    && commandArguments.includes("--is-ancestor")) {
+    budget.deadlineMs = budget.now() - 1;
+  }
+  if (budget
+    && result.code === 0
+    && process.env.CODEX_WORKSPACE_TEST_MODE === "1"
+    && process.env.CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_CLASSIFICATION_ANCESTOR === "1"
+    && options.phase === "classification") {
+    budget.deadlineMs = budget.now() - 1;
+  }
+  if (budget && result.code === 0 && recoveryPatchSeriesRemainingRuntimeMs(budget) <= 0) {
+    return {
+      code: 1,
+      status: 1,
+      signal: null,
+      errorCode: "ETIMEDOUT",
+      errorMessage: "recovery patch series aggregate runtime exhausted after command",
+      stdout: "",
+      stderr: recoveryPatchSeriesRuntimeError(budget),
+    };
+  }
+  return result;
+}
+
+function inspectRecoveryProofGitState(cwd, options = {}) {
+  const graftPathResult = gitRecoveryProof(["rev-parse", "--git-path", "info/grafts"], cwd, options);
+  if (graftPathResult.code !== 0) {
+    return { status: "unavailable", reason: "Non-ancestral recovery could not inspect local Git graft state" };
+  }
+  const gitReportedGraftPath = String(graftPathResult.stdout || "").trim();
+  if (!gitReportedGraftPath) {
+    return { status: "unavailable", reason: "Non-ancestral recovery could not resolve local Git graft state" };
+  }
+  const graftPath = resolve(cwd, gitReportedGraftPath);
+  try {
+    // Git permits comments and blank lines in info/grafts.  They do not alter
+    // ancestry, so only a substantive graft entry is proof-relevant.
+    const hasSubstantiveGraft = existsSync(graftPath) && readFileSync(graftPath, "utf8")
+      .split(/\r?\n/)
+      .some((line) => {
+        const trimmed = line.trim();
+        return trimmed.length > 0 && !trimmed.startsWith("#");
+      });
+    if (!hasSubstantiveGraft) {
+      return { status: "clean", replacementObjectsDisabled: true, graftsPresent: false };
+    }
+  } catch {
+    return { status: "unavailable", reason: "Non-ancestral recovery could not inspect local Git graft state" };
+  }
+  return {
+    status: "blocked",
+    replacementObjectsDisabled: true,
+    graftsPresent: true,
+    reason: "Non-ancestral recovery rejects local Git graft state",
+  };
+}
+
+function gitRecoveryCommitIsAncestor(ancestor, descendant, cwd, options = {}) {
+  return gitRecoveryProof(["merge-base", "--is-ancestor", ancestor, descendant], cwd, options).code === 0;
+}
+
+function gitRecoveryFirstParentNonMergeCommitList(base, head, cwd, maxCommits = recoveryPatchSeriesMaxCommits, options = {}) {
+  const result = gitRecoveryProof(["rev-list", "--first-parent", "--reverse", "--no-merges", `--max-count=${maxCommits + 1}`, `${base}..${head}`], cwd, options);
+  if (result.code !== 0) return { commits: [], error: result.stderr || result.stdout || "cannot inspect recovery first-parent non-merge lineage" };
+  const commits = String(result.stdout || "").split(/\r?\n/).filter(Boolean);
+  return commits.every((commit) => exactGitObjectIdOrNull(commit)) ? { commits } : { commits: [], error: "recovery first-parent non-merge lineage contains an invalid object id" };
+}
+
+function gitRecoveryFirstParentCommits(base, head, cwd, maxCommits = recoveryPatchSeriesMaxCommits, options = {}) {
+  const result = gitRecoveryProof(["rev-list", "--first-parent", "--reverse", `--max-count=${maxCommits + 1}`, `${base}..${head}`], cwd, options);
+  if (result.code !== 0) return { commits: [], error: result.stderr || result.stdout || "cannot inspect recovery source post-PR lineage" };
+  const commits = String(result.stdout || "").split(/\r?\n/).filter(Boolean);
+  if (!commits.every((commit) => exactGitObjectIdOrNull(commit))) return { commits: [], error: "recovery source post-PR lineage contains an invalid object id" };
+  return { commits };
+}
+
+function gitRecoveryPatchIdentity(commit, cwd, options = {}) {
+  const captureLimit = Math.min(recoveryPatchCaptureMaxBytes, Number.isSafeInteger(options.captureLimit) ? options.captureLimit : recoveryPatchCaptureMaxBytes);
+  const timeoutMs = Math.min(defaultVerificationTimeoutMs, Number.isSafeInteger(options.timeoutMs) ? options.timeoutMs : defaultVerificationTimeoutMs);
+  const budget = options.budget || null;
+  if (captureLimit <= 0) return { patchId: null, patchBytes: 0, error: `recovery patch series exceeds the bounded ${recoveryPatchSeriesCaptureMaxBytes / (1024 * 1024)} MiB aggregate capture` };
+  if (timeoutMs <= 0) return { patchId: null, patchBytes: 0, error: `recovery patch series exceeds the bounded ${recoveryPatchSeriesTimeoutMs / 1000}s aggregate runtime` };
+  const patch = spawnSync("git", ["--no-replace-objects", "show", "--format=", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", commit], {
+    cwd,
+    encoding: "buffer",
+    stdio: "pipe",
+    timeout: timeoutMs,
+    maxBuffer: captureLimit,
+  });
+  const stdout = Buffer.isBuffer(patch.stdout) ? patch.stdout : Buffer.from(patch.stdout || "");
+  const stderr = Buffer.isBuffer(patch.stderr) ? patch.stderr.toString("utf8") : String(patch.stderr || "");
+  if (patch.error) {
+    if (patch.error.code === "ENOBUFS") {
+      if (captureLimit < recoveryPatchCaptureMaxBytes) {
+        return { patchId: null, patchBytes: stdout.length, error: `recovery patch series exceeds the bounded ${recoveryPatchSeriesCaptureMaxBytes / (1024 * 1024)} MiB aggregate capture` };
+      }
+      return { patchId: null, error: `recovery patch for ${commit} exceeds the bounded ${recoveryPatchCaptureMaxBytes / (1024 * 1024)} MiB capture` };
+    }
+    if (patch.error.code === "ETIMEDOUT" && timeoutMs < defaultVerificationTimeoutMs) {
+      return { patchId: null, patchBytes: stdout.length, error: `recovery patch series exceeds the bounded ${recoveryPatchSeriesTimeoutMs / 1000}s aggregate runtime` };
+    }
+    return { patchId: null, error: `cannot safely render recovery patch for ${commit}: ${patch.error.message || patch.error.code || "process error"}` };
+  }
+  if (patch.status !== 0) return { patchId: null, patchBytes: stdout.length, error: stderr || stdout.toString("utf8") || `cannot render recovery patch for ${commit}` };
+  // This byte-safe path invokes Git directly rather than through
+  // gitRecoveryProof, so preserve the same post-success deadline guarantee
+  // before it hashes authority evidence.
+  if (budget
+    && process.env.CODEX_WORKSPACE_TEST_MODE === "1"
+    && process.env.CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_PATCH_SHOW === "1") {
+    budget.deadlineMs = budget.now() - 1;
+  }
+  if (budget && recoveryPatchSeriesRemainingRuntimeMs(budget) <= 0) {
+    return { patchId: null, patchBytes: stdout.length, error: recoveryPatchSeriesRuntimeError(budget) };
+  }
+  // This is intentionally stricter than `git patch-id`: preserve every
+  // authority-bearing byte Git emits, including submodule targets, file and
+  // hunk locations, and non-UTF-8 paths. The sole normalization removes the
+  // two rebase-dependent blob IDs from `index` headers; those object IDs vary
+  // when a base changes outside the replayed hunk and are not patch content.
+  const patchId = createHash("sha256").update(canonicalizeRecoveryPatchBytes(stdout)).digest("hex");
+  return /^[a-f0-9]{64}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), patchBytes: stdout.length, error: null } : { patchId: null, patchBytes: stdout.length, error: `recovery patch identity for ${commit} is malformed` };
+}
+
+function canonicalizeRecoveryPatchBytes(patch) {
+  const chunks = [];
+  let offset = 0;
+  let inFileHeader = false;
+  while (offset < patch.length) {
+    const newline = patch.indexOf(0x0a, offset);
+    const end = newline === -1 ? patch.length : newline + 1;
+    const line = patch.subarray(offset, end);
+    if (line.subarray(0, 11).equals(Buffer.from("diff --git "))) {
+      inFileHeader = true;
+      chunks.push(line);
+    } else if (inFileHeader) {
+      const text = line.toString("ascii");
+      const match = /^(index )([0-9a-f]+)\.\.([0-9a-f]+)( [0-7]{6})?(\r?\n)?$/i.exec(text);
+      if (match) {
+        chunks.push(Buffer.from(`${match[1]}${"0".repeat(match[2].length)}..${"0".repeat(match[3].length)}${match[4] || ""}${match[5] || ""}`, "ascii"));
+        inFileHeader = false;
+      } else {
+        chunks.push(line);
+        if (text.startsWith("--- ") || text.startsWith("GIT binary patch") || text.startsWith("Submodule ")) inFileHeader = false;
+      }
+    } else {
+      chunks.push(line);
+    }
+    offset = end;
+  }
+  return Buffer.concat(chunks);
+}
+
+function createRecoveryPatchSeriesBudget(options = {}) {
+  // The injected clock is an internal deterministic test seam. Production
+  // callers use the monotonic wall-clock observation supplied by Date.now.
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  const testBudgetAlreadyExpired = process.env.CODEX_WORKSPACE_TEST_MODE === "1"
+    && process.env.CODEX_WORKSPACE_TEST_RECOVERY_PROOF_BUDGET_EXHAUSTED === "1";
+  const startedAtMs = now() - (testBudgetAlreadyExpired ? recoveryPatchSeriesTimeoutMs : 0);
+  return {
+    now,
+    startedAtMs,
+    deadlineMs: startedAtMs + recoveryPatchSeriesTimeoutMs,
+    maxCommits: recoveryPatchSeriesMaxCommits,
+    maxBytes: recoveryPatchSeriesCaptureMaxBytes,
+    maxRuntimeMs: recoveryPatchSeriesTimeoutMs,
+    commitsUsed: 0,
+    bytesUsed: 0,
+  };
+}
+
+function recoveryPatchSeriesRemainingRuntimeMs(budget) {
+  const now = typeof budget?.now === "function" ? budget.now : Date.now;
+  return budget.deadlineMs - now();
+}
+
+function recoveryPatchSeriesRuntimeError(budget) {
+  return `recovery patch series exceeds the bounded ${budget.maxRuntimeMs / 1000}s aggregate runtime`;
+}
+
+function recoveryPatchSeriesBudgetEvidence(budget) {
+  return {
+    maxCommits: budget.maxCommits,
+    maxBytes: budget.maxBytes,
+    maxRuntimeMs: budget.maxRuntimeMs,
+    commitsUsed: budget.commitsUsed,
+    bytesUsed: budget.bytesUsed,
+    elapsedMs: Math.max(0, budget.maxRuntimeMs - recoveryPatchSeriesRemainingRuntimeMs(budget)),
+  };
+}
+
+function gitStablePatchSeries(base, head, cwd, options = {}) {
+  const budget = options.budget || createRecoveryPatchSeriesBudget();
+  const remainingCommitCapacity = budget.maxCommits - budget.commitsUsed;
+  if (remainingCommitCapacity <= 0) {
+    return { digest: null, commits: [], patchIds: [], error: `recovery patch series exceeds the bounded ${budget.maxCommits} commits` };
+  }
+  const firstParent = gitRecoveryFirstParentCommits(base, head, cwd, remainingCommitCapacity, { budget });
+  if (firstParent.error) return { digest: null, commits: [], patchIds: [], error: firstParent.error };
+  if (firstParent.commits.length > remainingCommitCapacity) {
+    return { digest: null, commits: [], patchIds: [], error: `recovery patch series exceeds the bounded ${budget.maxCommits} commits` };
+  }
+  const commits = gitRecoveryFirstParentNonMergeCommitList(base, head, cwd, remainingCommitCapacity, { budget });
+  if (commits.error) return { digest: null, commits: [], patchIds: [], error: commits.error };
+  if (options.requireNoMerges && firstParent.commits.length !== commits.commits.length) {
+    return { digest: null, commits: [], patchIds: [], error: "prior delivery lineage contains a merge commit" };
+  }
+  if (!commits.commits.length) return { digest: null, commits: [], patchIds: [], error: "patch series is empty" };
+  if (commits.commits.length > remainingCommitCapacity) {
+    return { digest: null, commits: [], patchIds: [], error: `recovery patch series exceeds the bounded ${budget.maxCommits} commits` };
+  }
+  budget.commitsUsed += commits.commits.length;
+  const patchIds = [];
+  for (const commit of commits.commits) {
+    const remainingRuntimeMs = recoveryPatchSeriesRemainingRuntimeMs(budget);
+    const remainingBytes = budget.maxBytes - budget.bytesUsed;
+    const patch = gitRecoveryPatchIdentity(commit, cwd, { captureLimit: remainingBytes, timeoutMs: remainingRuntimeMs, budget });
+    if (patch.error) return { digest: null, commits: commits.commits, patchIds: [], error: patch.error };
+    budget.bytesUsed += patch.patchBytes;
+    patchIds.push(patch.patchId);
+  }
+  return {
+    digest: createHash("sha256").update(`count=${patchIds.length}\n${patchIds.join("\n")}\n`).digest("hex"),
+    commits: commits.commits,
+    patchIds,
+    error: null,
+  };
+}
+
+function contiguousSubsequenceStart(expected, actual) {
+  if (!expected.length || expected.length > actual.length) return -1;
+  for (let start = 0; start <= actual.length - expected.length; start += 1) {
+    if (expected.every((patchId, index) => actual[start + index] === patchId)) return start;
+  }
+  return -1;
+}
+
 function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
   const specification = pr723NonAncestralRefreshException;
+  const recoveryPatchBudget = context.recoveryPatchBudget || createRecoveryPatchSeriesBudget();
   const rawAuthorization = context.options?.nonAncestralRecoveryAuthorization;
   // This is deliberately an exact byte-for-byte token, not normal metadata:
   // whitespace normalization would make the operator evidence ambiguous.
@@ -3759,10 +4253,11 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
     : "";
   const expectedAuthorization = `operator-authorized recovery=pr-723 prior=${specification.priorHeadSha} anchor=${specification.authorizedAnchorHeadSha} merge-base=${specification.documentedMergeBaseSha}`;
   const liveHeadSha = exactGitObjectIdOrNull(context.pr?.headRefOid) || null;
-  const observedMergeBase = git(["merge-base", specification.priorHeadSha, specification.authorizedAnchorHeadSha], { cwd: manifest.worktree_path });
+  const recoveryGitState = context.recoveryGitState || inspectRecoveryProofGitState(manifest.worktree_path, { budget: recoveryPatchBudget });
+  const observedMergeBase = gitRecoveryProof(["merge-base", specification.priorHeadSha, specification.authorizedAnchorHeadSha], manifest.worktree_path, { budget: recoveryPatchBudget });
   const observedMergeBaseSha = observedMergeBase.code === 0 ? exactGitObjectIdOrNull(observedMergeBase.stdout.trim()) : null;
   const anchorIsAncestorOfLiveHead = liveHeadSha
-    ? gitCommitIsAncestor(specification.authorizedAnchorHeadSha, liveHeadSha, manifest.worktree_path)
+    ? gitRecoveryCommitIsAncestor(specification.authorizedAnchorHeadSha, liveHeadSha, manifest.worktree_path, { budget: recoveryPatchBudget })
     : false;
   const literalBindingMatches = (
     manifest.task_id === specification.taskId
@@ -3789,6 +4284,7 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
       liveHeadSha,
       observedMergeBaseSha,
       anchorIsAncestorOfLiveHead,
+      recoveryGitState,
       literalBindingMatches,
       blockers,
       metadataOnly: true,
@@ -3797,6 +4293,7 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
   }
 
   if (!literalBindingMatches) blockers.push("Non-ancestral recovery is restricted to the literal recorded PR #723 task, repository, URL, branch, base, and prior delivery head");
+  if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Non-ancestral recovery requires a clean local Git replacement and graft state");
   if (authorization !== expectedAuthorization) blockers.push("Non-ancestral recovery requires exact operator evidence bound to the PR #723 prior head, authorized anchor, and documented merge base");
   if (!observedMergeBaseSha || observedMergeBaseSha !== specification.documentedMergeBaseSha) blockers.push("Non-ancestral recovery did not reproduce the documented merge base");
   if (!anchorIsAncestorOfLiveHead) blockers.push("Non-ancestral recovery requires the live PR head to descend from the exact authorized anchor head");
@@ -3820,6 +4317,7 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
     documentedMergeBaseSha: specification.documentedMergeBaseSha,
     observedMergeBaseSha,
     anchorIsAncestorOfLiveHead,
+    recoveryGitState,
     localHeadSha: context.localHeadSha || null,
     remoteHeadSha: context.remoteHeadSha || null,
     literalBindingMatches,
@@ -4790,6 +5288,44 @@ function compactStatusCheckEvidence(checks) {
     metadataOnly: true,
     rawPayloadRetained: false,
   };
+}
+
+function deliveryEligibilitySnapshot(pr, checks) {
+  // Keep this snapshot deliberately aligned with every mutable PR field used
+  // by refresh-pr-head's delivery eligibility gates.  A post-proof comparison
+  // must not silently retain an earlier OPEN/non-draft/branch/review state.
+  return {
+    pr: {
+      number: positiveSafePrNumberOrNull(pr?.number),
+      url: typeof pr?.url === "string" ? pr.url : null,
+      state: typeof pr?.state === "string" ? pr.state : null,
+      isDraft: Boolean(pr?.isDraft),
+      mergedAt: pr?.mergedAt || null,
+      baseRefName: typeof pr?.baseRefName === "string" ? pr.baseRefName : null,
+      baseRefOid: exactGitObjectIdOrNull(pr?.baseRefOid) || null,
+      headRefName: typeof pr?.headRefName === "string" ? pr.headRefName : null,
+      headRefOid: exactGitObjectIdOrNull(pr?.headRefOid) || null,
+      reviewDecision: typeof pr?.reviewDecision === "string" ? pr.reviewDecision : null,
+    },
+    checks: compactStatusCheckEvidence(checks),
+  };
+}
+
+function deliveryLockEligibilitySnapshot(inspection, manifest, options, lockedRefresh = false) {
+  // Lease heartbeats are expected to move while an audit runs; only the lock
+  // eligibility outcome is identity-bearing.  During --apply the lock wrapper
+  // intentionally supplies `owned`, while a fresh read sees that same owner
+  // as `active`; treat only that known wrapper state as equivalent.
+  const status = inspection?.status || "ambiguous";
+  const owner = inspection?.metadata?.owner || inspection?.owner || null;
+  const currentOwner = currentLaneOwner(options);
+  const releasedByCurrentOwner = status === "released"
+    && owner === manifest?.owner
+    && manifest?.owner === currentOwner;
+  const ownedApplyLock = lockedRefresh && status === "active" && owner === currentOwner;
+  return JSON.stringify({
+    eligible: status === "absent" || status === "owned" || releasedByCurrentOwner || ownedApplyLock,
+  });
 }
 
 function compactReviewThreadAudit(audit) {
@@ -6036,6 +6572,35 @@ function hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha) {
 function synchronizeStandardDeliveryEvidenceAfterHeadRebind(existing, packet) {
   if (!existing || existing.status !== "recorded" || existing.authorityProfile !== "standard-delivery") return existing || null;
   if (existing.headRevision !== packet.priorHeadSha) return existing;
+  if (packet.nonAncestralRecovery?.status === "authorized") {
+    // Do not copy any old verification/result field across a recovery rebind.
+    // The changed base can change the outcome even for an exact patch replay.
+    return {
+      schemaVersion: 1,
+      status: "stale",
+      authorityProfile: "standard-delivery",
+      taskId: existing.taskId,
+      branch: existing.branch,
+      baseBranch: existing.baseBranch,
+      headRevision: packet.newHeadSha,
+      pullRequestNumber: existing.pullRequestNumber,
+      pullRequestUrl: existing.pullRequestUrl,
+      staleAt: packet.checkedAt,
+      reason: "Non-ancestral delivery-head recovery requires fresh exact-head delivery verification before merge.",
+      deliveryHeadRefresh: {
+        schemaVersion: 1,
+        priorHeadSha: packet.priorHeadSha,
+        newHeadSha: packet.newHeadSha,
+        checkedAt: packet.checkedAt,
+        reason: packet.reason,
+        recoveryKind: packet.nonAncestralRecovery.kind,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
   return {
     ...existing,
     headRevision: packet.newHeadSha,
@@ -10885,7 +11450,10 @@ function gitMergeCommitHasNoResolutionDelta(commit, cwd) {
 function gitStablePatchId(commit, cwd) {
   const patch = git(["show", "--format=", "--binary", commit], { cwd, preserveStdout: true });
   if (patch.code !== 0) return { patchId: null, error: patch.stderr || patch.stdout || `cannot render patch for ${commit}` };
-  const result = spawnSync("git", ["patch-id", "--stable"], { cwd, input: patch.stdout, encoding: "utf8", stdio: "pipe", timeout: defaultVerificationTimeoutMs });
+  // `--verbatim` preserves whitespace.  Patch equivalence is authorization
+  // evidence, so a whitespace-only semantic change (for example Python/YAML
+  // indentation) must never collapse to the same identity.
+  const result = spawnSync("git", ["patch-id", "--verbatim"], { cwd, input: patch.stdout, encoding: "utf8", stdio: "pipe", timeout: defaultVerificationTimeoutMs });
   if (result.status !== 0) return { patchId: null, error: result.stderr || result.stdout || `cannot calculate stable patch ID for ${commit}` };
   const patchId = String(result.stdout || "").trim().split(/\s+/)[0] || "";
   return /^[a-f0-9]{40}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `stable patch ID for ${commit} is malformed` };

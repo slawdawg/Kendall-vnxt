@@ -499,6 +499,53 @@ operator evidence, non-terminal check, incomplete review audit, non-owned
 lock, or a live head outside the authorized anchor's ancestry remains a hard
 stop.
 
+#### Patch-equivalent rebased-head recovery
+
+For a different managed PR that was explicitly rebased after its delivery head
+was recorded, use neither the PR #723 exception nor a manual manifest edit.
+The owner must first run the ordinary `refresh-pr-head --summary-json` packet
+with `--rebased-recovery-authorization` omitted. When all read-only source
+proofs are available, the packet prints the one exact operator-evidence value
+it requires. Supply that unchanged value through
+`--rebased-recovery-authorization` on a fresh preview and then on `--apply`.
+
+This narrow recovery is available only when all normal refresh gates pass and
+the tool proves the live PR head descends from the exact GitHub PR base head.
+It also calculates the merge base between the recorded and live heads, rejects
+merge commits in the pre-rebase delivery lineage, calculates byte- and
+location-sensitive SHA-256 identities from Git's binary patch output (with
+only the rebase-dependent before/after blob IDs in `index` headers normalized), and
+requires the base-to-live first-parent series to exactly equal the whole
+pre-rebase series: no extra, reordered, or later reverting commits are
+permitted. Recovery patch capture is bounded at 16 MiB per commit and, across
+the entire proof (initial graft/fast-forward classification, merge-base,
+ancestry, enumeration, and both compared series), at 128 commits, 64 MiB, and
+five minutes; an over-limit proof fails closed and requires a separately
+reviewed recovery plan. The remaining shared deadline is checked before and
+after each proof command, including the final ancestry command, before
+authorization can be produced.
+Recovery-proof Git commands disable replacement objects, and
+any substantive local graft entry is a hard stop (blank lines and `#` comments
+are ignored); they also force submodule diffs into identity output. After
+patch hashing, the runner re-audits every mutable delivery gate: the GitHub PR
+identity, state, draft/merge status, base/head branches and commits, review
+decision, checks, complete thread-aware review state, task-lock eligibility,
+local Git proof state, local head, and origin ref before it can authorize the
+rebind. That final PR/check/ref snapshot is taken after the final paginated
+thread audit. The
+exact authorization binds the task, PR,
+recorded prior head, live head, PR base head, merge base, and SHA-256 digest of
+that prior patch series. Any changed byte, missing source object, reordered or
+altered or relocated patch, local replacement/graft history, non-ancestral PR base, local/origin/GitHub disagreement, or
+changed check/thread evidence blocks the recovery.
+
+The successful operation records metadata only, marks older delivery and gate
+evidence stale, and still does not resolve review threads, merge, or clean up.
+Run fresh exact-head gates before thread adjudication or delivery. If the patch
+series cannot be proven—for example because conflict resolution changed a
+commit—leave the lane blocked and create a separately reviewed recovery plan;
+do not treat an operator authorization as a bypass.
+
 9. **Cleanup.** The delegated delivery/cleanup worker should prefer
    `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
