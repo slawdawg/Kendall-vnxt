@@ -242,6 +242,20 @@ for (const requiredText of [
     failures,
   );
 }
+const supervisorJob = ciJobBlock("supervisor");
+const supervisorProfileTimeoutMs = Number(
+  supervisorJob.match(/test:supervisor:profile -- --timeout-ms=(\d+)/)?.[1],
+);
+const supervisorJobTimeoutMs = Number(
+  supervisorJob.match(/timeout-minutes: (\d+)/)?.[1],
+) * 60_000;
+assertCondition(
+  supervisorProfileTimeoutMs === 900_000 &&
+    Number.isFinite(supervisorJobTimeoutMs) &&
+    supervisorJobTimeoutMs - supervisorProfileTimeoutMs >= 300_000,
+  ".github/workflows/ci.yml supervisor job must retain the 15-minute child timeout and at least five minutes of job margin",
+  failures,
+);
 assertCondition(
   ciJobBlock("check").includes('needs.changes.outputs.static') &&
     ciJobBlock("check").includes("Static checks were required but did not pass"),
