@@ -3656,8 +3656,12 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   if (postAuditRefsChanged) blockers.push("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit");
   if (!localHeadSha || localHeadSha !== pr?.headRefOid) blockers.push("Local worktree HEAD does not match the live PR head");
   if (!remoteHeadSha || remoteHeadSha !== pr?.headRefOid) blockers.push("origin branch HEAD does not match the live PR head");
-  const fastForward = priorHeadSha && pr?.headRefOid
-    ? git(["merge-base", "--is-ancestor", priorHeadSha, pr.headRefOid], { cwd: manifest.worktree_path }).code === 0
+  // Classifying a refresh as ordinary fast-forward is itself recovery-proof
+  // authority. Do not let local replace refs or grafts route a rewritten head
+  // around the non-ancestral recovery contracts.
+  const recoveryGitState = inspectRecoveryProofGitState(manifest.worktree_path);
+  const fastForward = priorHeadSha && pr?.headRefOid && recoveryGitState.status === "clean"
+    ? gitRecoveryCommitIsAncestor(priorHeadSha, pr.headRefOid, manifest.worktree_path)
     : false;
   const nonAncestralRecovery = shapeNonAncestralRefreshRecoveryEvidence(manifest, {
     options,
@@ -3667,7 +3671,9 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     repository,
     pr,
     fastForward,
+    recoveryGitState,
   });
+  if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Delivery-head refresh requires a clean local Git replacement and graft state");
   if (!fastForward && nonAncestralRecovery.status !== "authorized") {
     blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
   }
@@ -3808,8 +3814,9 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
     : "";
   const liveHeadSha = exactGitObjectIdOrNull(context.pr?.headRefOid) || null;
   const baseHeadSha = exactGitObjectIdOrNull(context.pr?.baseRefOid) || null;
+  const recoveryGitState = context.recoveryGitState || inspectRecoveryProofGitState(manifest.worktree_path);
   const mergeBaseResult = context.priorHeadSha && liveHeadSha
-    ? git(["merge-base", context.priorHeadSha, liveHeadSha], { cwd: manifest.worktree_path })
+    ? gitRecoveryProof(["merge-base", context.priorHeadSha, liveHeadSha], manifest.worktree_path)
     : null;
   const observedMergeBaseSha = mergeBaseResult?.code === 0
     ? exactGitObjectIdOrNull(mergeBaseResult.stdout.trim())
@@ -3833,7 +3840,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
       : null
   );
   const baseIsAncestorOfLiveHead = baseHeadSha && liveHeadSha
-    ? gitCommitIsAncestor(baseHeadSha, liveHeadSha, manifest.worktree_path)
+    ? gitRecoveryCommitIsAncestor(baseHeadSha, liveHeadSha, manifest.worktree_path)
     : false;
   const blockers = [];
 
@@ -3853,6 +3860,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
       livePatchSeries,
       patchSeriesMatch,
       baseIsAncestorOfLiveHead,
+      recoveryGitState,
       blockers,
       metadataOnly: true,
       rawPayloadRetained: false,
@@ -3860,6 +3868,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
   }
 
   if (!liveHeadSha || !baseHeadSha || !context.priorHeadSha) blockers.push("Rebased-head recovery requires exact prior, live, and PR-base commit identities");
+  if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Rebased-head recovery requires a clean local Git replacement and graft state");
   if (!observedMergeBaseSha) blockers.push("Rebased-head recovery could not reproduce an exact merge base");
   if (!baseIsAncestorOfLiveHead) blockers.push("Rebased-head recovery requires the live PR head to descend from the exact PR base head");
   if (priorPatchSeries.error) blockers.push(`Rebased-head recovery prior patch series is unavailable: ${priorPatchSeries.error}`);
@@ -3885,6 +3894,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
     livePatchSeries,
     patchSeriesMatch,
     baseIsAncestorOfLiveHead,
+    recoveryGitState,
     localHeadSha: context.localHeadSha || null,
     remoteHeadSha: context.remoteHeadSha || null,
     blockers,
@@ -3893,10 +3903,74 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
   };
 }
 
+function gitRecoveryProof(commandArguments, cwd, options = {}) {
+  return git(["--no-replace-objects", ...commandArguments], {
+    ...options,
+    cwd,
+    // Replace refs can rewrite commit parents and therefore change every
+    // ancestry, rev-list, and show proof below. Recovery evidence must always
+    // inspect the literal objects named by the recorded GitHub SHAs.
+  });
+}
+
+function inspectRecoveryProofGitState(cwd) {
+  const graftPathResult = gitRecoveryProof(["rev-parse", "--git-path", "info/grafts"], cwd);
+  if (graftPathResult.code !== 0) {
+    return { status: "unavailable", reason: "Non-ancestral recovery could not inspect local Git graft state" };
+  }
+  const gitReportedGraftPath = String(graftPathResult.stdout || "").trim();
+  if (!gitReportedGraftPath) {
+    return { status: "unavailable", reason: "Non-ancestral recovery could not resolve local Git graft state" };
+  }
+  const graftPath = resolve(cwd, gitReportedGraftPath);
+  try {
+    if (!existsSync(graftPath) || !readFileSync(graftPath, "utf8").trim()) {
+      return { status: "clean", replacementObjectsDisabled: true, graftsPresent: false };
+    }
+  } catch {
+    return { status: "unavailable", reason: "Non-ancestral recovery could not inspect local Git graft state" };
+  }
+  return {
+    status: "blocked",
+    replacementObjectsDisabled: true,
+    graftsPresent: true,
+    reason: "Non-ancestral recovery rejects local Git graft state",
+  };
+}
+
+function gitRecoveryCommitIsAncestor(ancestor, descendant, cwd) {
+  return gitRecoveryProof(["merge-base", "--is-ancestor", ancestor, descendant], cwd).code === 0;
+}
+
+function gitRecoveryFirstParentNonMergeCommitList(base, head, cwd) {
+  const result = gitRecoveryProof(["rev-list", "--first-parent", "--reverse", "--no-merges", `${base}..${head}`], cwd);
+  if (result.code !== 0) return { commits: [], error: result.stderr || result.stdout || "cannot inspect recovery first-parent non-merge lineage" };
+  const commits = String(result.stdout || "").split(/\r?\n/).filter(Boolean);
+  return commits.every((commit) => exactGitObjectIdOrNull(commit)) ? { commits } : { commits: [], error: "recovery first-parent non-merge lineage contains an invalid object id" };
+}
+
+function gitRecoveryFirstParentCommits(base, head, cwd) {
+  const result = gitRecoveryProof(["rev-list", "--first-parent", "--reverse", `${base}..${head}`], cwd);
+  if (result.code !== 0) return { commits: [], error: result.stderr || result.stdout || "cannot inspect recovery source post-PR lineage" };
+  const commits = String(result.stdout || "").split(/\r?\n/).filter(Boolean);
+  if (!commits.every((commit) => exactGitObjectIdOrNull(commit))) return { commits: [], error: "recovery source post-PR lineage contains an invalid object id" };
+  return { commits };
+}
+
+function gitRecoveryPatchIdentity(commit, cwd) {
+  const patch = gitRecoveryProof(["show", "--format=", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", commit], cwd, { preserveStdout: true });
+  if (patch.code !== 0) return { patchId: null, error: patch.stderr || patch.stdout || `cannot render recovery patch for ${commit}` };
+  // This is intentionally stricter than `git patch-id`: preserve every byte
+  // Git emits, including file and hunk locations. An edit replayed into a
+  // different repeated region must not authorize a delivery-head rebind.
+  const patchId = createHash("sha256").update(patch.stdout).digest("hex");
+  return /^[a-f0-9]{64}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `recovery patch identity for ${commit} is malformed` };
+}
+
 function gitStablePatchSeries(base, head, cwd, options = {}) {
-  const firstParent = gitFirstParentCommits(base, head, cwd);
+  const firstParent = gitRecoveryFirstParentCommits(base, head, cwd);
   if (firstParent.error) return { digest: null, commits: [], patchIds: [], error: firstParent.error };
-  const commits = gitFirstParentNonMergeCommitList(base, head, cwd);
+  const commits = gitRecoveryFirstParentNonMergeCommitList(base, head, cwd);
   if (commits.error) return { digest: null, commits: [], patchIds: [], error: commits.error };
   if (options.requireNoMerges && firstParent.commits.length !== commits.commits.length) {
     return { digest: null, commits: [], patchIds: [], error: "prior delivery lineage contains a merge commit" };
@@ -3904,7 +3978,7 @@ function gitStablePatchSeries(base, head, cwd, options = {}) {
   if (!commits.commits.length) return { digest: null, commits: [], patchIds: [], error: "patch series is empty" };
   const patchIds = [];
   for (const commit of commits.commits) {
-    const patch = gitStablePatchId(commit, cwd);
+    const patch = gitRecoveryPatchIdentity(commit, cwd);
     if (patch.error) return { digest: null, commits: commits.commits, patchIds: [], error: patch.error };
     patchIds.push(patch.patchId);
   }
@@ -3934,10 +4008,11 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
     : "";
   const expectedAuthorization = `operator-authorized recovery=pr-723 prior=${specification.priorHeadSha} anchor=${specification.authorizedAnchorHeadSha} merge-base=${specification.documentedMergeBaseSha}`;
   const liveHeadSha = exactGitObjectIdOrNull(context.pr?.headRefOid) || null;
-  const observedMergeBase = git(["merge-base", specification.priorHeadSha, specification.authorizedAnchorHeadSha], { cwd: manifest.worktree_path });
+  const recoveryGitState = context.recoveryGitState || inspectRecoveryProofGitState(manifest.worktree_path);
+  const observedMergeBase = gitRecoveryProof(["merge-base", specification.priorHeadSha, specification.authorizedAnchorHeadSha], manifest.worktree_path);
   const observedMergeBaseSha = observedMergeBase.code === 0 ? exactGitObjectIdOrNull(observedMergeBase.stdout.trim()) : null;
   const anchorIsAncestorOfLiveHead = liveHeadSha
-    ? gitCommitIsAncestor(specification.authorizedAnchorHeadSha, liveHeadSha, manifest.worktree_path)
+    ? gitRecoveryCommitIsAncestor(specification.authorizedAnchorHeadSha, liveHeadSha, manifest.worktree_path)
     : false;
   const literalBindingMatches = (
     manifest.task_id === specification.taskId
@@ -3964,6 +4039,7 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
       liveHeadSha,
       observedMergeBaseSha,
       anchorIsAncestorOfLiveHead,
+      recoveryGitState,
       literalBindingMatches,
       blockers,
       metadataOnly: true,
@@ -3972,6 +4048,7 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
   }
 
   if (!literalBindingMatches) blockers.push("Non-ancestral recovery is restricted to the literal recorded PR #723 task, repository, URL, branch, base, and prior delivery head");
+  if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Non-ancestral recovery requires a clean local Git replacement and graft state");
   if (authorization !== expectedAuthorization) blockers.push("Non-ancestral recovery requires exact operator evidence bound to the PR #723 prior head, authorized anchor, and documented merge base");
   if (!observedMergeBaseSha || observedMergeBaseSha !== specification.documentedMergeBaseSha) blockers.push("Non-ancestral recovery did not reproduce the documented merge base");
   if (!anchorIsAncestorOfLiveHead) blockers.push("Non-ancestral recovery requires the live PR head to descend from the exact authorized anchor head");
@@ -3995,6 +4072,7 @@ function shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
     documentedMergeBaseSha: specification.documentedMergeBaseSha,
     observedMergeBaseSha,
     anchorIsAncestorOfLiveHead,
+    recoveryGitState,
     localHeadSha: context.localHeadSha || null,
     remoteHeadSha: context.remoteHeadSha || null,
     literalBindingMatches,

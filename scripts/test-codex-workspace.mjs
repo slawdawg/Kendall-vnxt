@@ -11542,6 +11542,38 @@ try {
         documentedMergeBaseSha,
       });
 
+      // Forge the live head's parent to make a non-ancestral PR #723 rewrite
+      // look like a normal fast-forward. The classification gate must use the
+      // literal graph and retain the dedicated source-governed contract.
+      commitFile(fixture.root, "forged-pr723-fast-forward.txt", "forged\n", "forged PR #723 replacement ancestry");
+      const forgedFastForwardSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["replace", authorizedAnchorHeadSha, forgedFastForwardSha]);
+      const forgedPreview = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+          "--reason", "Forged PR #723 ancestry must require its literal recovery proof.",
+          "--state-root", fixture.stateRoot, "--summary-json",
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(forgedPreview.code === 0, forgedPreview.stderr || forgedPreview.stdout);
+      const forgedPacket = JSON.parse(forgedPreview.stdout);
+      assert(forgedPacket.nonAncestralRecovery?.literalBindingMatches === true, JSON.stringify(forgedPacket.nonAncestralRecovery));
+      assert(forgedPacket.nonAncestralRecovery?.status === "blocked", JSON.stringify(forgedPacket.nonAncestralRecovery));
+      assert(forgedPacket.requiredGates?.includes("an explicit PR #723 historical-rewrite contract or operator-authorized patch-equivalent rebased-head recovery"), JSON.stringify(forgedPacket));
+      const forgedApply = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+          "--reason", "Forged PR #723 ancestry must not bypass source-governed proof.",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(forgedApply.code !== 0, "forged PR #723 ancestry unexpectedly bypassed recovery proof");
+      assert(forgedApply.stderr.includes("not a fast-forward ancestor"), forgedApply.stderr || forgedApply.stdout);
+
       const denied = runFixtureScript(
         fixture,
         [
@@ -11646,6 +11678,48 @@ try {
       assert(packet.nonAncestralRecovery?.priorPatchSeries?.digest, "rebased recovery omitted the prior patch-series digest");
       assert(packet.nonAncestralRecovery?.patchSeriesMatch >= 0, "rebased recovery did not locate the patch series");
 
+      const graftPath = runGit(fixture.worktree, ["rev-parse", "--git-path", "info/grafts"]).stdout;
+      // This graft makes the live head appear to descend from the recorded
+      // delivery head. A normal fast-forward classifier must still block it.
+      writeFileSync(graftPath, `${liveHeadSha} ${priorHeadSha}\n`);
+      const graftPreview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Local graft state must never participate in recovery proof.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(graftPreview.code === 0, graftPreview.stderr || graftPreview.stdout);
+      const graftPacket = JSON.parse(graftPreview.stdout);
+      assert(graftPacket.nonAncestralRecovery?.status === "blocked", JSON.stringify(graftPacket.nonAncestralRecovery));
+      assert(graftPacket.nonAncestralRecovery?.blockers?.includes("Non-ancestral recovery rejects local Git graft state"), JSON.stringify(graftPacket.nonAncestralRecovery));
+      assert(graftPacket.requiredGates?.includes("an explicit PR #723 historical-rewrite contract or operator-authorized patch-equivalent rebased-head recovery"), JSON.stringify(graftPacket));
+      rmSync(graftPath, { force: true });
+
+      // A local replace ref must not change the result: every recovery-proof
+      // Git command explicitly disables replacements before reading history.
+      // This replacement forges a live parent that would otherwise classify
+      // the historical rewrite as an ordinary fast-forward.
+      commitFile(fixture.root, "forged-fast-forward.txt", "forged\n", "forged replacement ancestry");
+      const forgedFastForwardSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["replace", liveHeadSha, forgedFastForwardSha]);
+      const replacementPreview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Replacement refs must not alter recovery proof identity.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(replacementPreview.code === 0, replacementPreview.stderr || replacementPreview.stdout);
+      const replacementPacket = JSON.parse(replacementPreview.stdout);
+      assert(replacementPacket.nonAncestralRecovery?.patchSeriesMatch >= 0, JSON.stringify(replacementPacket.nonAncestralRecovery));
+      assert(replacementPacket.nonAncestralRecovery?.expectedAuthorization === authorization, JSON.stringify(replacementPacket.nonAncestralRecovery));
+      assert(replacementPacket.requiredGates?.includes("an explicit PR #723 historical-rewrite contract or operator-authorized patch-equivalent rebased-head recovery"), JSON.stringify(replacementPacket));
+
+      const forgedNormalApply = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+        "--reason", "Forged normal ancestry must still require recovery proof.",
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(forgedNormalApply.code !== 0, "forged replacement ancestry unexpectedly bypassed recovery proof");
+      assert(forgedNormalApply.stderr.includes("not a fast-forward ancestor"), forgedNormalApply.stderr || forgedNormalApply.stdout);
+
       const denied = runFixtureScript(fixture, [
         "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
         "--reason", "A verified rebase replayed the recorded patch series onto the current base.",
@@ -11670,6 +11744,49 @@ try {
       assert(rebind.nonAncestralRecovery.priorPatchSeries.digest === packet.nonAncestralRecovery.priorPatchSeries.digest, "rebased recovery lost its patch-series proof");
       assert(rebind.nonAncestralRecovery.baseIsAncestorOfLiveHead === true, "rebased recovery did not retain PR-base ancestry proof");
       assert(refreshed.authority_decisions?.at(-1)?.authorityFamily === "delivery-evidence-rebind-recovery", "rebased recovery authority decision missing");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head rejects an otherwise-identical edit replayed at a different location", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      commitFile(fixture.root, "repeated.txt", "section-a\nvalue\nsection-b\nvalue\n", "add repeated recovery regions");
+      const baseHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      writeFileSync(join(fixture.root, "repeated.txt"), "section-a\nchanged\nsection-b\nvalue\n");
+      runGit(fixture.root, ["add", "repeated.txt"]);
+      runGit(fixture.root, ["commit", "-q", "-m", "recorded edit in first repeated region"]);
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+
+      writeFileSync(join(fixture.worktree, "repeated.txt"), "section-a\nvalue\nsection-b\nchanged\n");
+      runGit(fixture.worktree, ["add", "repeated.txt"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "relocated edit in second repeated region"]);
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "A location-shifted edit must not prove patch-equivalent recovery.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.patchSeriesMatch === -1, JSON.stringify(packet.nonAncestralRecovery));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
