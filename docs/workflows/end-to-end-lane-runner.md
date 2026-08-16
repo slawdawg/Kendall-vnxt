@@ -573,7 +573,7 @@ do not treat an operator authorization as a bypass.
    A closed manifest is normally terminal and `cleanup-merged` deliberately
    skips it. If a verified old closeout retained only its remote branch, use
    `cleanup-closed-remote <exact-task-id>` with the exact structured
-   `--remote-delete-authority 'task=<id>;branch=<branch>;pr=<n>;head=<sha>;remote-delete=true'`
+   `--remote-delete-authority 'task=<percent-encoded-id>;branch=<percent-encoded-branch>;pr=<n>;head=<sha>;remote-delete=true'`
    binding as a dry run first, then add `--apply --approval <operator-evidence>`.
    This narrow remote-only recovery requires all of the following at execution
    time: the manifest is closed and owned by the current runner (or
@@ -582,10 +582,16 @@ do not treat an operator authorization as a bypass.
    and delivery head; its worktree and local branch are absent; the live PR is
    merged on the
    recorded base with the recorded PR number, branch, and exact delivery head;
-   and the live remote ref equals that same head. The command uses an exact
-   force-with-lease deletion and records an already-absent remote as an
-   idempotent success. It never permits a mismatched, recreated, or unproven
-   remote branch to be deleted.
+   and the live remote ref equals that same head. Encode every binding value
+   with standard percent-encoding (notably `%3B` for a semicolon in a valid
+   branch name); quote the full value as shown so the shell does not alter it.
+   The command uses an exact force-with-lease deletion and records an
+   already-absent remote as an idempotent confirmation without replacing the
+   original deletion proof. It never permits a mismatched, recreated, or
+   unproven remote branch to be deleted. Before it enters its lease callback,
+   the runner reserves the bounded external-command ledger budget required for
+   the reproof, deletion, and post-delete verification; insufficient capacity
+   fails closed before any remote mutation.
    If a versioned lease reports `external_command_fence_unresolved`, do not
    rerun delivery, delete the lock, or manufacture a completion file. First
    prove the recorded runner PID/start identity is absent and inspect the exact
