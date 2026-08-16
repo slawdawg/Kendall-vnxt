@@ -7275,47 +7275,6 @@ class TrustedAutonomyReadinessReportApiEnvelope(BaseModel):
     meta: dict[str, str | int | float | bool | None] | None = None
 
 
-class EpicCompletionAuditItemView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    itemId: str
-    label: str
-    status: str
-    summary: str
-    evidence: list[str]
-
-
-class EpicCompletionAuditReportView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    reportId: str
-    generatedAt: datetime
-    summary: str
-    epicId: str
-    overallStatus: str
-    completedItems: list[EpicCompletionAuditItemView]
-    remainingItems: list[EpicCompletionAuditItemView]
-    blockedOperations: list[str]
-    recommendedApproval: str
-    requiredEvidence: list[str]
-    stopConditions: list[str]
-    nextSafeActions: list[str]
-    readOnly: Literal[True]
-    epicComplete: Literal[True]
-    remoteDeliveryApproved: Literal[True]
-    providerExecutionApproved: Literal[False]
-    cleanupApproved: Literal[True]
-
-
-class EpicCompletionAuditReportApiEnvelope(BaseModel):
-    """Typed response boundary for the supervisor-owned Epic 6 completion audit."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    data: EpicCompletionAuditReportView
-    meta: dict[str, str | int | float | bool | None] | None = None
-
-
 class MvpProofTrialStepView(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

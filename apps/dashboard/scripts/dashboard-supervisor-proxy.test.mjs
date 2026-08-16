@@ -163,7 +163,8 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
 });
 
 test("Controls has a finite operator-only no-query proxy contract with a capped read response", async () => {
-  assert.equal(CONTROLS_READ_PATHS.size, 34);
+  assert.equal(CONTROLS_READ_PATHS.size, 33);
+  assert.equal(CONTROLS_READ_PATHS.has("/supervisor/epic-6-completion-audit-report"), false);
   assert.deepEqual([...CONTROLS_MUTATION_PATHS], [
     "/pipeline-control-plane/actions/v1/capability",
     "/pipeline-control-plane/approvals/v1",

@@ -25,7 +25,11 @@ test("LAN operator pages declare exact read contracts and do not replace the ser
     assert.ok(page.reads.every((read) => read.method === "GET"));
   }
   const controls = manifest.find((entry) => entry.page === "controls");
-  assert.equal(controls.reads.length, 34);
+  assert.equal(controls.reads.length, 33);
+  assert.equal(
+    controls.reads.filter((read) => read.path === "/supervisor/epic-6-completion-audit-report").length,
+    0,
+  );
   assert.ok(controls.reads.every((read) => read.method === "GET" && !("query" in read)));
   assert.deepEqual(manifest.at(-1).roles, ["operator", "test_viewer"]);
   const [boundary, state, transport] = await Promise.all([readFile(boundaryUrl, "utf8"), readFile(stateUrl, "utf8"), readFile(transportUrl, "utf8")]);
@@ -69,8 +73,9 @@ test("named pages use the authenticated LAN client boundary rather than SSR supe
 });
 
 test("Controls keeps its fixed full-data manifest while using bounded safe diagnostics", async () => {
-  const [controlsData, lanControls, scheduler, pageState, controlsRoute] = await Promise.all([
+  const [controlsData, controlsContent, lanControls, scheduler, pageState, controlsRoute] = await Promise.all([
     readFile(controlsDataUrl, "utf8"),
+    readFile(controlsContentUrl, "utf8"),
     readFile(lanControlsUrl, "utf8"),
     readFile(controlsSchedulerUrl, "utf8"),
     readFile(stateUrl, "utf8"),
@@ -78,7 +83,9 @@ test("Controls keeps its fixed full-data manifest while using bounded safe diagn
   ]);
   assert.match(controlsData, /runBoundedControlsReads/);
   assert.match(controlsData, /CONTROLS_PAGE_READ_TIMEOUT_MS = 15_000/);
-  assert.equal((controlsData.match(/alias:/g) || []).length, 34);
+  assert.equal((controlsData.match(/alias:/g) || []).length, 33);
+  assert.doesNotMatch(controlsData, /epic-6-completion-audit-report|Epic6CompletionAudit/);
+  assert.doesNotMatch(controlsContent, /epic-6-completion-audit-report|EpicCompletionAudit/);
   assert.doesNotMatch(controlsData, /Promise\.all\(\[/);
   assert.match(lanControls, /timeoutMs: CONTROLS_PAGE_READ_TIMEOUT_MS/);
   assert.match(lanControls, /safeControlsDiagnostic/);

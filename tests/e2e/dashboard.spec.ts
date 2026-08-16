@@ -2133,7 +2133,6 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/remote-cleanup-sync-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-autonomy-readiness-report")).toBeVisible();
-    await expect(reportCatalogPanel.getByText("GET /supervisor/epic-6-completion-audit-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/epic-6-mvp-proof-trial-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
@@ -2897,19 +2896,6 @@ test.describe("dashboard workflow coverage", () => {
     await expect(autonomyPanel.getByText("Codex or Claude launch without explicit authority")).toBeVisible();
     await expect(autonomyPanel.getByText("Use this report to select one narrow workflow class for a future autonomy trial.")).toBeVisible();
     await expect(page.locator("#trusted-autonomy-readiness-report")).toBeVisible();
-
-    const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
-    await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Overall", { exact: true })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Epic complete", { exact: true })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Remote delivery", { exact: true })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Cleanup", { exact: true })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Prepared" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Remaining" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Blocked operations" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Required evidence" })).toBeVisible();
-    await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 
     const mvpProofPanel = page.locator("#epic-6-mvp-proof-trial-report");
     await expect(mvpProofPanel.getByText("MVP proof", { exact: true })).toBeVisible();

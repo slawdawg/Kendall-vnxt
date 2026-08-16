@@ -420,8 +420,6 @@ from supervisor.api.schemas import (
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
     ExecutionAttemptView,
-    EpicCompletionAuditItemView,
-    EpicCompletionAuditReportView,
     ExecutionReadinessAttemptSummaryView,
     ExecutionReadinessOutcomeEvidenceView,
     ExecutionReadinessReportView,
@@ -12117,19 +12115,6 @@ class SupervisorService:
                 relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
-                reportId="epic-6-completion-audit-report-v1",
-                label="Epic 6 completion audit",
-                endpoint="GET /supervisor/epic-6-completion-audit-report",
-                status="historical",
-                summary="Shows Epic 6 completion evidence, remaining blockers, and the next approval needed before delivery work continues.",
-                evidenceScope=["Epic 6 local stack", "delivery packaging plan", "authority gates", "completion blockers"],
-                relatedDocs=[
-                    "docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                ],
-            ),
-            SupervisorReportCatalogEntryView(
                 reportId="epic-6-mvp-proof-trial-report-v1",
                 label="Epic 6 MVP proof trial packet",
                 endpoint="GET /supervisor/epic-6-mvp-proof-trial-report",
@@ -21282,154 +21267,6 @@ class SupervisorService:
             autonomousCleanupApproved=False,
         )
 
-    def get_epic_6_completion_audit_report(self) -> EpicCompletionAuditReportView:
-        return EpicCompletionAuditReportView(
-            reportId="epic-6-completion-audit-report-v1",
-            generatedAt=datetime.now(timezone.utc),
-            summary=(
-                "Read-only Epic 6 completion audit. The integrated Epic 6 milestone, cleanup hardening, and trusted "
-                "delivery eligibility follow-ups were merged. Story 3.66 completed the real BMAD proof path through "
-                "Candidate Work, Active Work, lane decision, local evidence, bounded Codex implementation, verification, "
-                "PR/CI/merge, cleanup, and retained done evidence. Epic 6 MVP is complete; post-MVP autonomy remains gated."
-            ),
-            epicId="6",
-            overallStatus="epic_6_mvp_complete",
-            completedItems=[
-                EpicCompletionAuditItemView(
-                    itemId="local-readiness-stack",
-                    label="Local readiness stack",
-                    status="prepared_locally",
-                    summary="Stories 6.3 through 6.26 have implementation evidence for proposed work, routing preview, Dev Console visibility, authority readiness reports, delivery eligibility, and completion audit visibility.",
-                    evidence=[
-                        "Candidate Work and BMAD import surfaces exist.",
-                        "Task Packet preview, fake or blocked attempts, runtime evidence, and Dev Console live state are wired.",
-                        "Codex, Claude, GitHub, cleanup, and trusted autonomy reports are read-only and default to blocked.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="delivery-packaging-plan",
-                    label="Delivery packaging plan",
-                    status="merged",
-                    summary="Integrated PR #86 delivered the Epic 6 milestone stack into main after approved merge authority.",
-                    evidence=[
-                        "https://github.com/slawdawg/Kendall-vnxt/pull/86",
-                        "PR #86 was merged into main.",
-                        "docs/workflows/implementation-evidence-boundary.md",
-                        "The delivery plan did not approve Codex launch, Claude launch, remote cleanup, story sync, or trusted autonomy expansion.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="local-cleanup-closeout",
-                    label="Local cleanup closeout",
-                    status="completed_with_follow_up",
-                    summary="Merged Epic 6 worktrees and branches were cleaned up, and local cleanup RCA produced a hardening follow-up.",
-                    evidence=[
-                        "Local Git worktree list was reduced to the main checkout plus intentional ongoing work.",
-                        "Remote merged branches for PR #85, PR #86, PR #87, and PR #88 were cleaned up.",
-                        "Local cache and ACL cleanup prevention was delivered through PR #87.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="dev-console-integration",
-                    label="Dev Console integration",
-                    status="visible",
-                    summary="Controls, proposed work, active work, runtime evidence, and report catalog surfaces make the pipeline visible.",
-                    evidence=[
-                        "Controls page includes authority, cleanup, delivery, and autonomy reports.",
-                        "Report shortcut anchors link evidence to the right dashboard sections.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="trusted-delivery-eligibility",
-                    label="Trusted delivery eligibility",
-                    status="merged",
-                    summary="Story 6.26 now evaluates the current branch before any future push, PR, merge, or cleanup action is considered eligible.",
-                    evidence=[
-                        "https://github.com/slawdawg/Kendall-vnxt/pull/88",
-                        "GET /supervisor/trusted-delivery-eligibility-report is wired into Controls and report shortcuts.",
-                        "The evaluator uses branch-scoped merge-base diff evidence and performs no GitHub mutation.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="story-3-66-selection",
-                    label="Story 3.66 proof selection",
-                    status="completed",
-                    summary="Story 3.66 is the selected low-risk real BMAD story for the Epic 6 MVP proof lifecycle.",
-                    evidence=[
-                        "docs/workflows/implementation-evidence-boundary.md",
-                        "Candidate Work 8afea99f-bb79-4f51-a66c-f1b02dff9005 was promoted to Active WorkItem a8e43bba-a2dd-4b2e-b995-22fecea85611.",
-                        "PR #96 merged proof-selection, approval-packet, progress, and authority-ledger evidence into main.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="story-3-66-done-proof",
-                    label="Story 3.66 done proof",
-                    status="completed",
-                    summary="Story 3.66 completed the approved MVP proof lifecycle and retained delivery, cleanup, and done-state evidence.",
-                    evidence=[
-                        "PR #97 delivered the Story 3.66 implementation evidence and merged into main at a750601af1d0144507f6cc05b3ca1ada676d2d07.",
-                        "Branch/worktree codex/epic-6-mvp-proof-story-3-66-bounded-implementati was cleaned up locally and remotely after merge evidence was retained.",
-                        "Dev Console done evidence is retained for the Story 3.66 proof path.",
-                        "Runtime evidence remains metadata-only and must not retain raw prompts, completions, reasoning traces, secrets, or unnecessary source copies.",
-                    ],
-                ),
-            ],
-            remainingItems=[
-                EpicCompletionAuditItemView(
-                    itemId="provider-and-review-execution",
-                    label="Provider and review execution",
-                    status="post_mvp_blocked_by_default",
-                    summary="Epic 6 MVP does not require Claude launch or provider expansion; those remain blocked until a post-MVP approval grants them.",
-                    evidence=[
-                        "Claude readiness and approval packet reports do not launch Claude.",
-                        "Provider expansion remains blocked beyond the approved metadata-only local/Ollama boundary.",
-                    ],
-                ),
-                EpicCompletionAuditItemView(
-                    itemId="post-mvp-autonomy",
-                    label="Post-MVP autonomy",
-                    status="blocked_by_default",
-                    summary="Epic 6 MVP completion does not approve trusted end-to-end autonomy, issue sync, provider expansion, or unrelated cleanup.",
-                    evidence=[
-                        "Trusted autonomy remains policy-scoped and evidence-gated.",
-                        "Remote cleanup and sync readiness report defaults remote mutation approvals to false outside approved targets.",
-                    ],
-                ),
-            ],
-            blockedOperations=[
-                "Pushing follow-up hardening branches without explicit update approval.",
-                "Merging, closing, or deleting GitHub PRs without matching approval.",
-                "Launching additional Codex workers or Claude workers without bounded approval.",
-                "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval for the specific target.",
-                "Marking trusted autonomy complete before a separate post-MVP autonomy policy is approved.",
-            ],
-            recommendedApproval=(
-                "Treat Epic 6 MVP as complete. Use separate post-MVP approvals for Claude launch, provider expansion, issue/story sync, trusted autonomy expansion, or additional delivery automation."
-            ),
-            requiredEvidence=[
-                "Merged PR #86, PR #87, PR #88, PR #96, and PR #97 URLs and merge commits retained as milestone and proof evidence.",
-                "Story 3.66 work item, approval packet, lane decision, local/Ollama evidence, implementation diff, verification output, and done evidence retained.",
-                "PR #97 CI, merge, and cleanup evidence retained.",
-                "Post-MVP authority remains separately gated.",
-            ],
-            stopConditions=[
-                "The local worktree is dirty or contains unrelated changes.",
-                "The remote branch or PR target is ambiguous.",
-                "CI fails, review comments remain unresolved, or GitHub reports merge conflicts.",
-                "The requested action expands into Claude launch, provider expansion, issue sync, unrelated cleanup, or post-MVP autonomy without separate approval.",
-                "Evidence needed for audit or rollback would be lost.",
-            ],
-            nextSafeActions=[
-                "Run a post-MVP retrospective or plan the next authority-hardening epic.",
-                "Keep Claude, provider expansion, remote sync, and broad autonomy separately gated until their evidence exists.",
-            ],
-            readOnly=True,
-            epicComplete=True,
-            remoteDeliveryApproved=True,
-            providerExecutionApproved=False,
-            cleanupApproved=True,
-        )
-
     def get_epic_6_mvp_proof_trial_report(self) -> MvpProofTrialReportView:
         return MvpProofTrialReportView(
             reportId="epic-6-mvp-proof-trial-report-v1",
@@ -21511,7 +21348,10 @@ class SupervisorService:
                     stepId="done-evidence",
                     label="Done evidence",
                     status="completed",
-                    summary="The Epic 6 proof report and completion audit retain the WorkItem done evidence and remaining post-MVP blockers.",
+                    summary=(
+                        "The retained MVP proof report records the WorkItem done evidence and post-MVP blockers. "
+                        "The historical completion audit is preserved only in the dated ledger and archive."
+                    ),
                     requiredApproval="No separate approval unless done evidence requires remote issue/story sync.",
                     evidence=[
                         "Runtime evidence export",
@@ -22419,7 +22259,6 @@ class SupervisorService:
             "GET /supervisor/local-cleanup-readiness-report",
             "GET /supervisor/remote-cleanup-sync-readiness-report",
             "GET /supervisor/trusted-autonomy-readiness-report",
-            "GET /supervisor/epic-6-completion-audit-report",
             "GET /supervisor/epic-6-mvp-proof-trial-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
