@@ -654,9 +654,12 @@ do not treat an operator authorization as a bypass.
    `s` `git ls-files -v` representation),
    filtered, text/eol-normalized, legacy `crlf`-normalized, ident-expanded,
    mode-hidden, encoded, or drifting paths; it
-   disables Git fsmonitor for every status proof, refuses `core.trustctime=false`
-   and `core.ignoreCase=true`, and repeats the configuration and conversion-
-   attribute checks at the final cleanup boundary. Its preservation ref must be
+   disables Git fsmonitor for every status proof, refuses `core.trustctime=false`,
+   `core.ignoreCase=true`, and `core.autocrlf=true|input`, and repeats the
+   configuration and conversion-attribute checks at the final cleanup boundary.
+   Those bounded, NUL-delimited attribute checks cover both the live tracked
+   paths and the recorded source tree, so deleting a conversion rule in dirty
+   metadata cannot authorize a reset that restores it. Its preservation ref must be
    a direct, non-symbolic ref and is written without dereferencing, so a
    pre-existing symbolic ref cannot redirect the snapshot. It persists dirty
    paths in UTF-8 byte order rather than host-locale order, forces

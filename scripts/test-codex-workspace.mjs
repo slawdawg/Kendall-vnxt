@@ -17401,19 +17401,50 @@ try {
     }
   });
 
-  test("cleanup-superseded rechecks fileMode and conversion attributes after preservation", () => {
-    for (const [name, setup] of [["fileMode", (fixture) => runGit(fixture.worktree, ["config", "core.fileMode", "false"])], ["filter", (fixture) => writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt filter=drop\n")]]) {
+  test("cleanup-superseded rechecks fileMode, autocrlf, and conversion attributes after preservation", () => {
+    for (const [name, setup] of [["fileMode", (fixture) => runGit(fixture.worktree, ["config", "core.fileMode", "false"])], ["autocrlf", (fixture) => runGit(fixture.worktree, ["config", "core.autocrlf", "true"])], ["filter", (fixture) => writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt filter=drop\n")]]) {
       const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
       const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved preservation", "--reason", "final cleanup must recheck configuration"];
       try {
         writeFileSync(join(fixture.worktree, "carried.txt"), "preserved bytes\n");
-        assert(runFixtureScript(fixture, preserve, { env: fixture.env }).code === 0, name);
+        const preserved = runFixtureScript(fixture, preserve, { env: fixture.env });
+        assert(preserved.code === 0, `${name}: ${preserved.stderr || preserved.stdout}`);
         setup(fixture);
         const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
-        assert(name === "fileMode" ? cleanup.code !== 0 && (cleanup.stderr || cleanup.stdout).includes("core.fileMode=false") : cleanup.code !== 0 && (cleanup.stderr || cleanup.stdout).includes("conversion attributes"), `${name}: ${cleanup.stderr || cleanup.stdout}`);
+        const output = cleanup.stderr || cleanup.stdout;
+        assert(name === "fileMode"
+          ? cleanup.code !== 0 && output.includes("core.fileMode=false")
+          : name === "autocrlf"
+            ? cleanup.code !== 0 && output.includes("core.autocrlf")
+            : cleanup.code !== 0 && output.includes("conversion attributes"), `${name}: ${output}`);
         assert(existsSync(fixture.worktree), `${name} allowed cleanup`);
       } finally { cleanupSupersededCleanupFixture(fixture); }
     }
+  });
+
+  test("preserve-dirty-superseded rejects source-tree conversion attributes removed by live dirty metadata", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, sourceAttribute: "carried.txt filter=source-only\n" });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, ".gitattributes"), "carried.txt !filter\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "live metadata removes source filter\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === false && JSON.parse(result.stdout).reason.includes("source-tree tracked conversion attributes"), result.stderr || result.stdout);
+      assert(readFileSync(join(fixture.worktree, ".gitattributes"), "utf8").includes("!filter"), "source-tree attribute rejection reset dirty metadata");
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("live metadata"), "source-tree attribute rejection reset dirty content");
+      assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "source-tree attribute rejection wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded batches tracked conversion-attribute checks", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "batched attribute proof dirty bytes\n");
+      installFixtureGitProxy(fixture, "args.includes('check-attr') && (!args.includes('--stdin') || !args.includes('-z'))", "fixture rejected unbatched conversion-attribute proof");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === true, result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
   });
 
   test("preserve-dirty-superseded blocks a post-plan trustctime flip before reset or cleanup", () => {
@@ -20839,6 +20870,7 @@ function createSupersededCleanupFixture(options = {}) {
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  if (options.sourceAttribute) commitFile(fixtureRoot, ".gitattributes", options.sourceAttribute, "source attributes");
   if (options.firstUseRepair) commitFile(fixtureRoot, "hardened.txt", "original hardening surface\n", "add hardening surface");
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
