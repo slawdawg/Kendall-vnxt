@@ -649,7 +649,8 @@ do not treat an operator authorization as a bypass.
    `preserve-dirty-superseded <task>` with the same exact closed-source PR and
    ordered carry-forward patch arguments. Its dry run rejects untracked or
    ignored files, renamed, copied, malformed, non-UTF-8, literal-pathspec
-   metacharacters, active replacement refs, any whole-index hidden
+   metacharacters, active replacement refs or repository/ambient graft history,
+   any whole-index hidden
    assume-unchanged/skip-worktree entry (including the combined lowercase
    `s` `git ls-files -v` representation),
    filtered, text/eol-normalized, legacy `crlf`-normalized, ident-expanded,
@@ -672,7 +673,8 @@ do not treat an operator authorization as a bypass.
    takeover is a separate governed operation. Its apply re-reads the exact
    porcelain set under lock, stages only those named paths in a temporary
    index, and repeats the porcelain/tree proof immediately before reset. The
-   final producer-lease heartbeat is adjacent to that reset, so governed
+   final producer-lease heartbeat and exact checked-out branch/HEAD reproof are
+   adjacent to that reset, so governed
    writers cannot publish during the destructive boundary. It publishes a
    lane-qualified `refs/codex-preservation/<task>/dirty-superseded` snapshot
    commit/tree, records exact dirty path/status/blob identities plus owner and
@@ -680,7 +682,10 @@ do not treat an operator authorization as a bypass.
    cleans the source worktree. Ordinary apply repeats the absence of pending
    snapshot intent or preservation evidence after taking the manifest lock;
    if either appears, only the separately authorized `--resume-pending` route
-   may recover it. Persisted snapshot identity fields are normalized
+   may recover it. Every generic cleanup path (merged, integrated, orphan,
+   branch, and closed-remote) likewise rejects either pending intent or
+   completed preservation evidence; only the governed resume and
+   `cleanup-superseded` routes may settle the durable record. Persisted snapshot identity fields are normalized
    only when their aliases agree. An adopted pending snapshot must have the
    recorded source head as its sole parent and match a separately rebuilt full
    tree from the still-dirty source, not merely the named dirty entries. A

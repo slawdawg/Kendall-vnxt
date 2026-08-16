@@ -9210,8 +9210,10 @@ function cleanupMerged(argv, mode = {}) {
       }
       continue;
     }
-    if (manifest.dirty_superseded_preservation) {
-      const reason = "dirty superseded preservation is retained evidence; only cleanup-superseded may remove this lane";
+    if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) {
+      const reason = manifest.dirty_superseded_snapshot_intent
+        ? "dirty superseded snapshot-publication intent is retained evidence; only --resume-pending may settle it before cleanup-superseded"
+        : "dirty superseded preservation is retained evidence; only cleanup-superseded may remove this lane";
       if (options.summaryJson) {
         summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_dirty_superseded_preservation", reason, { deleteRemote }));
       } else {
@@ -9342,8 +9344,10 @@ function cleanupMerged(argv, mode = {}) {
       // A dirty preservation may have completed after the unlocked preflight
       // but before this lock was acquired.  It has an exclusive cleanup path
       // because its snapshot and rollback evidence must be revalidated there.
-      if (manifest.dirty_superseded_preservation) {
-        throw new Error("dirty superseded preservation appeared before locked cleanup; only cleanup-superseded may remove this lane");
+      if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) {
+        throw new Error(manifest.dirty_superseded_snapshot_intent
+          ? "dirty superseded snapshot-publication intent appeared before locked cleanup; only --resume-pending may settle it before cleanup-superseded"
+          : "dirty superseded preservation appeared before locked cleanup; only cleanup-superseded may remove this lane");
       }
       const lockedCleanupTarget = assertCleanupWorktreeForMerged(manifest, state);
       try {
@@ -10218,6 +10222,11 @@ function assertClosedRemoteCleanupOptionSyntax(argv) {
 
 function closedRemoteCleanupProof(manifest, state, context = {}) {
   const blockers = [];
+  if (manifest.dirty_superseded_snapshot_intent || manifest.dirty_superseded_preservation) {
+    blockers.push(manifest.dirty_superseded_snapshot_intent
+      ? "closed manifest retains a pending dirty superseded snapshot intent; governed resume/cleanup-superseded must settle it before remote cleanup"
+      : "closed manifest retains completed dirty superseded preservation evidence; cleanup-superseded must settle it before remote cleanup");
+  }
   if (manifest.status !== "closed") blockers.push("workspace manifest is not closed");
   const expectedHeadSha = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha);
   if (!expectedHeadSha) blockers.push("closed manifest lacks an exact recorded delivery head");
@@ -10656,8 +10665,13 @@ function cleanupIntegratedPlan(record, state, context) {
   if (manifest.mode === "epic-batch") {
     return { ...base, reason: "epic-batch workspace requires finish-epic closeout; integrated cleanup is disabled" };
   }
-  if (manifest.dirty_superseded_preservation) {
-    return { ...base, reason: "dirty superseded preservation requires cleanup-superseded; integrated cleanup never removes preserved evidence" };
+  if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) {
+    return {
+      ...base,
+      reason: manifest.dirty_superseded_snapshot_intent
+        ? "dirty superseded snapshot-publication intent requires --resume-pending before cleanup-superseded; integrated cleanup never removes pending evidence"
+        : "dirty superseded preservation requires cleanup-superseded; integrated cleanup never removes preserved evidence",
+    };
   }
   if (strict ? supersededSourceHasPrEvidence(manifest) || (hasStrictCloseoutEvidence(manifest) && !strictResume) : !closedPrIntegrated && (manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || "")))) {
     return { ...base, reason: strict ? "source workspace has PR or cleanup evidence" : "workspace has PR/merged cleanup evidence; use cleanup-merged" };
@@ -11477,6 +11491,7 @@ function preserveDirtySuperseded(argv) {
       assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
       assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
       heartbeat();
+      assertDirtySupersededResetHead(fresh);
       runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
       if (dirtySupersededStatusRecords(fresh.worktreePath, fresh.expectedHeadSha).length) throw new Error("Dirty superseded preservation cleaned source worktree incompletely; cleanup remains blocked.");
       manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset" };
@@ -11553,9 +11568,10 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
     // for a separately governed recovery rather than authorizing a reset.
     const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
     verifyDirtySupersededImmutableSnapshot(resumedPlan, snapshot);
-    heartbeat();
     assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
     assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
+    heartbeat();
+    assertDirtySupersededResetHead(fresh);
     runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
     if (dirtySupersededStatusRecords(fresh.worktreePath, fresh.expectedHeadSha).length) throw new Error("Dirty superseded preservation resumed reset left source worktree dirty; cleanup remains blocked.");
     manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset", resumedAfterInterruption: true };
@@ -11630,6 +11646,40 @@ function assertNoDirtySupersededReplacementRefs(worktreePath) {
   if (replacements.code !== 0) throw new Error("dirty superseded preservation could not inspect replacement refs");
   if (String(replacements.stdout || "").trim()) {
     throw new Error("dirty superseded preservation refuses active Git replacement refs");
+  }
+  if (process.env.GIT_GRAFT_FILE) {
+    throw new Error("dirty superseded preservation refuses an ambient Git graft file");
+  }
+  // `info/grafts` belongs to the shared repository, not a linked worktree's
+  // private administrative directory. Resolve the common Git directory so a
+  // source worktree cannot evade the proof by being linked.
+  const commonDirResult = git(["rev-parse", "--git-common-dir"], { cwd: worktreePath });
+  if (commonDirResult.code !== 0 || !commonDirResult.stdout.trim()) {
+    throw new Error("dirty superseded preservation could not resolve the repository graft path");
+  }
+  const graftPath = join(resolve(worktreePath, commonDirResult.stdout.trim()), "info", "grafts");
+  let graftContents = "";
+  try {
+    if (existsSync(graftPath)) graftContents = readFileSync(graftPath, "utf8");
+  } catch (error) {
+    throw new Error(`dirty superseded preservation could not inspect repository graft state: ${safeMetadataText(error.message || error, 200)}`);
+  }
+  if (graftContents.split(/\r?\n/).some((line) => {
+    const trimmed = line.trim();
+    return trimmed.length > 0 && !trimmed.startsWith("#");
+  })) {
+    throw new Error("dirty superseded preservation refuses active repository Git graft state");
+  }
+}
+
+function assertDirtySupersededResetHead(plan) {
+  const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: plan.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
+  if (branch.code !== 0 || branch.stdout.trim() !== plan.branch) {
+    throw new Error("dirty superseded preservation branch changed before reset");
+  }
+  const head = git(["rev-parse", "HEAD"], { cwd: plan.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
+  if (head.code !== 0 || head.stdout.trim() !== plan.expectedHeadSha) {
+    throw new Error("dirty superseded preservation branch head changed before reset");
   }
 }
 
@@ -11728,7 +11778,7 @@ function assertDirtySupersededStatusConfiguration(worktreePath) {
 }
 
 function assertDurablePreservationGitEnvironment() {
-  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"].filter((name) => process.env[name]);
+  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE"].filter((name) => process.env[name]);
   if (unsafe.length) {
     throw new Error(`dirty superseded preservation refuses ambient Git repository, index, or object-store overrides: ${unsafe.join(", ")}`);
   }
@@ -12114,6 +12164,9 @@ function cleanupSupersededPlan(record, state, context) {
   if (manifest.status === "closed") return { ...base, reason: "workspace manifest is already closed" };
   if (/(?:hold|held)/i.test(String(manifest.status || ""))) return { ...base, reason: "held workspace deletion is forbidden" };
   if (manifest.mode === "epic-batch") return { ...base, reason: "epic-batch workspace requires finish-epic closeout" };
+  if (manifest.dirty_superseded_snapshot_intent && context.allowPendingDirty !== true) {
+    return { ...base, reason: "dirty superseded snapshot-publication intent requires --resume-pending before cleanup-superseded" };
+  }
   if (supersededSourceHasPrEvidence(manifest) && !proofInput.closedSourcePr) {
     return { ...base, reason: "source workspace has PR or prior cleanup evidence; cleanup-superseded accepts only no-PR source lanes" };
   }
@@ -12131,6 +12184,11 @@ function cleanupSupersededPlan(record, state, context) {
     cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, cleanupTarget);
   } catch (error) {
     return { ...base, reason: error.message };
+  }
+  try {
+    assertNoDirtySupersededReplacementRefs(cleanupCwd);
+  } catch (error) {
+    return { ...base, cleanupCwd, reason: error.message };
   }
   // Treat PR-returned lineage ids as untrusted metadata.  Normalize them before
   // any cleanup proof can use them as a Git revision.
@@ -13527,7 +13585,7 @@ function cleanupOrphans(argv) {
   }
   const directoryEntries = entries.filter((entry) => entry.isDirectory());
   const hiddenMetadataSkipped = directoryEntries.filter((entry) => hiddenWorkspaceMetadataEntry(entry.name)).length;
-  const directories = directoryEntries
+  const candidateDirectories = directoryEntries
     .filter((entry) => !hiddenWorkspaceMetadataEntry(entry.name))
     .map((entry) => join(managedRoot, entry.name))
     .map((worktreePath) => {
@@ -13536,16 +13594,27 @@ function cleanupOrphans(argv) {
     })
     .filter((worktreePath) => !worktreeListed(worktreePath))
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
+  const retainedDirtyEvidence = new Map(
+    readManifests(state)
+      .filter(({ manifest }) => manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent))
+      .map(({ manifest }) => [resolve(manifest.worktree_path), manifest.task_id]),
+  );
+  const retainedDirectories = candidateDirectories.filter((worktreePath) => retainedDirtyEvidence.has(resolve(worktreePath)));
+  const directories = candidateDirectories.filter((worktreePath) => !retainedDirtyEvidence.has(resolve(worktreePath)));
 
   if (options.summaryJson) {
     console.log(
       JSON.stringify(
-        buildCleanupOrphansSummary({ state, query, all: Boolean(options.all), directories, hiddenMetadataSkipped }),
+        buildCleanupOrphansSummary({ state, query, all: Boolean(options.all), directories, retainedDirectories, hiddenMetadataSkipped }),
         null,
         2,
       ),
     );
     return;
+  }
+
+  for (const worktreePath of retainedDirectories) {
+    console.log(`SKIP orphan directory ${worktreePath}: manifest ${retainedDirtyEvidence.get(resolve(worktreePath))} retains dirty superseded evidence; use governed resume/cleanup-superseded.`);
   }
 
   if (directories.length === 0) {
@@ -13578,7 +13647,7 @@ function cleanupOrphans(argv) {
   }
 }
 
-function buildCleanupOrphansSummary({ state, query, all, directories, hiddenMetadataSkipped }) {
+function buildCleanupOrphansSummary({ state, query, all, directories, retainedDirectories = [], hiddenMetadataSkipped }) {
   return {
     generatedAt: new Date().toISOString(),
     worktreesDir: state.worktreesDir,
@@ -13586,6 +13655,7 @@ function buildCleanupOrphansSummary({ state, query, all, directories, hiddenMeta
     all,
     counts: {
       matchedOrphans: directories.length,
+      retainedDirtyEvidence: retainedDirectories.length,
       hiddenMetadataSkipped,
     },
     orphanDirectories: directories.slice(0, 10).map((worktreePath) => ({
@@ -13593,6 +13663,11 @@ function buildCleanupOrphansSummary({ state, query, all, directories, hiddenMeta
       path: worktreePath,
     })),
     orphanDirectoriesTruncated: directories.length > 10,
+    retainedDirtyEvidenceDirectories: retainedDirectories.slice(0, 10).map((worktreePath) => ({
+      name: basename(worktreePath),
+      path: worktreePath,
+    })),
+    retainedDirtyEvidenceDirectoriesTruncated: retainedDirectories.length > 10,
     requiresTarget: directories.length > 0 && !query && !all,
     mutation: "none; summary only",
   };
@@ -13637,7 +13712,7 @@ function cleanupBranches(argv) {
   const state = workspaceState(options);
   const preservedBranches = new Set(
     readManifests(state)
-      .filter(({ manifest }) => manifest.status !== "closed" && manifest.dirty_superseded_preservation)
+      .filter(({ manifest }) => manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent))
       .map(({ manifest }) => manifest.branch)
       .filter(Boolean),
   );
@@ -13647,9 +13722,9 @@ function cleanupBranches(argv) {
   for (const branch of branches) {
     assertSafeBranch(branch);
     if (preservedBranches.has(branch)) {
-      skipped.push({ branch, reason: "branch has dirty superseded preservation evidence; use cleanup-superseded" });
+      skipped.push({ branch, reason: "branch has dirty superseded preservation or pending snapshot evidence; use governed resume/cleanup-superseded" });
       if (!options.summaryJson) {
-        console.log(`SKIP ${branch}: branch has dirty superseded preservation evidence; use cleanup-superseded.`);
+        console.log(`SKIP ${branch}: branch has dirty superseded preservation or pending snapshot evidence; use governed resume/cleanup-superseded.`);
       }
       continue;
     }
