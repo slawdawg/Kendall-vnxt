@@ -32,28 +32,6 @@ const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcu
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const routingPreviewTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
-const epicAuditSchemaStart = schemaSource.indexOf("class EpicCompletionAuditReportApiEnvelope");
-const epicAuditSchemaEnd = schemaSource.indexOf("\n\nclass MvpProofTrialStepView", epicAuditSchemaStart);
-const epicAuditSchema = epicAuditSchemaStart >= 0 && epicAuditSchemaEnd > epicAuditSchemaStart
-  ? schemaSource.slice(epicAuditSchemaStart, epicAuditSchemaEnd)
-  : "";
-const epicAuditViewStart = schemaSource.indexOf("class EpicCompletionAuditReportView");
-const epicAuditViewEnd = schemaSource.indexOf("\n\nclass EpicCompletionAuditReportApiEnvelope", epicAuditViewStart);
-const epicAuditView = epicAuditViewStart >= 0 && epicAuditViewEnd > epicAuditViewStart
-  ? schemaSource.slice(epicAuditViewStart, epicAuditViewEnd)
-  : "";
-const epicAuditContractStart = contractSource.indexOf("export interface EpicCompletionAuditReportView");
-const epicAuditContractEnd = contractSource.indexOf("\nexport interface EpicCompletionAuditReportApiEnvelope", epicAuditContractStart);
-const epicAuditContract = epicAuditContractStart >= 0 && epicAuditContractEnd > epicAuditContractStart
-  ? contractSource.slice(epicAuditContractStart, epicAuditContractEnd)
-  : "";
-const epicAuditRouteStart = apiSource.indexOf(
-  '@app.get("/supervisor/epic-6-completion-audit-report", response_model=EpicCompletionAuditReportApiEnvelope)',
-);
-const epicAuditRouteEnd = apiSource.indexOf("\n\n@app.", epicAuditRouteStart);
-const epicAuditRoute = epicAuditRouteStart >= 0 && epicAuditRouteEnd > epicAuditRouteStart
-  ? apiSource.slice(epicAuditRouteStart, epicAuditRouteEnd)
-  : "";
 
 const reports = [
   {
@@ -320,10 +298,7 @@ for (const report of reports) {
   }
 }
 
-for (const historicalReportId of [
-  "epic-6-completion-audit-report-v1",
-  "epic-6-mvp-proof-trial-report-v1",
-]) {
+for (const historicalReportId of ["epic-6-mvp-proof-trial-report-v1"]) {
   const entryStart = serviceSource.indexOf(`reportId="${historicalReportId}"`);
   const entryEnd = serviceSource.indexOf("            ),", entryStart);
   const entry = entryStart >= 0 && entryEnd > entryStart
@@ -354,7 +329,6 @@ for (const visibleEndpoint of [
   "GET /supervisor/local-cleanup-readiness-report",
   "GET /supervisor/remote-cleanup-sync-readiness-report",
   "GET /supervisor/trusted-autonomy-readiness-report",
-  "GET /supervisor/epic-6-completion-audit-report",
   "GET /supervisor/epic-6-mvp-proof-trial-report",
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
@@ -370,40 +344,21 @@ for (const visibleEndpoint of [
   );
 }
 
-assertCondition(
-  epicAuditRoute.includes(
-    '@app.get("/supervisor/epic-6-completion-audit-report", response_model=EpicCompletionAuditReportApiEnvelope)',
-  ) && epicAuditRoute.includes(
-    "return EpicCompletionAuditReportApiEnvelope(data=service.get_epic_6_completion_audit_report())",
-  ),
-  "Epic 6 completion audit route must return the typed API envelope",
-  failures,
-);
-assertCondition(
-  epicAuditSchema.includes("class EpicCompletionAuditReportApiEnvelope") &&
-    epicAuditSchema.includes('model_config = ConfigDict(extra="forbid", strict=True)') &&
-    epicAuditSchema.includes("data: EpicCompletionAuditReportView") &&
-    epicAuditSchema.includes("meta: dict[str, str | int | float | bool | None] | None = None"),
-  "Epic 6 completion audit envelope must be strict and typed",
-  failures,
-);
-for (const safetyLiteral of [
-  "readOnly: Literal[True]",
-  "epicComplete: Literal[True]",
-  "remoteDeliveryApproved: Literal[True]",
-  "providerExecutionApproved: Literal[False]",
-  "cleanupApproved: Literal[True]",
+for (const [surface, source] of [
+  ["supervisor API", apiSource],
+  ["supervisor schema", schemaSource],
+  ["supervisor service", serviceSource],
+  ["TypeScript contracts", contractSource],
+  ["dashboard client", dashboardClient],
+  ["controls loader", controlsPageData],
+  ["controls content", controlsPageContent],
+  ["report shortcuts", reportShortcuts],
 ]) {
-  assertCondition(epicAuditView.includes(safetyLiteral), `Epic 6 audit view must include ${safetyLiteral}`, failures);
-}
-for (const safetyLiteral of [
-  "readOnly: true;",
-  "epicComplete: true;",
-  "remoteDeliveryApproved: true;",
-  "providerExecutionApproved: false;",
-  "cleanupApproved: true;",
-]) {
-  assertCondition(epicAuditContract.includes(safetyLiteral), `Epic 6 audit contract must include ${safetyLiteral}`, failures);
+  assertCondition(
+    !source.includes("epic-6-completion-audit-report") && !source.includes("EpicCompletionAudit"),
+    `Retired Epic 6 completion-audit surface must be absent from ${surface}`,
+    failures,
+  );
 }
 
 for (const overviewText of [

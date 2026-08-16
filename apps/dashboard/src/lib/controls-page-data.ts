@@ -2,7 +2,7 @@ import {
   getAuthorityReadinessMatrixReport, getClaudeReviewApprovalReport, getClaudeReviewReadinessReport,
   getCodexImplementationApprovalReport, getCodexReadinessReport, getDashboardE2EReport,
   getDeliveryReadinessPolicyReport, getDevelopmentRunwayReport, getDocumentationAuthorityReport,
-  getExecutionReadinessReport, getExecutionRecipes, getEpic6CompletionAuditReport,
+  getExecutionReadinessReport, getExecutionRecipes,
   getGitHubDeliveryAuthorityReport, getGitHubWorkflowPolicyReport, getGitHygieneReport,
   getLegacyPlanningArtifactInventoryReport, getLocalCleanupReadinessReport, getMaintenanceActionPlanReport,
   getMaintenanceReadinessReport, getMvpProofTrialReport, getManagedRecipePolicyReport,
@@ -21,7 +21,7 @@ const CONTROLS_REQUEST_TIMEOUT_MS = 2_500;
 
 export async function loadControlsPageData(signal?: AbortSignal) {
   const read = <T>(load: (options: { signal?: AbortSignal; timeoutMs?: number }) => Promise<T>) => ({ signal: requestSignal }: { signal?: AbortSignal }) => load({ signal: requestSignal, timeoutMs: CONTROLS_REQUEST_TIMEOUT_MS });
-  const [status, items, workers, laneProfiles, readinessReport, documentationAuthorityReport, legacyPlanningArtifactInventoryReport, verificationReadinessReport, authorityReadinessMatrixReport, dashboardE2EReport, reportCatalog, maintenanceReadinessReport, maintenanceActionPlanReport, developmentRunwayReport, runtimeEvidenceReviewReport, safeDevelopmentBacklog, runnerAssignmentStatusReport, managedRecipePolicyReport, githubWorkflowPolicyReport, githubDeliveryAuthorityReport, gitHygieneReport, localCleanupReadinessReport, remoteCleanupSyncReadinessReport, trustedDeliveryEligibilityReport, trustedAutonomyReadinessReport, epic6CompletionAuditReport, mvpProofTrialReport, codexReadinessReport, codexImplementationApprovalReport, claudeReviewReadinessReport, claudeReviewApprovalReport, reviewResourcePolicyReport, deliveryReadinessPolicyReport, executionRecipes] = await runBoundedControlsReads([
+  const [status, items, workers, laneProfiles, readinessReport, documentationAuthorityReport, legacyPlanningArtifactInventoryReport, verificationReadinessReport, authorityReadinessMatrixReport, dashboardE2EReport, reportCatalog, maintenanceReadinessReport, maintenanceActionPlanReport, developmentRunwayReport, runtimeEvidenceReviewReport, safeDevelopmentBacklog, runnerAssignmentStatusReport, managedRecipePolicyReport, githubWorkflowPolicyReport, githubDeliveryAuthorityReport, gitHygieneReport, localCleanupReadinessReport, remoteCleanupSyncReadinessReport, trustedDeliveryEligibilityReport, trustedAutonomyReadinessReport, mvpProofTrialReport, codexReadinessReport, codexImplementationApprovalReport, claudeReviewReadinessReport, claudeReviewApprovalReport, reviewResourcePolicyReport, deliveryReadinessPolicyReport, executionRecipes] = await runBoundedControlsReads([
     { alias: "Supervisor status", read: read(getRunStatus) },
     { alias: "Work items", read: read(getWorkItems) },
     { alias: "Worker registry", read: read(getWorkerRegistry) },
@@ -47,7 +47,6 @@ export async function loadControlsPageData(signal?: AbortSignal) {
     { alias: "Remote cleanup readiness", read: read(getRemoteCleanupSyncReadinessReport) },
     { alias: "Trusted delivery eligibility", read: read(getTrustedDeliveryEligibilityReport) },
     { alias: "Trusted autonomy readiness", read: read(getTrustedAutonomyReadinessReport) },
-    { alias: "Epic 6 completion audit", read: read(getEpic6CompletionAuditReport) },
     { alias: "Epic 6 MVP proof trial", read: read(getMvpProofTrialReport) },
     { alias: "Codex readiness", read: read(getCodexReadinessReport) },
     { alias: "Codex implementation approval", read: read(getCodexImplementationApprovalReport) },
@@ -57,7 +56,7 @@ export async function loadControlsPageData(signal?: AbortSignal) {
     { alias: "Delivery readiness policy", read: read(getDeliveryReadinessPolicyReport) },
     { alias: "Execution recipes", read: read(getExecutionRecipes) },
   ] as const, { signal });
-  return { status, items, workers, laneProfiles, readinessReport, documentationAuthorityReport, legacyPlanningArtifactInventoryReport, verificationReadinessReport, authorityReadinessMatrixReport, dashboardE2EReport, reportCatalog, maintenanceReadinessReport, maintenanceActionPlanReport, developmentRunwayReport, runtimeEvidenceReviewReport, safeDevelopmentBacklog, runnerAssignmentStatusReport, managedRecipePolicyReport, githubWorkflowPolicyReport, githubDeliveryAuthorityReport, gitHygieneReport, localCleanupReadinessReport, remoteCleanupSyncReadinessReport, trustedDeliveryEligibilityReport, trustedAutonomyReadinessReport, epic6CompletionAuditReport, mvpProofTrialReport, codexReadinessReport, codexImplementationApprovalReport, claudeReviewReadinessReport, claudeReviewApprovalReport, reviewResourcePolicyReport, deliveryReadinessPolicyReport, executionRecipes };
+  return { status, items, workers, laneProfiles, readinessReport, documentationAuthorityReport, legacyPlanningArtifactInventoryReport, verificationReadinessReport, authorityReadinessMatrixReport, dashboardE2EReport, reportCatalog, maintenanceReadinessReport, maintenanceActionPlanReport, developmentRunwayReport, runtimeEvidenceReviewReport, safeDevelopmentBacklog, runnerAssignmentStatusReport, managedRecipePolicyReport, githubWorkflowPolicyReport, githubDeliveryAuthorityReport, gitHygieneReport, localCleanupReadinessReport, remoteCleanupSyncReadinessReport, trustedDeliveryEligibilityReport, trustedAutonomyReadinessReport, mvpProofTrialReport, codexReadinessReport, codexImplementationApprovalReport, claudeReviewReadinessReport, claudeReviewApprovalReport, reviewResourcePolicyReport, deliveryReadinessPolicyReport, executionRecipes };
 }
 
 export type ControlsPageData = Awaited<ReturnType<typeof loadControlsPageData>>;
