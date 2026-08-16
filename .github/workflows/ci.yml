@@ -226,9 +226,9 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.supervisor == 'true'
     needs: changes
     runs-on: ubuntu-latest
-    # The child profile remains bounded at 12 minutes; leave setup and
-    # teardown margin so a passing bounded suite is not cancelled by the job.
-    timeout-minutes: 16
+    # Keep five minutes above the child profile for setup and job teardown,
+    # so GitHub does not cancel a still-healthy bounded test process.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -258,9 +258,10 @@ jobs:
 
       - name: Run supervisor tests with duration profile
         # Full supervisor teardown can outlive the test assertions; retain a
-        # bounded margin above the observed 9-minute suite rather than
-        # converting a passing test run into a CI timeout.
-        run: pnpm run test:supervisor:profile -- --timeout-ms=720000
+        # bounded 15-minute budget. Recent CI needed 12 minutes (including
+        # asynchronous SQLite cleanup) after pytest reported success; the
+        # 20-minute parent job preserves five minutes for setup and teardown.
+        run: pnpm run test:supervisor:profile -- --timeout-ms=900000
 
   full:
     if: github.event_name == 'push'
