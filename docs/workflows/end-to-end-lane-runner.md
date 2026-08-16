@@ -650,10 +650,11 @@ do not treat an operator authorization as a bypass.
    ordered carry-forward patch arguments. Its dry run rejects untracked or
    ignored files, renamed, copied, malformed, non-UTF-8, any whole-index hidden
    assume-unchanged/skip-worktree entry,
-   filtered, text/eol-normalized, mode-hidden, encoded, or drifting paths; it
+   filtered, text/eol-normalized, ident-expanded, mode-hidden, encoded, or
+   drifting paths; it
    forces dirty-submodule visibility and rejects every ambient Git index,
    repository/worktree, common-directory, or object-store override. Snapshot
-   objects and their ref are written with Git's loose-object/reference
+   blobs, tree, commit, and ref are written with Git's loose-object/reference
    durability enabled before reset. The exact current manifest owner must run it—dirty-lane
    takeover is a separate governed operation. Its apply re-reads the exact
    porcelain set under lock, stages only those named paths in a temporary
@@ -665,9 +666,13 @@ do not treat an operator authorization as a bypass.
    successor bindings in the manifest, and re-reads every binding before it
    cleans the source worktree. It never removes a worktree, local branch, or
    remote branch. `cleanup-superseded` re-validates any recorded snapshot ref
-   before local cleanup; a missing, changed, or unreadable preservation object
-   is a hard stop line. A crash or blocked post-reset check leaves immutable
-   pending evidence. Re-run the same proof with
+   and rechecks the source worktree's whole-index hidden flags before local
+   cleanup; a missing, changed, or unreadable preservation object, or a hidden
+   index entry, is a hard stop line. A crash or blocked post-reset check leaves
+   immutable pending evidence. If a pre-publication intent has no published
+   ref, `--resume-pending` re-reads the exact still-dirty source, retires only
+   that empty intent without reset, and requires a new ordinary snapshot. Re-run
+   any published pending snapshot with
    `preserve-dirty-superseded <task> --resume-pending --apply` and fresh
    approval/reason (which is retained with the resumed reset): it settles only
    an exact re-read clean source or an exact still-dirty snapshot, and otherwise
