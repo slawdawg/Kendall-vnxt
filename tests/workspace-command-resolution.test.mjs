@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { resolveWorkspaceCommand } from "../scripts/lib/workspace-command-resolution.mjs";
@@ -37,4 +38,17 @@ test("does not treat npm npm_execpath as a pnpm entrypoint", () => {
   assert.deepEqual(resolved.args, ["install"]);
   assert.equal(resolved.env?.PATH, "/usr/bin");
   assert.equal("npm_execpath" in resolved.env, false);
+});
+
+test("resolver keeps caller command state while stripping a non-pnpm ambient npm_execpath", () => {
+  const resolved = resolveWorkspaceCommand("pnpm", ["install"], {
+    env: { PATH: process.env.PATH || "", npm_execpath: "/tmp/mise/shims/pnpm", GIT_INDEX_FILE: "/tmp/preservation-index" },
+  });
+
+  assert.equal(resolved.command, "pnpm");
+  assert.equal(resolved.env?.GIT_INDEX_FILE, "/tmp/preservation-index");
+  assert.equal("npm_execpath" in resolved.env, false);
+  const child = spawnSync(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ index: process.env.GIT_INDEX_FILE || null, npm: process.env.npm_execpath || null }))"], { env: resolved.env, encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout), { index: "/tmp/preservation-index", npm: null });
 });

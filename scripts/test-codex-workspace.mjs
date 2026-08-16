@@ -1138,8 +1138,44 @@ try {
     const match = source.match(/function run\(commandName[\s\S]*?function samePath/);
     assert(match, "run source not found");
     assert(source.includes("resolveWorkspaceCommand"), "codex-workspace must import shared command resolver");
-    assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments);"), "run must resolve workspace commands");
-    assert(match[0].includes("env: resolved.env ?? process.env"), "run must pass resolved command environment");
+    assert(match[0].includes("const commandEnvironment = options.env ? { ...process.env, ...options.env } : process.env;"), "run must resolve against the caller environment");
+    assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments, { env: commandEnvironment });"), "run must resolve workspace commands against the caller environment");
+    assert(match[0].includes("env: resolved.env ?? commandEnvironment"), "run must pass the resolver-selected command environment");
+  });
+
+  test("run passes caller Git index state without restoring a stripped non-pnpm npm_execpath", () => {
+    const probeRoot = mkdtempSync(join(tmpdir(), "codex-run-env-probe-"));
+    const probeScripts = join(probeRoot, "scripts");
+    const probeBin = join(probeRoot, "bin");
+    const probeScript = join(probeScripts, "codex-workspace.mjs");
+    const marker = "\ntry {\n  switch (command) {";
+    try {
+      mkdirSync(probeScripts, { recursive: true }); mkdirSync(probeBin, { recursive: true });
+      symlinkSync(join(rootDir, "scripts", "lib"), join(probeScripts, "lib"), "dir");
+      symlinkSync(join(rootDir, "scripts", "anti-churn-guidance-hook.mjs"), join(probeScripts, "anti-churn-guidance-hook.mjs"));
+      const source = readFileSync(scriptPath, "utf8");
+      assert(source.includes(marker), "run environment probe could not find command dispatch boundary");
+      const injected = [
+        "",
+        'if (process.env.CODEX_WORKSPACE_TEST_RUN_ENV_PROBE === "1") {',
+        '  const result = run("pnpm", ["--probe"], { env: { GIT_INDEX_FILE: "/tmp/codex-preservation-index" } });',
+        '  process.stdout.write(result.stdout);',
+        '  process.exit(result.code);',
+        "}",
+      ].join("\n");
+      writeFileSync(probeScript, source.replace(marker, `${injected}${marker}`));
+      const fakePnpm = join(probeBin, "pnpm");
+      writeFileSync(fakePnpm, "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ index: process.env.GIT_INDEX_FILE || null, npm: process.env.npm_execpath || null }));\n");
+      chmodSync(fakePnpm, 0o755);
+      const result = spawnSync(process.execPath, [probeScript, "probe"], {
+        cwd: probeRoot,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${probeBin}:${process.env.PATH || ""}`, npm_execpath: "/tmp/mise/shims/pnpm", CODEX_WORKSPACE_TEST_RUN_ENV_PROBE: "1" },
+        stdio: "pipe",
+      });
+      assert(result.status === 0, result.stderr || result.stdout);
+      assert(JSON.stringify(JSON.parse(result.stdout)) === JSON.stringify({ index: "/tmp/codex-preservation-index", npm: null }), result.stdout);
+    } finally { rmSync(probeRoot, { recursive: true, force: true }); }
   });
 
   test("workspace state uses shared resolver", () => {
