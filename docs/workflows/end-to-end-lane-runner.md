@@ -614,8 +614,8 @@ do not treat an operator authorization as a bypass.
    identity is no longer live is recovered. Stale recovery first atomically
    claims a recovery gate and sidecar, then atomically moves the observed stale
    inode, so a competing recovery or fresh governed owner cannot lose a freshly
-   reacquired target lock. Linux records process start ticks; other supported hosts
-   record only a live PID and deliberately treat PID reuse as ambiguous rather
+   reacquired target lock. Linux records process start ticks; macOS records
+   only a live PID and deliberately treats PID reuse as ambiguous rather
    than reclaiming it. A failed remote deletion retains
    its intent and is retryable only after a fresh probe proves the exact remote
    ref is still present; any ambiguous post-failure state remains blocked.

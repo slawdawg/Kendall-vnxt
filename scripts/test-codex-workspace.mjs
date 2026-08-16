@@ -14595,7 +14595,7 @@ try {
       copyWorkspaceScriptFixture(fixtureRoot);
       const fixtureScript = join(fixtureRoot, "scripts", "codex-workspace.mjs");
       const source = readFileSync(fixtureScript, "utf8");
-      const seam = 'if (process.platform !== "linux") {';
+      const seam = 'if (process.platform === "darwin") {';
       assert(source.includes(seam), "fixture did not contain portable process identity seam");
       writeFileSync(fixtureScript, source.replace(seam, "if (true) {"));
       seedGeneratedSuccessorPrerequisites(state);

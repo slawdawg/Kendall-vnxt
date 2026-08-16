@@ -19158,8 +19158,8 @@ function applyLegacyRecoveryAdoption(state, packet, approval) {
 
 function processStartIdentity(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform !== "linux") {
-    // Other supported hosts lack Linux /proc start ticks.  A live PID-only
+  if (process.platform === "darwin") {
+    // macOS lacks Linux /proc start ticks. A live PID-only
     // identity is deliberately non-reclaimable on reuse: it preserves mutual
     // exclusion by failing closed rather than mistaking a reused PID for dead.
     try { process.kill(pid, 0); return `portable-live-pid:${pid}`; } catch { return null; }
