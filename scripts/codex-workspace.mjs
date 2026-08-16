@@ -11473,7 +11473,7 @@ function dirtySupersededSnapshotTree(plan) {
   if (indexPathResult.code !== 0) throw new Error("cannot locate source Git index for dirty preservation");
   const indexPath = resolve(plan.worktreePath, indexPathResult.stdout.trim());
   const temporaryIndex = `${indexPath}.dirty-preservation-${randomUUID()}`;
-  const env = { ...process.env, GIT_INDEX_FILE: temporaryIndex };
+  const env = { GIT_INDEX_FILE: temporaryIndex };
   try {
     runChecked("git", ["read-tree", plan.expectedHeadSha], { cwd: plan.worktreePath, env });
     runChecked("git", ["add", "--", ...plan.dirty.paths.map((entry) => entry.path)], { cwd: plan.worktreePath, env });
@@ -20552,11 +20552,14 @@ function runShellChecked(commandText, options = {}) {
 }
 
 function run(commandName, commandArguments, options = {}) {
-  const resolved = resolveWorkspaceCommand(commandName, commandArguments);
+  // Resolve against the complete caller environment. The resolver can then
+  // retain per-command state while still stripping unsafe pnpm shim metadata.
+  const commandEnvironment = options.env ? { ...process.env, ...options.env } : process.env;
+  const resolved = resolveWorkspaceCommand(commandName, commandArguments, { env: commandEnvironment });
   const spawnOptions = {
     cwd: options.cwd || repoRoot,
     encoding: "utf8",
-    env: resolved.env ?? options.env ?? process.env,
+    env: resolved.env ?? commandEnvironment,
     stdio: "pipe",
     timeout: options.timeout || defaultVerificationTimeoutMs,
   };
