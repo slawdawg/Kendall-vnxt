@@ -578,7 +578,8 @@ do not treat an operator authorization as a bypass.
    This narrow remote-only recovery requires all of the following at execution
    time: the manifest is closed and owned by the current runner (or
    a governed `--take-ownership --takeover-reason` is supplied); its retained
-   `cleanup-ready` audit and applied cleanup authority bind the same task, PR,
+   stored `cleanup-ready` audit (including its own exact head field) and
+   applied cleanup authority bind the same task, PR,
    and delivery head; its worktree and local branch are absent; the live PR is
    merged on the
    recorded base with the recorded PR number, branch, and exact delivery head;
@@ -597,8 +598,10 @@ do not treat an operator authorization as a bypass.
    The command uses an exact force-with-lease deletion and records an
    already-absent remote as an idempotent confirmation without replacing the
    original deletion proof. It records deletion intent durably before the
-   remote mutation and projects the resulting authority into the lane evidence
-   packet. A post-push remote reappearance is treated as ambiguous recreation,
+   remote mutation, preserves a bounded failed-attempt history on a controlled
+   retry, and records completion plus resulting authority only after the remote
+   operation or absence recheck succeeds. It projects the resulting authority
+   into the lane evidence packet. A post-push remote reappearance is treated as ambiguous recreation,
    never a retryable failure; only a failure known to precede the push may be
    retried after an exact fresh probe. It never permits a mismatched,
    recreated, locally registered, or unproven remote branch to be deleted.
@@ -614,9 +617,11 @@ do not treat an operator authorization as a bypass.
    delete intent share the same lease. Cleanup re-runs its complete
    branch-ownership proof while holding that lock before it records delete
    intent or deletes a remote ref; a contended lock is a stop line.
-   A lock is populated and fsynced privately before an atomic publish, then
-   records its PID/start identity; only a lock whose recorded process
-   identity is no longer live is recovered. Stale recovery first atomically
+   A lock, recovery gate, and reclaim sidecar are populated and fsynced
+   privately before atomic publication, then record PID/start identity; only
+   an artifact whose recorded process identity is no longer live is recovered.
+   A stale published recovery gate is quarantined only after its owner is
+   provably dead. Stale recovery first atomically
    claims a recovery gate and sidecar, then atomically moves the observed stale
    inode, so a competing recovery or fresh governed owner cannot lose a freshly
    reacquired target lock. Linux records process start ticks; macOS records

@@ -10073,19 +10073,29 @@ function cleanupClosedRemote(argv) {
     if (!lockedProof.ready) {
       throw new Error(`Closed-manifest remote cleanup is blocked under lock: ${lockedProof.blockers.join("; ")}`);
     }
-    const completedAt = new Date().toISOString();
+    const cleanupStartedAt = new Date().toISOString();
     const outcome = lockedProof.remote.sha ? "deleted" : "already_absent";
     if (lockedProof.remote.sha) {
       // Record immutable intent before the irreversible remote mutation.  A
       // crash after a successful push must never make a recreated ref eligible
       // on a retry.
+      const previousDeleteIntent = locked.closed_remote_cleanup_delete_intent;
+      if (previousDeleteIntent?.status === "retryable_failed") {
+        // A controlled retry must retain the failed attempt that justified it;
+        // replacing the intent alone would erase the only readable failure
+        // diagnostics after the retry completes.
+        locked.closed_remote_cleanup_delete_attempt_history = [
+          ...copyJsonArray(locked.closed_remote_cleanup_delete_attempt_history),
+          { ...previousDeleteIntent, supersededAt: cleanupStartedAt },
+        ].slice(-10);
+      }
       locked.closed_remote_cleanup_delete_intent = {
         schemaVersion: 1,
         taskId: locked.task_id,
         branch: locked.branch,
         expectedHeadSha: lockedProof.expectedHeadSha,
         remoteHeadSha: lockedProof.remote.sha,
-        recordedAt: completedAt,
+        recordedAt: cleanupStartedAt,
         metadataOnly: true,
       };
       appendTaskEvent(locked, "closed_remote_cleanup_delete_intent", `${locked.branch} ${lockedProof.remote.sha}`);
@@ -10126,6 +10136,9 @@ function cleanupClosedRemote(argv) {
       }
       appendTaskEvent(locked, "closed_remote_branch_already_absent", locked.branch);
     }
+    // Completion evidence and its authority must never predate the remote
+    // mutation or the final absence recheck.
+    const completedAt = new Date().toISOString();
     const previousCleanup = locked.closed_remote_cleanup;
     if (lockedProof.remote.sha || !previousCleanup?.status) {
       locked.closed_remote_cleanup = {
@@ -10232,6 +10245,10 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     blockers.push(branchOwnership.reason);
   }
 
+  const storedAuditHead = exactGitObjectIdOrNull(manifest.delivery_subagent_audit?.headSha);
+  if (storedAuditHead !== expectedHeadSha) {
+    blockers.push("retained cleanup audit does not itself bind the exact recorded delivery head");
+  }
   const retainedAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, {}, {
     expectedHeadSha,
     acceptableStatuses: ["cleanup-ready"],
@@ -10315,6 +10332,11 @@ function closedRemoteBranchOwnershipProof(manifest, state) {
   for (const record of readManifestRecords(state)) {
     if (record.error) return { status: "blocked", reason: "closed-manifest cleanup cannot verify manifest inventory" };
     const candidate = record.manifest;
+    try {
+      validateManifest(candidate, record.path);
+    } catch {
+      return { status: "blocked", reason: "closed-manifest cleanup cannot verify structurally invalid manifest inventory" };
+    }
     if (candidate?.task_id !== manifest.task_id && candidate?.branch === manifest.branch && candidate?.status !== "closed") {
       activeManifestIds.push(String(candidate.task_id || "unknown"));
     }
@@ -19646,7 +19668,8 @@ function withBranchOwnershipLock(state, branch, fn) {
   mkdirSync(directory, { recursive: true });
   const digest = createHash("sha256").update(branch).digest("hex");
   const lockPath = join(directory, `${digest}.lock`);
-  if (existsSync(branchOwnershipRecoveryGatePath(lockPath))) {
+  const recoveryGatePath = branchOwnershipRecoveryGatePath(lockPath);
+  if (existsSync(recoveryGatePath) && !recoverStaleBranchOwnershipRecoveryGate(recoveryGatePath, branch)) {
     throw new Error(`Branch ownership is locked by another session: ${branch}`);
   }
   const reclaimPath = branchOwnershipReclaimClaimPath(lockPath);
@@ -19707,16 +19730,15 @@ function recoverStaleBranchOwnershipLock(lockPath, branch) {
   // lock. Re-read the exact bytes after claiming: if anyone replaced the
   // lock while it was being inspected, never move their new owner record.
   const claimPath = branchOwnershipReclaimClaimPath(lockPath);
-  let claimFd;
-  try { claimFd = openSync(claimPath, "wx"); } catch (error) {
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) return false;
+  const claimBytes = `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, lockDigest: createHash("sha256").update(observed).digest("hex"), acquiredAt: new Date().toISOString() })}\n`;
+  try { publishBranchOwnershipLock(claimPath, claimBytes); } catch (error) {
     if (error?.code !== "EEXIST") return false;
     if (recoverStaleBranchOwnershipReclaimClaim(claimPath, branch)) return recoverStaleBranchOwnershipLock(lockPath, branch);
     return false;
   }
   try {
-    const processStart = processStartIdentity(process.pid);
-    if (!processStart) return false;
-    writeFileSync(claimPath, `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, lockDigest: createHash("sha256").update(observed).digest("hex"), acquiredAt: new Date().toISOString() })}\n`);
     let current;
     try { current = readFileSync(lockPath, "utf8"); } catch { return false; }
     if (current !== observed) return false;
@@ -19728,8 +19750,7 @@ function recoverStaleBranchOwnershipLock(lockPath, branch) {
     try { rmSync(quarantinePath, { force: true }); } catch { return false; }
     return true;
   } finally {
-    closeSync(claimFd);
-    rmSync(claimPath, { force: true });
+    removeBranchOwnershipArtifactIfOwned(claimPath, claimBytes);
   }
 }
 
@@ -19749,8 +19770,10 @@ function recoverStaleBranchOwnershipReclaimClaim(claimPath, branch) {
   if (claim?.branch !== branch || !Number.isInteger(claim?.pid) || typeof claim?.processStart !== "string" || !/^[a-f0-9]{64}$/.test(claim?.lockDigest || "")) return false;
   if (branchLockProcessProbe(claim.pid) !== "dead") return false;
   const gatePath = branchOwnershipRecoveryGatePath(claimPath.replace(/\.reclaim$/, ""));
-  let gateFd;
-  try { gateFd = openSync(gatePath, "wx"); } catch { return false; }
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) return false;
+  const gateBytes = `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`;
+  try { publishBranchOwnershipLock(gatePath, gateBytes); } catch { return false; }
   try {
     let current;
     try { current = readFileSync(claimPath, "utf8"); } catch { return false; }
@@ -19762,9 +19785,32 @@ function recoverStaleBranchOwnershipReclaimClaim(claimPath, branch) {
     try { rmSync(quarantinePath, { force: true }); } catch { return false; }
     return true;
   } finally {
-    closeSync(gateFd);
-    rmSync(gatePath, { force: true });
+    removeBranchOwnershipArtifactIfOwned(gatePath, gateBytes);
   }
+}
+
+function recoverStaleBranchOwnershipRecoveryGate(gatePath, branch) {
+  let observed;
+  try { observed = readFileSync(gatePath, "utf8"); } catch { return false; }
+  let gate;
+  try { gate = JSON.parse(observed); } catch { return false; }
+  if (gate?.branch !== branch || !Number.isInteger(gate?.pid) || typeof gate?.processStart !== "string") return false;
+  if (branchLockProcessProbe(gate.pid) !== "dead") return false;
+  // A rename claims the observed inode without unlinking a replacement gate.
+  // If another recovery won, this rename fails and the caller remains blocked.
+  let current;
+  try { current = readFileSync(gatePath, "utf8"); } catch { return false; }
+  if (current !== observed) return false;
+  const quarantinePath = `${gatePath}.${randomUUID()}.stale`;
+  try { renameSync(gatePath, quarantinePath); } catch { return false; }
+  try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+  return true;
+}
+
+function removeBranchOwnershipArtifactIfOwned(path, bytes) {
+  try {
+    if (readFileSync(path, "utf8") === bytes) rmSync(path, { force: true });
+  } catch {}
 }
 
 function branchLockProcessProbe(pid) {

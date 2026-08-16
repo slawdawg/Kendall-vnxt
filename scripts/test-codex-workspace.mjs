@@ -14239,6 +14239,15 @@ try {
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
       {
+        name: "retained audit missing its own head binding",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          delete manifest.delivery_subagent_audit.headSha;
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
         name: "stale retained cleanup authority",
         mutate(fixture, manifestPath) {
           const manifest = readJson(manifestPath);
@@ -14308,6 +14317,13 @@ try {
         name: "active manifest branch owner",
         mutate(fixture) {
           writeFileSync(join(fixture.stateRoot, "tasks", "active-branch-owner.json"), `${JSON.stringify({ task_id: "active-branch-owner", branch: fixture.branch, status: "pr_open" }, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "structurally invalid manifest inventory",
+        mutate(fixture) {
+          writeFileSync(join(fixture.stateRoot, "tasks", "invalid-active-manifest.json"), `${JSON.stringify({ task_id: "invalid-active-manifest", status: "pr_open" }, null, 2)}\n`);
         },
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
@@ -14511,6 +14527,8 @@ try {
       const retry = runFixtureScript(fixture, ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved retry", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot], { env: fixture.env });
       assert(retry.code === 0, retry.stderr || retry.stdout);
       assert(!remoteBranchExists(fixture.root, fixture.branch), "retry did not delete exact retained remote");
+      const retriedManifest = readJson(manifestPath);
+      assert(retriedManifest.closed_remote_cleanup_delete_attempt_history?.some((attempt) => attempt.status === "retryable_failed" && attempt.failure), "retry erased the retained failed-delete evidence");
     } finally { cleanupMergedCleanupFixture(fixture); }
   });
 
@@ -14604,6 +14622,21 @@ try {
       const reused = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(reused.code !== 0 && (reused.stderr || reused.stdout).includes("Branch ownership is locked"), "observed PID-reuse mismatch was reclaimed");
     } finally { rmSync(claimStateRoot, { recursive: true, force: true }); }
+  });
+
+  test("claim-next recovers a dead atomically published branch recovery gate", () => {
+    const state = mkdtempSync(join(tmpdir(), "codex-stale-branch-gate-"));
+    try {
+      const expected = expectedOpenSafeBacklogCandidate();
+      seedGeneratedSuccessorPrerequisites(state);
+      const lockDir = join(state, ".branch-ownership"); mkdirSync(lockDir, { recursive: true });
+      const lockPath = join(lockDir, `${createHash("sha256").update(expected.branch).digest("hex")}.lock`);
+      const gatePath = `${lockPath}.recovery-gate`;
+      writeFileSync(gatePath, `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: 999999, processStart: "linux-proc-start-ticks:dead", acquiredAt: new Date().toISOString() })}\n`);
+      const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", state]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!existsSync(gatePath), "dead recovery gate was not recovered");
+    } finally { rmSync(state, { recursive: true, force: true }); }
   });
 
   test("claim-next retains unknown and unprobeable branch-lock owners", () => {
