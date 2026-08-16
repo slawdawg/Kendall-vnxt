@@ -1,3 +1,4 @@
+import importlib
 import os
 import sys
 import uuid
@@ -21,8 +22,7 @@ from supervisor.domain.memory_inbox import (
 )
 from supervisor.infrastructure.db import database
 from supervisor.infrastructure.db.database import Base, _ensure_sqlite_memory_inbox_manifest_ownership, _ensure_sqlite_memory_inbox_revision_states
-from supervisor.infrastructure.db import migrations
-from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, SchemaMigration
+from supervisor.infrastructure.db.migrations import SCHEMA_MIGRATIONS_TABLE
 from supervisor.infrastructure.db import models  # noqa: F401
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult
 from supervisor.infrastructure.db.models import MemoryInboxManifest, MemoryInboxProposalAggregate, MemoryInboxProposalRevision, MemoryInboxSource, MemoryInboxSourceRevision
@@ -35,6 +35,12 @@ def _reset_supervisor_modules() -> None:
     for module_name in list(sys.modules):
         if module_name == "supervisor" or module_name.startswith("supervisor."):
             sys.modules.pop(module_name, None)
+
+
+def _active_migrations_module():
+    """Resolve the module used by init_db after cross-suite module resets."""
+
+    return importlib.import_module("supervisor.infrastructure.db.migrations")
 
 
 def test_lifecycle_vocabulary_is_closed_and_inert() -> None:
@@ -179,7 +185,8 @@ async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_up
                     f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
                 ))).scalars()
             )
-        assert applied_revisions == tuple(migration.revision for migration in MIGRATIONS)
+        active_migrations = _active_migrations_module()
+        assert applied_revisions == tuple(migration.revision for migration in active_migrations.MIGRATIONS)
 
         async with engine.begin() as connection:
             trigger_names = set((await connection.execute(text(
@@ -273,12 +280,17 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
         invoked.append("clean_install")
         await connection.execute(text("CREATE TABLE future_orm_owned (id INTEGER PRIMARY KEY)"))
 
-    later_migration = SchemaMigration(
+    active_migrations = _active_migrations_module()
+    later_migration = active_migrations.SchemaMigration(
         "0003_non_idempotent_model_table",
         non_idempotent_later_upgrade,
         clean_install=clean_install_future_table,
     )
-    monkeypatch.setattr(migrations, "MIGRATIONS", (*MIGRATIONS, later_migration))
+    monkeypatch.setattr(
+        active_migrations,
+        "MIGRATIONS",
+        (*active_migrations.MIGRATIONS, later_migration),
+    )
     monkeypatch.setattr(database, "engine", engine)
     try:
         await database.init_db()
@@ -289,7 +301,7 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
                     f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
                 ))).scalars()
             )
-        assert applied_revisions == tuple(migration.revision for migration in migrations.MIGRATIONS)
+        assert applied_revisions == tuple(migration.revision for migration in active_migrations.MIGRATIONS)
     finally:
         Base.metadata.remove(future_table)
         await engine.dispose()
@@ -312,10 +324,14 @@ async def test_existing_database_does_not_materialize_current_baseline_before_la
         await connection.execute(text("CREATE TABLE future_orm_owned (id INTEGER PRIMARY KEY)"))
 
     future_table = Table("future_orm_owned", Base.metadata, Column("id", Integer, primary_key=True))
+    active_migrations = _active_migrations_module()
     monkeypatch.setattr(
-        migrations,
+        active_migrations,
         "MIGRATIONS",
-        (*MIGRATIONS, SchemaMigration("0003_orm_owned_table", later_orm_owned_table_upgrade)),
+        (
+            *active_migrations.MIGRATIONS,
+            active_migrations.SchemaMigration("0003_orm_owned_table", later_orm_owned_table_upgrade),
+        ),
     )
     monkeypatch.setattr(database, "engine", engine)
     try:
