@@ -7278,7 +7278,7 @@ function originRepositoryIdentities(cwd) {
   if (result.code !== 0) return null;
   const values = result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   if (values.length !== 1) return null;
-  const match = values[0].match(/^(?:https?:\/\/github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  const match = values[0].match(/^(?:https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
   return match ? [{ owner: match[1], name: match[2], url: values[0] }] : null;
 }
 
@@ -10100,11 +10100,16 @@ function cleanupClosedRemote(argv) {
       } catch (error) {
         let remoteAfterFailure = null;
         try { remoteAfterFailure = remoteBranchShaAt(lockedProof.remote.url, locked.branch, lockedProof.cleanupCwd) || null; } catch {}
+        const pushSucceeded = error?.remoteDeletionPushSucceeded === true;
         locked.closed_remote_cleanup_delete_intent = {
           ...locked.closed_remote_cleanup_delete_intent,
-          status: remoteAfterFailure === lockedProof.expectedHeadSha ? "retryable_failed" : "outcome_unknown",
+          // A successful push followed by a present ref is necessarily an
+          // ambiguous recreation race. Only a failure known to occur before
+          // the push can be retried after an exact fresh probe.
+          status: !pushSucceeded && remoteAfterFailure === lockedProof.expectedHeadSha ? "retryable_failed" : "outcome_unknown",
           failedAt: new Date().toISOString(),
           remoteAfterFailure,
+          pushSucceeded,
           failure: safeMetadataText(error.message || error, 300),
         };
         appendTaskEvent(locked, "closed_remote_cleanup_delete_failed", locked.closed_remote_cleanup_delete_intent.status);
@@ -10458,6 +10463,17 @@ function closedRemoteCleanupAuthorityEvidence(manifest, proof, binding, recorded
     authorityFamily: "cleanup",
     decision: "applied",
     allowed: true,
+    // Authority-decision normalization intentionally retains only its stable
+    // evidence schema. Keep the destructive scope there rather than in
+    // ad-hoc object properties which would disappear from the canonical lane
+    // evidence packet.
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      `branch:${manifest.branch}`,
+      `pr:${proof.pr.number}`,
+      `expected-head:${proof.expectedHeadSha}`,
+      "remote-delete:true",
+    ],
     taskId: manifest.task_id,
     branch: manifest.branch,
     prNumber: proof.pr.number,
@@ -12783,18 +12799,27 @@ function deleteRemoteBranchIfPresent(manifest, cleanupCwd, expectedHeadSha, remo
   if (typeof remoteUrl !== "string" || !remoteUrl) throw new Error("Remote deletion requires an exact validated remote URL.");
   const remoteSha = remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd);
   assertExpectedBranchHead(`Remote branch ${remoteUrl}/${manifest.branch}`, remoteSha, expectedHeadSha);
-  if (remoteSha) {
-    runChecked(
-      "git",
-      ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, remoteUrl, `:refs/heads/${manifest.branch}`],
-      { cwd: cleanupCwd },
-    );
-    appendTaskEvent(manifest, "remote_branch_deleted", manifest.branch);
-  } else {
-    appendTaskEvent(manifest, "remote_branch_already_absent", manifest.branch);
-  }
-  if (remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd)) {
-    throw new Error(`Remote branch still exists after cleanup: ${remoteUrl}/${manifest.branch}`);
+  let remoteDeletionPushSucceeded = false;
+  try {
+    if (remoteSha) {
+      runChecked("git", ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, remoteUrl, `:refs/heads/${manifest.branch}`], { cwd: cleanupCwd });
+      // Set this immediately after the external mutation. Every following
+      // failure—including an unavailable post-delete probe—must retain the
+      // fact that a recreated exact ref is not a retryable failed push.
+      remoteDeletionPushSucceeded = true;
+      appendTaskEvent(manifest, "remote_branch_deleted", manifest.branch);
+      manifest.remote_branch_delete_push_succeeded_at = new Date().toISOString();
+    } else {
+      appendTaskEvent(manifest, "remote_branch_already_absent", manifest.branch);
+    }
+    if (remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd)) {
+      throw new Error(`Remote branch still exists after cleanup: ${remoteUrl}/${manifest.branch}`);
+    }
+  } catch (error) {
+    if (remoteDeletionPushSucceeded && error && typeof error === "object") {
+      error.remoteDeletionPushSucceeded = true;
+    }
+    throw error;
   }
   manifest.remote_branch_deleted_at = manifest.remote_branch_deleted_at || new Date().toISOString();
 }
@@ -19628,9 +19653,11 @@ function withBranchOwnershipLock(state, branch, fn) {
   if (existsSync(reclaimPath) && !recoverStaleBranchOwnershipReclaimClaim(reclaimPath, branch)) {
     throw new Error(`Branch ownership is locked by another session: ${branch}`);
   }
-  let fd;
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) throw new Error("Branch ownership lock cannot establish the current process identity.");
+  const lockBytes = `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`;
   try {
-    fd = openSync(lockPath, "wx");
+    publishBranchOwnershipLock(lockPath, lockBytes);
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
     if (recoverStaleBranchOwnershipLock(lockPath, branch)) {
@@ -19639,13 +19666,32 @@ function withBranchOwnershipLock(state, branch, fn) {
     throw new Error(`Branch ownership is locked by another session: ${branch}`);
   }
   try {
-    const processStart = processStartIdentity(process.pid);
-    if (!processStart) throw new Error("Branch ownership lock cannot establish the current process identity.");
-    writeFileSync(lockPath, `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`);
     return fn();
   } finally {
+    // Remove only the exact inode record this callback created. A recovery or
+    // replacement must never make this owner unlink somebody else's lock.
+    try {
+      if (readFileSync(lockPath, "utf8") === lockBytes) rmSync(lockPath, { force: true });
+    } catch {}
+  }
+}
+
+function publishBranchOwnershipLock(lockPath, lockBytes) {
+  // Populate and fsync a private file before atomically linking it at the
+  // contested pathname. Unlike open("wx") followed by write, a crash can
+  // leave no published partial record that would poison governed recovery.
+  const temporaryPath = `${lockPath}.${randomUUID()}.pending`;
+  let fd;
+  try {
+    fd = openSync(temporaryPath, "wx", 0o600);
+    writeFileSync(fd, lockBytes);
+    fsyncSync(fd);
     closeSync(fd);
-    rmSync(lockPath, { force: true });
+    fd = null;
+    linkSync(temporaryPath, lockPath);
+  } finally {
+    if (fd !== undefined && fd !== null) closeSync(fd);
+    rmSync(temporaryPath, { force: true });
   }
 }
 

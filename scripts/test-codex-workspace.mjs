@@ -14114,6 +14114,9 @@ try {
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
       runGit(fixture.root, ["branch", "-D", fixture.branch]);
       installFixtureCanonicalPrRepoAssertion(fixture);
+      // The absolute SSH spelling is a supported canonical GitHub origin and
+      // must bind every remote probe and the eventual direct deletion.
+      installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, ["ssh://git@github.com/slawdawg/Kendall-vnxt.git"]);
       fixture.env = { ...fixture.env, CODEX_WORKSPACE_TEST_REJECT_MUTABLE_ORIGIN_PUSH: "1" };
 
       const preview = runFixtureScript(fixture, [
@@ -14136,6 +14139,11 @@ try {
         readJson(manifestPath).lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "cleanup-closed-remote"),
         "closed remote cleanup authority was not projected into the canonical evidence packet",
       );
+      const authority = readJson(manifestPath).lane_evidence_packet?.authority_decisions?.find((entry) => entry.operation === "cleanup-closed-remote");
+      assert(authority?.evidenceRefs?.includes(`task:${manifest.task_id}`), "canonical cleanup authority lost its task binding");
+      assert(authority?.evidenceRefs?.includes(`branch:${manifest.branch}`), "canonical cleanup authority lost its branch binding");
+      assert(authority?.evidenceRefs?.includes(`pr:${manifest.pr_number}`), "canonical cleanup authority lost its PR binding");
+      assert(authority?.evidenceRefs?.includes(`expected-head:${manifest.pr_delivery_head_sha}`), "canonical cleanup authority lost its delivery-head binding");
 
       const resumed = runFixtureScript(fixture, [
         "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved idempotent remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
@@ -14506,6 +14514,29 @@ try {
     } finally { cleanupMergedCleanupFixture(fixture); }
   });
 
+  test("cleanup-closed-remote treats post-push recreation and probe loss as permanently ambiguous", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed"; manifest.closed_at = "2026-08-16T00:00:00.000Z"; manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`); markFixtureAssignmentClosed(fixture);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]); runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      installFixtureGitPostSuccessHook(
+        fixture,
+        "args[0] === 'push' && args.some((arg) => arg.startsWith('--force-with-lease='))",
+        ["push", "origin", `HEAD:refs/heads/${fixture.branch}`],
+        { failNextRemoteProbe: true },
+      );
+      const first = runFixtureScript(fixture, ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved post-push race", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(first.code !== 0, `post-push recreation unexpectedly completed cleanup: ${first.stdout} ${first.stderr}`);
+      assert(readJson(manifestPath).closed_remote_cleanup_delete_intent?.status === "outcome_unknown", `post-push recreation was made retryable: ${first.stdout} ${first.stderr} ${JSON.stringify(readJson(manifestPath).closed_remote_cleanup_delete_intent)}`);
+      const retry = runFixtureScript(fixture, ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved post-push race", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(retry.code !== 0, "ambiguous recreation was retried");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "ambiguous recreation was deleted");
+    } finally { cleanupMergedCleanupFixture(fixture); }
+  });
+
   test("cleanup-closed-remote blocks ambiguous failed-delete recovery", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -14548,6 +14579,10 @@ try {
       mkdirSync(lockDir, { recursive: true });
       const lockPath = join(lockDir, `${createHash("sha256").update(expected.branch).digest("hex")}.lock`);
       const staleLock = `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: 999999, processStart: "linux-proc-start-ticks:dead", acquiredAt: new Date().toISOString() })}\n`;
+      writeFileSync(lockPath, "");
+      const partial = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(partial.code !== 0 && (partial.stderr || partial.stdout).includes("Branch ownership is locked"), "incomplete published lock unexpectedly recovered");
+      assert(readFileSync(lockPath, "utf8") === "", "incomplete published lock was modified during failed recovery");
       writeFileSync(lockPath, staleLock);
       writeFileSync(`${lockPath}.reclaim`, `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: process.pid, processStart: processStartIdentityForTest(), lockDigest: createHash("sha256").update(staleLock).digest("hex"), acquiredAt: new Date().toISOString() })}\n`);
       const contended = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -14628,6 +14663,7 @@ try {
         manifest.closed_at = "2026-08-16T00:00:00.000Z";
         manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
         writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        markFixtureAssignmentClosed(fixture);
         runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
         runGit(fixture.root, ["branch", "-D", fixture.branch]);
         const binding = template.replace("HEAD", manifest.pr_delivery_head_sha);
@@ -14635,6 +14671,7 @@ try {
           "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", binding, "--state-root", fixture.stateRoot,
         ], { env: fixture.env });
         assert(result.code !== 0, `${name} authority mismatch unexpectedly succeeded: ${result.stdout}`);
+        assert((result.stderr || result.stdout).includes("remote-delete-authority"), `${name} authority mismatch did not reach the authority parser`);
         assert(remoteBranchExists(fixture.root, fixture.branch), `${name} authority mismatch deleted remote branch`);
         assert(!readJson(manifestPath).closed_remote_cleanup, `${name} authority mismatch wrote cleanup evidence`);
       } finally {
@@ -19412,21 +19449,29 @@ function installFixtureGitProxy(fixture, failureCondition, failureMessage) {
   return fakeGit;
 }
 
-function installFixtureGitPostSuccessHook(fixture, successCondition, hookArgs) {
+function installFixtureGitPostSuccessHook(fixture, successCondition, hookArgs, options = {}) {
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
   const fakeGit = join(fixture.fakeBin, "git");
+  const probeFailureSentinel = join(fixture.root, "post-push-probe-failure-sentinel");
   writeFileSync(
     fakeGit,
     [
       "#!/usr/bin/env node",
       "import { spawnSync } from 'node:child_process';",
+      "import { existsSync, rmSync, writeFileSync } from 'node:fs';",
       "const args = process.argv.slice(2);",
+      "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === '--all' && args[4] === 'origin') { console.log('git@github.com:slawdawg/Kendall-vnxt.git'); process.exit(0); }",
+      `if (${Boolean(options.failNextRemoteProbe)} && args[0] === 'ls-remote' && existsSync(${JSON.stringify(probeFailureSentinel)})) { rmSync(${JSON.stringify(probeFailureSentinel)}); console.error('fixture post-push probe unavailable'); process.exit(1); }`,
       `const env = { ...process.env, PATH: ${JSON.stringify(realPath)} };`,
+      "const configuredOrigin = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: process.cwd(), encoding: 'utf8', env });",
+      "const localOrigin = configuredOrigin.status === 0 ? configuredOrigin.stdout.trim() : '';",
+      "for (let index = 0; index < args.length; index += 1) if (/^(?:https?:\\/\\/github\\.com\\/|ssh:\\/\\/git@github\\.com\\/|git@github\\.com:)/i.test(args[index])) args[index] = localOrigin;",
       "const result = spawnSync('git', args, { cwd: process.cwd(), env, stdio: 'inherit' });",
       "if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);",
       `if (${successCondition}) {`,
       `  const hook = spawnSync('git', ${JSON.stringify(hookArgs)}, { cwd: process.cwd(), env, stdio: 'inherit' });`,
       "  if ((hook.status ?? 1) !== 0) process.exit(hook.status ?? 1);",
+      `  if (${Boolean(options.failNextRemoteProbe)}) writeFileSync(${JSON.stringify(probeFailureSentinel)}, 'fail once\\n');`,
       "}",
       "process.exit(0);",
       "",
