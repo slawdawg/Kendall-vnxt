@@ -582,13 +582,19 @@ do not treat an operator authorization as a bypass.
    and delivery head; its worktree and local branch are absent; the live PR is
    merged on the
    recorded base with the recorded PR number, branch, and exact delivery head;
-   and the live remote ref equals that same head. Encode every binding value
+   the only PR using that branch is the recorded merged PR (an empty, extra,
+   open, or closed-unmerged branch-PR result is a stop line); the checkout's actual `origin` push URL names
+   the canonical repository; and the live remote ref equals that same head.
+   An active emergency-stop checkpoint is also a hard stop line for the
+   mutation. Encode every binding value
    with canonical percent-encoding (notably `%3B` for a semicolon and `%27`
    for an apostrophe in a valid branch name); quote the full value as shown so
    the shell does not alter it.
    The command uses an exact force-with-lease deletion and records an
    already-absent remote as an idempotent confirmation without replacing the
-   original deletion proof. It never permits a mismatched, recreated, or
+   original deletion proof. It records deletion intent durably before the
+   remote mutation and projects the resulting authority into the lane evidence
+   packet. It never permits a mismatched, recreated, locally registered, or
    unproven remote branch to be deleted. Before it enters its lease callback,
    the runner reserves the bounded external-command ledger budget required for
    the reproof, deletion, and post-delete verification; insufficient capacity
