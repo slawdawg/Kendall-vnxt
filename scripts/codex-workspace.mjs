@@ -3686,7 +3686,26 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     fastForward,
     recoveryGitState,
   });
+  // Patch identity can require bounded-but-material Git output. Re-read every
+  // mutable identity after that proof so the rebind cannot authorize a PR,
+  // check, local, or origin snapshot observed before hashing completed.
+  const postRecoveryPr = prViewForGates(manifest);
+  const postRecoveryChecks = normalizeStatusCheckRollup(postRecoveryPr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const postRecoveryLocalHeadResult = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
+  const postRecoveryLocalHeadSha = postRecoveryLocalHeadResult.code === 0 ? exactGitObjectIdOrNull(postRecoveryLocalHeadResult.stdout.trim()) : null;
+  const postRecoveryRemoteHeadResult = git(["rev-parse", `origin/${manifest.branch}`], { cwd: manifest.worktree_path });
+  const postRecoveryRemoteHeadSha = postRecoveryRemoteHeadResult.code === 0 ? exactGitObjectIdOrNull(postRecoveryRemoteHeadResult.stdout.trim()) : null;
+  const postRecoverySnapshotChanged = !postRecoveryPr
+    || postRecoveryPr.number !== pr?.number
+    || postRecoveryPr.baseRefName !== pr?.baseRefName
+    || postRecoveryPr.baseRefOid !== pr?.baseRefOid
+    || postRecoveryPr.headRefName !== pr?.headRefName
+    || postRecoveryPr.headRefOid !== pr?.headRefOid
+    || JSON.stringify(compactStatusCheckEvidence(postRecoveryChecks)) !== JSON.stringify(compactStatusCheckEvidence(checks));
+  const postRecoveryRefsChanged = postRecoveryLocalHeadSha !== localHeadSha || postRecoveryRemoteHeadSha !== remoteHeadSha;
   if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Delivery-head refresh requires a clean local Git replacement and graft state");
+  if (postRecoverySnapshotChanged) blockers.push("Live PR or status checks changed while calculating the recovery patch proof");
+  if (postRecoveryRefsChanged) blockers.push("Local HEAD or origin branch refs changed while calculating the recovery patch proof");
   if (!fastForward && nonAncestralRecovery.status !== "authorized") {
     blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
   }
@@ -3728,6 +3747,8 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     remoteHeadSha,
     postAuditLocalHeadSha,
     postAuditRemoteHeadSha,
+    postRecoveryLocalHeadSha,
+    postRecoveryRemoteHeadSha,
     repository,
     pr: {
       number: pr?.number || null,
@@ -3975,7 +3996,7 @@ function gitRecoveryFirstParentCommits(base, head, cwd) {
 }
 
 function gitRecoveryPatchIdentity(commit, cwd) {
-  const patch = spawnSync("git", ["--no-replace-objects", "show", "--format=", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", commit], {
+  const patch = spawnSync("git", ["--no-replace-objects", "show", "--format=", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", commit], {
     cwd,
     encoding: "buffer",
     stdio: "pipe",
@@ -3991,12 +4012,42 @@ function gitRecoveryPatchIdentity(commit, cwd) {
     return { patchId: null, error: `cannot safely render recovery patch for ${commit}: ${patch.error.message || patch.error.code || "process error"}` };
   }
   if (patch.status !== 0) return { patchId: null, error: stderr || stdout.toString("utf8") || `cannot render recovery patch for ${commit}` };
-  // This is intentionally stricter than `git patch-id`: preserve every byte
-  // Git emits, including file and hunk locations. An edit replayed into a
-  // different repeated region or a distinct non-UTF-8 pathname must not
-  // authorize a delivery-head rebind.
-  const patchId = createHash("sha256").update(stdout).digest("hex");
+  // This is intentionally stricter than `git patch-id`: preserve every
+  // authority-bearing byte Git emits, including submodule targets, file and
+  // hunk locations, and non-UTF-8 paths. The sole normalization removes the
+  // two rebase-dependent blob IDs from `index` headers; those object IDs vary
+  // when a base changes outside the replayed hunk and are not patch content.
+  const patchId = createHash("sha256").update(canonicalizeRecoveryPatchBytes(stdout)).digest("hex");
   return /^[a-f0-9]{64}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `recovery patch identity for ${commit} is malformed` };
+}
+
+function canonicalizeRecoveryPatchBytes(patch) {
+  const chunks = [];
+  let offset = 0;
+  let inFileHeader = false;
+  while (offset < patch.length) {
+    const newline = patch.indexOf(0x0a, offset);
+    const end = newline === -1 ? patch.length : newline + 1;
+    const line = patch.subarray(offset, end);
+    if (line.subarray(0, 11).equals(Buffer.from("diff --git "))) {
+      inFileHeader = true;
+      chunks.push(line);
+    } else if (inFileHeader) {
+      const text = line.toString("ascii");
+      const match = /^(index )([0-9a-f]+)\.\.([0-9a-f]+)( [0-7]{6})?(\r?\n)?$/i.exec(text);
+      if (match) {
+        chunks.push(Buffer.from(`${match[1]}${"0".repeat(match[2].length)}..${"0".repeat(match[3].length)}${match[4] || ""}${match[5] || ""}`, "ascii"));
+        inFileHeader = false;
+      } else {
+        chunks.push(line);
+        if (text.startsWith("--- ") || text.startsWith("GIT binary patch") || text.startsWith("Submodule ")) inFileHeader = false;
+      }
+    } else {
+      chunks.push(line);
+    }
+    offset = end;
+  }
+  return Buffer.concat(chunks);
 }
 
 function gitStablePatchSeries(base, head, cwd, options = {}) {

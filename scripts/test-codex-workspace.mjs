@@ -1603,6 +1603,10 @@ try {
     assert(refresh[0].includes("const postAuditLocalHeadResult = git([\"rev-parse\", \"HEAD\"]"), "delivery-head refresh must reload the local ref after thread hydration");
     assert(refresh[0].includes("const postAuditRemoteHeadResult = git([\"rev-parse\", `origin/${manifest.branch}`]"), "delivery-head refresh must reload the remote ref after thread hydration");
     assert(refresh[0].includes("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration local/remote ref drift");
+    assert(refresh[0].includes("const postRecoveryPr = prViewForGates(manifest);"), "delivery-head refresh must reload the PR after recovery patch proof");
+    assert(refresh[0].includes("const postRecoveryRemoteHeadResult = git([\"rev-parse\", `origin/${manifest.branch}`]"), "delivery-head refresh must reload origin after recovery patch proof");
+    assert(refresh[0].includes("Live PR or status checks changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof PR/check drift");
+    assert(refresh[0].includes("Local HEAD or origin branch refs changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof local/remote ref drift");
     assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
 
     assert(source.includes("context.managedGate !== false && pr.headRefName !== manifest.branch"), "managed branch identity must not be imposed on detached unmanaged PR evidence");
@@ -11918,6 +11922,78 @@ try {
       assert(packet.nonAncestralRecovery?.priorPatchSeries?.error?.includes("exceeds the bounded 16 MiB capture"), JSON.stringify(packet.nonAncestralRecovery));
     } finally {
       cleanupFinishPrExistingCommitFixture(overLimit);
+    }
+  });
+
+  test("refresh-pr-head accepts a genuine rebase with base-only blob drift and rejects distinct gitlink targets", () => {
+    const blobDrift = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(blobDrift);
+      const baseLines = Array.from({ length: 16 }, (_, index) => `line-${index}`).join("\n");
+      commitFile(blobDrift.root, "shared.txt", `${baseLines}\n`, "add shared rebase fixture");
+      runGit(blobDrift.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      writeFileSync(join(blobDrift.root, "shared.txt"), `${baseLines.replace("line-14", "recorded-target")}\n`);
+      runGit(blobDrift.root, ["add", "shared.txt"]);
+      runGit(blobDrift.root, ["commit", "-q", "-m", "record target hunk"]);
+      const priorHeadSha = runGit(blobDrift.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(blobDrift.root, ["checkout", "-q", "main"]);
+      writeFileSync(join(blobDrift.root, "shared.txt"), `${baseLines.replace("line-0", "advanced-base-only-line")}\n`);
+      runGit(blobDrift.root, ["add", "shared.txt"]);
+      runGit(blobDrift.root, ["commit", "-q", "-m", "advance unrelated base line"]);
+      const baseHeadSha = runGit(blobDrift.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(blobDrift.worktree, ["reset", "--hard", "main"]);
+      writeFileSync(join(blobDrift.worktree, "shared.txt"), `${baseLines.replace("line-0", "advanced-base-only-line").replace("line-14", "recorded-target")}\n`);
+      runGit(blobDrift.worktree, ["add", "shared.txt"]);
+      runGit(blobDrift.worktree, ["commit", "-q", "-m", "replay target hunk onto advanced base"]);
+      runGit(blobDrift.worktree, ["push", "-q", "--force", "origin", blobDrift.branch]);
+      const liveHeadSha = runGit(blobDrift.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const pr = readJson(join(blobDrift.root, "pr-state.json"));
+      pr.baseRefOid = baseHeadSha;
+      pr.headRefOid = liveHeadSha;
+      writeFileSync(join(blobDrift.root, "pr-state.json"), `${JSON.stringify(pr)}\n`);
+      const preview = runFixtureScript(blobDrift, ["refresh-pr-head", "resumed-task", "--owner", "runner-a", "--reason", "Base-only blob IDs must not reject a genuine replay.", "--state-root", blobDrift.stateRoot, "--summary-json"], { cwd: blobDrift.worktree, env: blobDrift.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).nonAncestralRecovery?.patchSeriesExactlyEqual === true, preview.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(blobDrift);
+    }
+
+    const gitlink = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(gitlink);
+      runGit(gitlink.root, ["config", "diff.ignoreSubmodules", "all"]);
+      runGit(gitlink.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      runGit(gitlink.root, ["update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},dependency`]);
+      runGit(gitlink.root, ["commit", "-q", "-m", "record gitlink target"]);
+      const priorHeadSha = runGit(gitlink.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(gitlink.root, ["checkout", "-q", "main"]);
+      commitFile(gitlink.root, "gitlink-base-advance.txt", "base\n", "advance gitlink rebase target");
+      const baseHeadSha = runGit(gitlink.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(gitlink.worktree, ["reset", "--hard", "main"]);
+      runGit(gitlink.worktree, ["config", "diff.ignoreSubmodules", "all"]);
+      runGit(gitlink.worktree, ["update-index", "--add", "--cacheinfo", `160000,${"b".repeat(40)},dependency`]);
+      runGit(gitlink.worktree, ["commit", "-q", "-m", "replay different gitlink target"]);
+      runGit(gitlink.worktree, ["push", "-q", "--force", "origin", gitlink.branch]);
+      const liveHeadSha = runGit(gitlink.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const pr = readJson(join(gitlink.root, "pr-state.json"));
+      pr.baseRefOid = baseHeadSha;
+      pr.headRefOid = liveHeadSha;
+      writeFileSync(join(gitlink.root, "pr-state.json"), `${JSON.stringify(pr)}\n`);
+      const preview = runFixtureScript(gitlink, ["refresh-pr-head", "resumed-task", "--owner", "runner-a", "--reason", "Different gitlink targets must never prove recovery equivalence.", "--state-root", gitlink.stateRoot, "--summary-json"], { cwd: gitlink.worktree, env: gitlink.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).nonAncestralRecovery?.patchSeriesMatch === -1, preview.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(gitlink);
     }
   });
 

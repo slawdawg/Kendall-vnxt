@@ -513,13 +513,17 @@ This narrow recovery is available only when all normal refresh gates pass and
 the tool proves the live PR head descends from the exact GitHub PR base head.
 It also calculates the merge base between the recorded and live heads, rejects
 merge commits in the pre-rebase delivery lineage, calculates byte- and
-location-sensitive SHA-256 identities from Git's binary patch output, and
+location-sensitive SHA-256 identities from Git's binary patch output (with
+only the rebase-dependent before/after blob IDs in `index` headers normalized), and
 requires the base-to-live first-parent series to exactly equal the whole
 pre-rebase series: no extra, reordered, or later reverting commits are
 permitted. Recovery patch capture is bounded at 16 MiB (above Node's default
 capture); an over-limit patch fails closed and requires a separately reviewed
 recovery plan. Recovery-proof Git commands disable replacement objects, and
-any active local graft state is a hard stop. The exact authorization binds the task, PR,
+any active local graft state is a hard stop; they also force submodule diffs
+into identity output. After patch hashing, the runner re-audits the GitHub PR,
+checks, local head, and origin ref before it can authorize the rebind. The
+exact authorization binds the task, PR,
 recorded prior head, live head, PR base head, merge base, and SHA-256 digest of
 that prior patch series. Any changed byte, missing source object, reordered or
 altered or relocated patch, local replacement/graft history, non-ancestral PR base, local/origin/GitHub disagreement, or
