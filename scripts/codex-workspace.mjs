@@ -3687,24 +3687,34 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     recoveryGitState,
   });
   // Patch identity can require bounded-but-material Git output. Re-read every
-  // mutable identity after that proof so the rebind cannot authorize a PR,
-  // check, local, or origin snapshot observed before hashing completed.
+  // mutable delivery eligibility gate after that proof so the rebind cannot
+  // authorize a PR, check, review, lock, local, or origin snapshot observed
+  // before hashing completed.
   const postRecoveryPr = prViewForGates(manifest);
   const postRecoveryChecks = normalizeStatusCheckRollup(postRecoveryPr?.statusCheckRollup, nonRequiredCheckPolicy);
+  const postRecoveryReviewThreads = postRecoveryPr?.number
+    ? fetchReviewThreadState(manifest, repositoryRef, postRecoveryPr.number)
+    : emptyReviewThreadState();
+  const postRecoveryLockInspection = inspectTaskLock(workspaceState(options), manifest.task_id);
+  const postRecoveryGitState = inspectRecoveryProofGitState(manifest.worktree_path);
   const postRecoveryLocalHeadResult = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
   const postRecoveryLocalHeadSha = postRecoveryLocalHeadResult.code === 0 ? exactGitObjectIdOrNull(postRecoveryLocalHeadResult.stdout.trim()) : null;
   const postRecoveryRemoteHeadResult = git(["rev-parse", `origin/${manifest.branch}`], { cwd: manifest.worktree_path });
   const postRecoveryRemoteHeadSha = postRecoveryRemoteHeadResult.code === 0 ? exactGitObjectIdOrNull(postRecoveryRemoteHeadResult.stdout.trim()) : null;
-  const postRecoverySnapshotChanged = !postRecoveryPr
-    || postRecoveryPr.number !== pr?.number
-    || postRecoveryPr.baseRefName !== pr?.baseRefName
-    || postRecoveryPr.baseRefOid !== pr?.baseRefOid
-    || postRecoveryPr.headRefName !== pr?.headRefName
-    || postRecoveryPr.headRefOid !== pr?.headRefOid
-    || JSON.stringify(compactStatusCheckEvidence(postRecoveryChecks)) !== JSON.stringify(compactStatusCheckEvidence(checks));
+  const postRecoverySnapshotChanged = JSON.stringify(deliveryEligibilitySnapshot(postRecoveryPr, postRecoveryChecks))
+    !== JSON.stringify(deliveryEligibilitySnapshot(pr, checks));
+  const postRecoveryThreadSnapshotChanged = reviewThreadStateSnapshotFingerprint(postRecoveryReviewThreads)
+    !== reviewThreadStateSnapshotFingerprint(reviewThreads);
+  const lockedRefresh = lockInspection.status === "owned";
+  const postRecoveryLockChanged = deliveryLockEligibilitySnapshot(postRecoveryLockInspection, manifest, options, lockedRefresh)
+    !== deliveryLockEligibilitySnapshot(lockInspection, manifest, options, lockedRefresh);
+  const postRecoveryGitStateChanged = JSON.stringify(postRecoveryGitState) !== JSON.stringify(recoveryGitState);
   const postRecoveryRefsChanged = postRecoveryLocalHeadSha !== localHeadSha || postRecoveryRemoteHeadSha !== remoteHeadSha;
   if (recoveryGitState.status !== "clean") blockers.push(recoveryGitState.reason || "Delivery-head refresh requires a clean local Git replacement and graft state");
-  if (postRecoverySnapshotChanged) blockers.push("Live PR or status checks changed while calculating the recovery patch proof");
+  if (postRecoverySnapshotChanged) blockers.push("Live PR eligibility or status checks changed while calculating the recovery patch proof");
+  if (postRecoveryThreadSnapshotChanged) blockers.push("Review-thread state changed while calculating the recovery patch proof");
+  if (postRecoveryLockChanged) blockers.push("Task-lock eligibility changed while calculating the recovery patch proof");
+  if (postRecoveryGitStateChanged) blockers.push("Local Git replacement or graft state changed while calculating the recovery patch proof");
   if (postRecoveryRefsChanged) blockers.push("Local HEAD or origin branch refs changed while calculating the recovery patch proof");
   if (!fastForward && nonAncestralRecovery.status !== "authorized") {
     blockers.push("Recorded delivery head is not a fast-forward ancestor of the live PR head");
@@ -3727,7 +3737,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
     "canonical Kendall_Nxt repository and matching managed PR identity",
     "open non-draft PR at one exact local, origin, and GitHub head",
     "terminal successful checks or canonical policy-bound non-required skipped checks",
-    "complete thread-aware review audit with no pending review request",
+    "complete thread-aware review audit with no pending review request before and after recovery proof",
     "explicit prior/new head and reason retained as metadata only",
   ];
   if (!fastForward) {
@@ -3962,7 +3972,15 @@ function inspectRecoveryProofGitState(cwd) {
   }
   const graftPath = resolve(cwd, gitReportedGraftPath);
   try {
-    if (!existsSync(graftPath) || !readFileSync(graftPath, "utf8").trim()) {
+    // Git permits comments and blank lines in info/grafts.  They do not alter
+    // ancestry, so only a substantive graft entry is proof-relevant.
+    const hasSubstantiveGraft = existsSync(graftPath) && readFileSync(graftPath, "utf8")
+      .split(/\r?\n/)
+      .some((line) => {
+        const trimmed = line.trim();
+        return trimmed.length > 0 && !trimmed.startsWith("#");
+      });
+    if (!hasSubstantiveGraft) {
       return { status: "clean", replacementObjectsDisabled: true, graftsPresent: false };
     }
   } catch {
@@ -5126,6 +5144,44 @@ function compactStatusCheckEvidence(checks) {
     metadataOnly: true,
     rawPayloadRetained: false,
   };
+}
+
+function deliveryEligibilitySnapshot(pr, checks) {
+  // Keep this snapshot deliberately aligned with every mutable PR field used
+  // by refresh-pr-head's delivery eligibility gates.  A post-proof comparison
+  // must not silently retain an earlier OPEN/non-draft/branch/review state.
+  return {
+    pr: {
+      number: positiveSafePrNumberOrNull(pr?.number),
+      url: typeof pr?.url === "string" ? pr.url : null,
+      state: typeof pr?.state === "string" ? pr.state : null,
+      isDraft: Boolean(pr?.isDraft),
+      mergedAt: pr?.mergedAt || null,
+      baseRefName: typeof pr?.baseRefName === "string" ? pr.baseRefName : null,
+      baseRefOid: exactGitObjectIdOrNull(pr?.baseRefOid) || null,
+      headRefName: typeof pr?.headRefName === "string" ? pr.headRefName : null,
+      headRefOid: exactGitObjectIdOrNull(pr?.headRefOid) || null,
+      reviewDecision: typeof pr?.reviewDecision === "string" ? pr.reviewDecision : null,
+    },
+    checks: compactStatusCheckEvidence(checks),
+  };
+}
+
+function deliveryLockEligibilitySnapshot(inspection, manifest, options, lockedRefresh = false) {
+  // Lease heartbeats are expected to move while an audit runs; only the lock
+  // eligibility outcome is identity-bearing.  During --apply the lock wrapper
+  // intentionally supplies `owned`, while a fresh read sees that same owner
+  // as `active`; treat only that known wrapper state as equivalent.
+  const status = inspection?.status || "ambiguous";
+  const owner = inspection?.metadata?.owner || inspection?.owner || null;
+  const currentOwner = currentLaneOwner(options);
+  const releasedByCurrentOwner = status === "released"
+    && owner === manifest?.owner
+    && manifest?.owner === currentOwner;
+  const ownedApplyLock = lockedRefresh && status === "active" && owner === currentOwner;
+  return JSON.stringify({
+    eligible: status === "absent" || status === "owned" || releasedByCurrentOwner || ownedApplyLock,
+  });
 }
 
 function compactReviewThreadAudit(audit) {

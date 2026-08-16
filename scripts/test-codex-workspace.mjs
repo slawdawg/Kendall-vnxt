@@ -1604,8 +1604,13 @@ try {
     assert(refresh[0].includes("const postAuditRemoteHeadResult = git([\"rev-parse\", `origin/${manifest.branch}`]"), "delivery-head refresh must reload the remote ref after thread hydration");
     assert(refresh[0].includes("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration local/remote ref drift");
     assert(refresh[0].includes("const postRecoveryPr = prViewForGates(manifest);"), "delivery-head refresh must reload the PR after recovery patch proof");
+    assert(refresh[0].includes("deliveryEligibilitySnapshot(postRecoveryPr, postRecoveryChecks)"), "delivery-head refresh must compare every mutable PR eligibility gate after recovery patch proof");
+    assert(refresh[0].includes("const postRecoveryReviewThreads = postRecoveryPr?.number"), "delivery-head refresh must rehydrate review threads after recovery patch proof");
+    assert(refresh[0].includes("Review-thread state changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof review-thread drift");
+    assert(refresh[0].includes("const postRecoveryLockInspection = inspectTaskLock(workspaceState(options), manifest.task_id);"), "delivery-head refresh must re-audit lock eligibility after recovery patch proof");
+    assert(refresh[0].includes("Local Git replacement or graft state changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof local Git proof-state drift");
     assert(refresh[0].includes("const postRecoveryRemoteHeadResult = git([\"rev-parse\", `origin/${manifest.branch}`]"), "delivery-head refresh must reload origin after recovery patch proof");
-    assert(refresh[0].includes("Live PR or status checks changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof PR/check drift");
+    assert(refresh[0].includes("Live PR eligibility or status checks changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof PR/check drift");
     assert(refresh[0].includes("Local HEAD or origin branch refs changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof local/remote ref drift");
     assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
 
@@ -11714,6 +11719,19 @@ try {
       assert(packet.nonAncestralRecovery?.patchSeriesMatch >= 0, "rebased recovery did not locate the patch series");
 
       const graftPath = runGit(fixture.worktree, ["rev-parse", "--git-path", "info/grafts"]).stdout;
+      // Git permits operator notes in this file.  Blank and comment-only
+      // content cannot alter ancestry and must not turn a clean proof into a
+      // false hard stop.
+      writeFileSync(graftPath, "\n# operator note: no active grafts\n  # another note\n");
+      const commentOnlyGraftPreview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Comment-only graft files must not block recovery proof.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(commentOnlyGraftPreview.code === 0, commentOnlyGraftPreview.stderr || commentOnlyGraftPreview.stdout);
+      const commentOnlyGraftPacket = JSON.parse(commentOnlyGraftPreview.stdout);
+      assert(commentOnlyGraftPacket.nonAncestralRecovery?.recoveryGitState?.status === "clean", JSON.stringify(commentOnlyGraftPacket.nonAncestralRecovery));
+      assert(!commentOnlyGraftPacket.blockers?.includes("Non-ancestral recovery rejects local Git graft state"), JSON.stringify(commentOnlyGraftPacket));
       // This graft makes the live head appear to descend from the recorded
       // delivery head. A normal fast-forward classifier must still block it.
       writeFileSync(graftPath, `${liveHeadSha} ${priorHeadSha}\n`);
