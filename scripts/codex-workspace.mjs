@@ -10090,7 +10090,27 @@ function cleanupClosedRemote(argv) {
       };
       appendTaskEvent(locked, "closed_remote_cleanup_delete_intent", `${locked.branch} ${lockedProof.remote.sha}`);
       writeManifest(record.path, locked);
-      deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);
+      try {
+        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);
+        locked.closed_remote_cleanup_delete_intent = {
+          ...locked.closed_remote_cleanup_delete_intent,
+          status: "completed",
+          completedAt: new Date().toISOString(),
+        };
+      } catch (error) {
+        let remoteAfterFailure = null;
+        try { remoteAfterFailure = originBranchSha(locked.branch, lockedProof.cleanupCwd) || null; } catch {}
+        locked.closed_remote_cleanup_delete_intent = {
+          ...locked.closed_remote_cleanup_delete_intent,
+          status: remoteAfterFailure === lockedProof.expectedHeadSha ? "retryable_failed" : "outcome_unknown",
+          failedAt: new Date().toISOString(),
+          remoteAfterFailure,
+          failure: safeMetadataText(error.message || error, 300),
+        };
+        appendTaskEvent(locked, "closed_remote_cleanup_delete_failed", locked.closed_remote_cleanup_delete_intent.status);
+        writeManifest(record.path, locked);
+        throw error;
+      }
     } else {
       // The absence proof can change between the locked packet and this
       // mutation branch. Re-read the remote before recording a terminal no-op
@@ -10255,8 +10275,11 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   if (remoteSha && manifest.closed_remote_cleanup?.status) {
     blockers.push("closed manifest already records remote deletion but the remote branch is present again");
   }
-  if (remoteSha && manifest.closed_remote_cleanup_delete_intent) {
-    blockers.push("closed manifest records a prior remote deletion intent; a recreated remote branch is not eligible for closed-manifest cleanup");
+  if (manifest.closed_remote_cleanup_delete_intent && (
+    manifest.closed_remote_cleanup_delete_intent.status === "completed" ? Boolean(remoteSha) :
+      manifest.closed_remote_cleanup_delete_intent.status !== "retryable_failed" || remoteSha !== expectedHeadSha
+  )) {
+    blockers.push("closed manifest records a non-retryable or no-longer-exact remote deletion intent");
   }
   if (remoteSha && retainedAuthority?.operation === "cleanup-merged-delete-remote") {
     blockers.push("retained cleanup authority proves the remote branch was already deleted; a recreated remote branch is not eligible for closed-manifest cleanup");
@@ -19590,13 +19613,35 @@ function withBranchOwnershipLock(state, branch, fn) {
     fd = openSync(lockPath, "wx");
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+    if (recoverStaleBranchOwnershipLock(lockPath, branch)) {
+      return withBranchOwnershipLock(state, branch, fn);
+    }
     throw new Error(`Branch ownership is locked by another session: ${branch}`);
   }
   try {
+    const processStart = processStartIdentity(process.pid);
+    if (!processStart) throw new Error("Branch ownership lock cannot establish the current process identity.");
+    writeFileSync(lockPath, `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`);
     return fn();
   } finally {
     closeSync(fd);
     rmSync(lockPath, { force: true });
+  }
+}
+
+function recoverStaleBranchOwnershipLock(lockPath, branch) {
+  let record;
+  try { record = JSON.parse(readFileSync(lockPath, "utf8")); } catch { return false; }
+  if (record?.branch !== branch || !Number.isInteger(record?.pid) || typeof record?.processStart !== "string") return false;
+  if (branchLockProcessProbe(record.pid) !== "dead") return false;
+  rmSync(lockPath, { force: true });
+  return true;
+}
+
+function branchLockProcessProbe(pid) {
+  if (processStartIdentity(pid) !== null) return "observed";
+  try { process.kill(pid, 0); return "unknown"; } catch (error) {
+    return error?.code === "ESRCH" ? "dead" : "unknown";
   }
 }
 

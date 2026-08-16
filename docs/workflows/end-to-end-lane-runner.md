@@ -609,6 +609,10 @@ do not treat an operator authorization as a bypass.
    delete intent share the same lease. Cleanup re-runs its complete
    branch-ownership proof while holding that lock before it records delete
    intent or deletes a remote ref; a contended lock is a stop line.
+   A lock records its PID/start identity; only a lock whose recorded process
+   identity is no longer live is recovered. A failed remote deletion retains
+   its intent and is retryable only after a fresh probe proves the exact remote
+   ref is still present; any ambiguous post-failure state remains blocked.
    If a versioned lease reports `external_command_fence_unresolved`, do not
    rerun delivery, delete the lock, or manufacture a completion file. First
    prove the recorded runner PID/start identity is absent and inspect the exact
