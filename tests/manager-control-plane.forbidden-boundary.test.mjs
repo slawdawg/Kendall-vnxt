@@ -31,6 +31,8 @@ const workflowCoreFiles = collectFiles("packages/workflow-core/src/manager-contr
 workflowCoreFiles.push("packages/workflow-core/src/index.ts");
 workflowCoreFiles.push("packages/workflow-core/src/ports/dispatcher-port.ts");
 workflowCoreFiles.push("packages/workflow-core/src/ports/index.ts");
+workflowCoreFiles.push("packages/workflow-core/src/ports/runtime-ports.ts");
+workflowCoreFiles.push("packages/workflow-core/src/ports/orchestration-ports.ts");
 
 const contractFiles = collectFiles("packages/contracts/src/manager-control-plane", {
   include: (path) => path.endsWith(".ts")
@@ -141,6 +143,32 @@ test("contracts workflow-core and dashboard projection obey import boundaries", 
     const result = classifyBackendProofSourceBoundary({ path, source, surface: "dashboard_projection" });
     assert.equal(result.ok, true, `${path}: ${result.violations.map((violation) => violation.operation).join(", ")}`);
   }
+});
+
+test("orchestration engine boundary remains contract-only and has no native authority", async () => {
+  const source = await readFile("packages/workflow-core/src/ports/orchestration-ports.ts", "utf8");
+  const workspaceOutcomeSource = source.slice(source.indexOf("export interface WorkspaceExecutionOutcome {"));
+  assert.match(workspaceOutcomeSource, /supervisorOwnsLifecycleTruth: true/);
+  assert.match(workspaceOutcomeSource, /lifecycleTransitionApplied: false/);
+  for (const forbiddenImport of [
+    /from\s+["'][^"']*(?:db|database|session|child_process|tmux|octokit|github|openai|anthropic)[^"']*["']/i,
+    /require\(\s*["'][^"']*(?:db|database|session|child_process|tmux|octokit|github|openai|anthropic)[^"']*["']\s*\)/i
+  ]) {
+    assert.doesNotMatch(source, forbiddenImport);
+  }
+  for (const forbiddenCapability of [
+    "nativeWorkflowStateRetained: true",
+    "lifecycleTransitionAuthorityRetained: true",
+    "rawPayloadRetained: true",
+    "deliveryAuthorityRetained: true",
+    "cleanupAuthorityRetained: true",
+    "workspaceMutationAuthorityGranted: true",
+    "deliveryAuthorityGranted: true",
+    "cleanupAuthorityGranted: true"
+  ]) {
+    assert.equal(source.includes(forbiddenCapability), false, `orchestration boundary retains forbidden ${forbiddenCapability}`);
+  }
+  assert.equal(source.includes("lifecycleTransitionAuthorityRetained: false"), true);
 });
 
 test("backend proof evidence packet names real fake and forbidden capabilities without raw retention", () => {

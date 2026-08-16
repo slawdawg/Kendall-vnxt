@@ -12,6 +12,9 @@ Status: current navigation index
   for lifecycle convergence, technical-debt retirement, refactoring, and
   documentation/verification simplification. It carries the accepted standing
   cleanup mandate but changes no runtime authority.
+- `kendall-vnxt-orchestration-boundary-decision-2026-08-16.md`: current Phase 1
+  no-adoption decision and the supervisor-owned lifecycle-evidence / governed
+  workspace-outcome contract boundary for any future engine evaluation.
 - `kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md`: active baseline and
   ordered execution queue for the cleanup program.
 - `manager-supervisor-source-intake-boundary.md`: capability-gated loopback-only handoff from one eligible source-backed manager seed through continuous dry-run/apply into the supervisor-owned authoritative WorkPacket lifecycle.
