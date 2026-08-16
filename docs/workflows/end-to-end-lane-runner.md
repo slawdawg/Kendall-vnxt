@@ -583,8 +583,10 @@ do not treat an operator authorization as a bypass.
    merged on the
    recorded base with the recorded PR number, branch, and exact delivery head;
    the only PR using that branch is the recorded merged PR (an empty, extra,
-   open, or closed-unmerged branch-PR result is a stop line); the checkout's actual `origin` push URL names
-   the canonical repository; and the live remote ref equals that same head.
+   open, or closed-unmerged branch-PR result is a stop line); no other active
+   manifest or assignment owns that branch; the checkout has exactly one
+   `origin` push URL and it names the canonical repository; and the live remote
+   ref equals that same head.
    An active emergency-stop checkpoint is also a hard stop line for the
    mutation. Encode every binding value
    with canonical percent-encoding (notably `%3B` for a semicolon and `%27`
@@ -599,6 +601,14 @@ do not treat an operator authorization as a bypass.
    the runner reserves the bounded external-command ledger budget required for
    the reproof, deletion, and post-delete verification; insufficient capacity
    fails closed before any remote mutation.
+   Branch creation, direct and dispatched ownership claims, and this closeout
+   share a per-branch ownership lock. Direct claim and dispatch take branch
+   ownership, then emergency-stop, then assignment-index or task/manifest
+   locks. This closeout is the intentional exception: it takes branch
+   ownership, then its task/manifest lease, then emergency-stop so reproof and
+   delete intent share the same lease. Cleanup re-runs its complete
+   branch-ownership proof while holding that lock before it records delete
+   intent or deletes a remote ref; a contended lock is a stop line.
    If a versioned lease reports `external_command_fence_unresolved`, do not
    rerun delivery, delete the lock, or manufacture a completion file. First
    prove the recorded runner PID/start identity is absent and inspect the exact

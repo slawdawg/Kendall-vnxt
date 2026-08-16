@@ -4855,6 +4855,37 @@ try {
     }
   });
 
+  test("claim-next and dispatch-next acquire branch ownership before emergency or writer locks", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-branch-ownership-order-"));
+    try {
+      const expected = expectedOpenSafeBacklogCandidate();
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      const lockDir = join(claimStateRoot, ".branch-ownership");
+      mkdirSync(lockDir, { recursive: true });
+      const lockPath = join(lockDir, `${createHash("sha256").update(expected.branch).digest("hex")}.lock`);
+      writeFileSync(lockPath, "concurrent branch writer\n");
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const stop = run([
+        "emergency-stop", "--apply", "--mode", "drain", "--reason", "exercise branch lock ordering before emergency lock", "--owner", "runner-a", "--state-root", claimStateRoot,
+      ]);
+      assert(stop.code === 0, stop.stderr || stop.stdout);
+      const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(claim.code !== 0, "claim-next entered while a competing branch writer held the lock");
+      assert((claim.stderr || claim.stdout).includes("Branch ownership is locked by another session"), claim.stderr || claim.stdout);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "blocked claim-next wrote assignment evidence");
+
+      rmSync(join(claimStateRoot, "emergency-stop.json"), { force: true });
+      const dispatch = run(["dispatch-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(dispatch.code !== 0, "dispatch-next entered while a competing branch writer held the lock");
+      assert((dispatch.stderr || dispatch.stdout).includes("Branch ownership is locked by another session"), dispatch.stderr || dispatch.stdout);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "blocked dispatch-next wrote assignment evidence");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next blocks a second active lane for the same runner session without mutation", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-current-owner-bounded-"));
     try {
@@ -14255,7 +14286,40 @@ try {
       },
       {
         name: "origin push repository identity drift",
-        mutate(fixture) { installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, "git@github.com:fork-owner/fork-repository.git"); },
+        mutate(fixture) { installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, ["git@github.com:fork-owner/fork-repository.git"]); },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "multiple origin push URLs",
+        mutate(fixture) { installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, ["git@github.com:slawdawg/Kendall-vnxt.git", "git@github.com:fork-owner/fork-repository.git"]); },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "active manifest branch owner",
+        mutate(fixture) {
+          writeFileSync(join(fixture.stateRoot, "tasks", "active-branch-owner.json"), `${JSON.stringify({ task_id: "active-branch-owner", branch: fixture.branch, status: "pr_open" }, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "active assignment branch owner",
+        mutate(fixture) {
+          const source = readJson(join(fixture.stateRoot, "assignments", "cleanup-assignment.json"));
+          source.assignment_id = "active-branch-assignment";
+          source.task_id = "active-branch-owner";
+          source.status = "claimed";
+          writeFileSync(join(fixture.stateRoot, "assignments", "active-branch-assignment.json"), `${JSON.stringify(source, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "interleaving branch ownership writer lock",
+        mutate(fixture) {
+          const directory = join(fixture.stateRoot, ".branch-ownership");
+          mkdirSync(directory, { recursive: true });
+          const digest = createHash("sha256").update(fixture.branch).digest("hex");
+          writeFileSync(join(directory, `${digest}.lock`), "writer holds branch ownership lock\n");
+        },
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
       {
@@ -19155,7 +19219,7 @@ function createMergedCleanupFixture() {
   };
 }
 
-function installFixtureOriginIdentityProxy(root, fakeBin, originUrl = "git@github.com:slawdawg/Kendall-vnxt.git") {
+function installFixtureOriginIdentityProxy(root, fakeBin, originUrls = ["git@github.com:slawdawg/Kendall-vnxt.git"]) {
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fakeBin).join(":");
   const fakeGit = join(fakeBin, "git");
   writeFileSync(
@@ -19164,8 +19228,8 @@ function installFixtureOriginIdentityProxy(root, fakeBin, originUrl = "git@githu
       "#!/usr/bin/env node",
       "import { spawnSync } from 'node:child_process';",
       "const args = process.argv.slice(2);",
-      "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === 'origin') {",
-      `  console.log(${JSON.stringify(originUrl)});`,
+      "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === '--all' && args[4] === 'origin') {",
+      `  console.log(${JSON.stringify(originUrls.join("\\n"))});`,
       "  process.exit(0);",
       "}",
       `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
@@ -19285,12 +19349,14 @@ function writeFixtureGhRepositoryView(fixture, repository) {
 function installFixtureCanonicalPrRepoAssertion(fixture) {
   const fakeGh = join(fixture.fakeBin, "gh");
   const source = readFileSync(fakeGh, "utf8");
-  const seam = "if (args[0] === 'pr' && args[1] === 'list') {";
-  assert(source.includes(seam), "fixture did not contain the PR-view repository seam");
+  const seam = "const args = process.argv.slice(2);";
+  assert(source.includes(seam), "fixture did not contain the PR repository seam");
   const guard = [
     seam,
+    "if (args[0] === 'pr' && ['list', 'view'].includes(args[1])) {",
     "  const repoIndex = args.indexOf('--repo');",
     "  if (repoIndex < 0 || args[repoIndex + 1] !== 'slawdawg/Kendall-vnxt') { console.error('missing canonical --repo'); process.exit(1); }",
+    "}",
   ].join("\n");
   writeFileSync(fakeGh, source.replace(seam, guard));
   chmodSync(fakeGh, 0o755);
