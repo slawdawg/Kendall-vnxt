@@ -499,6 +499,34 @@ operator evidence, non-terminal check, incomplete review audit, non-owned
 lock, or a live head outside the authorized anchor's ancestry remains a hard
 stop.
 
+#### Patch-equivalent rebased-head recovery
+
+For a different managed PR that was explicitly rebased after its delivery head
+was recorded, use neither the PR #723 exception nor a manual manifest edit.
+The owner must first run the ordinary `refresh-pr-head --summary-json` packet
+with `--rebased-recovery-authorization` omitted. When all read-only source
+proofs are available, the packet prints the one exact operator-evidence value
+it requires. Supply that unchanged value through
+`--rebased-recovery-authorization` on a fresh preview and then on `--apply`.
+
+This narrow recovery is available only when all normal refresh gates pass and
+the tool proves the live PR head descends from the exact GitHub PR base head.
+It also calculates the merge base between the recorded and live heads, rejects
+merge commits in the pre-rebase delivery lineage, calculates stable patch IDs,
+and requires the whole pre-rebase series to occur contiguously and in order in
+the live first-parent history. The exact authorization binds the task, PR,
+recorded prior head, live head, PR base head, merge base, and SHA-256 digest of
+that prior patch series. Any changed byte, missing source object, reordered or
+altered patch, non-ancestral PR base, local/origin/GitHub disagreement, or
+changed check/thread evidence blocks the recovery.
+
+The successful operation records metadata only, marks older delivery and gate
+evidence stale, and still does not resolve review threads, merge, or clean up.
+Run fresh exact-head gates before thread adjudication or delivery. If the patch
+series cannot be proven—for example because conflict resolution changed a
+commit—leave the lane blocked and create a separately reviewed recovery plan;
+do not treat an operator authorization as a bypass.
+
 9. **Cleanup.** The delegated delivery/cleanup worker should prefer
    `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
