@@ -45,6 +45,10 @@ const checkVerificationTimeoutMs = 900_000;
 const verificationDiagnosticSchemaVersion = 2;
 const verificationDiagnosticTailMaxBytes = 2_048;
 const verificationDiagnosticCaptureMaxBytes = 4 * 1024 * 1024;
+// Recovery proof is intentionally bounded: Git patch output is untrusted
+// process output, but the documented recovery must support ordinary binary or
+// generated changes larger than Node's 1 MiB default capture.
+const recoveryPatchCaptureMaxBytes = 16 * 1024 * 1024;
 const resumableCheckInvocationBudgetMs = 180_000;
 // Every ordinary leaf must start with enough time to produce useful evidence.
 // Otherwise a short, healthy command can be killed solely because a prior leaf
@@ -3567,6 +3571,15 @@ function refreshPrHead(argv) {
       locked.pr_delivery_evidence,
       lockedPacket,
     );
+    if (lockedPacket.nonAncestralRecovery?.status === "authorized") {
+      // A non-ancestral rebind changes the tested base as well as the head.
+      // None of the prior delivery-result fields can prove this new object,
+      // even when its patch series is exact. Keep only stale identity/audit
+      // metadata and require the normal exact-head verification path again.
+      locked.last_verified_at = null;
+      locked.last_verification_command = null;
+      locked.check_verification_packet = null;
+    }
     locked.pr_url = lockedPacket.pr.url || locked.pr_url;
     locked.pr_number = lockedPacket.pr.number || locked.pr_number;
     locked.pr_head_rebinds = [...copyJsonArray(locked.pr_head_rebinds), rebind];
@@ -3834,6 +3847,8 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
   const patchSeriesMatch = priorPatchSeries.error || livePatchSeries.error
     ? null
     : contiguousSubsequenceStart(priorPatchSeries.patchIds, livePatchSeries.patchIds);
+  const patchSeriesExactlyEqual = patchSeriesMatch === 0
+    && priorPatchSeries.patchIds.length === livePatchSeries.patchIds.length;
   const expectedAuthorization = (
     context.priorHeadSha && liveHeadSha && baseHeadSha && observedMergeBaseSha && priorPatchSeries.digest
       ? `operator-authorized recovery=rebased-head task=${manifest.task_id} pr=${context.pr?.number} prior=${context.priorHeadSha} head=${liveHeadSha} base=${baseHeadSha} merge-base=${observedMergeBaseSha} patch-series=${priorPatchSeries.digest}`
@@ -3859,6 +3874,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
       priorPatchSeries,
       livePatchSeries,
       patchSeriesMatch,
+      patchSeriesExactlyEqual,
       baseIsAncestorOfLiveHead,
       recoveryGitState,
       blockers,
@@ -3873,7 +3889,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
   if (!baseIsAncestorOfLiveHead) blockers.push("Rebased-head recovery requires the live PR head to descend from the exact PR base head");
   if (priorPatchSeries.error) blockers.push(`Rebased-head recovery prior patch series is unavailable: ${priorPatchSeries.error}`);
   if (livePatchSeries.error) blockers.push(`Rebased-head recovery live patch series is unavailable: ${livePatchSeries.error}`);
-  if (patchSeriesMatch === -1) blockers.push("Rebased-head recovery could not prove the prior patch series occurs contiguously and in order in the live PR history");
+  if (!patchSeriesExactlyEqual) blockers.push("Rebased-head recovery requires the full base-to-live patch series to exactly equal the prior delivery patch series, with no extra, reordered, or reverted commits");
   if (authorization !== expectedAuthorization) blockers.push("Rebased-head recovery requires exact operator evidence bound to task, PR, prior/live/base heads, merge base, and prior patch-series digest");
   if (!context.localHeadSha || context.localHeadSha !== liveHeadSha) blockers.push("Rebased-head recovery requires exact local-head evidence for the live PR head");
   if (!context.remoteHeadSha || context.remoteHeadSha !== liveHeadSha) blockers.push("Rebased-head recovery requires exact origin-head evidence for the live PR head");
@@ -3893,6 +3909,7 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
     priorPatchSeries,
     livePatchSeries,
     patchSeriesMatch,
+    patchSeriesExactlyEqual,
     baseIsAncestorOfLiveHead,
     recoveryGitState,
     localHeadSha: context.localHeadSha || null,
@@ -3963,9 +3980,16 @@ function gitRecoveryPatchIdentity(commit, cwd) {
     encoding: "buffer",
     stdio: "pipe",
     timeout: defaultVerificationTimeoutMs,
+    maxBuffer: recoveryPatchCaptureMaxBytes,
   });
   const stdout = Buffer.isBuffer(patch.stdout) ? patch.stdout : Buffer.from(patch.stdout || "");
   const stderr = Buffer.isBuffer(patch.stderr) ? patch.stderr.toString("utf8") : String(patch.stderr || "");
+  if (patch.error) {
+    if (patch.error.code === "ENOBUFS") {
+      return { patchId: null, error: `recovery patch for ${commit} exceeds the bounded ${recoveryPatchCaptureMaxBytes / (1024 * 1024)} MiB capture` };
+    }
+    return { patchId: null, error: `cannot safely render recovery patch for ${commit}: ${patch.error.message || patch.error.code || "process error"}` };
+  }
   if (patch.status !== 0) return { patchId: null, error: stderr || stdout.toString("utf8") || `cannot render recovery patch for ${commit}` };
   // This is intentionally stricter than `git patch-id`: preserve every byte
   // Git emits, including file and hunk locations. An edit replayed into a
@@ -6297,6 +6321,35 @@ function hasRecordedRecoveryDeliveryIdentity(manifest, pr, expectedHeadSha) {
 function synchronizeStandardDeliveryEvidenceAfterHeadRebind(existing, packet) {
   if (!existing || existing.status !== "recorded" || existing.authorityProfile !== "standard-delivery") return existing || null;
   if (existing.headRevision !== packet.priorHeadSha) return existing;
+  if (packet.nonAncestralRecovery?.status === "authorized") {
+    // Do not copy any old verification/result field across a recovery rebind.
+    // The changed base can change the outcome even for an exact patch replay.
+    return {
+      schemaVersion: 1,
+      status: "stale",
+      authorityProfile: "standard-delivery",
+      taskId: existing.taskId,
+      branch: existing.branch,
+      baseBranch: existing.baseBranch,
+      headRevision: packet.newHeadSha,
+      pullRequestNumber: existing.pullRequestNumber,
+      pullRequestUrl: existing.pullRequestUrl,
+      staleAt: packet.checkedAt,
+      reason: "Non-ancestral delivery-head recovery requires fresh exact-head delivery verification before merge.",
+      deliveryHeadRefresh: {
+        schemaVersion: 1,
+        priorHeadSha: packet.priorHeadSha,
+        newHeadSha: packet.newHeadSha,
+        checkedAt: packet.checkedAt,
+        reason: packet.reason,
+        recoveryKind: packet.nonAncestralRecovery.kind,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
   return {
     ...existing,
     headRevision: packet.newHeadSha,

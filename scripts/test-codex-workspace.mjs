@@ -11664,16 +11664,35 @@ try {
       commitFile(fixture.root, "rebased-b.txt", "b\n", "recorded delivery patch b");
       const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
       const priorCommits = runGit(fixture.root, ["rev-list", "--reverse", "main..HEAD"]).stdout.split("\n").filter(Boolean);
+      runGit(fixture.root, ["checkout", "-q", "main"]);
+      commitFile(fixture.root, "rebased-base-advance.txt", "new base\n", "advance rebase target");
+      const baseHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      // Exact replay recovery is intentionally not an append-only escape
+      // hatch: the base-to-live series must contain only the recorded work.
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
       runGit(fixture.worktree, ["cherry-pick", ...priorCommits]);
-      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
       const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       const manifest = readJson(manifestPath);
       manifest.pr_delivery_head_sha = priorHeadSha;
       manifest.pr_delivery_evidence.headRevision = priorHeadSha;
       manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      manifest.pr_delivery_evidence.operation = "create-pr";
+      manifest.pr_delivery_evidence.pushedAt = "2026-08-16T00:00:00.000Z";
+      manifest.pr_delivery_evidence.verificationGate = {
+        status: "passed",
+        command: "pnpm run check:workspace-fast",
+        verifiedAt: "2026-08-16T00:00:00.000Z",
+      };
+      manifest.pr_delivery_evidence.requiredGates = ["configured verification command"];
+      manifest.pr_delivery_evidence.stopLines = ["no merge from finish-pr"];
+      manifest.last_verified_at = "2026-08-16T00:00:00.000Z";
+      manifest.last_verification_command = "pnpm run check:workspace-fast";
+      manifest.check_verification_packet = { status: "passed", head: priorHeadSha };
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const prStatePath = join(fixture.root, "pr-state.json");
       const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
       prState.headRefOid = liveHeadSha;
       writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
 
@@ -11756,8 +11775,149 @@ try {
       assert(rebind.nonAncestralRecovery.priorPatchSeries.digest === packet.nonAncestralRecovery.priorPatchSeries.digest, "rebased recovery lost its patch-series proof");
       assert(rebind.nonAncestralRecovery.baseIsAncestorOfLiveHead === true, "rebased recovery did not retain PR-base ancestry proof");
       assert(refreshed.authority_decisions?.at(-1)?.authorityFamily === "delivery-evidence-rebind-recovery", "rebased recovery authority decision missing");
+      assert(refreshed.pr_delivery_evidence?.status === "stale", "recovery rebind retained recorded delivery evidence");
+      assert(refreshed.pr_delivery_evidence?.headRevision === liveHeadSha, "recovery stale evidence lost the new exact head identity");
+      for (const staleResultField of ["operation", "pushedAt", "verificationGate", "requiredGates", "stopLines", "authorityDecision"]) {
+        assert(!(staleResultField in refreshed.pr_delivery_evidence), `recovery rebind retained stale delivery field ${staleResultField}`);
+      }
+      assert(refreshed.last_verified_at === null, "recovery rebind retained a stale verification timestamp");
+      assert(refreshed.last_verification_command === null, "recovery rebind retained a stale verification command");
+      assert(refreshed.check_verification_packet === null, "recovery rebind retained a stale verification result packet");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head rejects a replay followed by a reverting non-merge commit", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      commitFile(fixture.root, "replayed.txt", "recorded\n", "recorded delivery patch");
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["checkout", "-q", "main"]);
+      commitFile(fixture.root, "replay-revert-base-advance.txt", "new base\n", "advance rebase target");
+      const baseHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      runGit(fixture.worktree, ["cherry-pick", priorHeadSha]);
+      rmSync(join(fixture.worktree, "replayed.txt"));
+      runGit(fixture.worktree, ["add", "-A"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "revert recorded delivery patch"]);
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "A later non-merge revert must not retain recovery authority.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.patchSeriesMatch === 0, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchSeriesExactlyEqual === false, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.blockers?.includes("Rebased-head recovery requires the full base-to-live patch series to exactly equal the prior delivery patch series, with no extra, reordered, or reverted commits"), JSON.stringify(packet.nonAncestralRecovery));
+
+      const blocked = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
+        "--reason", "A later non-merge revert must not retain recovery authority.",
+        "--rebased-recovery-authorization", packet.nonAncestralRecovery.expectedAuthorization,
+        "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(blocked.code !== 0, "reverted replay unexpectedly authorized recovery");
+      assert(blocked.stderr.includes("exactly equal the prior delivery patch series"), blocked.stderr || blocked.stdout);
+      assert(readJson(manifestPath).pr_delivery_head_sha === priorHeadSha, "blocked replay-revert recovery rewrote the delivery head");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head captures recovery patches above Node's default buffer and fails closed at its explicit bound", () => {
+    const accepted = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(accepted);
+      runGit(accepted.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      writeFileSync(join(accepted.root, "large-recovery.txt"), Buffer.concat([Buffer.alloc(2 * 1024 * 1024, 0x61), Buffer.from("\n")]));
+      runGit(accepted.root, ["add", "large-recovery.txt"]);
+      runGit(accepted.root, ["commit", "-q", "-m", "record recovery patch above default buffer"]);
+      const priorHeadSha = runGit(accepted.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(accepted.root, ["checkout", "-q", "main"]);
+      commitFile(accepted.root, "large-recovery-base-advance.txt", "new base\n", "advance rebase target");
+      const baseHeadSha = runGit(accepted.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(accepted.worktree, ["reset", "--hard", "main"]);
+      runGit(accepted.worktree, ["cherry-pick", priorHeadSha]);
+      runGit(accepted.worktree, ["push", "-q", "--force", "origin", accepted.branch]);
+      const liveHeadSha = runGit(accepted.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(accepted.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(accepted, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Ordinary recovery patches larger than Node default capture must remain provable.",
+        "--state-root", accepted.stateRoot, "--summary-json",
+      ], { cwd: accepted.worktree, env: accepted.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.priorPatchSeries?.error === null, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.livePatchSeries?.error === null, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchSeriesExactlyEqual === true, JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(accepted);
+    }
+
+    const overLimit = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(overLimit);
+      runGit(overLimit.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      writeFileSync(join(overLimit.root, "over-limit-recovery.txt"), Buffer.concat([Buffer.alloc(17 * 1024 * 1024, 0x62), Buffer.from("\n")]));
+      runGit(overLimit.root, ["add", "over-limit-recovery.txt"]);
+      runGit(overLimit.root, ["commit", "-q", "-m", "record recovery patch over explicit capture bound"]);
+      const priorHeadSha = runGit(overLimit.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(overLimit.worktree, ["reset", "--hard", "main"]);
+      commitFile(overLimit.worktree, "unrelated-live.txt", "unrelated\n", "unrelated live work");
+      runGit(overLimit.worktree, ["push", "-q", "--force", "origin", overLimit.branch]);
+      const liveHeadSha = runGit(overLimit.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(overLimit.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(overLimit, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Over-limit recovery patch capture must fail closed.",
+        "--state-root", overLimit.stateRoot, "--summary-json",
+      ], { cwd: overLimit.worktree, env: overLimit.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.status === "blocked", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.priorPatchSeries?.error?.includes("exceeds the bounded 16 MiB capture"), JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(overLimit);
     }
   });
 
