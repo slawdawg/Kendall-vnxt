@@ -931,10 +931,10 @@ function startWorkspace(argv) {
 
   mkdirSync(state.tasksDir, { recursive: true });
   mkdirSync(state.worktreesDir, { recursive: true });
-  withManifestLock(state, taskId, () => {
+  withBranchOwnershipLock(state, branch, () => withManifestLock(state, taskId, () => {
     runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseRef], { cwd: repoRoot });
     writeManifest(manifestPath, manifest);
-  });
+  }));
 
   console.log(`Created Codex workspace ${taskId}`);
   printManifestSummary(manifest);
@@ -1893,22 +1893,25 @@ function claimNext(argv) {
     plan.push("preview only; no manifest, branch, PR, or worktree mutation");
     printPlan("claim-next", plan);
   } else {
-    const stop = activeEmergencyStop(state);
-    if (stop) {
-      plan.push(`emergency stop ${stop.checkpoint_id || "unknown"} (${stop.mode || "unknown"}) is active`);
-      printBlocked("claim-next", plan);
-      throw new Error(emergencyStopBlocker(stop, "claim-next"));
-    }
     if (!selected) {
       printBlocked("claim-next", plan);
       printClaimBlockers(queueEvaluations, selected);
       throw new Error("No claimable safe backlog lane found.");
     }
-    const applied = applyClaimNext(selected, {
-      state,
-      options,
-      currentOwner,
-      staleAfterSeconds,
+    const applied = withBranchOwnershipLock(state, selected.item.branchName, () => {
+      const stop = activeEmergencyStop(state);
+      if (stop) {
+        plan.push(`emergency stop ${stop.checkpoint_id || "unknown"} (${stop.mode || "unknown"}) is active`);
+        printBlocked("claim-next", plan);
+        throw new Error(emergencyStopBlocker(stop, "claim-next"));
+      }
+      return applyClaimNext(selected, {
+        state,
+        options,
+        currentOwner,
+        staleAfterSeconds,
+        branchOwnershipLockHeld: true,
+      });
     });
     printApplied("claim-next", [
       ...plan,
@@ -7270,13 +7273,13 @@ function githubRepositoryAt(cwd) {
   }
 }
 
-function originRepositoryIdentity(cwd) {
-  const result = git(["remote", "get-url", "--push", "origin"], { cwd });
+function originRepositoryIdentities(cwd) {
+  const result = git(["remote", "get-url", "--push", "--all", "origin"], { cwd });
   if (result.code !== 0) return null;
-  const value = result.stdout.trim();
-  const match = value.match(/^(?:https?:\/\/github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
-  if (!match) return null;
-  return { owner: match[1], name: match[2] };
+  const values = result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  if (values.length !== 1) return null;
+  const match = values[0].match(/^(?:https?:\/\/github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  return match ? [{ owner: match[1], name: match[2] }] : null;
 }
 
 function fetchReviewThreadState(manifest, repository, prNumber) {
@@ -10060,7 +10063,7 @@ function cleanupClosedRemote(argv) {
     return;
   }
 
-  withManifestLock(state, taskId, () => withEmergencyStopLock(state, () => {
+  withBranchOwnershipLock(state, record.manifest.branch, () => withManifestLock(state, taskId, () => withEmergencyStopLock(state, () => {
     assertNoActiveEmergencyStop(state, "cleanup-closed-remote");
     const locked = readManifest(record.path);
     validateManifest(locked, record.path);
@@ -10131,7 +10134,7 @@ function cleanupClosedRemote(argv) {
   }), {
     externalIntentReserve: closedRemoteCleanupExternalIntentReserve,
     manifestWriteReserve: closedRemoteCleanupManifestWriteReserve,
-  });
+  }));
   console.log(`Closed remote branch for ${taskId}`);
 }
 
@@ -10177,9 +10180,9 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   // The fallback checkout is mutable infrastructure. Bind both its GitHub
   // identity and the PR query to the canonical repository so a retargeted
   // origin cannot make a same-number fork PR eligible for deletion.
-  const originRepository = originRepositoryIdentity(cleanupCwd);
-  if (originRepository?.owner !== canonicalKendallRepository.owner || originRepository?.name !== canonicalKendallRepository.name) {
-    blockers.push("cleanup origin remote is not the canonical Kendall_Nxt repository");
+  const originRepositories = originRepositoryIdentities(cleanupCwd);
+  if (originRepositories?.length !== 1 || originRepositories[0].owner !== canonicalKendallRepository.owner || originRepositories[0].name !== canonicalKendallRepository.name) {
+    blockers.push("cleanup origin must have exactly one canonical Kendall_Nxt push URL");
   }
   const repository = githubRepositoryAt(cleanupCwd);
   if (repository?.owner !== canonicalKendallRepository.owner || repository?.name !== canonicalKendallRepository.name) {
@@ -10198,6 +10201,10 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   const branchPrProof = closedRemoteBranchPrProof(manifest, cleanupCwd);
   if (branchPrProof.status !== "matched") {
     blockers.push(branchPrProof.reason);
+  }
+  const branchOwnership = closedRemoteBranchOwnershipProof(manifest, state);
+  if (branchOwnership.status !== "matched") {
+    blockers.push(branchOwnership.reason);
   }
 
   const retainedAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, {}, {
@@ -10261,8 +10268,9 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     expectedHeadSha,
     pr,
     repository,
-    originRepository,
+    originRepositories,
     branchPrProof,
+    branchOwnership,
     cleanupCwd,
     retainedAudit,
     retainedAuthority,
@@ -10270,6 +10278,35 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     local: { worktreePresent, branchSha: localBranch.sha || null, branchState: localBranch.state },
     remote: { branch: manifest.branch, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
   };
+}
+
+function closedRemoteBranchOwnershipProof(manifest, state) {
+  const activeManifestIds = [];
+  for (const record of readManifestRecords(state)) {
+    if (record.error) return { status: "blocked", reason: "closed-manifest cleanup cannot verify manifest inventory" };
+    const candidate = record.manifest;
+    if (candidate?.task_id !== manifest.task_id && candidate?.branch === manifest.branch && candidate?.status !== "closed") {
+      activeManifestIds.push(String(candidate.task_id || "unknown"));
+    }
+  }
+  if (activeManifestIds.length) {
+    return { status: "blocked", reason: `closed-manifest cleanup found active manifest branch ownership: ${activeManifestIds.join(",")}` };
+  }
+  if (existsSync(state.assignmentsDir)) {
+    for (const name of readdirSync(state.assignmentsDir).filter((entry) => entry.endsWith(".json")).sort((left, right) => left.localeCompare(right))) {
+      let assignment;
+      try {
+        assignment = readAssignment(join(state.assignmentsDir, name));
+        validateAssignment(assignment, join(state.assignmentsDir, name));
+      } catch {
+        return { status: "blocked", reason: "closed-manifest cleanup cannot verify assignment inventory" };
+      }
+      if (assignment.task_id !== manifest.task_id && assignment.branch === manifest.branch && assignment.status !== "closed") {
+        return { status: "blocked", reason: `closed-manifest cleanup found active assignment branch ownership: ${assignment.assignment_id}` };
+      }
+    }
+  }
+  return { status: "matched" };
 }
 
 function closedRemoteBranchPrProof(manifest, cleanupCwd) {
@@ -15252,19 +15289,24 @@ function assignmentBranchStatesByBranch(assignments) {
 }
 
 function applyClaimNext(selected, context) {
-  const applyMutation = () => {
-    assertNoActiveEmergencyStop(context.state, "claim-next");
-    if (selected.mutation === "manifest_owner_claim") {
-      return applyManifestOwnerClaim(selected, context);
-    }
+  const applyWithBranchLock = () => {
+    const applyMutation = () => {
+      assertNoActiveEmergencyStop(context.state, "claim-next");
+      if (selected.mutation === "manifest_owner_claim") {
+        return applyManifestOwnerClaim(selected, { ...context, branchOwnershipLockHeld: true });
+      }
 
-    if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
-      return applyAssignmentClaim(selected, context);
-    }
+      if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
+        return applyAssignmentClaim(selected, { ...context, branchOwnershipLockHeld: true });
+      }
 
-    throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+      throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+    };
+    return context.emergencyStopLockHeld === true ? applyMutation() : withEmergencyStopLock(context.state, applyMutation);
   };
-  return context.emergencyStopLockHeld === true ? applyMutation() : withEmergencyStopLock(context.state, applyMutation);
+  return context.branchOwnershipLockHeld === true
+    ? applyWithBranchLock()
+    : withBranchOwnershipLock(context.state, selected.item.branchName, applyWithBranchLock);
 }
 
 function emergencyStopCheckpointPath(state) {
@@ -15901,7 +15943,7 @@ function formatQueueCandidateStateCounts(counts = {}) {
 }
 
 function applyDispatchNext(plan, context) {
-  return withEmergencyStopLock(context.state, () => {
+  return withBranchOwnershipLock(context.state, plan.selected.item.branchName, () => withEmergencyStopLock(context.state, () => {
     assertNoActiveEmergencyStop(context.state, "dispatch-next");
     if (!plan.selected) {
       throw new Error("No dispatchable safe backlog lane found.");
@@ -15914,6 +15956,7 @@ function applyDispatchNext(plan, context) {
       currentOwner: context.currentOwner,
       staleAfterSeconds: context.staleAfterSeconds,
       emergencyStopLockHeld: true,
+      branchOwnershipLockHeld: true,
     });
 
     if (plan.selected.mutation === "manifest_owner_claim") {
@@ -15966,7 +16009,7 @@ function applyDispatchNext(plan, context) {
       manifestPath: manifestResult.path,
       packet,
     };
-  });
+  }));
 }
 
 function applyManifestDispatch(selected, manifestPath, context, { assignmentPath, workspaceAction }) {
@@ -16477,12 +16520,12 @@ function printDispatchPacket(label, packet) {
   }
 }
 
-function applyManifestOwnerClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
+function applyManifestOwnerClaim(selected, { state, options, currentOwner, staleAfterSeconds, branchOwnershipLockHeld = false }) {
   const taskId = String(selected.targetTaskId || "");
   assertSafeTaskId(taskId);
   const manifestPath = join(state.tasksDir, `${taskId}.json`);
 
-  return withManifestLock(state, taskId, () => {
+  const apply = () => withManifestLock(state, taskId, () => {
     const manifest = readManifest(manifestPath);
     validateManifest(manifest, manifestPath);
     reconcileManifest(manifest);
@@ -16507,13 +16550,14 @@ function applyManifestOwnerClaim(selected, { state, options, currentOwner, stale
       message: `claimed existing unowned workspace ${taskId} for ${currentOwner}`,
     };
   });
+  return branchOwnershipLockHeld ? apply() : withBranchOwnershipLock(state, selected.item.branchName, apply);
 }
 
-function applyAssignmentClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
+function applyAssignmentClaim(selected, { state, options, currentOwner, staleAfterSeconds, branchOwnershipLockHeld = false }) {
   const assignmentId = String(selected.targetAssignmentId || selected.item.itemId || "");
   assertSafeTaskId(assignmentId);
 
-  return withAssignmentLock(state, assignmentId, () => {
+  const apply = () => withAssignmentLock(state, assignmentId, () => {
     const manifests = readManifests(state).map(({ manifest }) => manifest);
     const assignments = readAssignments(state);
     const freshEvaluation = evaluateClaimCandidate(
@@ -16550,6 +16594,7 @@ function applyAssignmentClaim(selected, { state, options, currentOwner, staleAft
         : `claimed ready lane ${selected.item.itemId} for ${currentOwner}`,
     };
   });
+  return branchOwnershipLockHeld ? apply() : withBranchOwnershipLock(state, selected.item.branchName, apply);
 }
 
 function buildLaneAssignment(item, existingAssignment, options = {}) {
@@ -19518,6 +19563,34 @@ function withAssignmentsIndexLock(state, fn) {
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
     throw new Error(`Assignment index is locked by another session: ${lockPath}`);
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    rmSync(lockPath, { force: true });
+  }
+}
+
+// Branch ownership is the outermost lock for governed branch creation, claim,
+// and closed-remote cleanup flows. Direct claim and dispatch take branch,
+// then emergency-stop, then assignment-index or task/manifest locks. Closed
+// remote cleanup takes branch, then its task/manifest lease, then the
+// emergency-stop lock so its reproof and delete-intent write share one task
+// lease. It re-proves branch ownership while it holds the branch lock before
+// recording delete intent or mutating the remote.
+function withBranchOwnershipLock(state, branch, fn) {
+  assertSafeBranch(branch);
+  const directory = join(state.root, ".branch-ownership");
+  mkdirSync(directory, { recursive: true });
+  const digest = createHash("sha256").update(branch).digest("hex");
+  const lockPath = join(directory, `${digest}.lock`);
+  let fd;
+  try {
+    fd = openSync(lockPath, "wx");
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    throw new Error(`Branch ownership is locked by another session: ${branch}`);
   }
   try {
     return fn();
