@@ -570,6 +570,65 @@ do not treat an operator authorization as a bypass.
    registered a remote branch through `--delete-remote`, preserve that flag on
    resume: the runner refuses to downgrade a still-present registered remote
    target and close the manifest while that branch remains.
+   A closed manifest is normally terminal and `cleanup-merged` deliberately
+   skips it. If a verified old closeout retained only its remote branch, use
+   `cleanup-closed-remote <exact-task-id>` with the exact structured
+   `--remote-delete-authority 'task=<percent-encoded-id>;branch=<percent-encoded-branch>;pr=<n>;head=<sha>;remote-delete=true'`
+   binding as a dry run first, then add `--apply --approval <operator-evidence>`.
+   This narrow remote-only recovery requires all of the following at execution
+   time: the manifest is closed and owned by the current runner (or
+   a governed `--take-ownership --takeover-reason` is supplied); its retained
+   stored `cleanup-ready` audit (including its own exact head field) and
+   applied cleanup authority bind the same task, PR,
+   and delivery head; its worktree and local branch are absent; the live PR is
+   merged on the
+   recorded base with the recorded PR number, branch, and exact delivery head;
+   the only PR using that branch is the recorded merged PR (an empty, extra,
+   open, or closed-unmerged branch-PR result is a stop line); no other active
+   manifest or assignment owns that branch; the checkout has exactly one
+   `origin` push URL (including supported `ssh://git@github.com/OWNER/REPO.git`
+   form) and it names the canonical repository; the same validated
+   immutable URL is used for every remote probe and deletion (never the mutable
+   `origin` name); and the live remote ref equals that same head.
+   An active emergency-stop checkpoint is also a hard stop line for the
+   mutation. Encode every binding value
+   with canonical percent-encoding (notably `%3B` for a semicolon and `%27`
+   for an apostrophe in a valid branch name); quote the full value as shown so
+   the shell does not alter it.
+   The command uses an exact force-with-lease deletion and records an
+   already-absent remote as an idempotent confirmation without replacing the
+   original deletion proof. It records deletion intent durably before the
+   remote mutation, preserves a bounded failed-attempt history on a controlled
+   retry, and records completion plus resulting authority only after the remote
+   operation or absence recheck succeeds. It projects the resulting authority
+   into the lane evidence packet. A post-push remote reappearance is treated as ambiguous recreation,
+   never a retryable failure; only a failure known to precede the push may be
+   retried after an exact fresh probe. It never permits a mismatched,
+   recreated, locally registered, or unproven remote branch to be deleted.
+   Before it enters its lease callback,
+   the runner reserves the bounded external-command ledger budget required for
+   the reproof, deletion, and post-delete verification; insufficient capacity
+   fails closed before any remote mutation.
+   Branch creation, direct and dispatched ownership claims, and this closeout
+   share a per-branch ownership lock. Direct claim and dispatch take branch
+   ownership, then emergency-stop, then assignment-index or task/manifest
+   locks. This closeout is the intentional exception: it takes branch
+   ownership, then its task/manifest lease, then emergency-stop so reproof and
+   delete intent share the same lease. Cleanup re-runs its complete
+   branch-ownership proof while holding that lock before it records delete
+   intent or deletes a remote ref; a contended lock is a stop line.
+   A lock, recovery gate, and reclaim sidecar are populated and fsynced
+   privately before atomic publication, then record PID/start identity; only
+   an artifact whose recorded process identity is no longer live is recovered.
+   A stale published recovery gate is quarantined only after its owner is
+   provably dead. Stale recovery first atomically
+   claims a recovery gate and sidecar, then atomically moves the observed stale
+   inode, so a competing recovery or fresh governed owner cannot lose a freshly
+   reacquired target lock. Linux records process start ticks; macOS records
+   only a live PID and deliberately treats PID reuse as ambiguous rather
+   than reclaiming it. A failed remote deletion retains
+   its intent and is retryable only after a fresh probe proves the exact remote
+   ref is still present; any ambiguous post-failure state remains blocked.
    If a versioned lease reports `external_command_fence_unresolved`, do not
    rerun delivery, delete the lock, or manufacture a completion file. First
    prove the recorded runner PID/start identity is absent and inspect the exact

@@ -184,6 +184,10 @@ let activeTaskLeaseWriteContext = null;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const canonicalKendallRepository = Object.freeze({ owner: "slawdawg", name: "Kendall-vnxt" });
+// A closed-remote cleanup makes a bounded sequence of external observations,
+// one remote deletion, and a post-delete probe while holding its task lease.
+const closedRemoteCleanupExternalIntentReserve = 13;
+const closedRemoteCleanupManifestWriteReserve = 2;
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": {
@@ -354,6 +358,9 @@ try {
       break;
     case "cleanup-current":
       cleanupCurrent(commandArgs);
+      break;
+    case "cleanup-closed-remote":
+      cleanupClosedRemote(commandArgs);
       break;
     case "cleanup-integrated":
       cleanupIntegrated(commandArgs);
@@ -670,6 +677,16 @@ cleanup-current options:
   --take-ownership          Reassign a lane and linked assignment to the current owner before cleanup.
   --takeover-reason <text>  Required with --take-ownership when another owner is recorded.
 
+cleanup-closed-remote <task-id> options:
+  --apply                   Delete only the exact matching remote branch. Without this, print a proof plan.
+  --approval <text>         Required with --apply; at least 10 non-whitespace characters.
+  --remote-delete-authority '<binding>'
+                            Required structured binding: task=<id>;branch=<branch>;pr=<n>;head=<sha>;remote-delete=true.
+  --summary-json            Without --apply, print a bounded remote-cleanup proof packet.
+  This is only for an already closed manifest whose merged PR, recorded head,
+  retained cleanup audit/authority, and live remote ref all match exactly. It
+  refuses any residual local target and honors recorded ownership/takeover.
+
 cleanup-integrated options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --base <ref>              Ref to compare against. Defaults to origin/dev.
@@ -914,10 +931,10 @@ function startWorkspace(argv) {
 
   mkdirSync(state.tasksDir, { recursive: true });
   mkdirSync(state.worktreesDir, { recursive: true });
-  withManifestLock(state, taskId, () => {
+  withBranchOwnershipLock(state, branch, () => withManifestLock(state, taskId, () => {
     runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseRef], { cwd: repoRoot });
     writeManifest(manifestPath, manifest);
-  });
+  }));
 
   console.log(`Created Codex workspace ${taskId}`);
   printManifestSummary(manifest);
@@ -1876,22 +1893,25 @@ function claimNext(argv) {
     plan.push("preview only; no manifest, branch, PR, or worktree mutation");
     printPlan("claim-next", plan);
   } else {
-    const stop = activeEmergencyStop(state);
-    if (stop) {
-      plan.push(`emergency stop ${stop.checkpoint_id || "unknown"} (${stop.mode || "unknown"}) is active`);
-      printBlocked("claim-next", plan);
-      throw new Error(emergencyStopBlocker(stop, "claim-next"));
-    }
     if (!selected) {
       printBlocked("claim-next", plan);
       printClaimBlockers(queueEvaluations, selected);
       throw new Error("No claimable safe backlog lane found.");
     }
-    const applied = applyClaimNext(selected, {
-      state,
-      options,
-      currentOwner,
-      staleAfterSeconds,
+    const applied = withBranchOwnershipLock(state, selected.item.branchName, () => {
+      const stop = activeEmergencyStop(state);
+      if (stop) {
+        plan.push(`emergency stop ${stop.checkpoint_id || "unknown"} (${stop.mode || "unknown"}) is active`);
+        printBlocked("claim-next", plan);
+        throw new Error(emergencyStopBlocker(stop, "claim-next"));
+      }
+      return applyClaimNext(selected, {
+        state,
+        options,
+        currentOwner,
+        staleAfterSeconds,
+        branchOwnershipLockHeld: true,
+      });
     });
     printApplied("claim-next", [
       ...plan,
@@ -7240,6 +7260,28 @@ function githubRepository(manifest) {
   return { owner, name: parsed.name };
 }
 
+function githubRepositoryAt(cwd) {
+  const result = run("gh", ["repo", "view", "--json", "owner,name"], { cwd });
+  if (result.code !== 0) return null;
+  try {
+    const parsed = parseGhJson(result.stdout, "cleanup repository metadata");
+    const owner = typeof parsed.owner === "string" ? parsed.owner : parsed.owner?.login;
+    const name = typeof parsed.name === "string" ? parsed.name : "";
+    return owner && name ? { owner, name } : null;
+  } catch {
+    return null;
+  }
+}
+
+function originRepositoryIdentities(cwd) {
+  const result = git(["remote", "get-url", "--push", "--all", "origin"], { cwd });
+  if (result.code !== 0) return null;
+  const values = result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  if (values.length !== 1) return null;
+  const match = values[0].match(/^(?:https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  return match ? [{ owner: match[1], name: match[2], url: values[0] }] : null;
+}
+
 function fetchReviewThreadState(manifest, repository, prNumber) {
   const query = [
     "query($owner:String!,$name:String!,$number:Int!,$after:String){",
@@ -9974,6 +10016,509 @@ function cleanupCurrent(argv) {
   cleanupMerged(argv, { currentOnly: true });
 }
 
+function cleanupClosedRemote(argv) {
+  assertClosedRemoteCleanupOptionSyntax(argv);
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) {
+    throw new Error("cleanup-closed-remote requires exactly one closed task id.");
+  }
+  if (options.summaryJson && options.apply) {
+    throw new Error("cleanup-closed-remote --summary-json is only supported without --apply.");
+  }
+  if (options.apply && options.dryRun) {
+    throw new Error("cleanup-closed-remote accepts either --dry-run or --apply, not both.");
+  }
+  if (options.apply && !validSupersessionApplyEvidence(options.approval)) {
+    throw new Error("cleanup-closed-remote --apply requires --approval with at least 10 non-whitespace characters.");
+  }
+
+  const taskId = positional[0];
+  assertSafeTaskId(taskId);
+  const state = workspaceState(options);
+  const record = findCleanupManifestByExactTaskId(state, taskId);
+  if (!String(record.manifest.owner || "").trim()) {
+    if (!options.takeOwnership) {
+      throw new Error("cleanup-closed-remote requires --take-ownership with --takeover-reason for an unowned closed manifest.");
+    }
+    if (!validTakeoverReason(options.takeoverReason)) {
+      throw new Error("cleanup-closed-remote --takeover-reason must explain the unowned-lane takeover in at least 10 non-whitespace characters.");
+    }
+  }
+  assertLaneOwner(record.manifest, options);
+  const remoteDeleteAuthority = parseClosedRemoteDeleteAuthority(options.remoteDeleteAuthority);
+  requireGh("cleanup-closed-remote");
+  const proof = closedRemoteCleanupProof(record.manifest, state, { remoteDeleteAuthority });
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(closedRemoteCleanupSummary(record.manifest, proof), null, 2));
+    return;
+  }
+  if (!proof.ready) {
+    printBlocked("cleanup-closed-remote", proof.blockers);
+    throw new Error(`Closed-manifest remote cleanup is blocked: ${proof.blockers.join("; ")}`);
+  }
+  if (!options.apply) {
+    printPlan("cleanup-closed-remote", closedRemoteCleanupPlanLines(record.manifest, proof));
+    console.log("Add --apply --approval <operator evidence> only after reviewing this exact-head proof packet.");
+    return;
+  }
+
+  withBranchOwnershipLock(state, record.manifest.branch, () => withManifestLock(state, taskId, () => withEmergencyStopLock(state, () => {
+    assertNoActiveEmergencyStop(state, "cleanup-closed-remote");
+    const locked = readManifest(record.path);
+    validateManifest(locked, record.path);
+    assertLaneOwner(locked, options);
+    claimLaneOwner(locked, options);
+    const lockedProof = closedRemoteCleanupProof(locked, state, { remoteDeleteAuthority });
+    if (!lockedProof.ready) {
+      throw new Error(`Closed-manifest remote cleanup is blocked under lock: ${lockedProof.blockers.join("; ")}`);
+    }
+    const cleanupStartedAt = new Date().toISOString();
+    const outcome = lockedProof.remote.sha ? "deleted" : "already_absent";
+    if (lockedProof.remote.sha) {
+      // Record immutable intent before the irreversible remote mutation.  A
+      // crash after a successful push must never make a recreated ref eligible
+      // on a retry.
+      const previousDeleteIntent = locked.closed_remote_cleanup_delete_intent;
+      if (previousDeleteIntent?.status === "retryable_failed") {
+        // A controlled retry must retain the failed attempt that justified it;
+        // replacing the intent alone would erase the only readable failure
+        // diagnostics after the retry completes.
+        locked.closed_remote_cleanup_delete_attempt_history = [
+          ...copyJsonArray(locked.closed_remote_cleanup_delete_attempt_history),
+          { ...previousDeleteIntent, supersededAt: cleanupStartedAt },
+        ].slice(-10);
+      }
+      locked.closed_remote_cleanup_delete_intent = {
+        schemaVersion: 1,
+        taskId: locked.task_id,
+        branch: locked.branch,
+        expectedHeadSha: lockedProof.expectedHeadSha,
+        remoteHeadSha: lockedProof.remote.sha,
+        recordedAt: cleanupStartedAt,
+        metadataOnly: true,
+      };
+      appendTaskEvent(locked, "closed_remote_cleanup_delete_intent", `${locked.branch} ${lockedProof.remote.sha}`);
+      writeManifest(record.path, locked);
+      try {
+        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha, lockedProof.remote.url);
+        locked.closed_remote_cleanup_delete_intent = {
+          ...locked.closed_remote_cleanup_delete_intent,
+          status: "completed",
+          completedAt: new Date().toISOString(),
+        };
+      } catch (error) {
+        let remoteAfterFailure = null;
+        try { remoteAfterFailure = remoteBranchShaAt(lockedProof.remote.url, locked.branch, lockedProof.cleanupCwd) || null; } catch {}
+        const pushSucceeded = error?.remoteDeletionPushSucceeded === true;
+        locked.closed_remote_cleanup_delete_intent = {
+          ...locked.closed_remote_cleanup_delete_intent,
+          // A successful push followed by a present ref is necessarily an
+          // ambiguous recreation race. Only a failure known to occur before
+          // the push can be retried after an exact fresh probe.
+          status: !pushSucceeded && remoteAfterFailure === lockedProof.expectedHeadSha ? "retryable_failed" : "outcome_unknown",
+          failedAt: new Date().toISOString(),
+          remoteAfterFailure,
+          pushSucceeded,
+          failure: safeMetadataText(error.message || error, 300),
+        };
+        appendTaskEvent(locked, "closed_remote_cleanup_delete_failed", locked.closed_remote_cleanup_delete_intent.status);
+        writeManifest(record.path, locked);
+        throw error;
+      }
+    } else {
+      // The absence proof can change between the locked packet and this
+      // mutation branch. Re-read the remote before recording a terminal no-op
+      // so an intervening recreation remains actionable rather than masked.
+      const recheckedRemoteSha = remoteBranchShaAt(lockedProof.remote.url, locked.branch, lockedProof.cleanupCwd);
+      if (recheckedRemoteSha) {
+        throw new Error(`Closed-manifest remote cleanup is blocked under lock: remote branch origin/${locked.branch} appeared after the absence proof.`);
+      }
+      appendTaskEvent(locked, "closed_remote_branch_already_absent", locked.branch);
+    }
+    // Completion evidence and its authority must never predate the remote
+    // mutation or the final absence recheck.
+    const completedAt = new Date().toISOString();
+    const previousCleanup = locked.closed_remote_cleanup;
+    if (lockedProof.remote.sha || !previousCleanup?.status) {
+      locked.closed_remote_cleanup = {
+        schemaVersion: 1,
+        status: outcome,
+        taskId: locked.task_id,
+        prNumber: lockedProof.pr.number,
+        expectedHeadSha: lockedProof.expectedHeadSha,
+        branch: locked.branch,
+        remoteHeadSha: lockedProof.remote.sha || null,
+        completedAt,
+        approval: safeMetadataText(options.approval, 500),
+        metadataOnly: true,
+      };
+    } else {
+      // A no-op rerun must never erase the original destructive-action proof.
+      locked.closed_remote_cleanup = {
+        ...previousCleanup,
+        idempotentAbsentConfirmedAt: completedAt,
+        idempotentAbsentApproval: safeMetadataText(options.approval, 500),
+      };
+    }
+    locked.closed_remote_cleanup_authority = closedRemoteCleanupAuthorityEvidence(locked, lockedProof, remoteDeleteAuthority, completedAt);
+    appendAuthorityDecision(locked, locked.closed_remote_cleanup_authority);
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {}, {
+      cleanupAuthorityDecision: locked.closed_remote_cleanup_authority,
+    });
+    locked.updated_at = completedAt;
+    appendTaskEvent(locked, "closed_remote_cleanup_completed", `${outcome} ${locked.branch}`);
+    writeManifest(record.path, locked);
+  }), {
+    externalIntentReserve: closedRemoteCleanupExternalIntentReserve,
+    manifestWriteReserve: closedRemoteCleanupManifestWriteReserve,
+  }));
+  console.log(`Closed remote branch for ${taskId}`);
+}
+
+function assertClosedRemoteCleanupOptionSyntax(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = ["--apply", "--dry-run", "--summary-json", "--take-ownership"].find((name) => arg === name || arg.startsWith(`${name}=`));
+    if (!option) continue;
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
+      throw new Error(`cleanup-closed-remote ${option} must be a bare flag without a value.`);
+    }
+  }
+}
+
+function closedRemoteCleanupProof(manifest, state, context = {}) {
+  const blockers = [];
+  if (manifest.status !== "closed") blockers.push("workspace manifest is not closed");
+  const expectedHeadSha = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha);
+  if (!expectedHeadSha) blockers.push("closed manifest lacks an exact recorded delivery head");
+  const expectedPrNumber = positiveSafePrNumberOrNull(manifest.pr_number);
+  if (!expectedPrNumber) blockers.push("closed manifest lacks an exact PR number");
+  if (!validMergedPrUrl(manifest.pr_url, expectedPrNumber, canonicalKendallRepository)) {
+    blockers.push("closed manifest PR URL is not the canonical Kendall_Nxt pull-request URL for its recorded PR number");
+  }
+  if (!manifest.branch) blockers.push("closed manifest lacks a branch name");
+
+  const managedRoot = assertManagedWorktreeRoot(state);
+  const targetPath = resolve(manifest.worktree_path || "");
+  const targetRelative = relative(managedRoot, targetPath);
+  if (!targetRelative || targetRelative.startsWith("..") || resolve(managedRoot, targetRelative) !== targetPath) {
+    blockers.push("closed manifest worktree path is not under the managed worktree root");
+  }
+  // This is a remote-only closeout, so the managed worktree must already be
+  // absent. The bounded root check above replaces cleanup's normal
+  // present-worktree validation before selecting the stable checkout.
+  const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, { closedRemoteOnly: true });
+  const worktreePresent = existsSync(manifest.worktree_path) || worktreeListed(manifest.worktree_path, cleanupCwd);
+  if (worktreePresent) blockers.push("closed manifest still has a registered or present local worktree");
+  const localBranch = cleanupLocalTargetEvidence(manifest, cleanupCwd);
+  if (localBranch.state === "unknown") blockers.push("closed manifest local branch inspection is unknown");
+  if (localBranch.state === "present") blockers.push(`closed manifest still has local branch ${manifest.branch} at ${localBranch.sha}`);
+
+  // The fallback checkout is mutable infrastructure. Bind both its GitHub
+  // identity and the PR query to the canonical repository so a retargeted
+  // origin cannot make a same-number fork PR eligible for deletion.
+  const originRepositories = originRepositoryIdentities(cleanupCwd);
+  if (originRepositories?.length !== 1 || originRepositories[0].owner !== canonicalKendallRepository.owner || originRepositories[0].name !== canonicalKendallRepository.name) {
+    blockers.push("cleanup origin must have exactly one canonical Kendall_Nxt push URL");
+  }
+  const repository = githubRepositoryAt(cleanupCwd);
+  if (repository?.owner !== canonicalKendallRepository.owner || repository?.name !== canonicalKendallRepository.name) {
+    blockers.push("cleanup repository identity is not the canonical Kendall_Nxt repository");
+  }
+  const pr = prView(manifest, canonicalKendallRepository);
+  if (!pr?.mergedAt || pr.state !== "MERGED") {
+    blockers.push("live GitHub PR is not merged");
+  } else {
+    if (pr.number !== expectedPrNumber) blockers.push(`live GitHub PR number ${pr.number || "missing"} does not match manifest ${expectedPrNumber}`);
+    if (!validMergedPrUrl(pr.url, pr.number, canonicalKendallRepository)) blockers.push("live GitHub PR URL is not the canonical Kendall_Nxt pull-request URL for its reported PR number");
+    if (pr.baseRefName !== manifest.base_branch) blockers.push(`live GitHub PR base ${pr.baseRefName || "missing"} does not match manifest ${manifest.base_branch}`);
+    if (pr.headRefName !== manifest.branch) blockers.push(`live GitHub PR branch ${pr.headRefName || "missing"} does not match manifest ${manifest.branch}`);
+    if (pr.headRefOid !== expectedHeadSha) blockers.push(`live GitHub PR head ${pr.headRefOid || "missing"} does not match recorded delivery head ${expectedHeadSha}`);
+  }
+  const branchPrProof = closedRemoteBranchPrProof(manifest, cleanupCwd);
+  if (branchPrProof.status !== "matched") {
+    blockers.push(branchPrProof.reason);
+  }
+  const branchOwnership = closedRemoteBranchOwnershipProof(manifest, state);
+  if (branchOwnership.status !== "matched") {
+    blockers.push(branchOwnership.reason);
+  }
+
+  const storedAuditHead = exactGitObjectIdOrNull(manifest.delivery_subagent_audit?.headSha);
+  if (storedAuditHead !== expectedHeadSha) {
+    blockers.push("retained cleanup audit does not itself bind the exact recorded delivery head");
+  }
+  const retainedAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, {}, {
+    expectedHeadSha,
+    acceptableStatuses: ["cleanup-ready"],
+    checkedAt: new Date().toISOString(),
+  });
+  if (retainedAudit.blockers.length) {
+    blockers.push(`retained cleanup audit is not exact-head cleanup-ready: ${retainedAudit.blockers.join(", ")}`);
+  }
+  const retainedAuthority = manifest.cleanup_authority_decision;
+  const expectedEvidenceRefs = [
+    `task:${manifest.task_id}`,
+    `pr:${expectedPrNumber}`,
+    `expected-head:${expectedHeadSha}`,
+  ];
+  if (!retainedAuthority || retainedAuthority.authorityFamily !== "cleanup" || retainedAuthority.decision !== "applied" || retainedAuthority.allowed !== true) {
+    blockers.push("retained cleanup authority is not an allowed applied cleanup decision");
+  } else if (!expectedEvidenceRefs.every((ref) => Array.isArray(retainedAuthority.evidenceRefs) && retainedAuthority.evidenceRefs.includes(ref))) {
+    blockers.push("retained cleanup authority does not bind this task, PR, and exact delivery head");
+  }
+  const remoteDeleteAuthority = context.remoteDeleteAuthority || { valid: false, reason: "--remote-delete-authority is required" };
+  if (!remoteDeleteAuthority.valid) {
+    blockers.push(remoteDeleteAuthority.reason);
+  } else {
+    const expectedAuthority = {
+      taskId: manifest.task_id,
+      branch: manifest.branch,
+      prNumber: expectedPrNumber,
+      headSha: expectedHeadSha,
+    };
+    for (const [field, expected] of Object.entries(expectedAuthority)) {
+      if (remoteDeleteAuthority[field] !== expected) {
+        blockers.push(`remote delete authority ${field} ${remoteDeleteAuthority[field] || "missing"} does not match ${expected}`);
+      }
+    }
+  }
+
+  const remoteUrl = originRepositories?.[0]?.url || null;
+  let remoteSha = "";
+  try {
+    if (!remoteUrl) throw new Error("canonical origin push URL is unavailable");
+    remoteSha = remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd);
+  } catch (error) {
+    blockers.push(`could not exactly inspect remote branch: ${safeMetadataText(error.message || error, 300)}`);
+  }
+  if (remoteSha && remoteSha !== expectedHeadSha) {
+    blockers.push(`remote branch origin/${manifest.branch} head ${remoteSha} does not match recorded delivery head ${expectedHeadSha}`);
+  }
+  if (remoteSha && manifest.closed_remote_cleanup?.status) {
+    blockers.push("closed manifest already records remote deletion but the remote branch is present again");
+  }
+  if (manifest.closed_remote_cleanup_delete_intent && (
+    manifest.closed_remote_cleanup_delete_intent.status === "completed" ? Boolean(remoteSha) :
+      manifest.closed_remote_cleanup_delete_intent.status !== "retryable_failed" || remoteSha !== expectedHeadSha
+  )) {
+    blockers.push("closed manifest records a non-retryable or no-longer-exact remote deletion intent");
+  }
+  if (remoteSha && retainedAuthority?.operation === "cleanup-merged-delete-remote") {
+    blockers.push("retained cleanup authority proves the remote branch was already deleted; a recreated remote branch is not eligible for closed-manifest cleanup");
+  }
+
+  return {
+    ready: blockers.length === 0,
+    blockers,
+    expectedHeadSha,
+    pr,
+    repository,
+    originRepositories,
+    branchPrProof,
+    branchOwnership,
+    cleanupCwd,
+    retainedAudit,
+    retainedAuthority,
+    remoteDeleteAuthority,
+    local: { worktreePresent, branchSha: localBranch.sha || null, branchState: localBranch.state },
+    remote: { branch: manifest.branch, url: remoteUrl, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
+  };
+}
+
+function closedRemoteBranchOwnershipProof(manifest, state) {
+  const activeManifestIds = [];
+  for (const record of readManifestRecords(state)) {
+    if (record.error) return { status: "blocked", reason: "closed-manifest cleanup cannot verify manifest inventory" };
+    const candidate = record.manifest;
+    try {
+      validateManifest(candidate, record.path);
+    } catch {
+      return { status: "blocked", reason: "closed-manifest cleanup cannot verify structurally invalid manifest inventory" };
+    }
+    if (candidate?.task_id !== manifest.task_id && candidate?.branch === manifest.branch && candidate?.status !== "closed") {
+      activeManifestIds.push(String(candidate.task_id || "unknown"));
+    }
+  }
+  if (activeManifestIds.length) {
+    return { status: "blocked", reason: `closed-manifest cleanup found active manifest branch ownership: ${activeManifestIds.join(",")}` };
+  }
+  if (existsSync(state.assignmentsDir)) {
+    for (const name of readdirSync(state.assignmentsDir).filter((entry) => entry.endsWith(".json")).sort((left, right) => left.localeCompare(right))) {
+      let assignment;
+      try {
+        assignment = readAssignment(join(state.assignmentsDir, name));
+        validateAssignment(assignment, join(state.assignmentsDir, name));
+      } catch {
+        return { status: "blocked", reason: "closed-manifest cleanup cannot verify assignment inventory" };
+      }
+      if (assignment.branch === manifest.branch && assignment.status !== "closed") {
+        return { status: "blocked", reason: `closed-manifest cleanup found active assignment branch ownership: ${assignment.assignment_id}` };
+      }
+    }
+  }
+  return { status: "matched" };
+}
+
+function closedRemoteBranchPrProof(manifest, cleanupCwd) {
+  const result = run("gh", [
+    "pr", "list", "--head", manifest.branch, "--state", "all",
+    "--json", "number,state,mergedAt,headRefName,headRefOid,baseRefName",
+    "--repo", `${canonicalKendallRepository.owner}/${canonicalKendallRepository.name}`,
+  ], { cwd: cleanupCwd });
+  if (result.code !== 0) return { status: "unavailable", reason: "live GitHub branch PR proof is unavailable" };
+  let pullRequests;
+  try { pullRequests = parseGhJson(result.stdout, "closed-remote branch PR proof"); } catch { return { status: "unavailable", reason: "live GitHub branch PR proof is malformed" }; }
+  if (!Array.isArray(pullRequests) || pullRequests.length !== 1 || pullRequests.some((pr) => !pr || pr.headRefName !== manifest.branch)) {
+    return { status: "unavailable", reason: "live GitHub branch PR proof is non-exact" };
+  }
+  const [recorded] = pullRequests;
+  if (recorded.number !== manifest.pr_number || recorded.state !== "MERGED" || !recorded.mergedAt) {
+    return { status: "blocked", reason: "live GitHub branch PR proof is not the single recorded merged PR for the source branch" };
+  }
+  return { status: "matched" };
+}
+
+function closedRemoteCleanupSummary(manifest, proof) {
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: "cleanup-closed-remote",
+    taskId: manifest.task_id,
+    ready: proof.ready,
+    blockers: proof.blockers,
+    expectedHeadSha: proof.expectedHeadSha || null,
+    pr: proof.pr ? cleanupPrSummary(manifest, proof.pr) : null,
+    retainedAudit: {
+      status: proof.retainedAudit.status,
+      agent: proof.retainedAudit.agent,
+      headSha: proof.retainedAudit.headSha,
+      blockers: proof.retainedAudit.blockers,
+    },
+    retainedAuthority: proof.retainedAuthority ? {
+      operation: proof.retainedAuthority.operation || null,
+      authorityFamily: proof.retainedAuthority.authorityFamily || null,
+      decision: proof.retainedAuthority.decision || null,
+      allowed: proof.retainedAuthority.allowed === true,
+    } : null,
+    remoteDeleteAuthority: proof.remoteDeleteAuthority.valid ? {
+      taskId: proof.remoteDeleteAuthority.taskId,
+      branch: proof.remoteDeleteAuthority.branch,
+      prNumber: proof.remoteDeleteAuthority.prNumber,
+      headSha: proof.remoteDeleteAuthority.headSha,
+      remoteDelete: true,
+    } : { valid: false, reason: proof.remoteDeleteAuthority.reason },
+    local: proof.local,
+    remote: proof.remote,
+    mutation: "none; proof only",
+  };
+}
+
+function closedRemoteCleanupPlanLines(manifest, proof) {
+  return [
+    `closed exact task ${manifest.task_id}`,
+    `merged PR #${proof.pr.number} and recorded delivery head ${proof.expectedHeadSha} matched`,
+    "retained cleanup-ready audit and applied cleanup authority matched the exact task, PR, and head",
+    "structured remote-delete authority matched the exact task, branch, PR, and head",
+    "managed local worktree and local branch are absent",
+    proof.remote.sha
+      ? `delete exact remote branch origin/${manifest.branch} (${proof.remote.sha}) with force-with-lease`
+      : `remote branch origin/${manifest.branch} is already absent; record idempotent completion only`,
+  ];
+}
+
+function parseClosedRemoteDeleteAuthority(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return { valid: false, reason: "--remote-delete-authority is required" };
+  }
+  const entries = value.split(";");
+  if (entries.length !== 5) {
+    return { valid: false, reason: "--remote-delete-authority must contain exactly task, branch, pr, head, and remote-delete fields" };
+  }
+  const fields = {};
+  for (const entry of entries) {
+    const index = entry.indexOf("=");
+    if (index <= 0 || entry.indexOf("=", index + 1) !== -1) {
+      return { valid: false, reason: "--remote-delete-authority has malformed key/value syntax" };
+    }
+    const key = entry.slice(0, index);
+    const encodedValue = entry.slice(index + 1);
+    let fieldValue;
+    try {
+      fieldValue = decodeURIComponent(encodedValue);
+    } catch {
+      return { valid: false, reason: "--remote-delete-authority has invalid percent-encoding" };
+    }
+    if (encodeClosedRemoteDeleteAuthorityValue(fieldValue) !== encodedValue) {
+      return { valid: false, reason: "--remote-delete-authority values must use canonical percent-encoding" };
+    }
+    if (!Object.hasOwn({ task: true, branch: true, pr: true, head: true, "remote-delete": true }, key) || Object.hasOwn(fields, key) || !fieldValue) {
+      return { valid: false, reason: "--remote-delete-authority has missing, duplicate, or unknown fields" };
+    }
+    fields[key] = fieldValue;
+  }
+  const prNumber = /^\d+$/.test(fields.pr) ? Number(fields.pr) : null;
+  const headSha = exactGitObjectIdOrNull(fields.head);
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || !headSha || fields["remote-delete"] !== "true") {
+    return { valid: false, reason: "--remote-delete-authority requires a positive PR, exact head, and remote-delete=true" };
+  }
+  return {
+    valid: true,
+    taskId: fields.task,
+    branch: fields.branch,
+    prNumber,
+    headSha,
+  };
+}
+
+function encodeClosedRemoteDeleteAuthorityValue(value) {
+  // encodeURIComponent deliberately leaves a few RFC 3986 reserved marks
+  // unescaped. Bindings are shell-quoted in the runbook, so encode all of
+  // them—especially an apostrophe—to provide one unambiguous canonical form.
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function closedRemoteCleanupAuthorityEvidence(manifest, proof, binding, recordedAt) {
+  return {
+    schemaVersion: 1,
+    operation: "cleanup-closed-remote",
+    authorityFamily: "cleanup",
+    decision: "applied",
+    allowed: true,
+    // Authority-decision normalization intentionally retains only its stable
+    // evidence schema. Keep the destructive scope there rather than in
+    // ad-hoc object properties which would disappear from the canonical lane
+    // evidence packet.
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      `branch:${manifest.branch}`,
+      `pr:${proof.pr.number}`,
+      `expected-head:${proof.expectedHeadSha}`,
+      "remote-delete:true",
+    ],
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    prNumber: proof.pr.number,
+    expectedHeadSha: proof.expectedHeadSha,
+    remoteDelete: true,
+    retainedCleanupAuthorityOperation: proof.retainedAuthority.operation,
+    retainedCleanupAudit: {
+      status: proof.retainedAudit.status,
+      agent: proof.retainedAudit.agent,
+      headSha: proof.retainedAudit.headSha,
+    },
+    binding: {
+      taskId: binding.taskId,
+      branch: binding.branch,
+      prNumber: binding.prNumber,
+      headSha: binding.headSha,
+      remoteDelete: true,
+    },
+    recordedAt,
+    metadataOnly: true,
+  };
+}
+
 function cleanupIntegrated(argv) {
   const { positional, options } = parseOptions(argv);
   if (options.summaryJson && options.apply) {
@@ -12272,21 +12817,31 @@ function deleteLocalBranchIfPresent(manifest, cleanupCwd, expectedHeadSha) {
   manifest.local_branch_deleted_at = manifest.local_branch_deleted_at || new Date().toISOString();
 }
 
-function deleteRemoteBranchIfPresent(manifest, cleanupCwd, expectedHeadSha) {
-  const remoteSha = originBranchSha(manifest.branch, cleanupCwd);
-  assertExpectedBranchHead(`Remote branch origin/${manifest.branch}`, remoteSha, expectedHeadSha);
-  if (remoteSha) {
-    runChecked(
-      "git",
-      ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, "origin", `:refs/heads/${manifest.branch}`],
-      { cwd: cleanupCwd },
-    );
-    appendTaskEvent(manifest, "remote_branch_deleted", manifest.branch);
-  } else {
-    appendTaskEvent(manifest, "remote_branch_already_absent", manifest.branch);
-  }
-  if (originBranchSha(manifest.branch, cleanupCwd)) {
-    throw new Error(`Remote branch still exists after cleanup: origin/${manifest.branch}`);
+function deleteRemoteBranchIfPresent(manifest, cleanupCwd, expectedHeadSha, remoteUrl = "origin") {
+  if (typeof remoteUrl !== "string" || !remoteUrl) throw new Error("Remote deletion requires an exact validated remote URL.");
+  const remoteSha = remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd);
+  assertExpectedBranchHead(`Remote branch ${remoteUrl}/${manifest.branch}`, remoteSha, expectedHeadSha);
+  let remoteDeletionPushSucceeded = false;
+  try {
+    if (remoteSha) {
+      runChecked("git", ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, remoteUrl, `:refs/heads/${manifest.branch}`], { cwd: cleanupCwd });
+      // Set this immediately after the external mutation. Every following
+      // failure—including an unavailable post-delete probe—must retain the
+      // fact that a recreated exact ref is not a retryable failed push.
+      remoteDeletionPushSucceeded = true;
+      appendTaskEvent(manifest, "remote_branch_deleted", manifest.branch);
+      manifest.remote_branch_delete_push_succeeded_at = new Date().toISOString();
+    } else {
+      appendTaskEvent(manifest, "remote_branch_already_absent", manifest.branch);
+    }
+    if (remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd)) {
+      throw new Error(`Remote branch still exists after cleanup: ${remoteUrl}/${manifest.branch}`);
+    }
+  } catch (error) {
+    if (remoteDeletionPushSucceeded && error && typeof error === "object") {
+      error.remoteDeletionPushSucceeded = true;
+    }
+    throw error;
   }
   manifest.remote_branch_deleted_at = manifest.remote_branch_deleted_at || new Date().toISOString();
 }
@@ -13356,21 +13911,25 @@ function branchSha(branch, cwd = repoRoot) {
 }
 
 function originBranchSha(branch, cwd = repoRoot) {
+  return remoteBranchShaAt("origin", branch, cwd, "origin");
+}
+
+function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote) {
   const exactRef = `refs/heads/${branch}`;
-  const result = git(["ls-remote", "--heads", "origin", exactRef], { cwd });
+  const result = git(["ls-remote", "--heads", remote, exactRef], { cwd });
   if (result.code !== 0) {
-    throw new Error(result.stderr || `Could not inspect remote branch: origin/${branch}`);
+    throw new Error(result.stderr || `Could not inspect remote branch: ${label}/${branch}`);
   }
   if (!result.stdout) {
     return "";
   }
   const rows = result.stdout.trim().split("\n").filter(Boolean);
   if (rows.length !== 1) {
-    throw new Error(`Could not uniquely inspect remote branch: origin/${branch}`);
+    throw new Error(`Could not uniquely inspect remote branch: ${label}/${branch}`);
   }
   const [sha, ref] = rows[0].split(/\s+/);
   if (!exactGitObjectIdOrNull(sha) || ref !== exactRef) {
-    throw new Error(`Could not exactly inspect remote branch: origin/${branch}`);
+    throw new Error(`Could not exactly inspect remote branch: ${label}/${branch}`);
   }
   return sha;
 }
@@ -14807,19 +15366,24 @@ function assignmentBranchStatesByBranch(assignments) {
 }
 
 function applyClaimNext(selected, context) {
-  const applyMutation = () => {
-    assertNoActiveEmergencyStop(context.state, "claim-next");
-    if (selected.mutation === "manifest_owner_claim") {
-      return applyManifestOwnerClaim(selected, context);
-    }
+  const applyWithBranchLock = () => {
+    const applyMutation = () => {
+      assertNoActiveEmergencyStop(context.state, "claim-next");
+      if (selected.mutation === "manifest_owner_claim") {
+        return applyManifestOwnerClaim(selected, { ...context, branchOwnershipLockHeld: true });
+      }
 
-    if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
-      return applyAssignmentClaim(selected, context);
-    }
+      if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
+        return applyAssignmentClaim(selected, { ...context, branchOwnershipLockHeld: true });
+      }
 
-    throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+      throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+    };
+    return context.emergencyStopLockHeld === true ? applyMutation() : withEmergencyStopLock(context.state, applyMutation);
   };
-  return context.emergencyStopLockHeld === true ? applyMutation() : withEmergencyStopLock(context.state, applyMutation);
+  return context.branchOwnershipLockHeld === true
+    ? applyWithBranchLock()
+    : withBranchOwnershipLock(context.state, selected.item.branchName, applyWithBranchLock);
 }
 
 function emergencyStopCheckpointPath(state) {
@@ -15456,7 +16020,7 @@ function formatQueueCandidateStateCounts(counts = {}) {
 }
 
 function applyDispatchNext(plan, context) {
-  return withEmergencyStopLock(context.state, () => {
+  return withBranchOwnershipLock(context.state, plan.selected.item.branchName, () => withEmergencyStopLock(context.state, () => {
     assertNoActiveEmergencyStop(context.state, "dispatch-next");
     if (!plan.selected) {
       throw new Error("No dispatchable safe backlog lane found.");
@@ -15469,6 +16033,7 @@ function applyDispatchNext(plan, context) {
       currentOwner: context.currentOwner,
       staleAfterSeconds: context.staleAfterSeconds,
       emergencyStopLockHeld: true,
+      branchOwnershipLockHeld: true,
     });
 
     if (plan.selected.mutation === "manifest_owner_claim") {
@@ -15521,7 +16086,7 @@ function applyDispatchNext(plan, context) {
       manifestPath: manifestResult.path,
       packet,
     };
-  });
+  }));
 }
 
 function applyManifestDispatch(selected, manifestPath, context, { assignmentPath, workspaceAction }) {
@@ -16032,12 +16597,12 @@ function printDispatchPacket(label, packet) {
   }
 }
 
-function applyManifestOwnerClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
+function applyManifestOwnerClaim(selected, { state, options, currentOwner, staleAfterSeconds, branchOwnershipLockHeld = false }) {
   const taskId = String(selected.targetTaskId || "");
   assertSafeTaskId(taskId);
   const manifestPath = join(state.tasksDir, `${taskId}.json`);
 
-  return withManifestLock(state, taskId, () => {
+  const apply = () => withManifestLock(state, taskId, () => {
     const manifest = readManifest(manifestPath);
     validateManifest(manifest, manifestPath);
     reconcileManifest(manifest);
@@ -16062,13 +16627,14 @@ function applyManifestOwnerClaim(selected, { state, options, currentOwner, stale
       message: `claimed existing unowned workspace ${taskId} for ${currentOwner}`,
     };
   });
+  return branchOwnershipLockHeld ? apply() : withBranchOwnershipLock(state, selected.item.branchName, apply);
 }
 
-function applyAssignmentClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
+function applyAssignmentClaim(selected, { state, options, currentOwner, staleAfterSeconds, branchOwnershipLockHeld = false }) {
   const assignmentId = String(selected.targetAssignmentId || selected.item.itemId || "");
   assertSafeTaskId(assignmentId);
 
-  return withAssignmentLock(state, assignmentId, () => {
+  const apply = () => withAssignmentLock(state, assignmentId, () => {
     const manifests = readManifests(state).map(({ manifest }) => manifest);
     const assignments = readAssignments(state);
     const freshEvaluation = evaluateClaimCandidate(
@@ -16105,6 +16671,7 @@ function applyAssignmentClaim(selected, { state, options, currentOwner, staleAft
         : `claimed ready lane ${selected.item.itemId} for ${currentOwner}`,
     };
   });
+  return branchOwnershipLockHeld ? apply() : withBranchOwnershipLock(state, selected.item.branchName, apply);
 }
 
 function buildLaneAssignment(item, existingAssignment, options = {}) {
@@ -18359,10 +18926,13 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, optio
     ["manifest-commits", "manifest_commit"],
   ]) {
     const count = leaseJsonRecordCount(taskLeaseLedgerPath(state, taskId, kind), label);
-    if (count >= taskLeaseMaximumHistoryRecords) {
+    const reserve = kind === "external-intents" || kind === "external-completions"
+      ? positiveInteger(options.externalIntentReserve, 1)
+      : positiveInteger(options.manifestWriteReserve, 1);
+    if (count > taskLeaseMaximumHistoryRecords - reserve) {
       throw new Error(
         `Task lease ${label} callback reservation capacity is exhausted: task_id=${taskId}; generation=${metadata.generation}; ` +
-        `maximum_history_records=${taskLeaseMaximumHistoryRecords}; mutation=none.`,
+        `required_records=${reserve}; maximum_history_records=${taskLeaseMaximumHistoryRecords}; mutation=none.`,
       );
     }
   }
@@ -18635,6 +19205,12 @@ function applyLegacyRecoveryAdoption(state, packet, approval) {
 
 function processStartIdentity(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "darwin") {
+    // macOS lacks Linux /proc start ticks. A live PID-only
+    // identity is deliberately non-reclaimable on reuse: it preserves mutual
+    // exclusion by failing closed rather than mistaking a reused PID for dead.
+    try { process.kill(pid, 0); return `portable-live-pid:${pid}`; } catch { return null; }
+  }
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
     const close = raw.lastIndexOf(")");
@@ -19079,6 +19655,171 @@ function withAssignmentsIndexLock(state, fn) {
   }
 }
 
+// Branch ownership is the outermost lock for governed branch creation, claim,
+// and closed-remote cleanup flows. Direct claim and dispatch take branch,
+// then emergency-stop, then assignment-index or task/manifest locks. Closed
+// remote cleanup takes branch, then its task/manifest lease, then the
+// emergency-stop lock so its reproof and delete-intent write share one task
+// lease. It re-proves branch ownership while it holds the branch lock before
+// recording delete intent or mutating the remote.
+function withBranchOwnershipLock(state, branch, fn) {
+  assertSafeBranch(branch);
+  const directory = join(state.root, ".branch-ownership");
+  mkdirSync(directory, { recursive: true });
+  const digest = createHash("sha256").update(branch).digest("hex");
+  const lockPath = join(directory, `${digest}.lock`);
+  const recoveryGatePath = branchOwnershipRecoveryGatePath(lockPath);
+  if (existsSync(recoveryGatePath) && !recoverStaleBranchOwnershipRecoveryGate(recoveryGatePath, branch)) {
+    throw new Error(`Branch ownership is locked by another session: ${branch}`);
+  }
+  const reclaimPath = branchOwnershipReclaimClaimPath(lockPath);
+  if (existsSync(reclaimPath) && !recoverStaleBranchOwnershipReclaimClaim(reclaimPath, branch)) {
+    throw new Error(`Branch ownership is locked by another session: ${branch}`);
+  }
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) throw new Error("Branch ownership lock cannot establish the current process identity.");
+  const lockBytes = `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`;
+  try {
+    publishBranchOwnershipLock(lockPath, lockBytes);
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    if (recoverStaleBranchOwnershipLock(lockPath, branch)) {
+      return withBranchOwnershipLock(state, branch, fn);
+    }
+    throw new Error(`Branch ownership is locked by another session: ${branch}`);
+  }
+  try {
+    return fn();
+  } finally {
+    // Remove only the exact inode record this callback created. A recovery or
+    // replacement must never make this owner unlink somebody else's lock.
+    try {
+      if (readFileSync(lockPath, "utf8") === lockBytes) rmSync(lockPath, { force: true });
+    } catch {}
+  }
+}
+
+function publishBranchOwnershipLock(lockPath, lockBytes) {
+  // Populate and fsync a private file before atomically linking it at the
+  // contested pathname. Unlike open("wx") followed by write, a crash can
+  // leave no published partial record that would poison governed recovery.
+  const temporaryPath = `${lockPath}.${randomUUID()}.pending`;
+  let fd;
+  try {
+    fd = openSync(temporaryPath, "wx", 0o600);
+    writeFileSync(fd, lockBytes);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    linkSync(temporaryPath, lockPath);
+  } finally {
+    if (fd !== undefined && fd !== null) closeSync(fd);
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+function recoverStaleBranchOwnershipLock(lockPath, branch) {
+  let observed;
+  try { observed = readFileSync(lockPath, "utf8"); } catch { return false; }
+  let record;
+  try { record = JSON.parse(observed); } catch { return false; }
+  if (record?.branch !== branch || !Number.isInteger(record?.pid) || typeof record?.processStart !== "string") return false;
+  if (branchLockProcessProbe(record.pid) !== "dead") return false;
+
+  // A durable exclusive claim serializes stale recovery before moving the old
+  // lock. Re-read the exact bytes after claiming: if anyone replaced the
+  // lock while it was being inspected, never move their new owner record.
+  const claimPath = branchOwnershipReclaimClaimPath(lockPath);
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) return false;
+  const claimBytes = `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, lockDigest: createHash("sha256").update(observed).digest("hex"), acquiredAt: new Date().toISOString() })}\n`;
+  try { publishBranchOwnershipLock(claimPath, claimBytes); } catch (error) {
+    if (error?.code !== "EEXIST") return false;
+    if (recoverStaleBranchOwnershipReclaimClaim(claimPath, branch)) return recoverStaleBranchOwnershipLock(lockPath, branch);
+    return false;
+  }
+  try {
+    let current;
+    try { current = readFileSync(lockPath, "utf8"); } catch { return false; }
+    if (current !== observed) return false;
+    // Every governed acquisition checks this live sidecar before it can create
+    // a target lock. Rename the observed stale inode out of the target path;
+    // never unlink that path after another owner might have acquired it.
+    const quarantinePath = `${claimPath}.${randomUUID()}.stale`;
+    try { renameSync(lockPath, quarantinePath); } catch { return false; }
+    try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+    return true;
+  } finally {
+    removeBranchOwnershipArtifactIfOwned(claimPath, claimBytes);
+  }
+}
+
+function branchOwnershipReclaimClaimPath(lockPath) {
+  return `${lockPath}.reclaim`;
+}
+
+function branchOwnershipRecoveryGatePath(lockPath) {
+  return `${lockPath}.recovery-gate`;
+}
+
+function recoverStaleBranchOwnershipReclaimClaim(claimPath, branch) {
+  let observed;
+  try { observed = readFileSync(claimPath, "utf8"); } catch { return false; }
+  let claim;
+  try { claim = JSON.parse(observed); } catch { return false; }
+  if (claim?.branch !== branch || !Number.isInteger(claim?.pid) || typeof claim?.processStart !== "string" || !/^[a-f0-9]{64}$/.test(claim?.lockDigest || "")) return false;
+  if (branchLockProcessProbe(claim.pid) !== "dead") return false;
+  const gatePath = branchOwnershipRecoveryGatePath(claimPath.replace(/\.reclaim$/, ""));
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) return false;
+  const gateBytes = `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`;
+  try { publishBranchOwnershipLock(gatePath, gateBytes); } catch { return false; }
+  try {
+    let current;
+    try { current = readFileSync(claimPath, "utf8"); } catch { return false; }
+    if (current !== observed) return false;
+    // The recovery gate is checked before every governed branch acquisition,
+    // so no fresh reclaim sidecar can be created while this dead one is moved.
+    const quarantinePath = `${gatePath}.${randomUUID()}.stale`;
+    try { renameSync(claimPath, quarantinePath); } catch { return false; }
+    try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+    return true;
+  } finally {
+    removeBranchOwnershipArtifactIfOwned(gatePath, gateBytes);
+  }
+}
+
+function recoverStaleBranchOwnershipRecoveryGate(gatePath, branch) {
+  let observed;
+  try { observed = readFileSync(gatePath, "utf8"); } catch { return false; }
+  let gate;
+  try { gate = JSON.parse(observed); } catch { return false; }
+  if (gate?.branch !== branch || !Number.isInteger(gate?.pid) || typeof gate?.processStart !== "string") return false;
+  if (branchLockProcessProbe(gate.pid) !== "dead") return false;
+  // A rename claims the observed inode without unlinking a replacement gate.
+  // If another recovery won, this rename fails and the caller remains blocked.
+  let current;
+  try { current = readFileSync(gatePath, "utf8"); } catch { return false; }
+  if (current !== observed) return false;
+  const quarantinePath = `${gatePath}.${randomUUID()}.stale`;
+  try { renameSync(gatePath, quarantinePath); } catch { return false; }
+  try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+  return true;
+}
+
+function removeBranchOwnershipArtifactIfOwned(path, bytes) {
+  try {
+    if (readFileSync(path, "utf8") === bytes) rmSync(path, { force: true });
+  } catch {}
+}
+
+function branchLockProcessProbe(pid) {
+  if (processStartIdentity(pid) !== null) return "observed";
+  try { process.kill(pid, 0); return "unknown"; } catch (error) {
+    return error?.code === "ESRCH" ? "dead" : "unknown";
+  }
+}
+
 function withAssignmentLock(state, assignmentId, fn) {
   assertSafeTaskId(assignmentId);
   return withAssignmentsIndexLock(state, () => withAssignmentLockUnsafe(state, assignmentId, fn));
@@ -19382,7 +20123,13 @@ function worktreeListed(worktreePath, cwd = repoRoot) {
   if (result.code !== 0) {
     return true;
   }
-  return parseWorktreePorcelain(result.stdout).some((record) => samePath(record.path, worktreePath));
+  // A prunable registration can name a directory which no longer exists.
+  // `samePath` intentionally requires real paths, so compare normalized
+  // lexical paths as a conservative fallback for registry evidence.
+  const normalizedTarget = resolve(worktreePath);
+  return parseWorktreePorcelain(result.stdout).some((record) =>
+    samePath(record.path, worktreePath) || resolve(record.path) === normalizedTarget,
+  );
 }
 
 function prunableGitWorktrees(cwd = repoRoot) {
