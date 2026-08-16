@@ -17314,6 +17314,38 @@ try {
     } finally { cleanupSupersededCleanupFixture(fixture); }
   });
 
+  test("preserve-dirty-superseded rejects nonempty repository object alternates without evidence or reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "alternate-backed dirty bytes\n");
+      const alternatesPath = join(fixture.root, ".git", "objects", "info", "alternates");
+      mkdirSync(dirname(alternatesPath), { recursive: true });
+      writeFileSync(alternatesPath, `${join(fixture.root, "untrusted-object-store")}\n`);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.ready === false && summary.reason.includes("objects/info/alternates"), result.stderr || result.stdout);
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("alternate-backed"), "alternates rejection reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "alternates rejection persisted snapshot evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rechecks pending evidence under lock and requires governed resume", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, lockedPendingDirtyEvidence: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "locked evidence must never be replaced by ordinary apply"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "locked pending evidence dirty bytes\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("--resume-pending"), result.stderr || result.stdout);
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("locked pending evidence"), "locked pending evidence rejection reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.dirty_superseded_snapshot_intent?.snapshotRef === "refs/codex-preservation/superseded-task/dirty-superseded", JSON.stringify(manifest));
+      assert(!manifest.dirty_superseded_preservation, "ordinary apply replaced locked pending evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
   test("cleanup-superseded retains preserved snapshot restoration evidence", () => {
     const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
     const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
@@ -21119,6 +21151,22 @@ function createSupersededCleanupFixture(options = {}) {
         "}",
       ]
     : [];
+  // This mutates the on-disk manifest during the initial, unlocked proof.
+  // preserve-dirty-superseded still holds its stale in-memory copy at that
+  // point, so a subsequent locked re-read must reject it rather than replace
+  // the newly durable recovery evidence.
+  const lockedPendingDirtyEvidence = options.lockedPendingDirtyEvidence
+    ? [
+        `const pendingManifestPath = ${JSON.stringify(join(stateRootFixture, "tasks", "superseded-task.json"))};`,
+        "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '456') {",
+        "  const manifest = JSON.parse(fs.readFileSync(pendingManifestPath, 'utf8'));",
+        "  if (!manifest.dirty_superseded_snapshot_intent) {",
+        "    manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: '2026-08-16T00:00:00Z', owner: 'runner-a', snapshotRef: 'refs/codex-preservation/superseded-task/dirty-superseded', metadataOnly: true };",
+        "    fs.writeFileSync(pendingManifestPath, `${JSON.stringify(manifest, null, 2)}\\n`);",
+        "  }",
+        "}",
+      ]
+    : [];
   writeFileSync(
     fakeGh,
     [
@@ -21127,6 +21175,7 @@ function createSupersededCleanupFixture(options = {}) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       ...lockedDrift,
+      ...lockedPendingDirtyEvidence,
       "if (args[0] === 'pr' && args[1] === 'list' && args[2] === '--head') {",
       "  if (args[args.indexOf('--limit') + 1] !== '1') { console.error('source PR existence proof must request one record'); process.exit(1); }",
       `  console.log(JSON.stringify(${options.sourcePrRecord ? "[{ number: 789 }]" : "[]"}));`,

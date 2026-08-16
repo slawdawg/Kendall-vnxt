@@ -664,7 +664,9 @@ do not treat an operator authorization as a bypass.
    pre-existing symbolic ref cannot redirect the snapshot. It persists dirty
    paths in UTF-8 byte order rather than host-locale order, forces
    dirty-submodule visibility, and rejects every ambient Git index,
-   repository/worktree, common-directory, or object-store override. Snapshot
+   repository/worktree, common-directory, or object-store override, and also
+   refuses a nonempty repository `objects/info/alternates` file so durable
+   snapshot objects cannot depend on another object store. Snapshot
    blobs, tree, commit, and ref are written with Git's loose-object/reference
    durability enabled before reset. The exact current manifest owner must run it—dirty-lane
    takeover is a separate governed operation. Its apply re-reads the exact
@@ -675,7 +677,10 @@ do not treat an operator authorization as a bypass.
    lane-qualified `refs/codex-preservation/<task>/dirty-superseded` snapshot
    commit/tree, records exact dirty path/status/blob identities plus owner and
    successor bindings in the manifest, and re-reads every binding before it
-   cleans the source worktree. Persisted snapshot identity fields are normalized
+   cleans the source worktree. Ordinary apply repeats the absence of pending
+   snapshot intent or preservation evidence after taking the manifest lock;
+   if either appears, only the separately authorized `--resume-pending` route
+   may recover it. Persisted snapshot identity fields are normalized
    only when their aliases agree. An adopted pending snapshot must have the
    recorded source head as its sole parent and match a separately rebuilt full
    tree from the still-dirty source, not merely the named dirty entries. A
