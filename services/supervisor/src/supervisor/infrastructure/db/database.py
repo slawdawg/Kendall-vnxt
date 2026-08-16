@@ -259,16 +259,16 @@ async def _sqlite_drop_legacy_manifest_owner_uniqueness(connection) -> None:
         connection, "memory_inbox_manifests", ("owner_revision_id", "copy_class")
     ):
         return
-    # SQLite cannot drop the autoindex backing a table UNIQUE constraint.  The
-    # replacement is created from the current declarative shape, which retains
-    # the store-ref uniqueness and adds the explicit-owner constraints.
-    from supervisor.infrastructure.db.models import MemoryInboxManifest
+    # SQLite cannot drop the autoindex backing a table UNIQUE constraint. The
+    # replacement must use the immutable revision-0001 snapshot, never live
+    # ORM metadata that can contain columns from later migrations.
+    from supervisor.infrastructure.db.models_baseline import MemoryInboxManifest as BaselineMemoryInboxManifest
 
     legacy_table = "memory_inbox_manifests_legacy_owner_unique"
     await connection.execute(text(f"ALTER TABLE memory_inbox_manifests RENAME TO {legacy_table}"))
-    await connection.run_sync(lambda sync_connection: MemoryInboxManifest.__table__.create(sync_connection))
+    await connection.run_sync(lambda sync_connection: BaselineMemoryInboxManifest.__table__.create(sync_connection))
     columns = await _sqlite_table_columns(connection, legacy_table)
-    target_columns = [column.name for column in MemoryInboxManifest.__table__.columns if column.name in columns]
+    target_columns = [column.name for column in BaselineMemoryInboxManifest.__table__.columns if column.name in columns]
     joined_columns = ", ".join(target_columns)
     await connection.execute(text(
         f"INSERT INTO memory_inbox_manifests ({joined_columns}) "
@@ -592,12 +592,6 @@ async def _apply_legacy_schema_compatibility(connection) -> None:
                 await connection.execute(
                     text(f"ALTER TABLE memory_inbox_cost_policy_receipts ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
                 )
-    await connection.execute(
-            text(
-                "INSERT INTO admission_locks (scope, generation) VALUES ('execute', 0) "
-                "ON CONFLICT (scope) DO NOTHING"
-            )
-        )
     await connection.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_retry_intents_pending_work_item "

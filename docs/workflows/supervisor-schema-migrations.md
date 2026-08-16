@@ -12,7 +12,9 @@ running application version or replay already applied revisions.
 1. `0001_model_baseline` creates the schema represented by the frozen ORM
    snapshot captured for revision `0001`.
 2. `0002_legacy_compatibility` carries the existing additive compatibility
-   work for databases created before the migration boundary.
+   work for databases created before the migration boundary. The execute
+   admission-lock singleton is repaired independently on every startup, so a
+   restore that retains migration history cannot omit the runtime invariant.
 
 These revisions deliberately preserve current behavior.  They form the
 baseline from which later schema changes must be introduced as a new ordered
@@ -47,7 +49,13 @@ applies the same frozen `0001_model_baseline` to supply any missing historical
 tables, then runs every later unapplied upgrade revision in order. This
 preserves partial legacy-schema recovery without materializing future ORM
 objects before the revisions that introduce them. Missing or partial
-bookkeeping is never treated as a clean install.
+bookkeeping is never treated as a clean install. Recorded revisions must form
+a contiguous prefix of the declared sequence, and every record must be known
+to the running binary. Unknown, interleaved, or gapped bookkeeping fails
+closed rather than silently treating a descendant as applied. A future release
+that needs an older binary to run against its schema must provide an explicit
+reviewed downgrade or compatibility protocol; numeric revision names alone do
+not prove additive safety.
 
 ## Operating rules
 
@@ -57,10 +65,16 @@ bookkeeping is never treated as a clean install.
 - A revision is recorded only after its upgrade or clean-install hook completes
   in the enclosing transaction. A failed revision therefore leaves no applied
   marker and must fail closed.
-- The current compatibility revisions are additive.  Their rollback is a
-  capability rollback to the previous supervisor binary while retaining the
-  additive schema and data; never drop tables or erase data as a rollback
-  shortcut.
+- PostgreSQL startup takes a transaction-scoped advisory lock before revision
+  discovery and recording. This prevents concurrent replicas from both running
+  the same unapplied revision; SQLite retains its existing schema lock.
+- Historical compatibility helpers that rebuild SQLite tables use frozen
+  revision metadata, never current application ORM models.
+- The current compatibility revisions are additive. Their rollback is a
+  capability rollback only to a supervisor binary that recognizes every
+  recorded revision, unless an explicit reviewed future compatibility or
+  downgrade protocol says otherwise. Retain additive schema and data; never
+  drop tables or erase data as a rollback shortcut.
 - Future reversible changes must state their explicit downgrade procedure.  A
   destructive or lossy migration needs separately reviewed retention and
   recovery authority.

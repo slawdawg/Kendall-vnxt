@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 Migration = Callable[[AsyncConnection], Awaitable[None]]
 SCHEMA_MIGRATIONS_TABLE = "supervisor_schema_migrations"
 MODEL_BASELINE_REVISION = "0001_model_baseline"
+POSTGRES_MIGRATION_LOCK_KEY = 1_633_671_841
 
 
 @dataclass(frozen=True)
@@ -72,9 +73,50 @@ async def _existing_table_names(connection: AsyncConnection) -> set[str]:
     return set(table_names)
 
 
+async def _lock_postgres_migration_bookkeeping(connection: AsyncConnection) -> None:
+    """Serialize revision discovery and recording for PostgreSQL replicas."""
+
+    if connection.dialect.name == "postgresql":
+        # This transaction-scoped advisory lock is available before the
+        # bookkeeping table exists and is released with init_db's transaction.
+        await connection.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": POSTGRES_MIGRATION_LOCK_KEY},
+        )
+
+
+def _validate_applied_revision_prefix(applied: set[str]) -> None:
+    """Reject bookkeeping outside this binary's complete ordered history."""
+
+    revisions = tuple(migration.revision for migration in MIGRATIONS)
+    expected_prefix: list[str] = []
+    for revision in revisions:
+        if revision not in applied:
+            break
+        expected_prefix.append(revision)
+    known_applied = applied.intersection(revisions)
+    if known_applied != set(expected_prefix):
+        raise RuntimeError("Supervisor schema migration bookkeeping must contain a contiguous revision prefix.")
+    future_revisions = applied.difference(revisions)
+    if future_revisions:
+        raise RuntimeError(f"Supervisor schema migration bookkeeping has unknown revisions: {sorted(future_revisions)}")
+
+
+async def _ensure_execute_admission_lock(connection: AsyncConnection) -> None:
+    """Repair the durable execute-admission singleton on every startup."""
+
+    await connection.execute(
+        text(
+            "INSERT INTO admission_locks (scope, generation) VALUES ('execute', 0) "
+            "ON CONFLICT (scope) DO NOTHING"
+        )
+    )
+
+
 async def upgrade_database(connection: AsyncConnection) -> None:
     """Apply every unapplied schema revision in the caller's transaction."""
 
+    await _lock_postgres_migration_bookkeeping(connection)
     # Decide before creating the migration table so clean installs can use
     # declared clean hooks while existing schemas follow ordered upgrades.
     existing_tables = await _existing_table_names(connection)
@@ -90,6 +132,7 @@ async def upgrade_database(connection: AsyncConnection) -> None:
     applied = set(
         (await connection.execute(text(f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE}"))).scalars()
     )
+    _validate_applied_revision_prefix(applied)
     for migration in MIGRATIONS:
         if migration.revision in applied:
             continue
@@ -102,3 +145,6 @@ async def upgrade_database(connection: AsyncConnection) -> None:
             text(f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES (:revision)"),
             {"revision": migration.revision},
         )
+    # This runtime invariant is intentionally separate from once-only 0002:
+    # restores can retain bookkeeping while omitting the singleton row.
+    await _ensure_execute_admission_lock(connection)
