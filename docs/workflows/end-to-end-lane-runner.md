@@ -648,17 +648,29 @@ do not treat an operator authorization as a bypass.
    A dirty closed-source PR lane must first use
    `preserve-dirty-superseded <task>` with the same exact closed-source PR and
    ordered carry-forward patch arguments. Its dry run rejects untracked or
-   ignored files, renamed, copied, malformed, or drifting paths. Its apply
-   re-reads the exact porcelain set under lock, stages only those named paths
-   in a temporary index, and repeats the porcelain/tree proof immediately
-   before reset. It publishes a
+   ignored files, renamed, copied, malformed, non-UTF-8, any whole-index hidden
+   assume-unchanged/skip-worktree entry,
+   filtered, encoded, or drifting paths; it also rejects transient Git object
+   store overrides. The exact current manifest owner must run it—dirty-lane
+   takeover is a separate governed operation. Its apply re-reads the exact
+   porcelain set under lock, stages only those named paths in a temporary
+   index, and repeats the porcelain/tree proof immediately before reset. The
+   final producer-lease heartbeat is adjacent to that reset, so governed
+   writers cannot publish during the destructive boundary. It publishes a
    lane-qualified `refs/codex-preservation/<task>/dirty-superseded` snapshot
    commit/tree, records exact dirty path/status/blob identities plus owner and
    successor bindings in the manifest, and re-reads every binding before it
    cleans the source worktree. It never removes a worktree, local branch, or
    remote branch. `cleanup-superseded` re-validates any recorded snapshot ref
    before local cleanup; a missing, changed, or unreadable preservation object
-   is a hard stop line.
+   is a hard stop line. A crash or blocked post-reset check leaves immutable
+   pending evidence. Re-run the same proof with
+   `preserve-dirty-superseded <task> --resume-pending --apply` and fresh
+   approval/reason: it settles only an exact re-read clean source or an exact
+   still-dirty snapshot, and otherwise makes no reset. Generic
+   `cleanup-merged`, `cleanup-current`, `cleanup-integrated`, and branch
+   cleanup deliberately refuse a lane with this evidence; only the final
+   `cleanup-superseded` route may remove its local resources.
    A clean lane with a retained, non-open PR can instead use the narrowly
    approved closed-PR form only for one exact task:
    `cleanup-integrated <task> --allow-closed-pr-integrated --approval "<recorded operator approval>" --base origin/<base> --summary-json`.

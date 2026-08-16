@@ -722,9 +722,11 @@ cleanup-superseded options:
 
 preserve-dirty-superseded <task> options:
   Uses the same exact closed-source-PR and carry-forward arguments as
-  cleanup-superseded. It accepts only a dirty tracked worktree with no
-  untracked, renamed, copied, or malformed paths.
+  cleanup-superseded. It accepts only an exact-owner dirty tracked worktree
+  with no untracked/ignored, renamed/copied, hidden-index, filtered, encoded,
+  non-UTF-8, or malformed paths. Transient Git object stores are refused.
   --apply                   Publish and re-read a lane-qualified Git snapshot ref, then clean only the proved source worktree.
+  --resume-pending          Bare flag with --apply: settle an interrupted exact pending preservation record; never replaces its snapshot.
   --approval <text>         Required with --apply; records the bounded preservation authorization.
   --reason <text>           Required with --apply; records why cleanup is safe after preservation.
   --summary-json            Without --apply, print a compact preservation proof packet.
@@ -9208,6 +9210,15 @@ function cleanupMerged(argv, mode = {}) {
       }
       continue;
     }
+    if (manifest.dirty_superseded_preservation) {
+      const reason = "dirty superseded preservation is retained evidence; only cleanup-superseded may remove this lane";
+      if (options.summaryJson) {
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_dirty_superseded_preservation", reason, { deleteRemote }));
+      } else {
+        console.log(`SKIP ${manifest.task_id}: ${reason}.`);
+      }
+      continue;
+    }
     assertLaneOwner(manifest, options);
     const cleanupTarget = assertCleanupWorktreeForMerged(manifest, state);
     if (!ghChecked) {
@@ -10639,6 +10650,9 @@ function cleanupIntegratedPlan(record, state, context) {
   if (manifest.mode === "epic-batch") {
     return { ...base, reason: "epic-batch workspace requires finish-epic closeout; integrated cleanup is disabled" };
   }
+  if (manifest.dirty_superseded_preservation) {
+    return { ...base, reason: "dirty superseded preservation requires cleanup-superseded; integrated cleanup never removes preserved evidence" };
+  }
   if (strict ? supersededSourceHasPrEvidence(manifest) || (hasStrictCloseoutEvidence(manifest) && !strictResume) : !closedPrIntegrated && (manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || "")))) {
     return { ...base, reason: strict ? "source workspace has PR or cleanup evidence" : "workspace has PR/merged cleanup evidence; use cleanup-merged" };
   }
@@ -11343,14 +11357,37 @@ function cleanupSuperseded(argv) {
 function preserveDirtySuperseded(argv) {
   const { positional, options } = parseOptions(argv);
   if (positional.length !== 1) throw new Error("preserve-dirty-superseded requires exactly one explicit source task id.");
+  assertBareApplyOption(options, "preserve-dirty-superseded");
+  if (options.resumePending !== undefined && options.resumePending !== true) {
+    throw new Error("preserve-dirty-superseded --resume-pending must be a bare flag.");
+  }
+  if (options.apply && options.dryRun) throw new Error("preserve-dirty-superseded accepts either --dry-run or --apply, not both.");
   if (options.summaryJson && options.apply) throw new Error("preserve-dirty-superseded --summary-json is only supported without --apply.");
   if (options.deleteRemote) throw new Error("preserve-dirty-superseded never deletes remote branches.");
+  assertDurablePreservationObjectStore();
   const proofInput = cleanupSupersessionInput(options);
   if (!proofInput.closedSourcePr) throw new Error("preserve-dirty-superseded requires --closed-source-pr and exact ordered patch lists.");
   const state = workspaceState(options);
   const record = findCleanupManifest(state, positional[0]);
+  if (record.manifest.owner !== currentLaneOwner(options)) {
+    throw new Error("preserve-dirty-superseded requires the exact current manifest owner; complete governed dirty-lane takeover separately before any reset.");
+  }
   assertCleanupWorktreeForSuperseded(record.manifest, state, proofInput);
   requireGh("preserve-dirty-superseded");
+  if (options.resumePending) {
+    if (!options.apply || options.summaryJson || options.dryRun) {
+      throw new Error("preserve-dirty-superseded --resume-pending requires bare --apply and does not support --summary-json or --dry-run.");
+    }
+    if (!validSupersessionApplyEvidence(options.approval) || !validSupersessionApplyEvidence(options.reason)) {
+      throw new Error("preserve-dirty-superseded --resume-pending requires --approval and --reason with at least 10 non-whitespace characters each.");
+    }
+    resumePendingDirtySuperseded(state, record, { options, proofInput });
+    console.log(`Settled dirty superseded preservation for ${record.manifest.task_id}`);
+    return;
+  }
+  if (record.manifest.dirty_superseded_preservation) {
+    throw new Error("dirty superseded preservation evidence already exists; use --resume-pending to settle an interrupted reset instead of replacing evidence.");
+  }
   const plan = dirtySupersededPreservationPlan(record, state, { options, proofInput, currentOwner: currentLaneOwner(options) });
   if (options.summaryJson) return console.log(JSON.stringify({
     generatedAt: new Date().toISOString(), mode: "preserve-dirty-superseded", sourceTask: plan.taskId,
@@ -11370,7 +11407,7 @@ function preserveDirtySuperseded(argv) {
   if (!validSupersessionApplyEvidence(options.approval) || !validSupersessionApplyEvidence(options.reason)) {
     throw new Error("preserve-dirty-superseded --apply requires --approval and --reason with at least 10 non-whitespace characters each.");
   }
-  withManifestLock(state, plan.taskId, () => {
+  withManifestLock(state, plan.taskId, ({ heartbeat }) => {
     const manifest = readManifest(plan.manifestPath);
     validateManifest(manifest, plan.manifestPath);
     assertLaneOwner(manifest, options); claimLaneOwner(manifest, options);
@@ -11386,6 +11423,7 @@ function preserveDirtySuperseded(argv) {
       // The only authorization to reset is the complete re-read below. Keep
       // this persisted record deliberately pending until that final reproof.
       verification: { status: "pending_reset_adjacent_reproof", recordedAt: new Date().toISOString(), pathCount: snapshot.paths.length, metadataOnly: true },
+      resetIntent: { sourceHead: fresh.expectedHeadSha, preparedAt: new Date().toISOString(), metadataOnly: true },
       approval: String(options.approval).trim(), reason: String(options.reason).trim(),
       metadataOnly: true, rawPayloadRetained: false,
     };
@@ -11395,10 +11433,14 @@ function preserveDirtySuperseded(argv) {
       // This last full porcelain/tree reproof is intentionally adjacent to the
       // destructive reset. Earlier snapshot verification cannot authorize a
       // later worktree state, even when the durable object is still valid.
+      // The fresh owned lease is the producer-quiescence boundary for governed
+      // writers; a lost or replaced lease aborts before any destructive step.
       const resetProof = verifyDirtySupersededSnapshot(manifest, fresh, snapshot, { requireLiveMatch: true });
       // Do not insert a manifest write or another external operation between
-      // this full current-state reproof and the destructive reset.
-      runChecked("git", ["reset", "--hard", fresh.expectedHeadSha], { cwd: fresh.worktreePath });
+      // the final immutable re-read, producer-lease heartbeat, and reset.
+      verifyDirtySupersededImmutableSnapshot(fresh, snapshot);
+      heartbeat();
+      runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath });
       if (dirtySupersededStatusRecords(fresh.worktreePath).length) throw new Error("Dirty superseded preservation cleaned source worktree incompletely; cleanup remains blocked.");
       manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset" };
     } catch (error) {
@@ -11414,6 +11456,49 @@ function preserveDirtySuperseded(argv) {
   console.log(`Preserved and cleaned dirty superseded worktree for ${plan.taskId}`);
 }
 
+function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
+  withManifestLock(state, record.manifest.task_id, ({ heartbeat }) => {
+    const manifest = readManifest(record.path);
+    validateManifest(manifest, record.path);
+    assertLaneOwner(manifest, options); claimLaneOwner(manifest, options);
+    const snapshot = manifest.dirty_superseded_preservation;
+    if (snapshot?.verification?.status !== "pending_reset_adjacent_reproof" || !snapshot.resetIntent?.preparedAt) {
+      throw new Error("dirty superseded preservation has no resumable pending reset evidence.");
+    }
+    const fresh = cleanupSupersededPlan({ manifest, path: record.path }, state, { options, proofInput, currentOwner: currentLaneOwner(options), allowDirtySource: true, allowPendingDirty: true });
+    if (fresh.status !== "ready") throw new Error(`Dirty superseded preservation resume is blocked: ${fresh.reason}`);
+    if (!dirtySupersededStatusRecords(fresh.worktreePath).length) {
+      if (!validDirtySupersededSnapshotEvidence(manifest, snapshot, proofInput, fresh.worktreePath)) {
+        throw new Error("dirty superseded preservation pending evidence no longer re-reads exactly; mutation=none.");
+      }
+      // The exact immutable ref/tree/path proof was re-read immediately above;
+      // a clean source has no destructive reset left to authorize.
+      const settled = { status: "matched", checkedAt: new Date().toISOString(), pathCount: snapshot.paths.length, metadataOnly: true };
+      manifest.dirty_superseded_preservation.verification = { ...settled, status: "matched_before_reset", settledAfterInterruption: true };
+      appendTaskEvent(manifest, "dirty_superseded_pending_settled", "source was already clean and durable snapshot re-read exactly");
+      manifest.updated_at = new Date().toISOString();
+      writeManifest(record.path, manifest);
+      return;
+    }
+    const expectedPaths = snapshot.paths.map(({ path, status }) => ({ path, status }));
+    const resumedPlan = { ...fresh, dirty: { paths: expectedPaths } };
+    if (JSON.stringify(dirtySupersededTrackedPaths(fresh.worktreePath).paths) !== JSON.stringify(expectedPaths)) {
+      throw new Error("dirty superseded preservation pending source no longer matches its recorded path/status snapshot; mutation=none.");
+    }
+    // A freshly proven owner lease is the producer-quiescence boundary for all
+    // governed writers. The full reproof and reset remain adjacent below.
+    const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
+    verifyDirtySupersededImmutableSnapshot(resumedPlan, snapshot);
+    heartbeat();
+    runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath });
+    if (dirtySupersededStatusRecords(fresh.worktreePath).length) throw new Error("Dirty superseded preservation resumed reset left source worktree dirty; cleanup remains blocked.");
+    manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset", resumedAfterInterruption: true };
+    appendTaskEvent(manifest, "dirty_superseded_pending_resumed", fresh.expectedHeadSha);
+    manifest.updated_at = new Date().toISOString();
+    writeManifest(record.path, manifest);
+  });
+}
+
 function dirtySupersededPreservationPlan(record, state, context) {
   const plan = cleanupSupersededPlan(record, state, { ...context, allowDirtySource: true });
   if (plan.status !== "ready") return plan;
@@ -11423,14 +11508,27 @@ function dirtySupersededPreservationPlan(record, state, context) {
 }
 
 function dirtySupersededTrackedPaths(worktreePath) {
+  assertNoDirtySupersededHiddenIndexFlags(worktreePath);
   const records = dirtySupersededStatusRecords(worktreePath);
   if (!records.length) throw new Error("dirty superseded preservation requires a currently dirty worktree");
   const paths = [];
   for (const record of records) {
     if (record.length < 4 || record[2] !== " ") throw new Error("dirty superseded preservation status record is malformed");
     const status = record.slice(0, 2); const path = record.slice(3);
-    if (!path || status === "??" || status === "!!" || /[RC]/.test(status) || /[\0\r\n:]/.test(path) || path.startsWith("/") || path.split("/").some((part) => !part || part === "." || part === "..")) {
+    if (!path || status === "??" || status === "!!" || /[RC]/.test(status) || (status[0] !== " " && status[1] !== " ") || /[\0\r\n:]/.test(path) || path.startsWith("/") || path.split("/").some((part) => !part || part === "." || part === "..")) {
       throw new Error("dirty superseded preservation refuses untracked, ignored, renamed, copied, or unsafe dirty paths");
+    }
+    const indexFlags = git(["ls-files", "-v", "--", path], { cwd: worktreePath });
+    if (indexFlags.code !== 0 || dirtyInLaneHiddenIndexFlags(indexFlags.stdout, path).length > 0) {
+      throw new Error("dirty superseded preservation refuses assume-unchanged or skip-worktree paths");
+    }
+    const indexEntry = git(["ls-files", "--stage", "--", path], { cwd: worktreePath });
+    if (indexEntry.code !== 0 || /^160000\s/.test(String(indexEntry.stdout || ""))) {
+      throw new Error("dirty superseded preservation refuses recursive submodule gitlinks");
+    }
+    const attributes = git(["check-attr", "filter", "working-tree-encoding", "--", path], { cwd: worktreePath });
+    if (attributes.code !== 0 || String(attributes.stdout || "").split(/\r?\n/).some((line) => line && !line.endsWith(": filter: unspecified") && !line.endsWith(": working-tree-encoding: unspecified"))) {
+      throw new Error("dirty superseded preservation refuses paths with clean filters or working-tree encodings");
     }
     paths.push({ path, status });
   }
@@ -11439,22 +11537,48 @@ function dirtySupersededTrackedPaths(worktreePath) {
   return { paths: paths.sort((a, b) => a.path.localeCompare(b.path)) };
 }
 
+function assertNoDirtySupersededHiddenIndexFlags(worktreePath) {
+  const indexFlags = git(["ls-files", "-v", "-z"], { cwd: worktreePath, preserveStdout: true });
+  if (indexFlags.code !== 0) throw new Error("dirty superseded preservation could not inspect whole-index flags");
+  const hidden = String(indexFlags.stdout || "").split("\0").filter(Boolean).filter((entry) => entry.length >= 3 && entry[1] === " " && (entry[0] === "h" || entry[0] === "S"));
+  if (hidden.length > 0) {
+    throw new Error("dirty superseded preservation refuses any assume-unchanged or skip-worktree index entry, including paths hidden from porcelain");
+  }
+}
+
 function dirtySupersededStatusRecords(worktreePath) {
-  const result = git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], { cwd: worktreePath, preserveStdout: true });
-  if (result.code !== 0) throw new Error(result.stderr || "could not inspect dirty superseded worktree");
-  return String(result.stdout || "").split("\0").filter(Boolean);
+  const result = spawnSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], { cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes });
+  if (result.status !== 0) throw new Error(String(result.stderr || "could not inspect dirty superseded worktree").trim());
+  const raw = Buffer.from(result.stdout || []); const records = [];
+  for (let start = 0, end = raw.indexOf(0, start); end >= 0; start = end + 1, end = raw.indexOf(0, start)) {
+    const record = raw.subarray(start, end);
+    if (record.length < 4) { records.push(record.toString("utf8")); continue; }
+    const pathBytes = record.subarray(3); const path = pathBytes.toString("utf8");
+    if (!Buffer.from(path, "utf8").equals(pathBytes)) throw new Error("dirty superseded preservation refuses non-UTF-8 path bytes");
+    records.push(`${record.subarray(0, 3).toString("ascii")}${path}`);
+  }
+  return records;
+}
+
+function assertDurablePreservationObjectStore() {
+  if (process.env.GIT_OBJECT_DIRECTORY || process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES) {
+    throw new Error("dirty superseded preservation refuses transient Git object-directory overrides");
+  }
 }
 
 function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
   const currentDirty = dirtySupersededTrackedPaths(plan.worktreePath);
   if (JSON.stringify(currentDirty.paths) !== JSON.stringify(plan.dirty.paths)) throw new Error("dirty superseded preservation changed before snapshot staging");
-  const tree = dirtySupersededSnapshotTree(plan);
   const rawRef = `refs/codex-preservation/${manifest.task_id}/dirty-superseded`;
   const ref = rawRef;
+  if (git(["check-ref-format", ref], { cwd: plan.worktreePath }).code !== 0) throw new Error("dirty superseded preservation task id cannot form a safe Git snapshot ref");
   if (git(["show-ref", "--verify", "--quiet", ref], { cwd: plan.worktreePath }).code === 0) throw new Error("dirty superseded preservation ref already exists; re-read or recover it instead of overwriting evidence");
+  const tree = dirtySupersededSnapshotTree(plan);
   const digest = createHash("sha256").update(JSON.stringify({ sourceHead: plan.expectedHeadSha, tree, paths: plan.dirty.paths })).digest("hex");
   const commit = requireExactGitObjectId(runChecked("git", ["commit-tree", tree, "-p", plan.expectedHeadSha, "-m", `preserve-dirty-superseded:${manifest.task_id}:${digest}`], { cwd: plan.worktreePath }).stdout.trim(), "dirty preservation commit");
-  runChecked("git", ["update-ref", ref, commit, "0".repeat(40)], { cwd: plan.worktreePath });
+  const objectFormat = git(["rev-parse", "--show-object-format"], { cwd: plan.worktreePath });
+  const nullOid = objectFormat.code === 0 && objectFormat.stdout.trim() === "sha256" ? "0".repeat(64) : "0".repeat(40);
+  runChecked("git", ["update-ref", ref, commit, nullOid], { cwd: plan.worktreePath });
   const paths = plan.dirty.paths.map((entry) => {
     const entryTree = scopedTreeEntries(tree, [entry.path], plan.worktreePath);
     if (entryTree.error || entryTree.entries.length > 1) throw new Error(`dirty preservation snapshot has ambiguous path: ${entry.path}`);
@@ -11476,13 +11600,33 @@ function dirtySupersededSnapshotTree(plan) {
   const env = { GIT_INDEX_FILE: temporaryIndex };
   try {
     runChecked("git", ["read-tree", plan.expectedHeadSha], { cwd: plan.worktreePath, env });
-    runChecked("git", ["add", "--", ...plan.dirty.paths.map((entry) => entry.path)], { cwd: plan.worktreePath, env });
+    runChecked("git", ["add", "--sparse", "--", ...plan.dirty.paths.map((entry) => entry.path)], { cwd: plan.worktreePath, env });
     const treeResult = runChecked("git", ["write-tree"], { cwd: plan.worktreePath, env });
     return requireExactGitObjectId(treeResult.stdout.trim(), "dirty preservation tree");
   } finally { try { rmSync(temporaryIndex, { force: true }); } catch {} }
 }
 
-function verifyDirtySupersededSnapshot(manifest, plan, snapshot, { requireLiveMatch = true } = {}) {
+function verifyDirtySupersededSnapshot(manifest, plan, snapshot, { requireLiveMatch = true, verifyImmutable = true } = {}) {
+  if (verifyImmutable) {
+    verifyDirtySupersededImmutableSnapshot(plan, snapshot);
+  }
+  if (requireLiveMatch) {
+    const currentDirty = dirtySupersededTrackedPaths(plan.worktreePath);
+    if (JSON.stringify(currentDirty.paths) !== JSON.stringify(plan.dirty.paths)) throw new Error("dirty superseded preservation changed before source cleanup");
+    const currentTree = dirtySupersededSnapshotTree(plan);
+    for (const path of snapshot.paths) {
+      const entries = scopedTreeEntries(currentTree, [path.path], plan.worktreePath);
+      if (path.status.includes("D")) {
+        if (entries.error || entries.entries.length !== 0) throw new Error(`dirty superseded deletion changed before source cleanup: ${path.path}`);
+      } else if (entries.error || entries.entries.length !== 1 || entries.entries[0].mode !== path.mode || entries.entries[0].objectId !== path.objectId) {
+        throw new Error(`dirty superseded worktree content changed before source cleanup: ${path.path}`);
+      }
+    }
+  }
+  return { status: "matched", checkedAt: new Date().toISOString(), pathCount: snapshot.paths.length, metadataOnly: true };
+}
+
+function verifyDirtySupersededImmutableSnapshot(plan, snapshot) {
   const refCommit = git(["rev-parse", "--verify", `${snapshot.ref}^{commit}`], { cwd: plan.worktreePath });
   if (refCommit.code !== 0 || refCommit.stdout.trim() !== snapshot.commit) throw new Error("dirty preservation ref does not re-read to its recorded commit");
   const tree = git(["rev-parse", "--verify", `${snapshot.commit}^{tree}`], { cwd: plan.worktreePath });
@@ -11497,12 +11641,6 @@ function verifyDirtySupersededSnapshot(manifest, plan, snapshot, { requireLiveMa
       throw new Error(`dirty preservation tree re-read mismatch: ${path.path}`);
     }
   }
-  if (requireLiveMatch) {
-    const currentDirty = dirtySupersededTrackedPaths(plan.worktreePath);
-    if (JSON.stringify(currentDirty.paths) !== JSON.stringify(plan.dirty.paths)) throw new Error("dirty superseded preservation changed before source cleanup");
-    if (dirtySupersededSnapshotTree(plan) !== snapshot.tree) throw new Error("dirty superseded worktree content changed before source cleanup");
-  }
-  return { status: "matched", checkedAt: new Date().toISOString(), pathCount: snapshot.paths.length, metadataOnly: true };
 }
 
 function cleanupSupersessionInput(options) {
@@ -11769,7 +11907,10 @@ function cleanupSupersededPlan(record, state, context) {
       return { ...base, cleanupCwd, reason: "partial supersession resume requires the recorded closed-PR patch-equivalence proof to exactly match current evidence" };
     }
     const preservedDirty = manifest.dirty_superseded_preservation;
-    if (preservedDirty && !validDirtySupersededPreservation(manifest, preservedDirty, proofInput, cleanupCwd)) {
+    const validPreservation = context.allowPendingDirty === true
+      ? validDirtySupersededSnapshotEvidence(manifest, preservedDirty, proofInput, cleanupCwd)
+      : validDirtySupersededPreservation(manifest, preservedDirty, proofInput, cleanupCwd);
+    if (preservedDirty && !validPreservation) {
       return { ...base, cleanupCwd, reason: "recorded dirty superseded preservation no longer re-reads exactly" };
     }
     return {
@@ -11834,8 +11975,13 @@ function cleanupSupersededPlan(record, state, context) {
 }
 
 function validDirtySupersededPreservation(manifest, evidence, proofInput, cwd) {
+  return validDirtySupersededSnapshotEvidence(manifest, evidence, proofInput, cwd, { requireCompleted: true });
+}
+
+function validDirtySupersededSnapshotEvidence(manifest, evidence, proofInput, cwd, { requireCompleted = false } = {}) {
   const verification = evidence?.verification;
-  if (!evidence || evidence.schemaVersion !== 1 || evidence.sourceHead !== proofInput.sourceHead || evidence.closedSourcePr !== proofInput.closedSourcePr?.number || evidence.carryForwardPr !== proofInput.carryForwardPr || evidence.carryForwardCommit !== proofInput.carryForwardCommit || evidence.owner !== manifest.owner || !/^refs\/codex-preservation\/[A-Za-z0-9_.-]+\/dirty-superseded$/.test(evidence.snapshotRef || "") || !exactGitObjectIdOrNull(evidence.snapshotCommit) || !exactGitObjectIdOrNull(evidence.snapshotTree) || !/^[a-f0-9]{64}$/.test(evidence.digest || "") || !Array.isArray(evidence.paths) || evidence.paths.length === 0 || evidence.paths.length > 64 || !verification || verification.status !== "matched_before_reset" || verification.metadataOnly !== true || verification.pathCount !== evidence.paths.length || !Number.isFinite(Date.parse(verification.checkedAt || ""))) return false;
+  if (!evidence || evidence.schemaVersion !== 1 || evidence.sourceHead !== proofInput.sourceHead || evidence.closedSourcePr !== proofInput.closedSourcePr?.number || evidence.carryForwardPr !== proofInput.carryForwardPr || evidence.carryForwardCommit !== proofInput.carryForwardCommit || !dirtySupersededOwnerLineageMatches(manifest, evidence.owner) || !/^refs\/codex-preservation\/[A-Za-z0-9_.-]+\/dirty-superseded$/.test(evidence.snapshotRef || "") || !exactGitObjectIdOrNull(evidence.snapshotCommit) || !exactGitObjectIdOrNull(evidence.snapshotTree) || !/^[a-f0-9]{64}$/.test(evidence.digest || "") || !Array.isArray(evidence.paths) || evidence.paths.length === 0 || evidence.paths.length > 64) return false;
+  if (requireCompleted && (!verification || verification.status !== "matched_before_reset" || verification.metadataOnly !== true || verification.pathCount !== evidence.paths.length || !Number.isFinite(Date.parse(verification.checkedAt || "")))) return false;
   const ref = git(["rev-parse", "--verify", `${evidence.snapshotRef}^{commit}`], { cwd });
   const tree = git(["rev-parse", "--verify", `${evidence.snapshotCommit}^{tree}`], { cwd });
   if (ref.code !== 0 || tree.code !== 0 || ref.stdout.trim() !== evidence.snapshotCommit || tree.stdout.trim() !== evidence.snapshotTree) return false;
@@ -11847,6 +11993,19 @@ function validDirtySupersededPreservation(manifest, evidence, proofInput, cwd) {
     if (entry.status.includes("D")) return !treeEntry.error && treeEntry.entries.length === 0 && entry.mode === null && entry.objectId === null;
     return !treeEntry.error && treeEntry.entries.length === 1 && treeEntry.entries[0].path === entry.path && /^[0-7]{6}$/.test(entry.mode || "") && exactGitObjectIdOrNull(entry.objectId) && treeEntry.entries[0].mode === entry.mode && treeEntry.entries[0].objectId === entry.objectId;
   });
+}
+
+function dirtySupersededOwnerLineageMatches(manifest, recordedOwner) {
+  let owner = String(recordedOwner || "").trim();
+  const current = String(manifest.owner || "").trim();
+  if (!owner || !current) return false;
+  if (owner === current) return true;
+  for (const takeover of Array.isArray(manifest.ownership_takeovers) ? manifest.ownership_takeovers : []) {
+    if (takeover?.previous_owner !== owner || typeof takeover.new_owner !== "string" || !validTakeoverReason(takeover.reason) || !Number.isFinite(Date.parse(takeover.at || ""))) continue;
+    owner = takeover.new_owner;
+    if (owner === current) return true;
+  }
+  return false;
 }
 
 function supersededSourceHeadMatches({ partialResume, localBranchHead, remoteBranchHead, sourceHead, expectedRemoteState }) {
@@ -12198,7 +12357,7 @@ function gitStablePatchId(commit, cwd) {
   const result = spawnSync("git", ["patch-id", "--verbatim"], { cwd, input: patch.stdout, encoding: "utf8", stdio: "pipe", timeout: defaultVerificationTimeoutMs });
   if (result.status !== 0) return { patchId: null, error: result.stderr || result.stdout || `cannot calculate stable patch ID for ${commit}` };
   const patchId = String(result.stdout || "").trim().split(/\s+/)[0] || "";
-  return /^[a-f0-9]{40}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `stable patch ID for ${commit} is malformed` };
+  return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `stable patch ID for ${commit} is malformed` };
 }
 
 function supersededAssignmentGate(state, manifest, options, proofInput) {
@@ -13168,11 +13327,25 @@ function cleanupBranches(argv) {
       .map((record) => record.branch?.replace(/^refs\/heads\//, ""))
       .filter(Boolean),
   );
+  const state = workspaceState(options);
+  const preservedBranches = new Set(
+    readManifests(state)
+      .filter(({ manifest }) => manifest.status !== "closed" && manifest.dirty_superseded_preservation)
+      .map(({ manifest }) => manifest.branch)
+      .filter(Boolean),
+  );
   const eligible = [];
   const skipped = [];
 
   for (const branch of branches) {
     assertSafeBranch(branch);
+    if (preservedBranches.has(branch)) {
+      skipped.push({ branch, reason: "branch has dirty superseded preservation evidence; use cleanup-superseded" });
+      if (!options.summaryJson) {
+        console.log(`SKIP ${branch}: branch has dirty superseded preservation evidence; use cleanup-superseded.`);
+      }
+      continue;
+    }
     if (activeWorktreeBranches.has(branch)) {
       skipped.push({ branch, reason: "branch is checked out in a worktree" });
       if (!options.summaryJson) {
