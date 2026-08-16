@@ -570,6 +570,22 @@ do not treat an operator authorization as a bypass.
    registered a remote branch through `--delete-remote`, preserve that flag on
    resume: the runner refuses to downgrade a still-present registered remote
    target and close the manifest while that branch remains.
+   A closed manifest is normally terminal and `cleanup-merged` deliberately
+   skips it. If a verified old closeout retained only its remote branch, use
+   `cleanup-closed-remote <exact-task-id>` with the exact structured
+   `--remote-delete-authority 'task=<id>;branch=<branch>;pr=<n>;head=<sha>;remote-delete=true'`
+   binding as a dry run first, then add `--apply --approval <operator-evidence>`.
+   This narrow remote-only recovery requires all of the following at execution
+   time: the manifest is closed and owned by the current runner (or
+   a governed `--take-ownership --takeover-reason` is supplied); its retained
+   `cleanup-ready` audit and applied cleanup authority bind the same task, PR,
+   and delivery head; its worktree and local branch are absent; the live PR is
+   merged on the
+   recorded base with the recorded PR number, branch, and exact delivery head;
+   and the live remote ref equals that same head. The command uses an exact
+   force-with-lease deletion and records an already-absent remote as an
+   idempotent success. It never permits a mismatched, recreated, or unproven
+   remote branch to be deleted.
    If a versioned lease reports `external_command_fence_unresolved`, do not
    rerun delivery, delete the lock, or manufacture a completion file. First
    prove the recorded runner PID/start identity is absent and inspect the exact
