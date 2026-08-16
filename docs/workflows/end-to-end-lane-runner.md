@@ -654,6 +654,8 @@ do not treat an operator authorization as a bypass.
    `s` `git ls-files -v` representation),
    filtered, text/eol-normalized, ident-expanded, mode-hidden, encoded, or
    drifting paths; it
+   disables Git fsmonitor for every status proof, refuses `core.trustctime=false`,
+   and persists dirty paths in UTF-8 byte order rather than host-locale order.
    forces dirty-submodule visibility and rejects every ambient Git index,
    repository/worktree, common-directory, or object-store override. Snapshot
    blobs, tree, commit, and ref are written with Git's loose-object/reference

@@ -9339,6 +9339,12 @@ function cleanupMerged(argv, mode = {}) {
       assertLaneOwner(lockedManifest, options);
       claimLaneOwner(lockedManifest, options);
       Object.assign(manifest, lockedManifest);
+      // A dirty preservation may have completed after the unlocked preflight
+      // but before this lock was acquired.  It has an exclusive cleanup path
+      // because its snapshot and rollback evidence must be revalidated there.
+      if (manifest.dirty_superseded_preservation) {
+        throw new Error("dirty superseded preservation appeared before locked cleanup; only cleanup-superseded may remove this lane");
+      }
       const lockedCleanupTarget = assertCleanupWorktreeForMerged(manifest, state);
       try {
         // Capture target state as soon as this worker owns the lock. Every
@@ -11595,7 +11601,14 @@ function dirtySupersededTrackedPaths(worktreePath) {
   }
   if (paths.length > 64) throw new Error("dirty superseded preservation refuses more than 64 dirty paths");
   if (new Set(paths.map((entry) => entry.path)).size !== paths.length) throw new Error("dirty superseded preservation dirty path set is ambiguous");
-  return { paths: paths.sort((a, b) => a.path.localeCompare(b.path)) };
+  // Persist path identities in a locale-independent byte order.  A pending
+  // snapshot may resume under another Node/ICU locale, so localeCompare() is
+  // not a durable ordering contract.
+  return { paths: paths.sort(compareDirtySupersededPathEntries) };
+}
+
+function compareDirtySupersededPathEntries(left, right) {
+  return Buffer.compare(Buffer.from(String(left?.path ?? ""), "utf8"), Buffer.from(String(right?.path ?? ""), "utf8"));
 }
 
 function assertNoDirtySupersededHiddenIndexFlags(worktreePath) {
@@ -11620,7 +11633,16 @@ function assertNoDirtySupersededReplacementRefs(worktreePath) {
 }
 
 function dirtySupersededStatusRecords(worktreePath) {
-  const result = spawnSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"], { cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes });
+  // This is a destructive-boundary proof.  A broken fsmonitor hook must not
+  // be allowed to hide a tracked path from the snapshot or cleanup recheck.
+  // Recheck trustctime here rather than only during plan construction: an
+  // operator can flip it between the initial plan and a reset-adjacent or
+  // cleanup validation, where a restored-mtime edit would otherwise hide.
+  const trustCtime = git(["config", "--bool", "core.trustctime"], { cwd: worktreePath });
+  if (trustCtime.code === 0 && trustCtime.stdout.trim() === "false") {
+    throw new Error("dirty superseded preservation refuses core.trustctime=false because restored-mtime edits could be hidden");
+  }
+  const result = spawnSync("git", ["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"], { cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes });
   if (result.status !== 0) throw new Error(String(result.stderr || "could not inspect dirty superseded worktree").trim());
   const raw = Buffer.from(result.stdout || []); const records = [];
   for (let start = 0, end = raw.indexOf(0, start); end >= 0; start = end + 1, end = raw.indexOf(0, start)) {
@@ -11688,7 +11710,7 @@ function recoverDirtySupersededSnapshotIntent(manifest, intent, proofInput, mani
       throw new Error("dirty preservation snapshot ref could not be proved absent after interrupted publication; mutation=none.");
     }
     const currentDirty = dirtySupersededTrackedPaths(cwd);
-    const intentPaths = intent.paths.map((entry) => ({ path: entry?.path, status: entry?.status })).sort((left, right) => String(left.path).localeCompare(String(right.path)));
+    const intentPaths = intent.paths.map((entry) => ({ path: entry?.path, status: entry?.status })).sort(compareDirtySupersededPathEntries);
     if (JSON.stringify(currentDirty.paths) !== JSON.stringify(intentPaths)) {
       throw new Error("unpublished dirty preservation intent source no longer matches its exact recorded path/status snapshot; mutation=none.");
     }
@@ -11706,7 +11728,7 @@ function recoverDirtySupersededSnapshotIntent(manifest, intent, proofInput, mani
   // fresh temporary-index tree from the still-dirty source and recorded base,
   // then compare that independently produced tree to the adopted object.
   const currentDirty = dirtySupersededTrackedPaths(cwd);
-  const intentPaths = intent.paths.map((entry) => ({ path: entry?.path, status: entry?.status })).sort((left, right) => String(left.path).localeCompare(String(right.path)));
+  const intentPaths = intent.paths.map((entry) => ({ path: entry?.path, status: entry?.status })).sort(compareDirtySupersededPathEntries);
   if (JSON.stringify(currentDirty.paths) !== JSON.stringify(intentPaths)) {
     throw new Error("interrupted dirty preservation snapshot source no longer matches its exact recorded path/status snapshot; mutation=none.");
   }
