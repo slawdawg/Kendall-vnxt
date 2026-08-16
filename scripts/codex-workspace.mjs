@@ -184,6 +184,9 @@ let activeTaskLeaseWriteContext = null;
 const cleanupBranchesDefaultBaseRef = "origin/main";
 const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const canonicalKendallRepository = Object.freeze({ owner: "slawdawg", name: "Kendall-vnxt" });
+// A closed-remote cleanup makes a bounded sequence of external observations,
+// one remote deletion, and a post-delete probe while holding its task lease.
+const closedRemoteCleanupExternalIntentReserve = 12;
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": {
@@ -7253,6 +7256,19 @@ function githubRepository(manifest) {
   return { owner, name: parsed.name };
 }
 
+function githubRepositoryAt(cwd) {
+  const result = run("gh", ["repo", "view", "--json", "owner,name"], { cwd });
+  if (result.code !== 0) return null;
+  try {
+    const parsed = parseGhJson(result.stdout, "cleanup repository metadata");
+    const owner = typeof parsed.owner === "string" ? parsed.owner : parsed.owner?.login;
+    const name = typeof parsed.name === "string" ? parsed.name : "";
+    return owner && name ? { owner, name } : null;
+  } catch {
+    return null;
+  }
+}
+
 function fetchReviewThreadState(manifest, repository, prNumber) {
   const query = [
     "query($owner:String!,$name:String!,$number:Int!,$after:String){",
@@ -10007,6 +10023,14 @@ function cleanupClosedRemote(argv) {
   assertSafeTaskId(taskId);
   const state = workspaceState(options);
   const record = findCleanupManifestByExactTaskId(state, taskId);
+  if (!String(record.manifest.owner || "").trim()) {
+    if (!options.takeOwnership) {
+      throw new Error("cleanup-closed-remote requires --take-ownership with --takeover-reason for an unowned closed manifest.");
+    }
+    if (!validTakeoverReason(options.takeoverReason)) {
+      throw new Error("cleanup-closed-remote --takeover-reason must explain the unowned-lane takeover in at least 10 non-whitespace characters.");
+    }
+  }
   assertLaneOwner(record.manifest, options);
   const remoteDeleteAuthority = parseClosedRemoteDeleteAuthority(options.remoteDeleteAuthority);
   requireGh("cleanup-closed-remote");
@@ -10042,30 +10066,40 @@ function cleanupClosedRemote(argv) {
     } else {
       appendTaskEvent(locked, "closed_remote_branch_already_absent", locked.branch);
     }
-    locked.closed_remote_cleanup = {
-      schemaVersion: 1,
-      status: outcome,
-      taskId: locked.task_id,
-      prNumber: lockedProof.pr.number,
-      expectedHeadSha: lockedProof.expectedHeadSha,
-      branch: locked.branch,
-      remoteHeadSha: lockedProof.remote.sha || null,
-      completedAt,
-      approval: safeMetadataText(options.approval, 500),
-      metadataOnly: true,
-    };
+    const previousCleanup = locked.closed_remote_cleanup;
+    if (lockedProof.remote.sha || !previousCleanup?.status) {
+      locked.closed_remote_cleanup = {
+        schemaVersion: 1,
+        status: outcome,
+        taskId: locked.task_id,
+        prNumber: lockedProof.pr.number,
+        expectedHeadSha: lockedProof.expectedHeadSha,
+        branch: locked.branch,
+        remoteHeadSha: lockedProof.remote.sha || null,
+        completedAt,
+        approval: safeMetadataText(options.approval, 500),
+        metadataOnly: true,
+      };
+    } else {
+      // A no-op rerun must never erase the original destructive-action proof.
+      locked.closed_remote_cleanup = {
+        ...previousCleanup,
+        idempotentAbsentConfirmedAt: completedAt,
+        idempotentAbsentApproval: safeMetadataText(options.approval, 500),
+      };
+    }
     locked.closed_remote_cleanup_authority = closedRemoteCleanupAuthorityEvidence(locked, lockedProof, remoteDeleteAuthority, completedAt);
     locked.updated_at = completedAt;
     appendTaskEvent(locked, "closed_remote_cleanup_completed", `${outcome} ${locked.branch}`);
     writeManifest(record.path, locked);
-  });
+  }, { externalIntentReserve: closedRemoteCleanupExternalIntentReserve });
   console.log(`Closed remote branch for ${taskId}`);
 }
 
 function assertClosedRemoteCleanupOptionSyntax(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const option = ["--apply", "--dry-run", "--summary-json"].find((name) => arg === name || arg.startsWith(`${name}=`));
+    const option = ["--apply", "--dry-run", "--summary-json", "--take-ownership"].find((name) => arg === name || arg.startsWith(`${name}=`));
     if (!option) continue;
     if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
       throw new Error(`cleanup-closed-remote ${option} must be a bare flag without a value.`);
@@ -10080,6 +10114,9 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   if (!expectedHeadSha) blockers.push("closed manifest lacks an exact recorded delivery head");
   const expectedPrNumber = positiveSafePrNumberOrNull(manifest.pr_number);
   if (!expectedPrNumber) blockers.push("closed manifest lacks an exact PR number");
+  if (!validMergedPrUrl(manifest.pr_url, expectedPrNumber, canonicalKendallRepository)) {
+    blockers.push("closed manifest PR URL is not the canonical Kendall_Nxt pull-request URL for its recorded PR number");
+  }
   if (!manifest.branch) blockers.push("closed manifest lacks a branch name");
 
   const managedRoot = assertManagedWorktreeRoot(state);
@@ -10094,14 +10131,23 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, { closedRemoteOnly: true });
   const worktreePresent = existsSync(manifest.worktree_path) || worktreeListed(manifest.worktree_path, cleanupCwd);
   if (worktreePresent) blockers.push("closed manifest still has a registered or present local worktree");
-  const localBranchSha = branchSha(manifest.branch, cleanupCwd);
-  if (localBranchSha) blockers.push(`closed manifest still has local branch ${manifest.branch} at ${localBranchSha}`);
+  const localBranch = cleanupLocalTargetEvidence(manifest, cleanupCwd);
+  if (localBranch.state === "unknown") blockers.push("closed manifest local branch inspection is unknown");
+  if (localBranch.state === "present") blockers.push(`closed manifest still has local branch ${manifest.branch} at ${localBranch.sha}`);
 
-  const pr = prView(manifest);
+  // The fallback checkout is mutable infrastructure. Bind both its GitHub
+  // identity and the PR query to the canonical repository so a retargeted
+  // origin cannot make a same-number fork PR eligible for deletion.
+  const repository = githubRepositoryAt(cleanupCwd);
+  if (repository?.owner !== canonicalKendallRepository.owner || repository?.name !== canonicalKendallRepository.name) {
+    blockers.push("cleanup repository identity is not the canonical Kendall_Nxt repository");
+  }
+  const pr = prView(manifest, canonicalKendallRepository);
   if (!pr?.mergedAt || pr.state !== "MERGED") {
     blockers.push("live GitHub PR is not merged");
   } else {
     if (pr.number !== expectedPrNumber) blockers.push(`live GitHub PR number ${pr.number || "missing"} does not match manifest ${expectedPrNumber}`);
+    if (!validMergedPrUrl(pr.url, pr.number, canonicalKendallRepository)) blockers.push("live GitHub PR URL is not the canonical Kendall_Nxt pull-request URL for its reported PR number");
     if (pr.baseRefName !== manifest.base_branch) blockers.push(`live GitHub PR base ${pr.baseRefName || "missing"} does not match manifest ${manifest.base_branch}`);
     if (pr.headRefName !== manifest.branch) blockers.push(`live GitHub PR branch ${pr.headRefName || "missing"} does not match manifest ${manifest.branch}`);
     if (pr.headRefOid !== expectedHeadSha) blockers.push(`live GitHub PR head ${pr.headRefOid || "missing"} does not match recorded delivery head ${expectedHeadSha}`);
@@ -10152,7 +10198,7 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   if (remoteSha && remoteSha !== expectedHeadSha) {
     blockers.push(`remote branch origin/${manifest.branch} head ${remoteSha} does not match recorded delivery head ${expectedHeadSha}`);
   }
-  if (remoteSha && manifest.closed_remote_cleanup?.status === "deleted") {
+  if (remoteSha && manifest.closed_remote_cleanup?.status) {
     blockers.push("closed manifest already records remote deletion but the remote branch is present again");
   }
 
@@ -10161,11 +10207,12 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     blockers,
     expectedHeadSha,
     pr,
+    repository,
     cleanupCwd,
     retainedAudit,
     retainedAuthority,
     remoteDeleteAuthority,
-    local: { worktreePresent, branchSha: localBranchSha || null },
+    local: { worktreePresent, branchSha: localBranch.sha || null, branchState: localBranch.state },
     remote: { branch: manifest.branch, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
   };
 }
@@ -10232,7 +10279,16 @@ function parseClosedRemoteDeleteAuthority(value) {
       return { valid: false, reason: "--remote-delete-authority has malformed key/value syntax" };
     }
     const key = entry.slice(0, index);
-    const fieldValue = entry.slice(index + 1);
+    const encodedValue = entry.slice(index + 1);
+    let fieldValue;
+    try {
+      fieldValue = decodeURIComponent(encodedValue);
+    } catch {
+      return { valid: false, reason: "--remote-delete-authority has invalid percent-encoding" };
+    }
+    if (encodeURIComponent(fieldValue) !== encodedValue) {
+      return { valid: false, reason: "--remote-delete-authority values must use canonical percent-encoding" };
+    }
     if (!Object.hasOwn({ task: true, branch: true, pr: true, head: true, "remote-delete": true }, key) || Object.hasOwn(fields, key) || !fieldValue) {
       return { valid: false, reason: "--remote-delete-authority has missing, duplicate, or unknown fields" };
     }
@@ -18667,10 +18723,13 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, optio
     ["manifest-commits", "manifest_commit"],
   ]) {
     const count = leaseJsonRecordCount(taskLeaseLedgerPath(state, taskId, kind), label);
-    if (count >= taskLeaseMaximumHistoryRecords) {
+    const reserve = kind === "external-intents" || kind === "external-completions"
+      ? positiveInteger(options.externalIntentReserve, 1)
+      : 1;
+    if (count > taskLeaseMaximumHistoryRecords - reserve) {
       throw new Error(
         `Task lease ${label} callback reservation capacity is exhausted: task_id=${taskId}; generation=${metadata.generation}; ` +
-        `maximum_history_records=${taskLeaseMaximumHistoryRecords}; mutation=none.`,
+        `required_records=${reserve}; maximum_history_records=${taskLeaseMaximumHistoryRecords}; mutation=none.`,
       );
     }
   }
