@@ -16,10 +16,12 @@ from supervisor.application.service import SupervisorService
 from supervisor.infrastructure.db.database import (
     SUPERVISOR_CONTROL_POSTGRES_COLUMNS,
     SUPERVISOR_CONTROL_SQLITE_COLUMNS,
+    _apply_legacy_schema_compatibility,
     _begin_sqlite_schema_migration,
     _sqlite_add_columns,
     init_db,
 )
+from supervisor.infrastructure.db.migrations import upgrade_database
 from supervisor.infrastructure.db.models import SupervisorControl
 
 
@@ -96,6 +98,8 @@ def test_runtime_admission_and_initialization_contracts_are_fenced_and_idempoten
     lease_source = inspect.getsource(SupervisorService._create_or_refresh_lease)
     intake_source = inspect.getsource(SupervisorService.create_work_item)
     init_source = inspect.getsource(init_db)
+    upgrade_source = inspect.getsource(upgrade_database)
+    legacy_compatibility_source = inspect.getsource(_apply_legacy_schema_compatibility)
     sqlite_lock_source = inspect.getsource(_begin_sqlite_schema_migration)
     sqlite_columns_source = inspect.getsource(_sqlite_add_columns)
     status_source = inspect.getsource(SupervisorService.get_status)
@@ -110,11 +114,14 @@ def test_runtime_admission_and_initialization_contracts_are_fenced_and_idempoten
     assert "_require_running_runtime_for_admission(session)" in local_proof_source
     assert "_require_running_runtime_for_admission(session)" in local_proof_transition_source
     assert "_begin_sqlite_schema_migration" in init_source
-    assert "_sqlite_add_columns" in init_source
+    assert "await upgrade_database(connection)" in init_source
+    assert "SCHEMA_MIGRATIONS_TABLE" in upgrade_source
+    assert "for migration in MIGRATIONS" in upgrade_source
+    assert "await migration.upgrade(connection)" in upgrade_source
     assert "BEGIN IMMEDIATE" in sqlite_lock_source
     assert "_sqlite_table_columns" in sqlite_columns_source
     assert "duplicate column name" in sqlite_columns_source
-    assert "ON CONFLICT (id) DO NOTHING" in init_source
+    assert "ON CONFLICT (id) DO NOTHING" in legacy_compatibility_source
     assert "activeLeaseCount" in status_source
     assert "runningAttemptCount" in status_source
 

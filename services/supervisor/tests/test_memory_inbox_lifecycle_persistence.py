@@ -1,3 +1,4 @@
+import importlib
 import os
 import sys
 import uuid
@@ -6,7 +7,7 @@ from pathlib import Path
 import pytest
 from datetime import UTC, datetime, timedelta, timezone
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import Column, Integer, Table, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from supervisor.domain.memory_inbox import (
 )
 from supervisor.infrastructure.db import database
 from supervisor.infrastructure.db.database import Base, _ensure_sqlite_memory_inbox_manifest_ownership, _ensure_sqlite_memory_inbox_revision_states
+from supervisor.infrastructure.db.migrations import SCHEMA_MIGRATIONS_TABLE
 from supervisor.infrastructure.db import models  # noqa: F401
 from supervisor.infrastructure.db.models import MemoryInboxCommandResult
 from supervisor.infrastructure.db.models import MemoryInboxManifest, MemoryInboxProposalAggregate, MemoryInboxProposalRevision, MemoryInboxSource, MemoryInboxSourceRevision
@@ -33,6 +35,12 @@ def _reset_supervisor_modules() -> None:
     for module_name in list(sys.modules):
         if module_name == "supervisor" or module_name.startswith("supervisor."):
             sys.modules.pop(module_name, None)
+
+
+def _active_migrations_module():
+    """Resolve the module used by init_db after cross-suite module resets."""
+
+    return importlib.import_module("supervisor.infrastructure.db.migrations")
 
 
 def test_lifecycle_vocabulary_is_closed_and_inert() -> None:
@@ -172,6 +180,15 @@ async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_up
         await database.init_db()
 
         async with engine.begin() as connection:
+            applied_revisions = tuple(
+                (await connection.execute(text(
+                    f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
+                ))).scalars()
+            )
+        active_migrations = _active_migrations_module()
+        assert applied_revisions == tuple(migration.revision for migration in active_migrations.MIGRATIONS)
+
+        async with engine.begin() as connection:
             trigger_names = set((await connection.execute(text(
                 "SELECT name FROM sqlite_master WHERE type = 'trigger' "
                 "AND tbl_name IN ('memory_inbox_source_revisions', 'memory_inbox_proposal_revisions')"
@@ -235,8 +252,245 @@ async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_up
                     "UPDATE memory_inbox_proposal_revisions SET id = 'proposal-revision:renamed' "
                     "WHERE id = 'proposal-revision:default'"
                 ))
+
+        # A second startup must read the applied revisions, not replay the
+        # compatibility DDL or lose the data written after the upgrade.
+        await database.init_db()
+        async with engine.begin() as connection:
+            assert (await connection.scalar(text(
+                "SELECT COUNT(*) FROM memory_inbox_manifests WHERE id = 'manifest:default'"
+            ))) == 1
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migration(tmp_path, monkeypatch) -> None:
+    """A later non-idempotent migration uses its clean hook, not upgrade DDL."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'clean-install-stamping.db'}")
+    invoked: list[str] = []
+    future_table = Table("future_orm_owned", Base.metadata, Column("id", Integer, primary_key=True))
+
+    async def non_idempotent_later_upgrade(connection) -> None:
+        invoked.append("upgrade")
+        await connection.execute(text("CREATE TABLE future_orm_owned (id INTEGER PRIMARY KEY)"))
+
+    async def clean_install_future_table(connection) -> None:
+        invoked.append("clean_install")
+        await connection.execute(text("CREATE TABLE future_orm_owned (id INTEGER PRIMARY KEY)"))
+
+    active_migrations = _active_migrations_module()
+    later_migration = active_migrations.SchemaMigration(
+        "0003_non_idempotent_model_table",
+        non_idempotent_later_upgrade,
+        clean_install=clean_install_future_table,
+    )
+    monkeypatch.setattr(
+        active_migrations,
+        "MIGRATIONS",
+        (*active_migrations.MIGRATIONS, later_migration),
+    )
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        await database.init_db()
+        assert invoked == ["clean_install"]
+        async with engine.begin() as connection:
+            applied_revisions = tuple(
+                (await connection.execute(text(
+                    f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
+                ))).scalars()
+            )
+        assert applied_revisions == tuple(migration.revision for migration in active_migrations.MIGRATIONS)
+    finally:
+        Base.metadata.remove(future_table)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_partial_bookkeeping", [False, True])
+async def test_existing_database_does_not_materialize_current_baseline_before_later_upgrade(
+    tmp_path,
+    monkeypatch,
+    has_partial_bookkeeping,
+) -> None:
+    """A later ORM-owned table must not be created before its legacy upgrade."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-upgrade.db'}")
+    invoked: list[str] = []
+
+    async def later_orm_owned_table_upgrade(connection) -> None:
+        invoked.append("upgrade")
+        await connection.execute(text("CREATE TABLE future_orm_owned (id INTEGER PRIMARY KEY)"))
+
+    future_table = Table("future_orm_owned", Base.metadata, Column("id", Integer, primary_key=True))
+    active_migrations = _active_migrations_module()
+    monkeypatch.setattr(
+        active_migrations,
+        "MIGRATIONS",
+        (
+            *active_migrations.MIGRATIONS,
+            active_migrations.SchemaMigration("0003_orm_owned_table", later_orm_owned_table_upgrade),
+        ),
+    )
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        # This marker represents a schema created before migration bookkeeping.
+        async with engine.begin() as connection:
+            await connection.execute(text("CREATE TABLE pre_boundary_marker (id INTEGER PRIMARY KEY)"))
+            if has_partial_bookkeeping:
+                await connection.execute(text(
+                    f"CREATE TABLE {SCHEMA_MIGRATIONS_TABLE} (revision VARCHAR(80) PRIMARY KEY)"
+                ))
+
+        await database.init_db()
+        assert invoked == ["upgrade"]
+        async with engine.begin() as connection:
+            assert await connection.scalar(text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'future_orm_owned'"
+            )) == 1
+    finally:
+        Base.metadata.remove(future_table)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_bookkeeping_rejects_non_prefix_history(tmp_path, monkeypatch) -> None:
+    """A recorded descendant without its predecessor must fail closed."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'non-prefix-history.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("CREATE TABLE pre_boundary_marker (id INTEGER PRIMARY KEY)"))
+            await connection.execute(text(
+                f"CREATE TABLE {SCHEMA_MIGRATIONS_TABLE} (revision VARCHAR(80) PRIMARY KEY)"
+            ))
+            await connection.execute(text(
+                f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES ('0002_legacy_compatibility')"
+            ))
+
+        with pytest.raises(RuntimeError, match="contiguous revision prefix"):
+            await database.init_db()
+        async with engine.begin() as connection:
+            recorded = tuple((await connection.execute(text(
+                f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
+            ))).scalars())
+        assert recorded == ("0002_legacy_compatibility",)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "revision",
+    [
+        "0003_future_schema",
+        "0004_future_schema",
+        "future_schema",
+    ],
+)
+async def test_migration_bookkeeping_rejects_unknown_future_revision_history(tmp_path, monkeypatch, revision) -> None:
+    """A prior binary cannot infer compatibility from an unknown revision ID."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'invalid-future-{revision}.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        await database.init_db()
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES (:revision)"
+            ), {"revision": revision})
+
+        with pytest.raises(RuntimeError, match="unknown revisions"):
+            await database.init_db()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_bookkeeping_rejects_interleaved_unknown_revision_history(tmp_path, monkeypatch) -> None:
+    """A later record cannot appear between this binary's known revisions."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'interleaved-history.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("CREATE TABLE pre_boundary_marker (id INTEGER PRIMARY KEY)"))
+            await connection.execute(text(
+                f"CREATE TABLE {SCHEMA_MIGRATIONS_TABLE} (revision VARCHAR(80) PRIMARY KEY)"
+            ))
+            await connection.execute(text(
+                f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES ('0001_model_baseline')"
+            ))
+            await connection.execute(text(
+                f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES ('0003_future_schema')"
+            ))
+
+        with pytest.raises(RuntimeError, match="unknown revisions"):
+            await database.init_db()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_startup_repairs_execute_admission_lock_after_recorded_compatibility(tmp_path, monkeypatch) -> None:
+    """A restore may retain migration rows while omitting this runtime singleton."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'admission-lock-repair.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        await database.init_db()
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM admission_locks WHERE scope = 'execute'"))
+
+        await database.init_db()
+        async with engine.begin() as connection:
+            assert await connection.scalar(text(
+                "SELECT generation FROM admission_locks WHERE scope = 'execute'"
+            )) == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_migration_bookkeeping_uses_a_transaction_scoped_lock() -> None:
+    """Replicas serialize before they observe and record applied revisions."""
+
+    active_migrations = _active_migrations_module()
+
+    class RecordingConnection:
+        def __init__(self, dialect_name: str) -> None:
+            self.dialect = type("Dialect", (), {"name": dialect_name})()
+            self.calls: list[tuple[str, dict[str, int]]] = []
+
+        async def execute(self, statement, parameters=None) -> None:
+            self.calls.append((str(statement), parameters or {}))
+
+    postgres = RecordingConnection("postgresql")
+    await active_migrations._lock_postgres_migration_bookkeeping(postgres)
+    assert postgres.calls == [
+        ("SELECT pg_advisory_xact_lock(:lock_key)", {"lock_key": active_migrations.POSTGRES_MIGRATION_LOCK_KEY})
+    ]
+
+    sqlite = RecordingConnection("sqlite")
+    await active_migrations._lock_postgres_migration_bookkeeping(sqlite)
+    assert sqlite.calls == []
+
+
+def test_legacy_sqlite_manifest_rebuild_uses_frozen_baseline_metadata() -> None:
+    """Compatibility revision 0002 must not materialize future live ORM columns."""
+
+    source = Path(database.__file__).read_text(encoding="utf-8")
+    helper = source[source.index("async def _sqlite_drop_legacy_manifest_owner_uniqueness"):source.index("async def _ensure_sqlite_memory_inbox_manifest_ownership")]
+    assert "models_baseline import MemoryInboxManifest as BaselineMemoryInboxManifest" in helper
+    assert "supervisor.infrastructure.db.models import MemoryInboxManifest" not in helper
+    assert "BaselineMemoryInboxManifest.__table__.create" in helper
+
+
+def test_supervisor_readme_links_schema_migration_runbook() -> None:
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    assert "supervisor-schema-migrations.md" in readme.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
