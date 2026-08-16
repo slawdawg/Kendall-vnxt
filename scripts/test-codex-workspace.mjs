@@ -14098,6 +14098,11 @@ try {
       assert(applied.code === 0, applied.stderr || applied.stdout);
       assert(!remoteBranchExists(fixture.root, fixture.branch), "exact remote branch was not deleted");
       assert(readJson(manifestPath).closed_remote_cleanup?.status === "deleted", "deletion outcome was not recorded");
+      assert(readJson(manifestPath).closed_remote_cleanup_delete_intent?.remoteHeadSha === manifest.pr_delivery_head_sha, "pre-delete intent was not retained");
+      assert(
+        readJson(manifestPath).lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "cleanup-closed-remote"),
+        "closed remote cleanup authority was not projected into the canonical evidence packet",
+      );
 
       const resumed = runFixtureScript(fixture, [
         "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved idempotent remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
@@ -14134,6 +14139,14 @@ try {
       {
         name: "owner mismatch",
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-b", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "active emergency stop",
+        mutate(fixture) {
+          const stop = runFixtureScript(fixture, ["emergency-stop", "--apply", "--mode", "drain", "--reason", "operator requested controlled cleanup drain", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+          assert(stop.code === 0, stop.stderr || stop.stdout);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
       {
         name: "unowned manifest without explicit takeover",
@@ -14241,6 +14254,47 @@ try {
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
       {
+        name: "origin push repository identity drift",
+        mutate(fixture) { installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, "git@github.com:fork-owner/fork-repository.git"); },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "empty exact branch PR proof",
+        mutate(fixture) { fixture.env = { ...fixture.env, CODEX_WORKSPACE_TEST_BRANCH_PRS: "[]" }; },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "singleton open branch PR proof",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          fixture.env = { ...fixture.env, CODEX_WORKSPACE_TEST_BRANCH_PRS: JSON.stringify([
+            { number: manifest.pr_number, state: "OPEN", mergedAt: null, headRefName: manifest.branch, headRefOid: manifest.pr_delivery_head_sha, baseRefName: manifest.base_branch },
+          ]) };
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "singleton closed-unmerged branch PR proof",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          fixture.env = { ...fixture.env, CODEX_WORKSPACE_TEST_BRANCH_PRS: JSON.stringify([
+            { number: manifest.pr_number, state: "CLOSED", mergedAt: null, headRefName: manifest.branch, headRefOid: manifest.pr_delivery_head_sha, baseRefName: manifest.base_branch },
+          ]) };
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "extra merged branch PR proof",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          fixture.env = { ...fixture.env, CODEX_WORKSPACE_TEST_BRANCH_PRS: JSON.stringify([
+            { number: manifest.pr_number, state: "MERGED", mergedAt: "2026-06-21T00:00:00Z", headRefName: manifest.branch, headRefOid: manifest.pr_delivery_head_sha, baseRefName: manifest.base_branch },
+            { number: 124, state: "MERGED", mergedAt: "2026-06-22T00:00:00Z", headRefName: manifest.branch, headRefOid: manifest.pr_delivery_head_sha, baseRefName: manifest.base_branch },
+          ]) };
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
         name: "recreated remote after cleanup-merged remote deletion",
         mutate(fixture, manifestPath) {
           const manifest = readJson(manifestPath);
@@ -14287,7 +14341,7 @@ try {
       for (const kind of ["external-intents", "external-completions"]) {
         const ledger = join(fixture.stateRoot, "tasks", ".leases", "cleanup-task", kind);
         mkdirSync(ledger, { recursive: true });
-        for (let index = 0; index < 4_085; index += 1) writeFileSync(join(ledger, `reserved-${index}.json`), "{}\n");
+        for (let index = 0; index < 4_096; index += 1) writeFileSync(join(ledger, `reserved-${index}.json`), "{}\n");
       }
       const before = readFileSync(manifestPath, "utf8");
       const result = runFixtureScript(fixture, [
@@ -14297,6 +14351,57 @@ try {
       assert(result.stderr.includes("required_records=13"), result.stderr || result.stdout);
       assert(remoteBranchExists(fixture.root, fixture.branch), "lease-capacity failure deleted remote branch");
       assert(readFileSync(manifestPath, "utf8") === before, "lease-capacity failure mutated manifest");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-closed-remote reserves both manifest writes before durable delete intent", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed";
+      manifest.closed_at = "2026-08-16T00:00:00.000Z";
+      manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      for (const kind of ["manifest-intents", "manifest-commits"]) {
+        const ledger = join(fixture.stateRoot, "tasks", ".leases", "cleanup-task", kind);
+        mkdirSync(ledger, { recursive: true });
+        for (let index = 0; index < 4_095; index += 1) writeFileSync(join(ledger, `reserved-${index}.json`), "{}\n");
+      }
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved bounded cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code !== 0, "insufficient manifest capacity unexpectedly entered cleanup");
+      assert(result.stderr.includes("required_records=2"), result.stderr || result.stdout);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "manifest-capacity failure deleted remote branch");
+      assert(readFileSync(manifestPath, "utf8") === before, "manifest-capacity failure wrote delete intent or other evidence");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-closed-remote blocks a missing but still registered prunable worktree", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed";
+      manifest.closed_at = "2026-08-16T00:00:00.000Z";
+      manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      rmSync(fixture.worktree, { recursive: true, force: true });
+      runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`]);
+      const result = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code !== 0, "missing registered worktree unexpectedly became eligible");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "registered-worktree blocker deleted remote branch");
+      assert(!readJson(manifestPath).closed_remote_cleanup, "registered-worktree blocker wrote cleanup evidence");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -18941,6 +19046,10 @@ function createMergedCleanupFixture() {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: 'slawdawg', name: 'Kendall-vnxt' })); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'list') {",
+      `  console.log(process.env.CODEX_WORKSPACE_TEST_BRANCH_PRS || JSON.stringify([{ number: 123, state: 'MERGED', mergedAt: '2026-06-21T00:00:00Z', headRefName: '${branch}', headRefOid: '${branchHead}', baseRefName: 'main' }]));`,
+      "  process.exit(0);",
+      "}",
       "if (args[0] === 'pr' && args[1] === 'view') {",
       `  console.log(JSON.stringify({ number: 123, url: 'https://github.com/slawdawg/Kendall-vnxt/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: '${branch}', headRefOid: process.env.CODEX_WORKSPACE_TEST_MERGED_PR_HEAD || '${branchHead}' }));`,
       "  process.exit(0);",
@@ -18951,6 +19060,9 @@ function createMergedCleanupFixture() {
     ].join("\n"),
   );
   chmodSync(fakeGh, 0o755);
+  // The fixture uses a local bare repository for real push semantics.  The
+  // cleanup proof must nevertheless exercise canonical-origin identity.
+  installFixtureOriginIdentityProxy(fixtureRoot, fakeBin);
   mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
   runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
 
@@ -19043,6 +19155,28 @@ function createMergedCleanupFixture() {
   };
 }
 
+function installFixtureOriginIdentityProxy(root, fakeBin, originUrl = "git@github.com:slawdawg/Kendall-vnxt.git") {
+  const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fakeBin).join(":");
+  const fakeGit = join(fakeBin, "git");
+  writeFileSync(
+    fakeGit,
+    [
+      "#!/usr/bin/env node",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === 'origin') {",
+      `  console.log(${JSON.stringify(originUrl)});`,
+      "  process.exit(0);",
+      "}",
+      `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
+      "process.exit(result.status ?? 1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGit, 0o755);
+  return fakeGit;
+}
+
 function installFixtureGitProxy(fixture, failureCondition, failureMessage) {
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
   const fakeGit = join(fixture.fakeBin, "git");
@@ -19098,6 +19232,10 @@ function writeFixtureGhPrView(fixture, headRefOid) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: 'slawdawg', name: 'Kendall-vnxt' })); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'list') {",
+      `  console.log(process.env.CODEX_WORKSPACE_TEST_BRANCH_PRS || JSON.stringify([{ number: 123, state: 'MERGED', mergedAt: '2026-06-21T00:00:00Z', headRefName: ${JSON.stringify(fixture.branch)}, headRefOid: ${JSON.stringify(headRefOid)}, baseRefName: 'main' }]));`,
+      "  process.exit(0);",
+      "}",
       "if (args[0] === 'pr' && args[1] === 'view') {",
       `  console.log(JSON.stringify({ number: 123, url: 'https://github.com/slawdawg/Kendall-vnxt/pull/123', mergedAt: '2026-06-21T00:00:00Z', state: 'MERGED', baseRefName: 'main', headRefName: ${JSON.stringify(fixture.branch)}, headRefOid: ${JSON.stringify(headRefOid)} }));`,
       "  process.exit(0);",
@@ -19119,6 +19257,10 @@ function writeFixtureGhPrPayload(fixture, payload) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: 'slawdawg', name: 'Kendall-vnxt' })); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'list') {",
+      `  console.log(process.env.CODEX_WORKSPACE_TEST_BRANCH_PRS || JSON.stringify([{ number: ${payload.number}, state: ${JSON.stringify(payload.state)}, mergedAt: ${JSON.stringify(payload.mergedAt)}, headRefName: ${JSON.stringify(payload.headRefName)}, headRefOid: ${JSON.stringify(payload.headRefOid)}, baseRefName: ${JSON.stringify(payload.baseRefName)} }]));`,
+      "  process.exit(0);",
+      "}",
       "if (args[0] === 'pr' && args[1] === 'view') {",
       `  console.log(JSON.stringify(${JSON.stringify(payload)}));`,
       "  process.exit(0);",
@@ -19143,7 +19285,7 @@ function writeFixtureGhRepositoryView(fixture, repository) {
 function installFixtureCanonicalPrRepoAssertion(fixture) {
   const fakeGh = join(fixture.fakeBin, "gh");
   const source = readFileSync(fakeGh, "utf8");
-  const seam = "if (args[0] === 'pr' && args[1] === 'view') {";
+  const seam = "if (args[0] === 'pr' && args[1] === 'list') {";
   assert(source.includes(seam), "fixture did not contain the PR-view repository seam");
   const guard = [
     seam,

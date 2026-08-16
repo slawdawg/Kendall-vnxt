@@ -187,6 +187,7 @@ const canonicalKendallRepository = Object.freeze({ owner: "slawdawg", name: "Ken
 // A closed-remote cleanup makes a bounded sequence of external observations,
 // one remote deletion, and a post-delete probe while holding its task lease.
 const closedRemoteCleanupExternalIntentReserve = 13;
+const closedRemoteCleanupManifestWriteReserve = 2;
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": {
@@ -7269,6 +7270,15 @@ function githubRepositoryAt(cwd) {
   }
 }
 
+function originRepositoryIdentity(cwd) {
+  const result = git(["remote", "get-url", "--push", "origin"], { cwd });
+  if (result.code !== 0) return null;
+  const value = result.stdout.trim();
+  const match = value.match(/^(?:https?:\/\/github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  if (!match) return null;
+  return { owner: match[1], name: match[2] };
+}
+
 function fetchReviewThreadState(manifest, repository, prNumber) {
   const query = [
     "query($owner:String!,$name:String!,$number:Int!,$after:String){",
@@ -10050,7 +10060,8 @@ function cleanupClosedRemote(argv) {
     return;
   }
 
-  withManifestLock(state, taskId, () => {
+  withManifestLock(state, taskId, () => withEmergencyStopLock(state, () => {
+    assertNoActiveEmergencyStop(state, "cleanup-closed-remote");
     const locked = readManifest(record.path);
     validateManifest(locked, record.path);
     assertLaneOwner(locked, options);
@@ -10062,6 +10073,20 @@ function cleanupClosedRemote(argv) {
     const completedAt = new Date().toISOString();
     const outcome = lockedProof.remote.sha ? "deleted" : "already_absent";
     if (lockedProof.remote.sha) {
+      // Record immutable intent before the irreversible remote mutation.  A
+      // crash after a successful push must never make a recreated ref eligible
+      // on a retry.
+      locked.closed_remote_cleanup_delete_intent = {
+        schemaVersion: 1,
+        taskId: locked.task_id,
+        branch: locked.branch,
+        expectedHeadSha: lockedProof.expectedHeadSha,
+        remoteHeadSha: lockedProof.remote.sha,
+        recordedAt: completedAt,
+        metadataOnly: true,
+      };
+      appendTaskEvent(locked, "closed_remote_cleanup_delete_intent", `${locked.branch} ${lockedProof.remote.sha}`);
+      writeManifest(record.path, locked);
       deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);
     } else {
       // The absence proof can change between the locked packet and this
@@ -10096,10 +10121,17 @@ function cleanupClosedRemote(argv) {
       };
     }
     locked.closed_remote_cleanup_authority = closedRemoteCleanupAuthorityEvidence(locked, lockedProof, remoteDeleteAuthority, completedAt);
+    appendAuthorityDecision(locked, locked.closed_remote_cleanup_authority);
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {}, {
+      cleanupAuthorityDecision: locked.closed_remote_cleanup_authority,
+    });
     locked.updated_at = completedAt;
     appendTaskEvent(locked, "closed_remote_cleanup_completed", `${outcome} ${locked.branch}`);
     writeManifest(record.path, locked);
-  }, { externalIntentReserve: closedRemoteCleanupExternalIntentReserve });
+  }), {
+    externalIntentReserve: closedRemoteCleanupExternalIntentReserve,
+    manifestWriteReserve: closedRemoteCleanupManifestWriteReserve,
+  });
   console.log(`Closed remote branch for ${taskId}`);
 }
 
@@ -10145,6 +10177,10 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   // The fallback checkout is mutable infrastructure. Bind both its GitHub
   // identity and the PR query to the canonical repository so a retargeted
   // origin cannot make a same-number fork PR eligible for deletion.
+  const originRepository = originRepositoryIdentity(cleanupCwd);
+  if (originRepository?.owner !== canonicalKendallRepository.owner || originRepository?.name !== canonicalKendallRepository.name) {
+    blockers.push("cleanup origin remote is not the canonical Kendall_Nxt repository");
+  }
   const repository = githubRepositoryAt(cleanupCwd);
   if (repository?.owner !== canonicalKendallRepository.owner || repository?.name !== canonicalKendallRepository.name) {
     blockers.push("cleanup repository identity is not the canonical Kendall_Nxt repository");
@@ -10158,6 +10194,10 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     if (pr.baseRefName !== manifest.base_branch) blockers.push(`live GitHub PR base ${pr.baseRefName || "missing"} does not match manifest ${manifest.base_branch}`);
     if (pr.headRefName !== manifest.branch) blockers.push(`live GitHub PR branch ${pr.headRefName || "missing"} does not match manifest ${manifest.branch}`);
     if (pr.headRefOid !== expectedHeadSha) blockers.push(`live GitHub PR head ${pr.headRefOid || "missing"} does not match recorded delivery head ${expectedHeadSha}`);
+  }
+  const branchPrProof = closedRemoteBranchPrProof(manifest, cleanupCwd);
+  if (branchPrProof.status !== "matched") {
+    blockers.push(branchPrProof.reason);
   }
 
   const retainedAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, {}, {
@@ -10208,6 +10248,9 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   if (remoteSha && manifest.closed_remote_cleanup?.status) {
     blockers.push("closed manifest already records remote deletion but the remote branch is present again");
   }
+  if (remoteSha && manifest.closed_remote_cleanup_delete_intent) {
+    blockers.push("closed manifest records a prior remote deletion intent; a recreated remote branch is not eligible for closed-manifest cleanup");
+  }
   if (remoteSha && retainedAuthority?.operation === "cleanup-merged-delete-remote") {
     blockers.push("retained cleanup authority proves the remote branch was already deleted; a recreated remote branch is not eligible for closed-manifest cleanup");
   }
@@ -10218,6 +10261,8 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     expectedHeadSha,
     pr,
     repository,
+    originRepository,
+    branchPrProof,
     cleanupCwd,
     retainedAudit,
     retainedAuthority,
@@ -10225,6 +10270,25 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     local: { worktreePresent, branchSha: localBranch.sha || null, branchState: localBranch.state },
     remote: { branch: manifest.branch, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
   };
+}
+
+function closedRemoteBranchPrProof(manifest, cleanupCwd) {
+  const result = run("gh", [
+    "pr", "list", "--head", manifest.branch, "--state", "all",
+    "--json", "number,state,mergedAt,headRefName,headRefOid,baseRefName",
+    "--repo", `${canonicalKendallRepository.owner}/${canonicalKendallRepository.name}`,
+  ], { cwd: cleanupCwd });
+  if (result.code !== 0) return { status: "unavailable", reason: "live GitHub branch PR proof is unavailable" };
+  let pullRequests;
+  try { pullRequests = parseGhJson(result.stdout, "closed-remote branch PR proof"); } catch { return { status: "unavailable", reason: "live GitHub branch PR proof is malformed" }; }
+  if (!Array.isArray(pullRequests) || pullRequests.length !== 1 || pullRequests.some((pr) => !pr || pr.headRefName !== manifest.branch)) {
+    return { status: "unavailable", reason: "live GitHub branch PR proof is non-exact" };
+  }
+  const [recorded] = pullRequests;
+  if (recorded.number !== manifest.pr_number || recorded.state !== "MERGED" || !recorded.mergedAt) {
+    return { status: "blocked", reason: "live GitHub branch PR proof is not the single recorded merged PR for the source branch" };
+  }
+  return { status: "matched" };
 }
 
 function closedRemoteCleanupSummary(manifest, proof) {
@@ -18742,7 +18806,7 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, optio
     const count = leaseJsonRecordCount(taskLeaseLedgerPath(state, taskId, kind), label);
     const reserve = kind === "external-intents" || kind === "external-completions"
       ? positiveInteger(options.externalIntentReserve, 1)
-      : 1;
+      : positiveInteger(options.manifestWriteReserve, 1);
     if (count > taskLeaseMaximumHistoryRecords - reserve) {
       throw new Error(
         `Task lease ${label} callback reservation capacity is exhausted: task_id=${taskId}; generation=${metadata.generation}; ` +
@@ -19766,7 +19830,13 @@ function worktreeListed(worktreePath, cwd = repoRoot) {
   if (result.code !== 0) {
     return true;
   }
-  return parseWorktreePorcelain(result.stdout).some((record) => samePath(record.path, worktreePath));
+  // A prunable registration can name a directory which no longer exists.
+  // `samePath` intentionally requires real paths, so compare normalized
+  // lexical paths as a conservative fallback for registry evidence.
+  const normalizedTarget = resolve(worktreePath);
+  return parseWorktreePorcelain(result.stdout).some((record) =>
+    samePath(record.path, worktreePath) || resolve(record.path) === normalizedTarget,
+  );
 }
 
 function prunableGitWorktrees(cwd = repoRoot) {
