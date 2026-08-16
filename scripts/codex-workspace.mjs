@@ -7279,7 +7279,7 @@ function originRepositoryIdentities(cwd) {
   const values = result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   if (values.length !== 1) return null;
   const match = values[0].match(/^(?:https?:\/\/github\.com\/|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
-  return match ? [{ owner: match[1], name: match[2] }] : null;
+  return match ? [{ owner: match[1], name: match[2], url: values[0] }] : null;
 }
 
 function fetchReviewThreadState(manifest, repository, prNumber) {
@@ -10091,7 +10091,7 @@ function cleanupClosedRemote(argv) {
       appendTaskEvent(locked, "closed_remote_cleanup_delete_intent", `${locked.branch} ${lockedProof.remote.sha}`);
       writeManifest(record.path, locked);
       try {
-        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);
+        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha, lockedProof.remote.url);
         locked.closed_remote_cleanup_delete_intent = {
           ...locked.closed_remote_cleanup_delete_intent,
           status: "completed",
@@ -10099,7 +10099,7 @@ function cleanupClosedRemote(argv) {
         };
       } catch (error) {
         let remoteAfterFailure = null;
-        try { remoteAfterFailure = originBranchSha(locked.branch, lockedProof.cleanupCwd) || null; } catch {}
+        try { remoteAfterFailure = remoteBranchShaAt(lockedProof.remote.url, locked.branch, lockedProof.cleanupCwd) || null; } catch {}
         locked.closed_remote_cleanup_delete_intent = {
           ...locked.closed_remote_cleanup_delete_intent,
           status: remoteAfterFailure === lockedProof.expectedHeadSha ? "retryable_failed" : "outcome_unknown",
@@ -10115,7 +10115,7 @@ function cleanupClosedRemote(argv) {
       // The absence proof can change between the locked packet and this
       // mutation branch. Re-read the remote before recording a terminal no-op
       // so an intervening recreation remains actionable rather than masked.
-      const recheckedRemoteSha = originBranchSha(locked.branch, lockedProof.cleanupCwd);
+      const recheckedRemoteSha = remoteBranchShaAt(lockedProof.remote.url, locked.branch, lockedProof.cleanupCwd);
       if (recheckedRemoteSha) {
         throw new Error(`Closed-manifest remote cleanup is blocked under lock: remote branch origin/${locked.branch} appeared after the absence proof.`);
       }
@@ -10263,9 +10263,11 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     }
   }
 
+  const remoteUrl = originRepositories?.[0]?.url || null;
   let remoteSha = "";
   try {
-    remoteSha = originBranchSha(manifest.branch, cleanupCwd);
+    if (!remoteUrl) throw new Error("canonical origin push URL is unavailable");
+    remoteSha = remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd);
   } catch (error) {
     blockers.push(`could not exactly inspect remote branch: ${safeMetadataText(error.message || error, 300)}`);
   }
@@ -10299,7 +10301,7 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
     retainedAuthority,
     remoteDeleteAuthority,
     local: { worktreePresent, branchSha: localBranch.sha || null, branchState: localBranch.state },
-    remote: { branch: manifest.branch, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
+    remote: { branch: manifest.branch, url: remoteUrl, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
   };
 }
 
@@ -10324,7 +10326,7 @@ function closedRemoteBranchOwnershipProof(manifest, state) {
       } catch {
         return { status: "blocked", reason: "closed-manifest cleanup cannot verify assignment inventory" };
       }
-      if (assignment.task_id !== manifest.task_id && assignment.branch === manifest.branch && assignment.status !== "closed") {
+      if (assignment.branch === manifest.branch && assignment.status !== "closed") {
         return { status: "blocked", reason: `closed-manifest cleanup found active assignment branch ownership: ${assignment.assignment_id}` };
       }
     }
@@ -12777,21 +12779,22 @@ function deleteLocalBranchIfPresent(manifest, cleanupCwd, expectedHeadSha) {
   manifest.local_branch_deleted_at = manifest.local_branch_deleted_at || new Date().toISOString();
 }
 
-function deleteRemoteBranchIfPresent(manifest, cleanupCwd, expectedHeadSha) {
-  const remoteSha = originBranchSha(manifest.branch, cleanupCwd);
-  assertExpectedBranchHead(`Remote branch origin/${manifest.branch}`, remoteSha, expectedHeadSha);
+function deleteRemoteBranchIfPresent(manifest, cleanupCwd, expectedHeadSha, remoteUrl = "origin") {
+  if (typeof remoteUrl !== "string" || !remoteUrl) throw new Error("Remote deletion requires an exact validated remote URL.");
+  const remoteSha = remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd);
+  assertExpectedBranchHead(`Remote branch ${remoteUrl}/${manifest.branch}`, remoteSha, expectedHeadSha);
   if (remoteSha) {
     runChecked(
       "git",
-      ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, "origin", `:refs/heads/${manifest.branch}`],
+      ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, remoteUrl, `:refs/heads/${manifest.branch}`],
       { cwd: cleanupCwd },
     );
     appendTaskEvent(manifest, "remote_branch_deleted", manifest.branch);
   } else {
     appendTaskEvent(manifest, "remote_branch_already_absent", manifest.branch);
   }
-  if (originBranchSha(manifest.branch, cleanupCwd)) {
-    throw new Error(`Remote branch still exists after cleanup: origin/${manifest.branch}`);
+  if (remoteBranchShaAt(remoteUrl, manifest.branch, cleanupCwd)) {
+    throw new Error(`Remote branch still exists after cleanup: ${remoteUrl}/${manifest.branch}`);
   }
   manifest.remote_branch_deleted_at = manifest.remote_branch_deleted_at || new Date().toISOString();
 }
@@ -13861,21 +13864,25 @@ function branchSha(branch, cwd = repoRoot) {
 }
 
 function originBranchSha(branch, cwd = repoRoot) {
+  return remoteBranchShaAt("origin", branch, cwd, "origin");
+}
+
+function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote) {
   const exactRef = `refs/heads/${branch}`;
-  const result = git(["ls-remote", "--heads", "origin", exactRef], { cwd });
+  const result = git(["ls-remote", "--heads", remote, exactRef], { cwd });
   if (result.code !== 0) {
-    throw new Error(result.stderr || `Could not inspect remote branch: origin/${branch}`);
+    throw new Error(result.stderr || `Could not inspect remote branch: ${label}/${branch}`);
   }
   if (!result.stdout) {
     return "";
   }
   const rows = result.stdout.trim().split("\n").filter(Boolean);
   if (rows.length !== 1) {
-    throw new Error(`Could not uniquely inspect remote branch: origin/${branch}`);
+    throw new Error(`Could not uniquely inspect remote branch: ${label}/${branch}`);
   }
   const [sha, ref] = rows[0].split(/\s+/);
   if (!exactGitObjectIdOrNull(sha) || ref !== exactRef) {
-    throw new Error(`Could not exactly inspect remote branch: origin/${branch}`);
+    throw new Error(`Could not exactly inspect remote branch: ${label}/${branch}`);
   }
   return sha;
 }
@@ -19151,6 +19158,12 @@ function applyLegacyRecoveryAdoption(state, packet, approval) {
 
 function processStartIdentity(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform !== "linux") {
+    // Other supported hosts lack Linux /proc start ticks.  A live PID-only
+    // identity is deliberately non-reclaimable on reuse: it preserves mutual
+    // exclusion by failing closed rather than mistaking a reused PID for dead.
+    try { process.kill(pid, 0); return `portable-live-pid:${pid}`; } catch { return null; }
+  }
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
     const close = raw.lastIndexOf(")");
@@ -19608,6 +19621,13 @@ function withBranchOwnershipLock(state, branch, fn) {
   mkdirSync(directory, { recursive: true });
   const digest = createHash("sha256").update(branch).digest("hex");
   const lockPath = join(directory, `${digest}.lock`);
+  if (existsSync(branchOwnershipRecoveryGatePath(lockPath))) {
+    throw new Error(`Branch ownership is locked by another session: ${branch}`);
+  }
+  const reclaimPath = branchOwnershipReclaimClaimPath(lockPath);
+  if (existsSync(reclaimPath) && !recoverStaleBranchOwnershipReclaimClaim(reclaimPath, branch)) {
+    throw new Error(`Branch ownership is locked by another session: ${branch}`);
+  }
   let fd;
   try {
     fd = openSync(lockPath, "wx");
@@ -19630,12 +19650,75 @@ function withBranchOwnershipLock(state, branch, fn) {
 }
 
 function recoverStaleBranchOwnershipLock(lockPath, branch) {
+  let observed;
+  try { observed = readFileSync(lockPath, "utf8"); } catch { return false; }
   let record;
-  try { record = JSON.parse(readFileSync(lockPath, "utf8")); } catch { return false; }
+  try { record = JSON.parse(observed); } catch { return false; }
   if (record?.branch !== branch || !Number.isInteger(record?.pid) || typeof record?.processStart !== "string") return false;
   if (branchLockProcessProbe(record.pid) !== "dead") return false;
-  rmSync(lockPath, { force: true });
-  return true;
+
+  // A durable exclusive claim serializes stale recovery before moving the old
+  // lock. Re-read the exact bytes after claiming: if anyone replaced the
+  // lock while it was being inspected, never move their new owner record.
+  const claimPath = branchOwnershipReclaimClaimPath(lockPath);
+  let claimFd;
+  try { claimFd = openSync(claimPath, "wx"); } catch (error) {
+    if (error?.code !== "EEXIST") return false;
+    if (recoverStaleBranchOwnershipReclaimClaim(claimPath, branch)) return recoverStaleBranchOwnershipLock(lockPath, branch);
+    return false;
+  }
+  try {
+    const processStart = processStartIdentity(process.pid);
+    if (!processStart) return false;
+    writeFileSync(claimPath, `${JSON.stringify({ schemaVersion: 1, branch, pid: process.pid, processStart, lockDigest: createHash("sha256").update(observed).digest("hex"), acquiredAt: new Date().toISOString() })}\n`);
+    let current;
+    try { current = readFileSync(lockPath, "utf8"); } catch { return false; }
+    if (current !== observed) return false;
+    // Every governed acquisition checks this live sidecar before it can create
+    // a target lock. Rename the observed stale inode out of the target path;
+    // never unlink that path after another owner might have acquired it.
+    const quarantinePath = `${claimPath}.${randomUUID()}.stale`;
+    try { renameSync(lockPath, quarantinePath); } catch { return false; }
+    try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+    return true;
+  } finally {
+    closeSync(claimFd);
+    rmSync(claimPath, { force: true });
+  }
+}
+
+function branchOwnershipReclaimClaimPath(lockPath) {
+  return `${lockPath}.reclaim`;
+}
+
+function branchOwnershipRecoveryGatePath(lockPath) {
+  return `${lockPath}.recovery-gate`;
+}
+
+function recoverStaleBranchOwnershipReclaimClaim(claimPath, branch) {
+  let observed;
+  try { observed = readFileSync(claimPath, "utf8"); } catch { return false; }
+  let claim;
+  try { claim = JSON.parse(observed); } catch { return false; }
+  if (claim?.branch !== branch || !Number.isInteger(claim?.pid) || typeof claim?.processStart !== "string" || !/^[a-f0-9]{64}$/.test(claim?.lockDigest || "")) return false;
+  if (branchLockProcessProbe(claim.pid) !== "dead") return false;
+  const gatePath = branchOwnershipRecoveryGatePath(claimPath.replace(/\.reclaim$/, ""));
+  let gateFd;
+  try { gateFd = openSync(gatePath, "wx"); } catch { return false; }
+  try {
+    let current;
+    try { current = readFileSync(claimPath, "utf8"); } catch { return false; }
+    if (current !== observed) return false;
+    // The recovery gate is checked before every governed branch acquisition,
+    // so no fresh reclaim sidecar can be created while this dead one is moved.
+    const quarantinePath = `${gatePath}.${randomUUID()}.stale`;
+    try { renameSync(claimPath, quarantinePath); } catch { return false; }
+    try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+    return true;
+  } finally {
+    closeSync(gateFd);
+    rmSync(gatePath, { force: true });
+  }
 }
 
 function branchLockProcessProbe(pid) {

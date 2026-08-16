@@ -585,8 +585,9 @@ do not treat an operator authorization as a bypass.
    the only PR using that branch is the recorded merged PR (an empty, extra,
    open, or closed-unmerged branch-PR result is a stop line); no other active
    manifest or assignment owns that branch; the checkout has exactly one
-   `origin` push URL and it names the canonical repository; and the live remote
-   ref equals that same head.
+   `origin` push URL and it names the canonical repository; the same validated
+   immutable URL is used for every remote probe and deletion (never the mutable
+   `origin` name); and the live remote ref equals that same head.
    An active emergency-stop checkpoint is also a hard stop line for the
    mutation. Encode every binding value
    with canonical percent-encoding (notably `%3B` for a semicolon and `%27`
@@ -610,7 +611,12 @@ do not treat an operator authorization as a bypass.
    branch-ownership proof while holding that lock before it records delete
    intent or deletes a remote ref; a contended lock is a stop line.
    A lock records its PID/start identity; only a lock whose recorded process
-   identity is no longer live is recovered. A failed remote deletion retains
+   identity is no longer live is recovered. Stale recovery first atomically
+   claims a recovery gate and sidecar, then atomically moves the observed stale
+   inode, so a competing recovery or fresh governed owner cannot lose a freshly
+   reacquired target lock. Linux records process start ticks; other supported hosts
+   record only a live PID and deliberately treat PID reuse as ambiguous rather
+   than reclaiming it. A failed remote deletion retains
    its intent and is retryable only after a fresh probe proves the exact remote
    ref is still present; any ambiguous post-failure state remains blocked.
    If a versioned lease reports `external_command_fence_unresolved`, do not
