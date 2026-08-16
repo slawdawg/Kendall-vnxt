@@ -50,10 +50,10 @@ These reports are evidence and approval-prep surfaces only. They do not grant th
 ## Historical Epic 6 Completion Audit Archive
 
 The former `GET /supervisor/epic-6-completion-audit-report` is archive-only
-historical evidence, not a current evidence surface. Its final
-`epicComplete=true` finding is preserved in this dated ledger as an archival
-fact; the route, catalog entry, dashboard control, schema, and service generator
-were retired in the Phase 1 compatibility-removal slice. The separately retained,
+historical evidence, not a current evidence surface. Its complete final snapshot
+is preserved in the dated [Epic 6 Completion Audit Archive (2026-08-16)](kendall-vnxt-epic-6-completion-audit-archive-2026-08-16.md);
+the route, catalog entry, dashboard control, schema, and service generator were
+retired in the Phase 1 compatibility-removal slice. The separately retained,
 read-only historical MVP proof-trial packet is
 `GET /supervisor/epic-6-mvp-proof-trial-report`.
 The [Supervisor Report Surface Classification (2026-08-15)](kendall-vnxt-supervisor-report-surface-classification-2026-08-15.md)

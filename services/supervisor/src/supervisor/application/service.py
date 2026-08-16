@@ -21348,7 +21348,10 @@ class SupervisorService:
                     stepId="done-evidence",
                     label="Done evidence",
                     status="completed",
-                    summary="The Epic 6 proof report and completion audit retain the WorkItem done evidence and remaining post-MVP blockers.",
+                    summary=(
+                        "The retained MVP proof report records the WorkItem done evidence and post-MVP blockers. "
+                        "The historical completion audit is preserved only in the dated ledger and archive."
+                    ),
                     requiredApproval="No separate approval unless done evidence requires remote issue/story sync.",
                     evidence=[
                         "Runtime evidence export",
