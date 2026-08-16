@@ -14685,6 +14685,7 @@ try {
       manifest.closed_at = "2026-08-16T00:00:00.000Z";
       manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
       runGit(fixture.root, ["branch", "-D", fixture.branch]);
       runGit(fixture.root, ["push", "origin", `:refs/heads/${fixture.branch}`]);
@@ -19512,7 +19513,7 @@ function installFixtureCanonicalPrRepoAssertion(fixture) {
 
 function installFixtureClosedRemoteAbsenceRace(fixture) {
   const source = readFileSync(fixture.script, "utf8");
-  const seam = "      const recheckedRemoteSha = originBranchSha(locked.branch, lockedProof.cleanupCwd);";
+  const seam = "      const recheckedRemoteSha = remoteBranchShaAt(lockedProof.remote.url, locked.branch, lockedProof.cleanupCwd);";
   assert(source.includes(seam), "fixture did not contain the closed-remote absence recheck seam");
   const mutation = [
     '      if (process.env.CODEX_WORKSPACE_FIXTURE_CLOSED_REMOTE_ABSENCE_RACE === "1") {',
