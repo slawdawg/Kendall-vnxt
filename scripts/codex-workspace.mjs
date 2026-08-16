@@ -10,6 +10,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -11345,6 +11346,10 @@ function cleanupSuperseded(argv) {
   if (options.deleteRemote) {
     throw new Error("cleanup-superseded retains remote branches; --delete-remote is forbidden.");
   }
+  // This command performs the same final destructive worktree proof as dirty
+  // preservation. Never let an ambient index/worktree/object override redirect
+  // that proof away from the managed source.
+  assertDurablePreservationGitEnvironment();
 
   const proofInput = cleanupSupersessionInput(options);
   const state = workspaceState(options);
@@ -11727,7 +11732,12 @@ function dirtySupersededTrackedAttributePaths(worktreePath, sourceHead) {
 }
 
 function dirtySupersededAttributeValueIsSafe(attribute, value) {
-  if (attribute === "text" || attribute === "ident" || attribute === "crlf") return value === "unspecified" || value === "unset";
+  // Snapshot blobs are hashed from raw working-tree bytes with --no-filters,
+  // so the repository's normal LF text policy cannot normalize away the only
+  // preserved copy. Keep all other conversion modes fail-closed.
+  if (attribute === "text") return value === "unspecified" || value === "unset" || value === "auto";
+  if (attribute === "eol") return value === "unspecified" || value === "unset" || value === "lf";
+  if (attribute === "ident" || attribute === "crlf") return value === "unspecified" || value === "unset";
   return value === "unspecified";
 }
 
@@ -11778,7 +11788,7 @@ function assertDirtySupersededStatusConfiguration(worktreePath) {
 }
 
 function assertDurablePreservationGitEnvironment() {
-  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE"].filter((name) => process.env[name]);
+  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE"].filter((name) => process.env[name]);
   if (unsafe.length) {
     throw new Error(`dirty superseded preservation refuses ambient Git repository, index, or object-store overrides: ${unsafe.join(", ")}`);
   }
@@ -11917,13 +11927,42 @@ function dirtySupersededSnapshotTree(plan) {
   const indexPath = resolve(plan.worktreePath, indexPathResult.stdout.trim());
   const temporaryIndex = `${indexPath}.dirty-preservation-${randomUUID()}`;
   const env = { GIT_INDEX_FILE: temporaryIndex, GIT_NO_REPLACE_OBJECTS: "1" };
-  // `git add` writes the preserved loose blobs and `write-tree` writes the
-  // preserved tree.  They are the only copy after reset, so durability must
-  // cover those writers as well as commit-tree/update-ref below.
+  // Raw `hash-object -w --no-filters` writes the preserved loose blobs,
+  // `update-index` records their exact modes, and `write-tree` writes the
+  // preserved tree. They are the only copy after reset, so durability covers
+  // those writers as well as commit-tree/update-ref below.
   const durableGit = ["-c", "core.fsync=loose-object,reference"];
   try {
     runChecked("git", [...durableGit, "read-tree", plan.expectedHeadSha], { cwd: plan.worktreePath, env });
-    runChecked("git", [...durableGit, "add", "--sparse", "--", ...plan.dirty.paths.map((entry) => entry.path)], { cwd: plan.worktreePath, env });
+    for (const entry of plan.dirty.paths) {
+      if (entry.status.includes("D")) {
+        runChecked("git", [...durableGit, "update-index", "--force-remove", "--", entry.path], { cwd: plan.worktreePath, env });
+        continue;
+      }
+      const sourcePath = join(plan.worktreePath, entry.path);
+      const info = lstatSync(sourcePath);
+      const mode = info.isSymbolicLink() ? "120000" : (info.mode & 0o111 ? "100755" : "100644");
+      let rawObject;
+      if (info.isSymbolicLink()) {
+        // `hash-object <path>` follows a symlink. A tree mode 120000 instead
+        // stores the link text verbatim, so hash its raw readlink bytes.
+        rawObject = spawnSync("git", [...durableGit, "hash-object", "-w", "--no-filters", "--stdin"], {
+          cwd: plan.worktreePath, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+          input: readlinkSync(sourcePath, { encoding: "buffer" }), stdio: "pipe",
+          timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes,
+        });
+      } else {
+        rawObject = spawnSync("git", [...durableGit, "hash-object", "-w", "--no-filters", "--", entry.path], {
+          cwd: plan.worktreePath, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" }, stdio: "pipe",
+          timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes,
+        });
+      }
+      if (rawObject.status !== 0) throw new Error(String(rawObject.stderr || "could not write raw dirty preservation blob").trim());
+      const objectId = requireExactGitObjectId(String(rawObject.stdout || "").trim(), "raw dirty preservation blob");
+      const indexInfo = Buffer.from(`${mode} ${objectId}\t${entry.path}\0`, "utf8");
+      const staged = spawnSync("git", [...durableGit, "update-index", "-z", "--index-info"], { cwd: plan.worktreePath, env, input: indexInfo, stdio: "pipe", timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes });
+      if (staged.status !== 0) throw new Error(String(staged.stderr || "could not stage raw dirty preservation blob").trim());
+    }
     const treeResult = runChecked("git", [...durableGit, "write-tree"], { cwd: plan.worktreePath, env });
     return requireExactGitObjectId(treeResult.stdout.trim(), "dirty preservation tree");
   } finally { try { rmSync(temporaryIndex, { force: true }); } catch {} }
@@ -13594,11 +13633,22 @@ function cleanupOrphans(argv) {
     })
     .filter((worktreePath) => !worktreeListed(worktreePath))
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
-  const retainedDirtyEvidence = new Map(
-    readManifests(state)
-      .filter(({ manifest }) => manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent))
-      .map(({ manifest }) => [resolve(manifest.worktree_path), manifest.task_id]),
-  );
+  // A malformed manifest is not evidence absence. Its worktree path can be
+  // the sole location of an interrupted raw-byte snapshot, so any unreadable
+  // or invalid inventory record blocks this generic destructive cleanup.
+  const retainedDirtyEvidence = new Map();
+  for (const record of readManifestRecords(state)) {
+    if (record.error) throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
+    try {
+      validateManifest(record.manifest, record.path);
+    } catch {
+      throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
+    }
+    const manifest = record.manifest;
+    if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent)) {
+      retainedDirtyEvidence.set(resolve(manifest.worktree_path), manifest.task_id);
+    }
+  }
   const retainedDirectories = candidateDirectories.filter((worktreePath) => retainedDirtyEvidence.has(resolve(worktreePath)));
   const directories = candidateDirectories.filter((worktreePath) => !retainedDirtyEvidence.has(resolve(worktreePath)));
 

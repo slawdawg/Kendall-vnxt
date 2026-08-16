@@ -653,8 +653,10 @@ do not treat an operator authorization as a bypass.
    any whole-index hidden
    assume-unchanged/skip-worktree entry (including the combined lowercase
    `s` `git ls-files -v` representation),
-   filtered, text/eol-normalized, legacy `crlf`-normalized, ident-expanded,
-   mode-hidden, encoded, or drifting paths; it
+   filtered, legacy `crlf`-normalized, ident-expanded, mode-hidden, encoded,
+   or drifting paths. The repository baseline `text=auto eol=lf` is supported
+   by hashing raw working-tree bytes with `--no-filters` into the temporary
+   snapshot index, rather than by filtered `git add`; it
    disables Git fsmonitor for every status proof, refuses `core.trustctime=false`,
    `core.ignoreCase=true`, and `core.autocrlf=true|input`, and repeats the
    configuration and conversion-attribute checks at the final cleanup boundary.
@@ -665,7 +667,8 @@ do not treat an operator authorization as a bypass.
    pre-existing symbolic ref cannot redirect the snapshot. It persists dirty
    paths in UTF-8 byte order rather than host-locale order, forces
    dirty-submodule visibility, and rejects every ambient Git index,
-   repository/worktree, common-directory, or object-store override, and also
+   repository/worktree, common-directory, object-store, or alternate
+   replacement-ref-base override, and also
    refuses a nonempty repository `objects/info/alternates` file so durable
    snapshot objects cannot depend on another object store. Snapshot
    blobs, tree, commit, and ref are written with Git's loose-object/reference
