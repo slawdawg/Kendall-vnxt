@@ -14110,9 +14110,11 @@ try {
       manifest.closed_at = "2026-08-16T00:00:00.000Z";
       manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
       runGit(fixture.root, ["branch", "-D", fixture.branch]);
       installFixtureCanonicalPrRepoAssertion(fixture);
+      fixture.env = { ...fixture.env, CODEX_WORKSPACE_TEST_REJECT_MUTABLE_ORIGIN_PUSH: "1" };
 
       const preview = runFixtureScript(fixture, [
         "cleanup-closed-remote", "cleanup-task", "--summary-json", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
@@ -14313,6 +14315,16 @@ try {
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
       {
+        name: "same-task active assignment branch owner",
+        mutate(fixture) {
+          const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+          const assignment = readJson(assignmentPath);
+          assignment.status = "claimed";
+          writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
         name: "interleaving branch ownership writer lock",
         mutate(fixture) {
           const directory = join(fixture.stateRoot, ".branch-ownership");
@@ -14377,6 +14389,7 @@ try {
         manifest.closed_at = "2026-08-16T00:00:00.000Z";
         manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
         writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        markFixtureAssignmentClosed(fixture);
         runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
         runGit(fixture.root, ["branch", "-D", fixture.branch]);
         scenario.mutate?.(fixture, manifestPath);
@@ -14400,6 +14413,7 @@ try {
       manifest.closed_at = "2026-08-16T00:00:00.000Z";
       manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
       runGit(fixture.root, ["branch", "-D", fixture.branch]);
       for (const kind of ["external-intents", "external-completions"]) {
@@ -14429,6 +14443,7 @@ try {
       manifest.closed_at = "2026-08-16T00:00:00.000Z";
       manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
       runGit(fixture.root, ["branch", "-D", fixture.branch]);
       for (const kind of ["manifest-intents", "manifest-commits"]) {
@@ -14458,6 +14473,7 @@ try {
       manifest.closed_at = "2026-08-16T00:00:00.000Z";
       manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
       rmSync(fixture.worktree, { recursive: true, force: true });
       runGit(fixture.root, ["update-ref", "-d", `refs/heads/${fixture.branch}`]);
       const result = runFixtureScript(fixture, [
@@ -14477,7 +14493,7 @@ try {
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
       const manifest = readJson(manifestPath);
       manifest.status = "closed"; manifest.closed_at = "2026-08-16T00:00:00.000Z"; manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`); markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]); runGit(fixture.root, ["branch", "-D", fixture.branch]);
       installFixtureClosedRemoteDeleteFailure(fixture);
       const first = runFixtureScript(fixture, ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved retry", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot], { env: fixture.env });
@@ -14496,7 +14512,7 @@ try {
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
       const manifest = readJson(manifestPath);
       manifest.status = "closed"; manifest.closed_at = "2026-08-16T00:00:00.000Z"; manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`); markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]); runGit(fixture.root, ["branch", "-D", fixture.branch]);
       installFixtureClosedRemoteDeleteFailure(fixture, "changed");
       const first = runFixtureScript(fixture, ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved retry", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot], { env: fixture.env });
@@ -14513,7 +14529,7 @@ try {
     const fixture = createMergedCleanupFixture();
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json"); const manifest = readJson(manifestPath);
-      manifest.status = "closed"; manifest.closed_at = "2026-08-16T00:00:00.000Z"; manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest); writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      manifest.status = "closed"; manifest.closed_at = "2026-08-16T00:00:00.000Z"; manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest); writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`); markFixtureAssignmentClosed(fixture);
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]); runGit(fixture.root, ["branch", "-D", fixture.branch]); installFixtureClosedRemoteDeleteFailure(fixture, "absent");
       const result = runFixtureScript(fixture, ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved retry", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot], { env: fixture.env });
       assert(result.code !== 0, "absent postfailure unexpectedly succeeded"); assert(readJson(manifestPath).closed_remote_cleanup_delete_intent?.status === "outcome_unknown", "absent postfailure was not fail-closed");
@@ -14531,7 +14547,18 @@ try {
       const lockDir = join(claimStateRoot, ".branch-ownership");
       mkdirSync(lockDir, { recursive: true });
       const lockPath = join(lockDir, `${createHash("sha256").update(expected.branch).digest("hex")}.lock`);
-      writeFileSync(lockPath, `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: 999999, processStart: "linux-proc-start-ticks:dead", acquiredAt: new Date().toISOString() })}\n`);
+      const staleLock = `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: 999999, processStart: "linux-proc-start-ticks:dead", acquiredAt: new Date().toISOString() })}\n`;
+      writeFileSync(lockPath, staleLock);
+      writeFileSync(`${lockPath}.reclaim`, `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: process.pid, processStart: processStartIdentityForTest(), lockDigest: createHash("sha256").update(staleLock).digest("hex"), acquiredAt: new Date().toISOString() })}\n`);
+      const contended = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(contended.code !== 0 && (contended.stderr || contended.stdout).includes("Branch ownership is locked"), "a concurrent stale-lock claimant was not retained");
+      assert(existsSync(lockPath), "contended stale-lock recovery removed the live lock path");
+      rmSync(lockPath, { force: true });
+      const freshOwner = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(freshOwner.code !== 0 && (freshOwner.stderr || freshOwner.stdout).includes("Branch ownership is locked"), "a fresh branch owner entered while the reclaim claim was live");
+      assert(!existsSync(lockPath), "fresh branch owner created a target lock while the reclaim claim was live");
+      writeFileSync(lockPath, staleLock);
+      writeFileSync(`${lockPath}.reclaim`, `${JSON.stringify({ schemaVersion: 1, branch: expected.branch, pid: 999999, processStart: "linux-proc-start-ticks:dead", lockDigest: createHash("sha256").update(staleLock).digest("hex"), acquiredAt: new Date().toISOString() })}\n`);
       const recovered = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(recovered.code === 0, recovered.stderr || recovered.stdout);
       assert(!existsSync(lockPath), "stale branch lock was not recovered and released");
@@ -14559,6 +14586,23 @@ try {
         assert(result.code !== 0 && (result.stderr || result.stdout).includes("Branch ownership is locked"), `${outcome} lock probe was reclaimed`);
       } finally { rmSync(fixtureRoot, { recursive: true, force: true }); }
     }
+  });
+
+  test("claim-next supports the conservative portable branch-lock identity fallback", () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-portable-branch-lock-"));
+    const state = join(fixtureRoot, "state");
+    try {
+      copyWorkspaceScriptFixture(fixtureRoot);
+      const fixtureScript = join(fixtureRoot, "scripts", "codex-workspace.mjs");
+      const source = readFileSync(fixtureScript, "utf8");
+      const seam = 'if (process.platform !== "linux") {';
+      assert(source.includes(seam), "fixture did not contain portable process identity seam");
+      writeFileSync(fixtureScript, source.replace(seam, "if (true) {"));
+      seedGeneratedSuccessorPrerequisites(state);
+      seedFixtureSafeBacklogSource(fixtureRoot, [{ itemId: "setup-churn-handoff-hardening", laneSlug: "setup-churn-handoff-hardening", status: "ready", priority: "P1", recommendedSliceSize: "small" }]);
+      const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", state], { script: fixtureScript, cwd: fixtureRoot });
+      assert(result.code === 0, result.stderr || result.stdout);
+    } finally { rmSync(fixtureRoot, { recursive: true, force: true }); }
   });
 
   test("cleanup-closed-remote rejects malformed and every mismatched structured remote-delete authority field", () => {
@@ -19309,6 +19353,15 @@ function createMergedCleanupFixture() {
   };
 }
 
+function markFixtureAssignmentClosed(fixture) {
+  const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+  const assignment = readJson(assignmentPath);
+  assignment.status = "closed";
+  assignment.phase = "closed";
+  assignment.closed_at = assignment.closed_at || "2026-08-16T00:00:00.000Z";
+  writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+}
+
 function installFixtureOriginIdentityProxy(root, fakeBin, originUrls = ["git@github.com:slawdawg/Kendall-vnxt.git"]) {
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fakeBin).join(":");
   const fakeGit = join(fakeBin, "git");
@@ -19322,6 +19375,11 @@ function installFixtureOriginIdentityProxy(root, fakeBin, originUrls = ["git@git
       `  console.log(${JSON.stringify(originUrls.join("\\n"))});`,
       "  process.exit(0);",
       "}",
+      "if (process.env.CODEX_WORKSPACE_TEST_REJECT_MUTABLE_ORIGIN_PUSH === '1' && args[0] === 'push' && args.includes('origin')) { console.error('mutable origin push rejected'); process.exit(1); }",
+      `const canonicalUrls = ${JSON.stringify(originUrls)};`,
+      "const configuredOrigin = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, PATH: " + JSON.stringify(realPath) + " } });",
+      "const localOrigin = configuredOrigin.status === 0 ? configuredOrigin.stdout.trim() : '';",
+      "for (let index = 0; index < args.length; index += 1) if (canonicalUrls.includes(args[index])) args[index] = localOrigin;",
       `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
       "process.exit(result.status ?? 1);",
       "",
@@ -19468,12 +19526,12 @@ function installFixtureClosedRemoteAbsenceRace(fixture) {
 
 function installFixtureClosedRemoteDeleteFailure(fixture, mode = "present") {
   const source = readFileSync(fixture.script, "utf8");
-  const seam = "      try {\n        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);";
+  const seam = "      try {\n        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha, lockedProof.remote.url);";
   assert(source.includes(seam), "fixture did not contain the closed-remote delete seam");
   const disturbance = mode === "changed"
     ? "runChecked(\"git\", [\"commit\", \"--allow-empty\", \"-m\", \"fixture changed postfailure\"], { cwd: lockedProof.cleanupCwd }); runChecked(\"git\", [\"push\", \"--force\", \"origin\", `HEAD:refs/heads/${locked.branch}`], { cwd: lockedProof.cleanupCwd });"
     : mode === "absent" ? "runChecked(\"git\", [\"push\", \"origin\", `:refs/heads/${locked.branch}`], { cwd: lockedProof.cleanupCwd });" : "";
-  const replacement = `      try {\n        if (process.env.CODEX_WORKSPACE_FIXTURE_DELETE_FAILURE === \"1\") { ${disturbance} throw new Error(\"fixture delete failure\"); }\n        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);`;
+  const replacement = `      try {\n        if (process.env.CODEX_WORKSPACE_FIXTURE_DELETE_FAILURE === \"1\") { ${disturbance} throw new Error(\"fixture delete failure\"); }\n        deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha, lockedProof.remote.url);`;
   writeFileSync(fixture.script, source.replace(seam, replacement));
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_DELETE_FAILURE: "1" };
 }
