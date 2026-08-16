@@ -12032,15 +12032,22 @@ try {
     const fixture = createCanonicalManagedPrFixture({ existingPr: true });
     try {
       const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
-      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      // Build the former delivery history in the same worktree that later
+      // verifies it.  A separate checkout can make the intentionally
+      // unreachable source lineage dependent on test-runner ref discovery;
+      // retain it explicitly so this test reaches its actual aggregate-count
+      // guard rather than failing on fixture object visibility.
       for (let index = 0; index <= 128; index += 1) {
-        runGit(fixture.root, ["commit", "--allow-empty", "-q", "-m", `bounded recovery commit ${index}`]);
+        runGit(fixture.worktree, ["commit", "--allow-empty", "-q", "-m", `bounded recovery commit ${index}`]);
       }
-      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      const priorHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const retentionRef = "refs/codex-test/refresh-oversized-recovery";
+      runGit(fixture.worktree, ["update-ref", retentionRef, priorHeadSha]);
       runGit(fixture.worktree, ["reset", "--hard", "main"]);
       commitFile(fixture.worktree, "unrelated-live.txt", "unrelated\n", "unrelated live work");
       runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
       const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["cat-file", "-e", `${priorHeadSha}^{commit}`]);
 
       const manifest = readJson(manifestPath);
       manifest.pr_delivery_head_sha = priorHeadSha;
