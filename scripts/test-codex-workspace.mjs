@@ -14070,6 +14070,193 @@ try {
     }
   });
 
+  test("cleanup-closed-remote deletes only an exact merged closed-manifest residue and is idempotent", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed";
+      manifest.closed_at = "2026-08-16T00:00:00.000Z";
+      manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+
+      const preview = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--summary-json", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.ready === true, preview.stdout);
+      assert(packet.remote.state === "present", packet.remote.state);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "proof unexpectedly deleted remote branch");
+
+      const applied = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved closed manifest remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "exact remote branch was not deleted");
+      assert(readJson(manifestPath).closed_remote_cleanup?.status === "deleted", "deletion outcome was not recorded");
+
+      const resumed = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved idempotent remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      assert(readJson(manifestPath).closed_remote_cleanup?.status === "already_absent", "absence was not recorded as idempotent completion");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-closed-remote fails closed for owner, audit, authority, and identity blockers", () => {
+    const scenarios = [
+      {
+        name: "missing approval",
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "missing structured remote authority",
+        args: (fixture) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "owner mismatch",
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-b", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "missing retained audit",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          delete manifest.delivery_subagent_audit;
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "missing retained cleanup authority",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          delete manifest.cleanup_authority_decision;
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "stale retained audit",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          manifest.delivery_subagent_audit.headSha = "0000000000000000000000000000000000000000";
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "stale retained cleanup authority",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          manifest.cleanup_authority_decision.evidenceRefs = [`task:${manifest.task_id}`, `pr:${manifest.pr_number}`, "expected-head:0000000000000000000000000000000000000000"];
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "local branch residue",
+        mutate(fixture) { runGit(fixture.root, ["branch", fixture.branch, "main"]); },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "remote head drift",
+        mutate(fixture) {
+          runGit(fixture.root, ["commit", "--allow-empty", "-m", "remote residue drift"]);
+          runGit(fixture.root, ["push", "--force", "origin", `HEAD:refs/heads/${fixture.branch}`]);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+      {
+        name: "live PR head drift",
+        mutate(fixture) { writeFixtureGhPrView(fixture, "0000000000000000000000000000000000000000"); },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.status = "closed";
+        manifest.closed_at = "2026-08-16T00:00:00.000Z";
+        manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+        runGit(fixture.root, ["branch", "-D", fixture.branch]);
+        scenario.mutate?.(fixture, manifestPath);
+        const currentManifest = readJson(manifestPath);
+        const result = runFixtureScript(fixture, scenario.args(fixture, currentManifest), { env: fixture.env });
+        assert(result.code !== 0, `${scenario.name} unexpectedly succeeded: ${result.stdout}`);
+        assert(remoteBranchExists(fixture.root, fixture.branch), `${scenario.name} deleted remote branch`);
+        assert(!readJson(manifestPath).closed_remote_cleanup, `${scenario.name} wrote cleanup evidence`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("cleanup-closed-remote rejects malformed and every mismatched structured remote-delete authority field", () => {
+    const cases = [
+      ["invalid head", "task=cleanup-task;branch=codex/cleanup-current;pr=123;head=not-a-sha;remote-delete=true"],
+      ["wrong field count", "task=cleanup-task;branch=codex/cleanup-current;pr=123;head=HEAD"],
+      ["malformed key value", "taskcleanup-task;branch=codex/cleanup-current;pr=123;head=HEAD;remote-delete=true"],
+      ["missing required field", "task=;branch=codex/cleanup-current;pr=123;head=HEAD;remote-delete=true"],
+      ["duplicate field", "task=cleanup-task;task=other-task;pr=123;head=HEAD;remote-delete=true"],
+      ["unknown field", "task=cleanup-task;branch=codex/cleanup-current;pr=123;head=HEAD;unexpected=true"],
+      ["task", "task=other-task;branch=codex/cleanup-current;pr=123;head=HEAD;remote-delete=true"],
+      ["branch", "task=cleanup-task;branch=codex/other;pr=123;head=HEAD;remote-delete=true"],
+      ["pr", "task=cleanup-task;branch=codex/cleanup-current;pr=999;head=HEAD;remote-delete=true"],
+      ["head", "task=cleanup-task;branch=codex/cleanup-current;pr=123;head=0000000000000000000000000000000000000000;remote-delete=true"],
+      ["remote-delete", "task=cleanup-task;branch=codex/cleanup-current;pr=123;head=HEAD;remote-delete=false"],
+    ];
+    for (const [name, template] of cases) {
+      const fixture = createMergedCleanupFixture();
+      try {
+        const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+        const manifest = readJson(manifestPath);
+        manifest.status = "closed";
+        manifest.closed_at = "2026-08-16T00:00:00.000Z";
+        manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+        runGit(fixture.root, ["branch", "-D", fixture.branch]);
+        const binding = template.replace("HEAD", manifest.pr_delivery_head_sha);
+        const result = runFixtureScript(fixture, [
+          "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", binding, "--state-root", fixture.stateRoot,
+        ], { env: fixture.env });
+        assert(result.code !== 0, `${name} authority mismatch unexpectedly succeeded: ${result.stdout}`);
+        assert(remoteBranchExists(fixture.root, fixture.branch), `${name} authority mismatch deleted remote branch`);
+        assert(!readJson(manifestPath).closed_remote_cleanup, `${name} authority mismatch wrote cleanup evidence`);
+      } finally {
+        cleanupMergedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  function closedRemoteCleanupFixtureAuthority(manifest) {
+    return {
+      schemaVersion: 1,
+      operation: "cleanup-merged",
+      authorityFamily: "cleanup",
+      decision: "applied",
+      allowed: true,
+      evidenceRefs: [
+        `task:${manifest.task_id}`,
+        `pr:${manifest.pr_number}`,
+        `expected-head:${manifest.pr_delivery_head_sha}`,
+      ],
+    };
+  }
+
+  function closedRemoteCleanupFixtureBinding(manifest) {
+    return `task=${manifest.task_id};branch=${manifest.branch};pr=${manifest.pr_number};head=${manifest.pr_delivery_head_sha};remote-delete=true`;
+  }
+
   test("cleanup-merged summary-json blocks missing delivery subagent audit evidence", () => {
     const fixture = createMergedCleanupFixture();
     try {

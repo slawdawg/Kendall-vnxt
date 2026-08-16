@@ -355,6 +355,9 @@ try {
     case "cleanup-current":
       cleanupCurrent(commandArgs);
       break;
+    case "cleanup-closed-remote":
+      cleanupClosedRemote(commandArgs);
+      break;
     case "cleanup-integrated":
       cleanupIntegrated(commandArgs);
       break;
@@ -669,6 +672,16 @@ cleanup-current options:
   --delivery-audit-summary <text> Metadata-only delivery audit summary for the exact PR head.
   --take-ownership          Reassign a lane and linked assignment to the current owner before cleanup.
   --takeover-reason <text>  Required with --take-ownership when another owner is recorded.
+
+cleanup-closed-remote <task-id> options:
+  --apply                   Delete only the exact matching remote branch. Without this, print a proof plan.
+  --approval <text>         Required with --apply; at least 10 non-whitespace characters.
+  --remote-delete-authority '<binding>'
+                            Required structured binding: task=<id>;branch=<branch>;pr=<n>;head=<sha>;remote-delete=true.
+  --summary-json            Without --apply, print a bounded remote-cleanup proof packet.
+  This is only for an already closed manifest whose merged PR, recorded head,
+  retained cleanup audit/authority, and live remote ref all match exactly. It
+  refuses any residual local target and honors recorded ownership/takeover.
 
 cleanup-integrated options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -9972,6 +9985,301 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner, options = {}
 
 function cleanupCurrent(argv) {
   cleanupMerged(argv, { currentOnly: true });
+}
+
+function cleanupClosedRemote(argv) {
+  assertClosedRemoteCleanupOptionSyntax(argv);
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) {
+    throw new Error("cleanup-closed-remote requires exactly one closed task id.");
+  }
+  if (options.summaryJson && options.apply) {
+    throw new Error("cleanup-closed-remote --summary-json is only supported without --apply.");
+  }
+  if (options.apply && options.dryRun) {
+    throw new Error("cleanup-closed-remote accepts either --dry-run or --apply, not both.");
+  }
+  if (options.apply && !validSupersessionApplyEvidence(options.approval)) {
+    throw new Error("cleanup-closed-remote --apply requires --approval with at least 10 non-whitespace characters.");
+  }
+
+  const taskId = positional[0];
+  assertSafeTaskId(taskId);
+  const state = workspaceState(options);
+  const record = findCleanupManifestByExactTaskId(state, taskId);
+  assertLaneOwner(record.manifest, options);
+  const remoteDeleteAuthority = parseClosedRemoteDeleteAuthority(options.remoteDeleteAuthority);
+  requireGh("cleanup-closed-remote");
+  const proof = closedRemoteCleanupProof(record.manifest, state, { remoteDeleteAuthority });
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(closedRemoteCleanupSummary(record.manifest, proof), null, 2));
+    return;
+  }
+  if (!proof.ready) {
+    printBlocked("cleanup-closed-remote", proof.blockers);
+    throw new Error(`Closed-manifest remote cleanup is blocked: ${proof.blockers.join("; ")}`);
+  }
+  if (!options.apply) {
+    printPlan("cleanup-closed-remote", closedRemoteCleanupPlanLines(record.manifest, proof));
+    console.log("Add --apply --approval <operator evidence> only after reviewing this exact-head proof packet.");
+    return;
+  }
+
+  withManifestLock(state, taskId, () => {
+    const locked = readManifest(record.path);
+    validateManifest(locked, record.path);
+    assertLaneOwner(locked, options);
+    claimLaneOwner(locked, options);
+    const lockedProof = closedRemoteCleanupProof(locked, state, { remoteDeleteAuthority });
+    if (!lockedProof.ready) {
+      throw new Error(`Closed-manifest remote cleanup is blocked under lock: ${lockedProof.blockers.join("; ")}`);
+    }
+    const completedAt = new Date().toISOString();
+    const outcome = lockedProof.remote.sha ? "deleted" : "already_absent";
+    if (lockedProof.remote.sha) {
+      deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);
+    } else {
+      appendTaskEvent(locked, "closed_remote_branch_already_absent", locked.branch);
+    }
+    locked.closed_remote_cleanup = {
+      schemaVersion: 1,
+      status: outcome,
+      taskId: locked.task_id,
+      prNumber: lockedProof.pr.number,
+      expectedHeadSha: lockedProof.expectedHeadSha,
+      branch: locked.branch,
+      remoteHeadSha: lockedProof.remote.sha || null,
+      completedAt,
+      approval: safeMetadataText(options.approval, 500),
+      metadataOnly: true,
+    };
+    locked.closed_remote_cleanup_authority = closedRemoteCleanupAuthorityEvidence(locked, lockedProof, remoteDeleteAuthority, completedAt);
+    locked.updated_at = completedAt;
+    appendTaskEvent(locked, "closed_remote_cleanup_completed", `${outcome} ${locked.branch}`);
+    writeManifest(record.path, locked);
+  });
+  console.log(`Closed remote branch for ${taskId}`);
+}
+
+function assertClosedRemoteCleanupOptionSyntax(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = ["--apply", "--dry-run", "--summary-json"].find((name) => arg === name || arg.startsWith(`${name}=`));
+    if (!option) continue;
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) {
+      throw new Error(`cleanup-closed-remote ${option} must be a bare flag without a value.`);
+    }
+  }
+}
+
+function closedRemoteCleanupProof(manifest, state, context = {}) {
+  const blockers = [];
+  if (manifest.status !== "closed") blockers.push("workspace manifest is not closed");
+  const expectedHeadSha = exactGitObjectIdOrNull(manifest.pr_delivery_head_sha);
+  if (!expectedHeadSha) blockers.push("closed manifest lacks an exact recorded delivery head");
+  const expectedPrNumber = positiveSafePrNumberOrNull(manifest.pr_number);
+  if (!expectedPrNumber) blockers.push("closed manifest lacks an exact PR number");
+  if (!manifest.branch) blockers.push("closed manifest lacks a branch name");
+
+  const managedRoot = assertManagedWorktreeRoot(state);
+  const targetPath = resolve(manifest.worktree_path || "");
+  const targetRelative = relative(managedRoot, targetPath);
+  if (!targetRelative || targetRelative.startsWith("..") || resolve(managedRoot, targetRelative) !== targetPath) {
+    blockers.push("closed manifest worktree path is not under the managed worktree root");
+  }
+  // This is a remote-only closeout, so the managed worktree must already be
+  // absent. The bounded root check above replaces cleanup's normal
+  // present-worktree validation before selecting the stable checkout.
+  const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, { closedRemoteOnly: true });
+  const worktreePresent = existsSync(manifest.worktree_path) || worktreeListed(manifest.worktree_path, cleanupCwd);
+  if (worktreePresent) blockers.push("closed manifest still has a registered or present local worktree");
+  const localBranchSha = branchSha(manifest.branch, cleanupCwd);
+  if (localBranchSha) blockers.push(`closed manifest still has local branch ${manifest.branch} at ${localBranchSha}`);
+
+  const pr = prView(manifest);
+  if (!pr?.mergedAt || pr.state !== "MERGED") {
+    blockers.push("live GitHub PR is not merged");
+  } else {
+    if (pr.number !== expectedPrNumber) blockers.push(`live GitHub PR number ${pr.number || "missing"} does not match manifest ${expectedPrNumber}`);
+    if (pr.baseRefName !== manifest.base_branch) blockers.push(`live GitHub PR base ${pr.baseRefName || "missing"} does not match manifest ${manifest.base_branch}`);
+    if (pr.headRefName !== manifest.branch) blockers.push(`live GitHub PR branch ${pr.headRefName || "missing"} does not match manifest ${manifest.branch}`);
+    if (pr.headRefOid !== expectedHeadSha) blockers.push(`live GitHub PR head ${pr.headRefOid || "missing"} does not match recorded delivery head ${expectedHeadSha}`);
+  }
+
+  const retainedAudit = shapeCleanupDeliverySubagentAuditEvidence(manifest, pr, {}, {
+    expectedHeadSha,
+    acceptableStatuses: ["cleanup-ready"],
+    checkedAt: new Date().toISOString(),
+  });
+  if (retainedAudit.blockers.length) {
+    blockers.push(`retained cleanup audit is not exact-head cleanup-ready: ${retainedAudit.blockers.join(", ")}`);
+  }
+  const retainedAuthority = manifest.cleanup_authority_decision;
+  const expectedEvidenceRefs = [
+    `task:${manifest.task_id}`,
+    `pr:${expectedPrNumber}`,
+    `expected-head:${expectedHeadSha}`,
+  ];
+  if (!retainedAuthority || retainedAuthority.authorityFamily !== "cleanup" || retainedAuthority.decision !== "applied" || retainedAuthority.allowed !== true) {
+    blockers.push("retained cleanup authority is not an allowed applied cleanup decision");
+  } else if (!expectedEvidenceRefs.every((ref) => Array.isArray(retainedAuthority.evidenceRefs) && retainedAuthority.evidenceRefs.includes(ref))) {
+    blockers.push("retained cleanup authority does not bind this task, PR, and exact delivery head");
+  }
+  const remoteDeleteAuthority = context.remoteDeleteAuthority || { valid: false, reason: "--remote-delete-authority is required" };
+  if (!remoteDeleteAuthority.valid) {
+    blockers.push(remoteDeleteAuthority.reason);
+  } else {
+    const expectedAuthority = {
+      taskId: manifest.task_id,
+      branch: manifest.branch,
+      prNumber: expectedPrNumber,
+      headSha: expectedHeadSha,
+    };
+    for (const [field, expected] of Object.entries(expectedAuthority)) {
+      if (remoteDeleteAuthority[field] !== expected) {
+        blockers.push(`remote delete authority ${field} ${remoteDeleteAuthority[field] || "missing"} does not match ${expected}`);
+      }
+    }
+  }
+
+  let remoteSha = "";
+  try {
+    remoteSha = originBranchSha(manifest.branch, cleanupCwd);
+  } catch (error) {
+    blockers.push(`could not exactly inspect remote branch: ${safeMetadataText(error.message || error, 300)}`);
+  }
+  if (remoteSha && remoteSha !== expectedHeadSha) {
+    blockers.push(`remote branch origin/${manifest.branch} head ${remoteSha} does not match recorded delivery head ${expectedHeadSha}`);
+  }
+  if (remoteSha && manifest.closed_remote_cleanup?.status === "deleted") {
+    blockers.push("closed manifest already records remote deletion but the remote branch is present again");
+  }
+
+  return {
+    ready: blockers.length === 0,
+    blockers,
+    expectedHeadSha,
+    pr,
+    cleanupCwd,
+    retainedAudit,
+    retainedAuthority,
+    remoteDeleteAuthority,
+    local: { worktreePresent, branchSha: localBranchSha || null },
+    remote: { branch: manifest.branch, sha: remoteSha || null, state: remoteSha ? "present" : "absent" },
+  };
+}
+
+function closedRemoteCleanupSummary(manifest, proof) {
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: "cleanup-closed-remote",
+    taskId: manifest.task_id,
+    ready: proof.ready,
+    blockers: proof.blockers,
+    expectedHeadSha: proof.expectedHeadSha || null,
+    pr: proof.pr ? cleanupPrSummary(manifest, proof.pr) : null,
+    retainedAudit: {
+      status: proof.retainedAudit.status,
+      agent: proof.retainedAudit.agent,
+      headSha: proof.retainedAudit.headSha,
+      blockers: proof.retainedAudit.blockers,
+    },
+    retainedAuthority: proof.retainedAuthority ? {
+      operation: proof.retainedAuthority.operation || null,
+      authorityFamily: proof.retainedAuthority.authorityFamily || null,
+      decision: proof.retainedAuthority.decision || null,
+      allowed: proof.retainedAuthority.allowed === true,
+    } : null,
+    remoteDeleteAuthority: proof.remoteDeleteAuthority.valid ? {
+      taskId: proof.remoteDeleteAuthority.taskId,
+      branch: proof.remoteDeleteAuthority.branch,
+      prNumber: proof.remoteDeleteAuthority.prNumber,
+      headSha: proof.remoteDeleteAuthority.headSha,
+      remoteDelete: true,
+    } : { valid: false, reason: proof.remoteDeleteAuthority.reason },
+    local: proof.local,
+    remote: proof.remote,
+    mutation: "none; proof only",
+  };
+}
+
+function closedRemoteCleanupPlanLines(manifest, proof) {
+  return [
+    `closed exact task ${manifest.task_id}`,
+    `merged PR #${proof.pr.number} and recorded delivery head ${proof.expectedHeadSha} matched`,
+    "retained cleanup-ready audit and applied cleanup authority matched the exact task, PR, and head",
+    "structured remote-delete authority matched the exact task, branch, PR, and head",
+    "managed local worktree and local branch are absent",
+    proof.remote.sha
+      ? `delete exact remote branch origin/${manifest.branch} (${proof.remote.sha}) with force-with-lease`
+      : `remote branch origin/${manifest.branch} is already absent; record idempotent completion only`,
+  ];
+}
+
+function parseClosedRemoteDeleteAuthority(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return { valid: false, reason: "--remote-delete-authority is required" };
+  }
+  const entries = value.split(";");
+  if (entries.length !== 5) {
+    return { valid: false, reason: "--remote-delete-authority must contain exactly task, branch, pr, head, and remote-delete fields" };
+  }
+  const fields = {};
+  for (const entry of entries) {
+    const index = entry.indexOf("=");
+    if (index <= 0 || entry.indexOf("=", index + 1) !== -1) {
+      return { valid: false, reason: "--remote-delete-authority has malformed key/value syntax" };
+    }
+    const key = entry.slice(0, index);
+    const fieldValue = entry.slice(index + 1);
+    if (!Object.hasOwn({ task: true, branch: true, pr: true, head: true, "remote-delete": true }, key) || Object.hasOwn(fields, key) || !fieldValue) {
+      return { valid: false, reason: "--remote-delete-authority has missing, duplicate, or unknown fields" };
+    }
+    fields[key] = fieldValue;
+  }
+  const prNumber = /^\d+$/.test(fields.pr) ? Number(fields.pr) : null;
+  const headSha = exactGitObjectIdOrNull(fields.head);
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || !headSha || fields["remote-delete"] !== "true") {
+    return { valid: false, reason: "--remote-delete-authority requires a positive PR, exact head, and remote-delete=true" };
+  }
+  return {
+    valid: true,
+    taskId: fields.task,
+    branch: fields.branch,
+    prNumber,
+    headSha,
+  };
+}
+
+function closedRemoteCleanupAuthorityEvidence(manifest, proof, binding, recordedAt) {
+  return {
+    schemaVersion: 1,
+    operation: "cleanup-closed-remote",
+    authorityFamily: "cleanup",
+    decision: "applied",
+    allowed: true,
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    prNumber: proof.pr.number,
+    expectedHeadSha: proof.expectedHeadSha,
+    remoteDelete: true,
+    retainedCleanupAuthorityOperation: proof.retainedAuthority.operation,
+    retainedCleanupAudit: {
+      status: proof.retainedAudit.status,
+      agent: proof.retainedAudit.agent,
+      headSha: proof.retainedAudit.headSha,
+    },
+    binding: {
+      taskId: binding.taskId,
+      branch: binding.branch,
+      prNumber: binding.prNumber,
+      headSha: binding.headSha,
+      remoteDelete: true,
+    },
+    recordedAt,
+    metadataOnly: true,
+  };
 }
 
 function cleanupIntegrated(argv) {
