@@ -19132,6 +19132,10 @@ try {
         status: "active",
         dirty_superseded_snapshot_intent: { schemaVersion: 1, snapshotRef: "refs/codex-preservation/invalid-pending-orphan/dirty-superseded" },
       }, null, 2)}\n`);
+      const preview = run(["cleanup-orphans", "invalid-pending-orphan", "--state-root", isolatedStateRoot]);
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(preview.stdout.includes(orphanPath), preview.stdout || preview.stderr);
+      assert(existsSync(orphanPath), "cleanup-orphans read-only preview removed an invalid retained-evidence directory");
       const result = run(["cleanup-orphans", "invalid-pending-orphan", "--apply", "--state-root", isolatedStateRoot]);
       assert(result.code !== 0 && (result.stderr || result.stdout).includes("cannot verify manifest inventory"), result.stderr || result.stdout);
       assert(existsSync(orphanPath), "cleanup-orphans removed an invalid retained-evidence directory");
@@ -19169,14 +19173,19 @@ try {
   });
 
   test("cleanup-orphans refuses hidden workspace metadata even when queried", () => {
-    const metadataPath = join(stateRoot, "worktrees", ".codex");
-    mkdirSync(metadataPath, { recursive: true });
+    const isolatedStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-hidden-metadata-state-"));
+    try {
+      const metadataPath = join(isolatedStateRoot, "worktrees", ".codex");
+      mkdirSync(metadataPath, { recursive: true });
 
-    const result = run(["cleanup-orphans", ".codex", "--apply", "--state-root", stateRoot]);
+      const result = run(["cleanup-orphans", ".codex", "--apply", "--state-root", isolatedStateRoot]);
 
-    assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("No orphan worktree directories matched"), result.stdout || result.stderr);
-    assert(existsSync(metadataPath), "cleanup-orphans removed hidden workspace metadata");
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("No orphan worktree directories matched"), result.stdout || result.stderr);
+      assert(existsSync(metadataPath), "cleanup-orphans removed hidden workspace metadata");
+    } finally {
+      rmSync(isolatedStateRoot, { recursive: true, force: true });
+    }
   });
 
   test("cleanup-orphans removes targeted orphan directory when applied", () => {

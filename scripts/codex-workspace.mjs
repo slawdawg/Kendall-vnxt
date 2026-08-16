@@ -13635,18 +13635,21 @@ function cleanupOrphans(argv) {
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
   // A malformed manifest is not evidence absence. Its worktree path can be
   // the sole location of an interrupted raw-byte snapshot, so any unreadable
-  // or invalid inventory record blocks this generic destructive cleanup.
+  // or invalid inventory record blocks this generic destructive cleanup. A
+  // read-only preview remains safe and useful for recovering that inventory.
   const retainedDirtyEvidence = new Map();
-  for (const record of readManifestRecords(state)) {
-    if (record.error) throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
-    try {
-      validateManifest(record.manifest, record.path);
-    } catch {
-      throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
-    }
-    const manifest = record.manifest;
-    if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent)) {
-      retainedDirtyEvidence.set(resolve(manifest.worktree_path), manifest.task_id);
+  if (apply) {
+    for (const record of readManifestRecords(state)) {
+      if (record.error) throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
+      try {
+        validateManifest(record.manifest, record.path);
+      } catch {
+        throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
+      }
+      const manifest = record.manifest;
+      if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent)) {
+        retainedDirtyEvidence.set(resolve(manifest.worktree_path), manifest.task_id);
+      }
     }
   }
   const retainedDirectories = candidateDirectories.filter((worktreePath) => retainedDirtyEvidence.has(resolve(worktreePath)));
