@@ -583,8 +583,9 @@ do not treat an operator authorization as a bypass.
    merged on the
    recorded base with the recorded PR number, branch, and exact delivery head;
    and the live remote ref equals that same head. Encode every binding value
-   with standard percent-encoding (notably `%3B` for a semicolon in a valid
-   branch name); quote the full value as shown so the shell does not alter it.
+   with canonical percent-encoding (notably `%3B` for a semicolon and `%27`
+   for an apostrophe in a valid branch name); quote the full value as shown so
+   the shell does not alter it.
    The command uses an exact force-with-lease deletion and records an
    already-absent remote as an idempotent confirmation without replacing the
    original deletion proof. It never permits a mismatched, recreated, or
