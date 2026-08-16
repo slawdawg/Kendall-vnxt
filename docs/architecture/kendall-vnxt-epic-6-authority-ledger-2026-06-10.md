@@ -40,13 +40,24 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 - Local cleanup: `GET /supervisor/local-cleanup-readiness-report`.
 - Remote cleanup/sync: `GET /supervisor/remote-cleanup-sync-readiness-report`.
 - Trusted autonomy: `GET /supervisor/trusted-autonomy-readiness-report`.
-- Epic completion audit: `GET /supervisor/epic-6-completion-audit-report`.
 - MVP proof trial packet: `GET /supervisor/epic-6-mvp-proof-trial-report`.
 - Low-risk doc/evidence autonomy policy: local-only planning packet preserved
   under `_bmad-output/local-clean-install-boundary-removed-artifacts/`; source
   evidence remains in the Epic 6 readiness and trusted-autonomy reports.
 
 These reports are evidence and approval-prep surfaces only. They do not grant the authority they describe.
+
+## Historical Epic 6 Completion Audit Archive
+
+The former `GET /supervisor/epic-6-completion-audit-report` is archive-only
+historical evidence, not a current evidence surface. Its final
+`epicComplete=true` finding is preserved in this dated ledger as an archival
+fact; the route, catalog entry, dashboard control, schema, and service generator
+were retired in the Phase 1 compatibility-removal slice. The separately retained,
+read-only historical MVP proof-trial packet is
+`GET /supervisor/epic-6-mvp-proof-trial-report`.
+The [Supervisor Report Surface Classification (2026-08-15)](kendall-vnxt-supervisor-report-surface-classification-2026-08-15.md)
+records the historical-surface disposition and removal requirements.
 
 ## Current Remote Delivery State
 
@@ -84,7 +95,7 @@ Snapshot date: 2026-06-11.
 - PR #97 delivered the Story 3.66 implementation evidence: `https://github.com/slawdawg/Kendall-vnxt/pull/97`.
 - PR #97 CI `check` passed on 2026-06-11, then PR #97 was marked ready and merged into `main` at `a750601af1d0144507f6cc05b3ca1ada676d2d07`.
 - PR #97 branch/worktree `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` was deleted locally and remotely after retained evidence.
-- Final proof report state: `GET /supervisor/epic-6-mvp-proof-trial-report` reports `trialStatus=epic_6_mvp_proof_complete`; `GET /supervisor/epic-6-completion-audit-report` reports `epicComplete=true`.
+- Final proof report state: the retained, read-only historical `GET /supervisor/epic-6-mvp-proof-trial-report` reports `trialStatus=epic_6_mvp_proof_complete`. This ledger preserves the now-retired completion-audit route's distinct final `epicComplete=true` result as historical archive evidence, not as a callable current endpoint.
 - Final completion update verification passed with focused report tests and full `pnpm run check`, including preflight, drift checks, dashboard build, and 143 supervisor tests.
 - Current stop line: post-MVP Claude review, provider expansion, issue/story sync, additional Codex launches, remote cleanup outside approved targets, and broad trusted autonomy remain separately gated.
 
