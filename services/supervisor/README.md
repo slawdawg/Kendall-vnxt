@@ -21,6 +21,10 @@ Use `pnpm run test:supervisor -- <pytest args>` for focused checks. The wrapper 
 
 `uv sync --directory services/supervisor` keeps the local virtualenv aligned with `services/supervisor/uv.lock`.
 
+For database initialization, ordered upgrades, clean-install hooks, and
+rollback/recovery constraints, see the [supervisor schema-migrations
+runbook](../../docs/workflows/supervisor-schema-migrations.md).
+
 For the default-disabled local attestation issuer, observer, and private-socket
 setup, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).
 
