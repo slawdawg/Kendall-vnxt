@@ -186,7 +186,7 @@ const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const canonicalKendallRepository = Object.freeze({ owner: "slawdawg", name: "Kendall-vnxt" });
 // A closed-remote cleanup makes a bounded sequence of external observations,
 // one remote deletion, and a post-delete probe while holding its task lease.
-const closedRemoteCleanupExternalIntentReserve = 12;
+const closedRemoteCleanupExternalIntentReserve = 13;
 const strictExactTreeCloseoutTaskId = "20260723-tailnet-authenticated-dashboard-persistence-and";
 const missingWorktreeCloseoutTargets = Object.freeze({
   "20260724-synchronize-dev-recovery": {
@@ -10064,6 +10064,13 @@ function cleanupClosedRemote(argv) {
     if (lockedProof.remote.sha) {
       deleteRemoteBranchIfPresent(locked, lockedProof.cleanupCwd, lockedProof.expectedHeadSha);
     } else {
+      // The absence proof can change between the locked packet and this
+      // mutation branch. Re-read the remote before recording a terminal no-op
+      // so an intervening recreation remains actionable rather than masked.
+      const recheckedRemoteSha = originBranchSha(locked.branch, lockedProof.cleanupCwd);
+      if (recheckedRemoteSha) {
+        throw new Error(`Closed-manifest remote cleanup is blocked under lock: remote branch origin/${locked.branch} appeared after the absence proof.`);
+      }
       appendTaskEvent(locked, "closed_remote_branch_already_absent", locked.branch);
     }
     const previousCleanup = locked.closed_remote_cleanup;
@@ -10201,6 +10208,9 @@ function closedRemoteCleanupProof(manifest, state, context = {}) {
   if (remoteSha && manifest.closed_remote_cleanup?.status) {
     blockers.push("closed manifest already records remote deletion but the remote branch is present again");
   }
+  if (remoteSha && retainedAuthority?.operation === "cleanup-merged-delete-remote") {
+    blockers.push("retained cleanup authority proves the remote branch was already deleted; a recreated remote branch is not eligible for closed-manifest cleanup");
+  }
 
   return {
     ready: blockers.length === 0,
@@ -10286,7 +10296,7 @@ function parseClosedRemoteDeleteAuthority(value) {
     } catch {
       return { valid: false, reason: "--remote-delete-authority has invalid percent-encoding" };
     }
-    if (encodeURIComponent(fieldValue) !== encodedValue) {
+    if (encodeClosedRemoteDeleteAuthorityValue(fieldValue) !== encodedValue) {
       return { valid: false, reason: "--remote-delete-authority values must use canonical percent-encoding" };
     }
     if (!Object.hasOwn({ task: true, branch: true, pr: true, head: true, "remote-delete": true }, key) || Object.hasOwn(fields, key) || !fieldValue) {
@@ -10306,6 +10316,13 @@ function parseClosedRemoteDeleteAuthority(value) {
     prNumber,
     headSha,
   };
+}
+
+function encodeClosedRemoteDeleteAuthorityValue(value) {
+  // encodeURIComponent deliberately leaves a few RFC 3986 reserved marks
+  // unescaped. Bindings are shell-quoted in the runbook, so encode all of
+  // them—especially an apostrophe—to provide one unambiguous canonical form.
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function closedRemoteCleanupAuthorityEvidence(manifest, proof, binding, recordedAt) {

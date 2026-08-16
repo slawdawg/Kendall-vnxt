@@ -14240,6 +14240,15 @@ try {
         mutate(fixture) { writeFixtureGhRepositoryView(fixture, { owner: "fork-owner", name: "fork-repository" }); },
         args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
       },
+      {
+        name: "recreated remote after cleanup-merged remote deletion",
+        mutate(fixture, manifestPath) {
+          const manifest = readJson(manifestPath);
+          manifest.cleanup_authority_decision.operation = "cleanup-merged-delete-remote";
+          writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        },
+        args: (fixture, manifest) => ["cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot],
+      },
     ];
     for (const scenario of scenarios) {
       const fixture = createMergedCleanupFixture();
@@ -14285,7 +14294,7 @@ try {
         "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved bounded cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
       ], { env: fixture.env });
       assert(result.code !== 0, "insufficient reserved capacity unexpectedly entered cleanup");
-      assert(result.stderr.includes("required_records=12"), result.stderr || result.stdout);
+      assert(result.stderr.includes("required_records=13"), result.stderr || result.stdout);
       assert(remoteBranchExists(fixture.root, fixture.branch), "lease-capacity failure deleted remote branch");
       assert(readFileSync(manifestPath, "utf8") === before, "lease-capacity failure mutated manifest");
     } finally {
@@ -14338,7 +14347,7 @@ try {
       const manifest = readJson(manifestPath);
       manifest.status = "closed";
       manifest.closed_at = "2026-08-16T00:00:00.000Z";
-      manifest.branch = "codex/cleanup;encoded";
+      manifest.branch = "codex/o'hare;encoded";
       manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       runGit(fixture.root, ["branch", manifest.branch, "main"]);
@@ -14353,11 +14362,36 @@ try {
       runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
       runGit(fixture.root, ["branch", "-D", fixture.branch]);
       runGit(fixture.root, ["branch", "-D", manifest.branch]);
+      assert(closedRemoteCleanupFixtureBinding(manifest).includes("%27"), "authority binding did not canonically escape apostrophe");
       const result = runFixtureScript(fixture, [
         "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved encoded authority", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
       ], { env: fixture.env });
       assert(result.code === 0, result.stderr || result.stdout);
       assert(!remoteBranchExists(fixture.root, manifest.branch), "encoded branch binding did not delete exact remote branch");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-closed-remote rechecks an absent remote before recording idempotent evidence", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed";
+      manifest.closed_at = "2026-08-16T00:00:00.000Z";
+      manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      runGit(fixture.root, ["push", "origin", `:refs/heads/${fixture.branch}`]);
+      installFixtureClosedRemoteAbsenceRace(fixture);
+      const result = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--apply", "--approval", "operator approved absent remote cleanup", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code !== 0, "remote appearance after absence proof unexpectedly succeeded");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "race fixture did not recreate remote branch");
+      assert(!readJson(manifestPath).closed_remote_cleanup, "appearance race wrote already-absent cleanup evidence");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -14379,7 +14413,11 @@ try {
   }
 
   function closedRemoteCleanupFixtureBinding(manifest) {
-    return `task=${encodeURIComponent(manifest.task_id)};branch=${encodeURIComponent(manifest.branch)};pr=${manifest.pr_number};head=${manifest.pr_delivery_head_sha};remote-delete=true`;
+    return `task=${closedRemoteCleanupFixtureEncodedValue(manifest.task_id)};branch=${closedRemoteCleanupFixtureEncodedValue(manifest.branch)};pr=${manifest.pr_number};head=${manifest.pr_delivery_head_sha};remote-delete=true`;
+  }
+
+  function closedRemoteCleanupFixtureEncodedValue(value) {
+    return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
   }
 
   test("cleanup-merged summary-json blocks missing delivery subagent audit evidence", () => {
@@ -19114,6 +19152,20 @@ function installFixtureCanonicalPrRepoAssertion(fixture) {
   ].join("\n");
   writeFileSync(fakeGh, source.replace(seam, guard));
   chmodSync(fakeGh, 0o755);
+}
+
+function installFixtureClosedRemoteAbsenceRace(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const seam = "      const recheckedRemoteSha = originBranchSha(locked.branch, lockedProof.cleanupCwd);";
+  assert(source.includes(seam), "fixture did not contain the closed-remote absence recheck seam");
+  const mutation = [
+    '      if (process.env.CODEX_WORKSPACE_FIXTURE_CLOSED_REMOTE_ABSENCE_RACE === "1") {',
+    '        runChecked("git", ["push", "origin", `HEAD:refs/heads/${locked.branch}`], { cwd: lockedProof.cleanupCwd });',
+    "      }",
+    seam,
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(seam, mutation));
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_CLOSED_REMOTE_ABSENCE_RACE: "1" };
 }
 
 function runMergedCleanupFixtureScript(fixture, args, options = {}) {
