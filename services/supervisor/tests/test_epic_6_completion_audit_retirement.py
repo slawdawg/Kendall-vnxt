@@ -53,3 +53,10 @@ def test_epic_6_mvp_proof_trial_runtime_contract_is_unchanged() -> None:
     assert report.claudeLaunchApproved is False
     assert report.providerExpansionApproved is False
     assert report.autonomousDeliveryApproved is False
+
+    done_evidence = next(
+        step for step in report.steps if step.stepId == "done-evidence"
+    )
+    assert "retained MVP proof report" in done_evidence.summary
+    assert "historical completion audit" in done_evidence.summary
+    assert "completion audit retain" not in done_evidence.summary
