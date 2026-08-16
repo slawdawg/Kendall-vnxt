@@ -648,7 +648,8 @@ do not treat an operator authorization as a bypass.
    A dirty closed-source PR lane must first use
    `preserve-dirty-superseded <task>` with the same exact closed-source PR and
    ordered carry-forward patch arguments. Its dry run rejects untracked or
-   ignored files, renamed, copied, malformed, non-UTF-8, any whole-index hidden
+   ignored files, renamed, copied, malformed, non-UTF-8, literal-pathspec
+   metacharacters, active replacement refs, any whole-index hidden
    assume-unchanged/skip-worktree entry,
    filtered, text/eol-normalized, ident-expanded, mode-hidden, encoded, or
    drifting paths; it
@@ -664,12 +665,20 @@ do not treat an operator authorization as a bypass.
    lane-qualified `refs/codex-preservation/<task>/dirty-superseded` snapshot
    commit/tree, records exact dirty path/status/blob identities plus owner and
    successor bindings in the manifest, and re-reads every binding before it
-   cleans the source worktree. It never removes a worktree, local branch, or
-   remote branch. `cleanup-superseded` re-validates any recorded snapshot ref
-   and rechecks the source worktree's whole-index hidden flags before local
-   cleanup; a missing, changed, or unreadable preservation object, or a hidden
-   index entry, is a hard stop line. A crash or blocked post-reset check leaves
-   immutable pending evidence. If a pre-publication intent has no published
+   cleans the source worktree. Persisted snapshot identity fields are normalized
+   only when their aliases agree. An adopted pending snapshot must have the
+   recorded source head as its sole parent and match a separately rebuilt full
+   tree from the still-dirty source, not merely the named dirty entries. A
+   recorded prior owner is accepted
+   only through a valid ownership-takeover lineage. It never removes a
+   worktree, local branch, or remote branch. `cleanup-superseded` re-validates
+   any recorded snapshot ref and, while the worktree remains present, rechecks
+   full status including ignored/untracked residue and whole-index hidden flags
+   before local cleanup; a missing, changed, or unreadable preservation object,
+   live residue, or hidden index entry is a hard stop line. A proven partial
+   cleanup validates the immutable evidence from its stable checkout without
+   probing the deliberately absent worktree. A crash or blocked post-reset check
+   leaves immutable pending evidence. If a pre-publication intent has no published
    ref, `--resume-pending` re-reads the exact still-dirty source, retires only
    that empty intent without reset, and requires a new ordinary snapshot. Re-run
    any published pending snapshot with

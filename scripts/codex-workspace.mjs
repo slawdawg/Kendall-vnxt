@@ -11376,6 +11376,7 @@ function preserveDirtySuperseded(argv) {
     throw new Error("preserve-dirty-superseded never takes ownership; complete governed dirty-lane takeover separately before any reset.");
   }
   assertCleanupWorktreeForSuperseded(record.manifest, state, proofInput);
+  assertNoDirtySupersededReplacementRefs(record.manifest.worktree_path);
   requireGh("preserve-dirty-superseded");
   if (options.resumePending) {
     if (!options.apply || options.summaryJson || options.dryRun) {
@@ -11384,8 +11385,12 @@ function preserveDirtySuperseded(argv) {
     if (!validSupersessionApplyEvidence(options.approval) || !validSupersessionApplyEvidence(options.reason)) {
       throw new Error("preserve-dirty-superseded --resume-pending requires --approval and --reason with at least 10 non-whitespace characters each.");
     }
-    resumePendingDirtySuperseded(state, record, { options, proofInput });
-    console.log(`Settled dirty superseded preservation for ${record.manifest.task_id}`);
+    const outcome = resumePendingDirtySuperseded(state, record, { options, proofInput });
+    if (outcome?.status === "retired_unpublished") {
+      console.log(`Retired unpublished dirty preservation intent for ${record.manifest.task_id}; source was not reset. Rerun preserve-dirty-superseded without --resume-pending.`);
+    } else {
+      console.log(`Settled dirty superseded preservation for ${record.manifest.task_id}`);
+    }
     return;
   }
   if (record.manifest.dirty_superseded_preservation) {
@@ -11417,6 +11422,7 @@ function preserveDirtySuperseded(argv) {
     const manifest = readManifest(plan.manifestPath);
     validateManifest(manifest, plan.manifestPath);
     if (manifest.owner !== currentLaneOwner(options)) throw new Error("dirty superseded preservation owner changed before the locked reset; complete governed dirty-lane takeover separately.");
+    assertNoDirtySupersededReplacementRefs(manifest.worktree_path);
     const fresh = dirtySupersededPreservationPlan({ manifest, path: plan.manifestPath }, state, { options, proofInput, currentOwner: currentLaneOwner(options) });
     if (fresh.status !== "ready") throw new Error(`Dirty superseded preservation changed under lock: ${fresh.reason}`);
     const rawRef = `refs/codex-preservation/${manifest.task_id}/dirty-superseded`;
@@ -11456,8 +11462,9 @@ function preserveDirtySuperseded(argv) {
       // Do not insert a manifest write or another external operation between
       // the final immutable re-read, producer-lease heartbeat, and reset.
       verifyDirtySupersededImmutableSnapshot(fresh, snapshot);
+      assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
       heartbeat();
-      runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath });
+      runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
       if (dirtySupersededStatusRecords(fresh.worktreePath).length) throw new Error("Dirty superseded preservation cleaned source worktree incompletely; cleanup remains blocked.");
       manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset" };
     } catch (error) {
@@ -11474,10 +11481,12 @@ function preserveDirtySuperseded(argv) {
 }
 
 function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
+  let outcome = null;
   withManifestLock(state, record.manifest.task_id, ({ heartbeat }) => {
     const manifest = readManifest(record.path);
     validateManifest(manifest, record.path);
     if (manifest.owner !== currentLaneOwner(options)) throw new Error("dirty superseded preservation owner changed before the locked resume; complete governed dirty-lane takeover separately.");
+    assertNoDirtySupersededReplacementRefs(manifest.worktree_path);
     let snapshot = manifest.dirty_superseded_preservation;
     if (!snapshot && manifest.dirty_superseded_snapshot_intent) {
       snapshot = recoverDirtySupersededSnapshotIntent(manifest, manifest.dirty_superseded_snapshot_intent, proofInput, record.path);
@@ -11486,7 +11495,7 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
         appendTaskEvent(manifest, "dirty_superseded_snapshot_intent_retired_unpublished", `${snapshot.snapshotRef} was not published; source remains untouched and requires a new snapshot`);
         manifest.updated_at = new Date().toISOString();
         writeManifest(record.path, manifest);
-        console.log(`Retired unpublished dirty preservation intent for ${manifest.task_id}; source was not reset. Rerun preserve-dirty-superseded without --resume-pending.`);
+        outcome = { status: "retired_unpublished" };
         return;
       }
       manifest.dirty_superseded_preservation = snapshot;
@@ -11510,6 +11519,7 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
       appendTaskEvent(manifest, "dirty_superseded_pending_settled", "source was already clean and durable snapshot re-read exactly");
       manifest.updated_at = new Date().toISOString();
       writeManifest(record.path, manifest);
+      outcome = { status: "settled" };
       return;
     }
     manifest.dirty_superseded_preservation.resumeAuthorization = {
@@ -11530,13 +11540,16 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
     const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
     verifyDirtySupersededImmutableSnapshot(resumedPlan, snapshot);
     heartbeat();
-    runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath });
+    assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
+    runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
     if (dirtySupersededStatusRecords(fresh.worktreePath).length) throw new Error("Dirty superseded preservation resumed reset left source worktree dirty; cleanup remains blocked.");
     manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset", resumedAfterInterruption: true };
     appendTaskEvent(manifest, "dirty_superseded_pending_resumed", fresh.expectedHeadSha);
     manifest.updated_at = new Date().toISOString();
     writeManifest(record.path, manifest);
+    outcome = { status: "resumed" };
   });
+  return outcome;
 }
 
 function dirtySupersededPreservationPlan(record, state, context) {
@@ -11563,7 +11576,7 @@ function dirtySupersededTrackedPaths(worktreePath) {
   for (const record of records) {
     if (record.length < 4 || record[2] !== " ") throw new Error("dirty superseded preservation status record is malformed");
     const status = record.slice(0, 2); const path = record.slice(3);
-    if (!path || status === "??" || status === "!!" || /[RC]/.test(status) || (status[0] !== " " && status[1] !== " ") || /[\0\r\n:]/.test(path) || path.startsWith("/") || path.split("/").some((part) => !part || part === "." || part === "..")) {
+    if (!path || status === "??" || status === "!!" || /[RC]/.test(status) || (status[0] !== " " && status[1] !== " ") || /[\0\r\n:*?\[\]]/.test(path) || path.startsWith("/") || path.split("/").some((part) => !part || part === "." || part === "..")) {
       throw new Error("dirty superseded preservation refuses untracked, ignored, renamed, copied, or unsafe dirty paths");
     }
     const indexFlags = git(["ls-files", "-v", "--", path], { cwd: worktreePath });
@@ -11591,6 +11604,14 @@ function assertNoDirtySupersededHiddenIndexFlags(worktreePath) {
   const hidden = String(indexFlags.stdout || "").split("\0").filter(Boolean).filter((entry) => entry.length >= 3 && entry[1] === " " && (entry[0] === "h" || entry[0] === "S"));
   if (hidden.length > 0) {
     throw new Error("dirty superseded preservation refuses any assume-unchanged or skip-worktree index entry, including paths hidden from porcelain");
+  }
+}
+
+function assertNoDirtySupersededReplacementRefs(worktreePath) {
+  const replacements = git(["for-each-ref", "--format=%(refname)", "refs/replace/"], { cwd: worktreePath });
+  if (replacements.code !== 0) throw new Error("dirty superseded preservation could not inspect replacement refs");
+  if (String(replacements.stdout || "").trim()) {
+    throw new Error("dirty superseded preservation refuses active Git replacement refs");
   }
 }
 
@@ -11627,10 +11648,11 @@ function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
   // The snapshot is the only copy of the dirty bytes after reset. Ask Git to
   // durably flush loose objects and the ref transaction before that boundary.
   const durableGit = ["-c", "core.fsync=loose-object,reference"];
-  const commit = requireExactGitObjectId(runChecked("git", [...durableGit, "commit-tree", tree, "-p", plan.expectedHeadSha, "-m", `preserve-dirty-superseded:${manifest.task_id}:${digest}`], { cwd: plan.worktreePath }).stdout.trim(), "dirty preservation commit");
+  const immutableGitEnvironment = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const commit = requireExactGitObjectId(runChecked("git", [...durableGit, "commit-tree", tree, "-p", plan.expectedHeadSha, "-m", `preserve-dirty-superseded:${manifest.task_id}:${digest}`], { cwd: plan.worktreePath, env: immutableGitEnvironment }).stdout.trim(), "dirty preservation commit");
   const objectFormat = git(["rev-parse", "--show-object-format"], { cwd: plan.worktreePath });
   const nullOid = objectFormat.code === 0 && objectFormat.stdout.trim() === "sha256" ? "0".repeat(64) : "0".repeat(40);
-  runChecked("git", [...durableGit, "update-ref", ref, commit, nullOid], { cwd: plan.worktreePath });
+  runChecked("git", [...durableGit, "update-ref", ref, commit, nullOid], { cwd: plan.worktreePath, env: immutableGitEnvironment });
   const paths = plan.dirty.paths.map((entry) => {
     const entryTree = scopedTreeEntries(tree, [entry.path], plan.worktreePath);
     if (entryTree.error || entryTree.entries.length > 1) throw new Error(`dirty preservation snapshot has ambiguous path: ${entry.path}`);
@@ -11645,18 +11667,19 @@ function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
 }
 
 function recoverDirtySupersededSnapshotIntent(manifest, intent, proofInput, manifestPath) {
-  if (!intent || intent.schemaVersion !== 1 || intent.owner !== manifest.owner || intent.sourceHead !== proofInput.sourceHead || intent.closedSourcePr !== proofInput.closedSourcePr?.number || intent.carryForwardPr !== proofInput.carryForwardPr || intent.carryForwardCommit !== proofInput.carryForwardCommit || !/^refs\/codex-preservation\/[A-Za-z0-9_.-]+\/dirty-superseded$/.test(intent.snapshotRef || "") || !Array.isArray(intent.paths) || intent.paths.length === 0 || intent.paths.length > 64) {
+  if (!intent || intent.schemaVersion !== 1 || !dirtySupersededOwnerLineageMatches(manifest, intent.owner) || intent.sourceHead !== proofInput.sourceHead || intent.closedSourcePr !== proofInput.closedSourcePr?.number || intent.carryForwardPr !== proofInput.carryForwardPr || intent.carryForwardCommit !== proofInput.carryForwardCommit || !/^refs\/codex-preservation\/[A-Za-z0-9_.-]+\/dirty-superseded$/.test(intent.snapshotRef || "") || !Array.isArray(intent.paths) || intent.paths.length === 0 || intent.paths.length > 64) {
     throw new Error("dirty superseded snapshot-publication intent is malformed or does not match the requested proof; mutation=none.");
   }
   const cwd = manifest.worktree_path;
-  const ref = git(["rev-parse", "--verify", `${intent.snapshotRef}^{commit}`], { cwd });
+  const immutableGitEnvironment = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const ref = git(["rev-parse", "--verify", `${intent.snapshotRef}^{commit}`], { cwd, env: immutableGitEnvironment });
   if (ref.code !== 0) {
     // An intent is intentionally journaled before the first durable object or
     // ref write.  If publication never began, prove the source still matches
     // the exact recorded dirty-path set and retire only that empty journal.
     // This never resets or stages source bytes; a later ordinary invocation
     // must build a brand-new snapshot from the re-read source.
-    const absence = git(["show-ref", "--verify", "--quiet", intent.snapshotRef], { cwd });
+    const absence = git(["show-ref", "--verify", "--quiet", intent.snapshotRef], { cwd, env: immutableGitEnvironment });
     if (absence.code !== 1) {
       throw new Error("dirty preservation snapshot ref could not be proved absent after interrupted publication; mutation=none.");
     }
@@ -11668,11 +11691,28 @@ function recoverDirtySupersededSnapshotIntent(manifest, intent, proofInput, mani
     return { unpublished: true, snapshotRef: intent.snapshotRef };
   }
   const commit = requireExactGitObjectId(ref.stdout.trim(), "interrupted dirty preservation snapshot commit");
-  const treeResult = git(["rev-parse", "--verify", `${commit}^{tree}`], { cwd });
+  const parents = git(["show", "-s", "--format=%P", commit], { cwd, env: immutableGitEnvironment });
+  if (parents.code !== 0 || parents.stdout.trim() !== intent.sourceHead) {
+    throw new Error("interrupted dirty preservation snapshot commit parent does not exactly match the recorded source head; mutation=none.");
+  }
+  const treeResult = git(["rev-parse", "--verify", `${commit}^{tree}`], { cwd, env: immutableGitEnvironment });
   const tree = requireExactGitObjectId(treeResult.stdout.trim(), "interrupted dirty preservation snapshot tree");
+  // A pre-publication intent contains only the exact path/status declaration;
+  // never derive the expected full tree from the adopted ref itself. Rebuild a
+  // fresh temporary-index tree from the still-dirty source and recorded base,
+  // then compare that independently produced tree to the adopted object.
+  const currentDirty = dirtySupersededTrackedPaths(cwd);
+  const intentPaths = intent.paths.map((entry) => ({ path: entry?.path, status: entry?.status })).sort((left, right) => String(left.path).localeCompare(String(right.path)));
+  if (JSON.stringify(currentDirty.paths) !== JSON.stringify(intentPaths)) {
+    throw new Error("interrupted dirty preservation snapshot source no longer matches its exact recorded path/status snapshot; mutation=none.");
+  }
+  const expectedTree = dirtySupersededSnapshotTree({ worktreePath: cwd, expectedHeadSha: intent.sourceHead, dirty: currentDirty });
+  if (expectedTree !== tree) {
+    throw new Error("interrupted dirty preservation snapshot full tree does not exactly match the current dirty source and recorded base; mutation=none.");
+  }
   const paths = intent.paths.map((entry) => {
     if (!entry || typeof entry.path !== "string" || typeof entry.status !== "string") throw new Error("dirty superseded snapshot-publication intent paths are malformed; mutation=none.");
-    const entries = scopedTreeEntries(tree, [entry.path], cwd);
+    const entries = scopedTreeEntries(tree, [entry.path], cwd, immutableGitEnvironment);
     if (entry.status.includes("D")) {
       if (entries.error || entries.entries.length !== 0) throw new Error("interrupted dirty preservation deletion snapshot does not re-read exactly; mutation=none.");
       return { path: entry.path, status: entry.status, mode: null, objectId: null };
@@ -11697,7 +11737,7 @@ function dirtySupersededSnapshotTree(plan) {
   if (indexPathResult.code !== 0) throw new Error("cannot locate source Git index for dirty preservation");
   const indexPath = resolve(plan.worktreePath, indexPathResult.stdout.trim());
   const temporaryIndex = `${indexPath}.dirty-preservation-${randomUUID()}`;
-  const env = { GIT_INDEX_FILE: temporaryIndex };
+  const env = { GIT_INDEX_FILE: temporaryIndex, GIT_NO_REPLACE_OBJECTS: "1" };
   // `git add` writes the preserved loose blobs and `write-tree` writes the
   // preserved tree.  They are the only copy after reset, so durability must
   // cover those writers as well as commit-tree/update-ref below.
@@ -11731,20 +11771,34 @@ function verifyDirtySupersededSnapshot(manifest, plan, snapshot, { requireLiveMa
 }
 
 function verifyDirtySupersededImmutableSnapshot(plan, snapshot) {
-  const refCommit = git(["rev-parse", "--verify", `${snapshot.ref}^{commit}`], { cwd: plan.worktreePath });
-  if (refCommit.code !== 0 || refCommit.stdout.trim() !== snapshot.commit) throw new Error("dirty preservation ref does not re-read to its recorded commit");
-  const tree = git(["rev-parse", "--verify", `${snapshot.commit}^{tree}`], { cwd: plan.worktreePath });
-  if (tree.code !== 0 || tree.stdout.trim() !== snapshot.tree) throw new Error("dirty preservation commit does not re-read to its recorded tree");
-  const digest = createHash("sha256").update(JSON.stringify({ sourceHead: plan.expectedHeadSha, tree: snapshot.tree, paths: plan.dirty.paths })).digest("hex");
+  const identity = dirtySupersededSnapshotIdentity(snapshot);
+  const refCommit = git(["rev-parse", "--verify", `${identity.ref}^{commit}`], { cwd: plan.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
+  if (refCommit.code !== 0 || refCommit.stdout.trim() !== identity.commit) throw new Error("dirty preservation ref does not re-read to its recorded commit");
+  const tree = git(["rev-parse", "--verify", `${identity.commit}^{tree}`], { cwd: plan.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
+  if (tree.code !== 0 || tree.stdout.trim() !== identity.tree) throw new Error("dirty preservation commit does not re-read to its recorded tree");
+  const digest = createHash("sha256").update(JSON.stringify({ sourceHead: plan.expectedHeadSha, tree: identity.tree, paths: plan.dirty.paths })).digest("hex");
   if (digest !== snapshot.digest) throw new Error("dirty preservation digest changed before cleanup");
   for (const path of snapshot.paths) {
-    const entries = scopedTreeEntries(snapshot.tree, [path.path], plan.worktreePath);
+    const entries = scopedTreeEntries(identity.tree, [path.path], plan.worktreePath);
     if (path.status.includes("D")) {
       if (entries.error || entries.entries.length !== 0 || path.mode !== null || path.objectId !== null) throw new Error(`dirty preservation deletion tree re-read mismatch: ${path.path}`);
     } else if (entries.error || entries.entries.length !== 1 || entries.entries[0].objectId !== path.objectId || entries.entries[0].mode !== path.mode) {
       throw new Error(`dirty preservation tree re-read mismatch: ${path.path}`);
     }
   }
+}
+
+function dirtySupersededSnapshotIdentity(snapshot) {
+  const ref = snapshot?.ref ?? snapshot?.snapshotRef;
+  const commit = snapshot?.commit ?? snapshot?.snapshotCommit;
+  const tree = snapshot?.tree ?? snapshot?.snapshotTree;
+  if (typeof ref !== "string" || !/^refs\/codex-preservation\/[A-Za-z0-9_.-]+\/dirty-superseded$/.test(ref) || !exactGitObjectIdOrNull(commit) || !exactGitObjectIdOrNull(tree)) {
+    throw new Error("dirty preservation snapshot object identity is malformed");
+  }
+  if ((snapshot.ref !== undefined && snapshot.ref !== ref) || (snapshot.snapshotRef !== undefined && snapshot.snapshotRef !== ref) || (snapshot.commit !== undefined && snapshot.commit !== commit) || (snapshot.snapshotCommit !== undefined && snapshot.snapshotCommit !== commit) || (snapshot.tree !== undefined && snapshot.tree !== tree) || (snapshot.snapshotTree !== undefined && snapshot.snapshotTree !== tree)) {
+    throw new Error("dirty preservation snapshot object identity aliases disagree");
+  }
+  return { ref, commit, tree };
 }
 
 function cleanupSupersessionInput(options) {
@@ -12086,18 +12140,23 @@ function validDirtySupersededSnapshotEvidence(manifest, evidence, proofInput, cw
   const verification = evidence?.verification;
   if (!evidence || evidence.schemaVersion !== 1 || evidence.sourceHead !== proofInput.sourceHead || evidence.closedSourcePr !== proofInput.closedSourcePr?.number || evidence.carryForwardPr !== proofInput.carryForwardPr || evidence.carryForwardCommit !== proofInput.carryForwardCommit || !dirtySupersededOwnerLineageMatches(manifest, evidence.owner) || !/^refs\/codex-preservation\/[A-Za-z0-9_.-]+\/dirty-superseded$/.test(evidence.snapshotRef || "") || !exactGitObjectIdOrNull(evidence.snapshotCommit) || !exactGitObjectIdOrNull(evidence.snapshotTree) || !/^[a-f0-9]{64}$/.test(evidence.digest || "") || !Array.isArray(evidence.paths) || evidence.paths.length === 0 || evidence.paths.length > 64) return false;
   if (requireCompleted && (!verification || verification.status !== "matched_before_reset" || verification.metadataOnly !== true || verification.pathCount !== evidence.paths.length || !Number.isFinite(Date.parse(verification.checkedAt || "")))) return false;
-  // Preservation time is not a cleanup authorization. Re-read the full index
-  // here so an edit hidden afterwards with h/S flags cannot be mistaken for a
-  // clean source when cleanup removes the worktree.
-  assertNoDirtySupersededHiddenIndexFlags(manifest.worktree_path);
-  const ref = git(["rev-parse", "--verify", `${evidence.snapshotRef}^{commit}`], { cwd });
-  const tree = git(["rev-parse", "--verify", `${evidence.snapshotCommit}^{tree}`], { cwd });
+  // Preservation time is not a cleanup authorization. Before final cleanup,
+  // re-read the live source for ignored/untracked residue and whole-index h/S
+  // flags. A proven partial cleanup has no worktree left to inspect, so it
+  // relies only on immutable ref/tree proof from the stable cleanup checkout.
+  if (requireCompleted && existsSync(manifest.worktree_path)) {
+    assertNoDirtySupersededHiddenIndexFlags(manifest.worktree_path);
+    if (dirtySupersededStatusRecords(manifest.worktree_path).length > 0) return false;
+  }
+  const immutableGitEnvironment = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const ref = git(["rev-parse", "--verify", `${evidence.snapshotRef}^{commit}`], { cwd, env: immutableGitEnvironment });
+  const tree = git(["rev-parse", "--verify", `${evidence.snapshotCommit}^{tree}`], { cwd, env: immutableGitEnvironment });
   if (ref.code !== 0 || tree.code !== 0 || ref.stdout.trim() !== evidence.snapshotCommit || tree.stdout.trim() !== evidence.snapshotTree) return false;
   const barePaths = evidence.paths.map(({ path, status }) => ({ path, status }));
   if (createHash("sha256").update(JSON.stringify({ sourceHead: evidence.sourceHead, tree: evidence.snapshotTree, paths: barePaths })).digest("hex") !== evidence.digest) return false;
   return evidence.paths.every((entry) => {
     if (!entry || typeof entry.path !== "string" || typeof entry.status !== "string") return false;
-    const treeEntry = scopedTreeEntries(evidence.snapshotTree, [entry.path], cwd);
+    const treeEntry = scopedTreeEntries(evidence.snapshotTree, [entry.path], cwd, immutableGitEnvironment);
     if (entry.status.includes("D")) return !treeEntry.error && treeEntry.entries.length === 0 && entry.mode === null && entry.objectId === null;
     return !treeEntry.error && treeEntry.entries.length === 1 && treeEntry.entries[0].path === entry.path && /^[0-7]{6}$/.test(entry.mode || "") && exactGitObjectIdOrNull(entry.objectId) && treeEntry.entries[0].mode === entry.mode && treeEntry.entries[0].objectId === entry.objectId;
   });
@@ -12774,8 +12833,8 @@ function compareScopedTreeEntries(sourceHead, carryForwardCommit, scope, cwd) {
   };
 }
 
-function scopedTreeEntries(commit, scope, cwd) {
-  const result = git(["ls-tree", "-r", "-z", "--full-tree", commit, "--", ...scope], { cwd });
+function scopedTreeEntries(commit, scope, cwd, env = undefined) {
+  const result = git(["ls-tree", "-r", "-z", "--full-tree", commit, "--", ...scope], { cwd, env });
   if (result.code !== 0) return { entries: [], error: result.stderr || result.stdout || `cannot inspect tree ${commit}` };
   const entries = [];
   for (const entry of String(result.stdout || "").split("\0").filter(Boolean)) {
