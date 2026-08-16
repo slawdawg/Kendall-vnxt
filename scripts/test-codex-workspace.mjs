@@ -1604,7 +1604,9 @@ try {
     assert(refresh[0].includes("const postAuditRemoteHeadResult = git([\"rev-parse\", `origin/${manifest.branch}`]"), "delivery-head refresh must reload the remote ref after thread hydration");
     assert(refresh[0].includes("Local HEAD or origin branch refs changed while collecting the refresh review-thread audit"), "delivery-head refresh must reject post-hydration local/remote ref drift");
     assert(refresh[0].includes("const postRecoveryPr = prViewForGates(manifest);"), "delivery-head refresh must reload the PR after recovery patch proof");
-    assert(refresh[0].includes("deliveryEligibilitySnapshot(postRecoveryPr, postRecoveryChecks)"), "delivery-head refresh must compare every mutable PR eligibility gate after recovery patch proof");
+    assert(refresh[0].includes("const postRecoveryFinalPr = prViewForGates(manifest);"), "delivery-head refresh must reload the PR after the final recovery review-thread audit");
+    assert(refresh[0].includes("const postRecoveryFinalChecks = normalizeStatusCheckRollup"), "delivery-head refresh must reload exact-head checks after the final recovery review-thread audit");
+    assert(refresh[0].includes("deliveryEligibilitySnapshot(postRecoveryFinalPr, postRecoveryFinalChecks)"), "delivery-head refresh must compare every mutable PR eligibility gate after the final recovery review-thread audit");
     assert(refresh[0].includes("const postRecoveryReviewThreads = postRecoveryPr?.number"), "delivery-head refresh must rehydrate review threads after recovery patch proof");
     assert(refresh[0].includes("Review-thread state changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof review-thread drift");
     assert(refresh[0].includes("const postRecoveryLockInspection = inspectTaskLock(workspaceState(options), manifest.task_id);"), "delivery-head refresh must re-audit lock eligibility after recovery patch proof");
@@ -1613,6 +1615,22 @@ try {
     assert(refresh[0].includes("Live PR eligibility or status checks changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof PR/check drift");
     assert(refresh[0].includes("Local HEAD or origin branch refs changed while calculating the recovery patch proof"), "delivery-head refresh must reject post-proof local/remote ref drift");
     assert(refresh[0].includes("Live PR head branch does not match the managed manifest branch"), "delivery-head refresh must bind the managed branch to the live PR branch");
+    const recoverySeries = source.match(/function createRecoveryPatchSeriesBudget[\s\S]*?function contiguousSubsequenceStart/);
+    assert(recoverySeries, "bounded recovery patch-series helpers not found");
+    assert(recoverySeries[0].includes("recoveryPatchSeriesMaxCommits"), "recovery patch proof must bound aggregate commit count");
+    assert(recoverySeries[0].includes("recoveryPatchSeriesCaptureMaxBytes"), "recovery patch proof must bound aggregate capture bytes");
+    assert(recoverySeries[0].includes("recoveryPatchSeriesTimeoutMs"), "recovery patch proof must bound aggregate runtime");
+    assert(source.includes("--max-count=${maxCommits + 1}"), "recovery patch proof must bound commit enumeration before patch rendering");
+    assert(recoverySeries[0].includes("remainingRuntimeMs"), "recovery patch proof must pass only remaining aggregate runtime to each render");
+    assert(source.includes("gitRecoveryProof([\"merge-base\", context.priorHeadSha, liveHeadSha], manifest.worktree_path, { budget: patchBudget })"), "recovery patch budget must begin before merge-base proof");
+    assert(source.includes("recoveryPatchSeriesRemainingRuntimeMs(budget)"), "every budgeted recovery proof must consume the shared remaining deadline");
+    assert(source.includes("CODEX_WORKSPACE_TEST_RECOVERY_PROOF_BUDGET_EXHAUSTED"), "recovery proof deadline must expose a deterministic test seam");
+    assert(source.includes("result.code === 0 && recoveryPatchSeriesRemainingRuntimeMs(budget) <= 0"), "recovery proof must reject post-command deadline slippage");
+    assert(source.includes("CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_IS_ANCESTOR"), "post-command deadline slippage must have a deterministic test seam");
+    assert(source.includes("CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_PATCH_SHOW"), "raw recovery patch rendering must have a deterministic post-command deadline seam");
+    assert(refresh[0].includes("const recoveryPatchBudget = createRecoveryPatchSeriesBudget();"), "initial recovery classification must start the shared proof budget");
+    assert(refresh[0].includes("phase: \"classification\""), "initial fast-forward ancestry classification must consume the shared proof budget");
+    assert(source.includes("CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_CLASSIFICATION_ANCESTOR"), "initial classification deadline must have a deterministic test seam");
 
     assert(source.includes("context.managedGate !== false && pr.headRefName !== manifest.branch"), "managed branch identity must not be imposed on detached unmanaged PR evidence");
     assert(source.includes("independently retained exact-head successor gate evidence is required"), "descendant reconciliation must fail closed without retained exact-head successor evidence");
@@ -11940,6 +11958,196 @@ try {
       assert(packet.nonAncestralRecovery?.priorPatchSeries?.error?.includes("exceeds the bounded 16 MiB capture"), JSON.stringify(packet.nonAncestralRecovery));
     } finally {
       cleanupFinishPrExistingCommitFixture(overLimit);
+    }
+  });
+
+  test("refresh-pr-head fails closed before rendering an oversized aggregate recovery series", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      for (let index = 0; index <= 128; index += 1) {
+        runGit(fixture.root, ["commit", "--allow-empty", "-q", "-m", `bounded recovery commit ${index}`]);
+      }
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      commitFile(fixture.worktree, "unrelated-live.txt", "unrelated\n", "unrelated live work");
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "An oversized aggregate recovery series must fail before patch rendering.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.status === "blocked", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.priorPatchSeries?.error === "recovery patch series exceeds the bounded 128 commits", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchBudget?.commitsUsed === 0, JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head fails closed before merge-base when the shared recovery deadline is exhausted", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      commitFile(fixture.root, "recorded-proof.txt", "recorded\n", "record a non-ancestral proof candidate");
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      commitFile(fixture.worktree, "live-proof.txt", "live\n", "create a distinct live proof candidate");
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "An exhausted shared proof deadline must block before merge-base and patch rendering.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], {
+        cwd: fixture.worktree,
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_MODE: "1", CODEX_WORKSPACE_TEST_RECOVERY_PROOF_BUDGET_EXHAUSTED: "1" },
+      });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.status === "blocked", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.priorPatchSeries?.error === "recovery patch series exceeds the bounded 300s aggregate runtime", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchBudget?.commitsUsed === 0, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchBudget?.bytesUsed === 0, JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head blocks when the shared deadline slips after its final ancestry command", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      commitFile(fixture.root, "recorded-proof.txt", "recorded\n", "record an equivalent proof candidate");
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["checkout", "-q", "main"]);
+      commitFile(fixture.root, "advanced-base.txt", "base\n", "advance the rebase target");
+      const baseHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      runGit(fixture.worktree, ["cherry-pick", priorHeadSha]);
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "A deadline crossing after final ancestry proof must block authorization.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], {
+        cwd: fixture.worktree,
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_MODE: "1", CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_IS_ANCESTOR: "1" },
+      });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.status === "blocked", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchSeriesExactlyEqual === true, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.blockers?.includes("recovery patch series exceeds the bounded 300s aggregate runtime"), JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head blocks when the shared deadline slips after a raw recovery patch render", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      commitFile(fixture.root, "recorded-proof.txt", "recorded\n", "record an equivalent raw-patch proof candidate");
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["checkout", "-q", "main"]);
+      commitFile(fixture.root, "advanced-base.txt", "base\n", "advance the raw-patch rebase target");
+      const baseHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      runGit(fixture.worktree, ["cherry-pick", priorHeadSha]);
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "A deadline crossing after raw patch rendering must block authorization.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], {
+        cwd: fixture.worktree,
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_MODE: "1", CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_PATCH_SHOW: "1" },
+      });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.status === "blocked", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.priorPatchSeries?.error === "recovery patch series exceeds the bounded 300s aggregate runtime", JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.patchBudget?.bytesUsed === 0, JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("refresh-pr-head blocks when the shared deadline slips during initial fast-forward classification", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      prepareFixtureForPrHeadRefresh(fixture);
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Initial fast-forward classification must share the bounded recovery deadline.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], {
+        cwd: fixture.worktree,
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_MODE: "1", CODEX_WORKSPACE_TEST_RECOVERY_PROOF_DEADLINE_SLIP_AFTER_CLASSIFICATION_ANCESTOR: "1" },
+      });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.status === "blocked", JSON.stringify(packet));
+      assert(packet.blockers?.includes("recovery patch series exceeds the bounded 300s aggregate runtime"), JSON.stringify(packet));
+      assert(packet.nonAncestralRecovery?.status === "blocked", JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
