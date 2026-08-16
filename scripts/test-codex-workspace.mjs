@@ -11555,6 +11555,19 @@ try {
       assert(denied.code !== 0, "wrong recovery evidence unexpectedly allowed a rebind");
       assert(denied.stderr.includes("requires exact operator evidence"), denied.stderr || denied.stdout);
 
+      const genericBypass = runFixtureScript(
+        fixture,
+        [
+          "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+          "--reason", "The literal recovery binding must not fall through to generic patch equivalence.",
+          "--rebased-recovery-authorization", "operator-authorized recovery=rebased-head invalid",
+          "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(genericBypass.code !== 0, "generic rebased recovery unexpectedly bypassed the literal PR #723 contract");
+      assert(genericBypass.stderr.includes("not permitted for the literal PR #723"), genericBypass.stderr || genericBypass.stdout);
+
       const wrongBranch = { ...readJson(prStatePath), headRefName: "codex/other-branch" };
       writeFileSync(prStatePath, `${JSON.stringify(wrongBranch)}\n`);
       const branchDenied = runFixtureScript(
@@ -11662,9 +11675,59 @@ try {
     }
   });
 
+  test("refresh-pr-head matches a rebased patch series only after the current PR base", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
+      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      commitFile(fixture.root, "rebased-a.txt", "a\n", "recorded delivery patch a");
+      const first = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      commitFile(fixture.root, "rebased-b.txt", "b\n", "recorded delivery patch b");
+      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+
+      // Simulate a base updated with the old patches.  The live PR contains
+      // only unrelated work after that new base, so inherited base history
+      // must not satisfy the replay proof.
+      runGit(fixture.root, ["checkout", "-q", "main"]);
+      runGit(fixture.root, ["cherry-pick", "--no-commit", first]);
+      runGit(fixture.root, ["commit", "-m", "base replay patch a"]);
+      runGit(fixture.root, ["cherry-pick", "--no-commit", priorHeadSha]);
+      runGit(fixture.root, ["commit", "-m", "base replay patch b"]);
+      const baseHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["reset", "--hard", "main"]);
+      commitFile(fixture.worktree, "unrelated-live.txt", "unrelated\n", "unrelated live work");
+      runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
+      const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = priorHeadSha;
+      manifest.pr_delivery_evidence.headRevision = priorHeadSha;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${priorHeadSha}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.baseRefOid = baseHeadSha;
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+
+      const preview = runFixtureScript(fixture, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "Inherited base history must not substitute for replayed PR commits.",
+        "--state-root", fixture.stateRoot, "--summary-json",
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.patchSeriesMatch === -1, JSON.stringify(packet.nonAncestralRecovery));
+      assert(packet.nonAncestralRecovery?.livePatchSeries?.commits?.length === 1, JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("refresh-pr-head fails closed for altered, reordered, incomplete, or fast-forward rebased-head claims", () => {
     const scenarios = [
       { name: "altered", commits: ["recorded-delivery-a"], apply: (fixture) => commitFile(fixture.worktree, "rebased-a.txt", "altered\n", "altered replacement patch") },
+      { name: "whitespace-only", commits: ["recorded-delivery-a"], apply: (fixture) => commitFile(fixture.worktree, "rebased-a.txt", "a \n", "whitespace-sensitive replacement patch") },
       { name: "reordered", commits: ["recorded-delivery-b", "recorded-delivery-a"], apply: (fixture, commits) => runGit(fixture.worktree, ["cherry-pick", ...commits]) },
       { name: "incomplete", commits: ["recorded-delivery-a"], apply: (fixture, commits) => runGit(fixture.worktree, ["cherry-pick", ...commits]) },
     ];
@@ -11690,6 +11753,14 @@ try {
         const prState = readJson(prStatePath);
         prState.headRefOid = liveHeadSha;
         writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+        const preview = runFixtureScript(fixture, [
+          "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+          "--reason", "The recovery must reject a non-equivalent rebase proof.",
+          "--state-root", fixture.stateRoot, "--summary-json",
+        ], { cwd: fixture.worktree, env: fixture.env });
+        assert(preview.code === 0, preview.stderr || preview.stdout);
+        const previewPacket = JSON.parse(preview.stdout);
+        assert(previewPacket.nonAncestralRecovery?.patchSeriesMatch === -1, `${scenario.name} unexpectedly matched the prior patch series`);
         const result = runFixtureScript(fixture, [
           "refresh-pr-head", "resumed-task", "--apply", "--owner", "runner-a",
           "--reason", "The recovery must reject a non-equivalent rebase proof.",
@@ -11702,6 +11773,43 @@ try {
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+
+    const mergeInLiveWindow = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = prepareFixtureForPrHeadRefresh(mergeInLiveWindow);
+      runGit(mergeInLiveWindow.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      commitFile(mergeInLiveWindow.root, "rebased-a.txt", "a\n", "recorded delivery patch a");
+      const first = runGit(mergeInLiveWindow.root, ["rev-parse", "HEAD"]).stdout;
+      commitFile(mergeInLiveWindow.root, "rebased-b.txt", "b\n", "recorded delivery patch b");
+      const second = runGit(mergeInLiveWindow.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(mergeInLiveWindow.worktree, ["cherry-pick", first]);
+      runGit(mergeInLiveWindow.worktree, ["checkout", "-q", "-b", "replayed-side"]);
+      commitFile(mergeInLiveWindow.worktree, "merge-side.txt", "side\n", "side branch change");
+      runGit(mergeInLiveWindow.worktree, ["checkout", "-q", mergeInLiveWindow.branch]);
+      runGit(mergeInLiveWindow.worktree, ["cherry-pick", second]);
+      runGit(mergeInLiveWindow.worktree, ["merge", "--no-ff", "replayed-side", "-m", "merge within replay window"]);
+      runGit(mergeInLiveWindow.worktree, ["push", "-q", "origin", mergeInLiveWindow.branch]);
+      const liveHeadSha = runGit(mergeInLiveWindow.worktree, ["rev-parse", "HEAD"]).stdout;
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = second;
+      manifest.pr_delivery_evidence.headRevision = second;
+      manifest.pr_delivery_evidence.authorityDecision.evidenceRefs = [`head:${second}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(mergeInLiveWindow.root, "pr-state.json");
+      const prState = readJson(prStatePath);
+      prState.headRefOid = liveHeadSha;
+      writeFileSync(prStatePath, `${JSON.stringify(prState)}\n`);
+      const preview = runFixtureScript(mergeInLiveWindow, [
+        "refresh-pr-head", "resumed-task", "--owner", "runner-a",
+        "--reason", "A merge in the live replay window must block recovery.",
+        "--state-root", mergeInLiveWindow.stateRoot, "--summary-json",
+      ], { cwd: mergeInLiveWindow.worktree, env: mergeInLiveWindow.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.nonAncestralRecovery?.livePatchSeries?.error === "prior delivery lineage contains a merge commit", JSON.stringify(packet.nonAncestralRecovery));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(mergeInLiveWindow);
     }
 
     const fastForward = createCanonicalManagedPrFixture({ existingPr: true });

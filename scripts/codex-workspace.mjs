@@ -3756,6 +3756,12 @@ function shapeNonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
   const rebasedAuthorization = context.options?.rebasedRecoveryAuthorization;
   const hasPr723Authorization = typeof pr723Authorization === "string" && pr723Authorization.length > 0;
   const hasRebasedAuthorization = typeof rebasedAuthorization === "string" && rebasedAuthorization.length > 0;
+  // Resolve the literal exception before the generic route.  The #723 proof is
+  // intentionally source-governed; it must never be weakened by a generic
+  // patch-equivalence token, even when the latter is otherwise well formed.
+  const pr723Recovery = !context.fastForward
+    ? shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context)
+    : null;
 
   if (hasPr723Authorization && hasRebasedAuthorization) {
     return {
@@ -3767,10 +3773,18 @@ function shapeNonAncestralRefreshRecoveryEvidence(manifest, context = {}) {
       rawPayloadRetained: false,
     };
   }
+  if (pr723Recovery?.literalBindingMatches && hasRebasedAuthorization) {
+    return {
+      ...pr723Recovery,
+      status: "blocked",
+      blockers: [...(pr723Recovery.blockers || []), "Rebased-head recovery authorization is not permitted for the literal PR #723 recovery binding"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
   if (hasRebasedAuthorization) return shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context);
   if (hasPr723Authorization) return shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context);
   if (!context.fastForward) {
-    const pr723Recovery = shapePr723NonAncestralRefreshRecoveryEvidence(manifest, context);
     return pr723Recovery.literalBindingMatches
       ? pr723Recovery
       : shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context);
@@ -3803,8 +3817,12 @@ function shapeRebasedDeliveryHeadRecoveryEvidence(manifest, context = {}) {
   const priorPatchSeries = observedMergeBaseSha && context.priorHeadSha
     ? gitStablePatchSeries(observedMergeBaseSha, context.priorHeadSha, manifest.worktree_path, { requireNoMerges: true })
     : { digest: null, commits: [], patchIds: [], error: "cannot determine the prior rebased patch series" };
-  const livePatchSeries = observedMergeBaseSha && liveHeadSha
-    ? gitStablePatchSeries(observedMergeBaseSha, liveHeadSha, manifest.worktree_path)
+  // The live series is intentionally scoped to the current PR base.  A
+  // rebased base can already contain historical patches; matching against the
+  // older prior/live merge base would incorrectly authorize a head that only
+  // inherited those patches from its base and did not replay them in the PR.
+  const livePatchSeries = baseHeadSha && liveHeadSha
+    ? gitStablePatchSeries(baseHeadSha, liveHeadSha, manifest.worktree_path, { requireNoMerges: true })
     : { digest: null, commits: [], patchIds: [], error: "cannot determine the live rebased patch series" };
   const patchSeriesMatch = priorPatchSeries.error || livePatchSeries.error
     ? null
@@ -11042,7 +11060,10 @@ function gitMergeCommitHasNoResolutionDelta(commit, cwd) {
 function gitStablePatchId(commit, cwd) {
   const patch = git(["show", "--format=", "--binary", commit], { cwd, preserveStdout: true });
   if (patch.code !== 0) return { patchId: null, error: patch.stderr || patch.stdout || `cannot render patch for ${commit}` };
-  const result = spawnSync("git", ["patch-id", "--stable"], { cwd, input: patch.stdout, encoding: "utf8", stdio: "pipe", timeout: defaultVerificationTimeoutMs });
+  // `--verbatim` preserves whitespace.  Patch equivalence is authorization
+  // evidence, so a whitespace-only semantic change (for example Python/YAML
+  // indentation) must never collapse to the same identity.
+  const result = spawnSync("git", ["patch-id", "--verbatim"], { cwd, input: patch.stdout, encoding: "utf8", stdio: "pipe", timeout: defaultVerificationTimeoutMs });
   if (result.status !== 0) return { patchId: null, error: result.stderr || result.stdout || `cannot calculate stable patch ID for ${commit}` };
   const patchId = String(result.stdout || "").trim().split(/\s+/)[0] || "";
   return /^[a-f0-9]{40}$/i.test(patchId) ? { patchId: patchId.toLowerCase(), error: null } : { patchId: null, error: `stable patch ID for ${commit} is malformed` };
