@@ -17311,13 +17311,13 @@ try {
   });
 
   test("cleanup-superseded rechecks whole-index hidden flags after dirty preservation", () => {
-    for (const [name, option] of [["assume-unchanged", "--assume-unchanged"], ["skip-worktree", "--skip-worktree"]]) {
+    for (const [name, options] of [["assume-unchanged", ["--assume-unchanged"]], ["skip-worktree", ["--skip-worktree"]], ["combined assume-unchanged and skip-worktree", ["--assume-unchanged", "--skip-worktree"]]]) {
       const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
       const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
       try {
         writeFileSync(join(fixture.worktree, "carried.txt"), "snapshot before hidden cleanup edit\n");
         const preserved = runFixtureScript(fixture, preserve, { env: fixture.env }); assert(preserved.code === 0, preserved.stderr || preserved.stdout);
-        runGit(fixture.worktree, ["update-index", option, "--", "carried.txt"]);
+        for (const option of options) runGit(fixture.worktree, ["update-index", option, "--", "carried.txt"]);
         writeFileSync(join(fixture.worktree, "carried.txt"), `hidden ${name} post-preservation edit\n`);
         const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
         assert(cleanup.code !== 0 && (cleanup.stderr || cleanup.stdout).includes("assume-unchanged or skip-worktree"), `${name}: ${cleanup.stderr || cleanup.stdout}`);

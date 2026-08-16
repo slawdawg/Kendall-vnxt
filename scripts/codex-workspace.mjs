@@ -11601,7 +11601,11 @@ function dirtySupersededTrackedPaths(worktreePath) {
 function assertNoDirtySupersededHiddenIndexFlags(worktreePath) {
   const indexFlags = git(["ls-files", "-v", "-z"], { cwd: worktreePath, preserveStdout: true });
   if (indexFlags.code !== 0) throw new Error("dirty superseded preservation could not inspect whole-index flags");
-  const hidden = String(indexFlags.stdout || "").split("\0").filter(Boolean).filter((entry) => entry.length >= 3 && entry[1] === " " && (entry[0] === "h" || entry[0] === "S"));
+  // `git ls-files -v` renders assume-unchanged with a lowercase tag.  A path
+  // with both flags can therefore be rendered as lowercase `s`, not just
+  // standalone `h` or uppercase `S`.  Every hidden-state representation is
+  // unsafe: porcelain may omit the path while the destructive reset acts on it.
+  const hidden = String(indexFlags.stdout || "").split("\0").filter(Boolean).filter((entry) => entry.length >= 3 && entry[1] === " " && (entry[0] === "h" || entry[0] === "S" || entry[0] === "s"));
   if (hidden.length > 0) {
     throw new Error("dirty superseded preservation refuses any assume-unchanged or skip-worktree index entry, including paths hidden from porcelain");
   }

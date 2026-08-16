@@ -650,7 +650,8 @@ do not treat an operator authorization as a bypass.
    ordered carry-forward patch arguments. Its dry run rejects untracked or
    ignored files, renamed, copied, malformed, non-UTF-8, literal-pathspec
    metacharacters, active replacement refs, any whole-index hidden
-   assume-unchanged/skip-worktree entry,
+   assume-unchanged/skip-worktree entry (including the combined lowercase
+   `s` `git ls-files -v` representation),
    filtered, text/eol-normalized, ident-expanded, mode-hidden, encoded, or
    drifting paths; it
    forces dirty-submodule visibility and rejects every ambient Git index,
