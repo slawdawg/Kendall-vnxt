@@ -20,6 +20,7 @@ import { loadWorkflowCoreManagerControlPlane } from "./helpers/manager-control-p
 
 const portPath = new URL("../packages/workflow-core/src/ports/dispatcher-port.ts", import.meta.url);
 const runtimePortsPath = new URL("../packages/workflow-core/src/ports/runtime-ports.ts", import.meta.url);
+const orchestrationPortsPath = new URL("../packages/workflow-core/src/ports/orchestration-ports.ts", import.meta.url);
 const portsIndexPath = new URL("../packages/workflow-core/src/ports/index.ts", import.meta.url);
 const lifecycleContractPath = new URL("../packages/contracts/src/manager-control-plane/lifecycle.ts", import.meta.url);
 const summaryContractPath = new URL("../packages/contracts/src/manager-control-plane/summary.ts", import.meta.url);
@@ -76,6 +77,37 @@ test("runtime port interfaces cover queue, verification, session, and policy wit
   assert.match(source, /rawPayloadRetained: false/);
   for (const forbidden of ["BullMQ", "Redis", "Hatchet", "SQLite", "tmux", "GitHub", "child_process"]) {
     assert.doesNotMatch(source, new RegExp(forbidden, "i"), `runtime port leaks ${forbidden}`);
+  }
+});
+
+test("orchestration boundary ports preserve supervisor lifecycle truth and governed workspace outcomes", async () => {
+  assert.equal(existsSync(orchestrationPortsPath), true, "missing orchestration-ports.ts");
+
+  const portsIndex = await readFile(portsIndexPath, "utf8");
+  assert.match(portsIndex, /export \* from "\.\/orchestration-ports";/);
+
+  const source = await readFile(orchestrationPortsPath, "utf8");
+  for (const interfaceName of ["OrchestrationPortDescriptor", "LifecycleEvidencePort", "WorkspaceExecutionPort", "OrchestrationEnginePorts"]) {
+    assert.match(source, new RegExp(`interface ${interfaceName}`));
+  }
+  assert.match(source, /extends RuntimePortDescriptor/);
+  assert.match(source, /kind: "lifecycle_evidence" \| "workspace_execution"/);
+  const workspaceOutcomeSource = source.slice(source.indexOf("export interface WorkspaceExecutionOutcome {"));
+  assert.match(workspaceOutcomeSource, /supervisorOwnsLifecycleTruth: true/);
+  assert.match(workspaceOutcomeSource, /lifecycleTransitionApplied: false/);
+  assert.match(source, /workspaceMutationAuthorityGranted: false/);
+  assert.match(source, /deliveryAuthorityGranted: false/);
+  assert.match(source, /cleanupAuthorityGranted: false/);
+  for (const invariant of [
+    "toolNativeStateRetained: false",
+    "nativeQueueStateRetained: false",
+    "nativeWorkflowStateRetained: false",
+    "lifecycleTransitionAuthorityRetained: false",
+    "deliveryAuthorityRetained: false",
+    "cleanupAuthorityRetained: false",
+    "rawPayloadRetained: false"
+  ]) {
+    assert.equal(source.includes(invariant), true, `orchestration port must preserve ${invariant}`);
   }
 });
 

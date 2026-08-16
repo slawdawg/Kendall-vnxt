@@ -14,7 +14,13 @@ import type {
 } from "./dispatcher-port";
 
 export type RuntimePortMode = "backend_proof" | "local_proof" | "live_adapter" | "simulated_adapter";
-export type RuntimePortKind = "queue" | "verification" | "session" | "policy";
+export type RuntimePortKind =
+  | "queue"
+  | "verification"
+  | "session"
+  | "policy"
+  | "lifecycle_evidence"
+  | "workspace_execution";
 export type RuntimeProductTruthBoundary = "kendall_product_truth";
 export type RuntimeStateRetention = "kendall_manager_metadata_only" | "tool_native_metadata" | "external_runtime_state";
 
