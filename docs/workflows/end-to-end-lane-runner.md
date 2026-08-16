@@ -645,6 +645,20 @@ do not treat an operator authorization as a bypass.
    scoped tree entries, then repeats that proof under lock before a local-only
    apply. This path never deletes the remote source branch and never applies to
    a held workspace or a source lane with PR evidence.
+   A dirty closed-source PR lane must first use
+   `preserve-dirty-superseded <task>` with the same exact closed-source PR and
+   ordered carry-forward patch arguments. Its dry run rejects untracked or
+   ignored files, renamed, copied, malformed, or drifting paths. Its apply
+   re-reads the exact porcelain set under lock, stages only those named paths
+   in a temporary index, and repeats the porcelain/tree proof immediately
+   before reset. It publishes a
+   lane-qualified `refs/codex-preservation/<task>/dirty-superseded` snapshot
+   commit/tree, records exact dirty path/status/blob identities plus owner and
+   successor bindings in the manifest, and re-reads every binding before it
+   cleans the source worktree. It never removes a worktree, local branch, or
+   remote branch. `cleanup-superseded` re-validates any recorded snapshot ref
+   before local cleanup; a missing, changed, or unreadable preservation object
+   is a hard stop line.
    A clean lane with a retained, non-open PR can instead use the narrowly
    approved closed-PR form only for one exact task:
    `cleanup-integrated <task> --allow-closed-pr-integrated --approval "<recorded operator approval>" --base origin/<base> --summary-json`.
