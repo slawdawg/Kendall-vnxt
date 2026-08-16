@@ -11,7 +11,6 @@ import { DashboardE2EReportPanel } from "./dashboard-e2e-report-panel";
 import { DeliveryReadinessPolicyReportPanel } from "./delivery-readiness-policy-report-panel";
 import { DevelopmentRunwayReportPanel } from "./development-runway-report-panel";
 import { DocumentationAuthorityReportPanel } from "./documentation-authority-report-panel";
-import { EpicCompletionAuditReportPanel } from "./epic-completion-audit-report-panel";
 import { ExecutionReadinessReportPanel } from "./execution-readiness-report-panel";
 import { GitHubDeliveryAuthorityReportPanel } from "./github-delivery-authority-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "./github-workflow-policy-report-panel";
@@ -70,7 +69,6 @@ export function ControlsPageContent({ data, lanAuthEnabled = true }: { data: Con
     <Report id="remote-cleanup-sync-readiness-report"><RemoteCleanupSyncReadinessReportPanel report={data.remoteCleanupSyncReadinessReport} /></Report>
     <Report id="trusted-delivery-eligibility-report"><TrustedDeliveryEligibilityReportPanel report={data.trustedDeliveryEligibilityReport} /></Report>
     <Report id="trusted-autonomy-readiness-report"><TrustedAutonomyReadinessReportPanel report={data.trustedAutonomyReadinessReport} /></Report>
-    <Report id="epic-6-completion-audit-report"><EpicCompletionAuditReportPanel report={data.epic6CompletionAuditReport} /></Report>
     <Report id="epic-6-mvp-proof-trial-report"><MvpProofTrialReportPanel report={data.mvpProofTrialReport} /></Report>
     <Report id="codex-readiness-report"><CodexReadinessReportPanel report={data.codexReadinessReport} /></Report>
     <Report id="codex-implementation-approval-report"><CodexImplementationApprovalReportPanel report={data.codexImplementationApprovalReport} /></Report>

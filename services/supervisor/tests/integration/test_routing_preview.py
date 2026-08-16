@@ -2881,7 +2881,6 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/local-cleanup-readiness-report",
         "GET /supervisor/remote-cleanup-sync-readiness-report",
         "GET /supervisor/trusted-autonomy-readiness-report",
-        "GET /supervisor/epic-6-completion-audit-report",
         "GET /supervisor/epic-6-mvp-proof-trial-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/legacy-planning-artifact-inventory",
@@ -6374,7 +6373,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/local-cleanup-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/remote-cleanup-sync-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/trusted-autonomy-readiness-report" in export["boundary"]["relatedSupervisorReports"]
-    assert "GET /supervisor/epic-6-completion-audit-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/epic-6-completion-audit-report" not in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
@@ -7330,61 +7329,6 @@ def test_trusted_autonomy_readiness_report_blocks_autonomous_execution(tmp_path,
     assert any("Codex or Claude launch" in item for item in report["blockedWork"])
     assert any("authority report says the action is blocked" in condition for condition in report["stopConditions"])
     assert any("one narrow workflow class" in action for action in report["nextSafeActions"])
-
-
-def test_epic_6_completion_audit_report_shows_mvp_complete_without_mutation(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "epic-6-completion-audit-report.db").as_posix()
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
-
-    _reset_supervisor_modules()
-
-    from supervisor.api.main import app
-
-    with TestClient(app) as client:
-        work_item_id = _create_routing_work_item(client)
-        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
-        response = client.get("/supervisor/epic-6-completion-audit-report")
-        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
-
-    assert response.status_code == 200
-    assert before_events == after_events
-
-    report = response.json()["data"]
-    assert report["reportId"] == "epic-6-completion-audit-report-v1"
-    assert report["readOnly"] is True
-    assert report["epicComplete"] is True
-    assert report["remoteDeliveryApproved"] is True
-    assert report["providerExecutionApproved"] is False
-    assert report["cleanupApproved"] is True
-    assert report["overallStatus"] == "epic_6_mvp_complete"
-    assert {item["itemId"] for item in report["completedItems"]} == {
-        "local-readiness-stack",
-        "delivery-packaging-plan",
-        "local-cleanup-closeout",
-        "dev-console-integration",
-        "trusted-delivery-eligibility",
-        "story-3-66-selection",
-        "story-3-66-done-proof",
-    }
-    assert {item["itemId"] for item in report["remainingItems"]} == {
-        "provider-and-review-execution",
-        "post-mvp-autonomy",
-    }
-    assert "Treat Epic 6 MVP as complete" in report["recommendedApproval"]
-    assert any("Merging, closing, or deleting" in operation for operation in report["blockedOperations"])
-    assert any("PR #97" in evidence for evidence in report["requiredEvidence"])
-    assert any("worktree is dirty" in condition for condition in report["stopConditions"])
-    assert any(
-        "docs/workflows/implementation-evidence-boundary.md" in evidence
-        for item in report["completedItems"]
-        for evidence in item["evidence"]
-    )
-    assert any(
-        "a750601af1d0144507f6cc05b3ca1ada676d2d07" in evidence
-        for item in report["completedItems"]
-        for evidence in item["evidence"]
-    )
 
 
 def test_epic_6_mvp_proof_trial_report_shows_done_evidence_without_mutation(tmp_path, monkeypatch) -> None:

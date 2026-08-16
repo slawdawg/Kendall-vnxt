@@ -2210,39 +2210,6 @@ export interface TrustedAutonomyReadinessReportApiEnvelope {
   meta?: Record<string, string | number | boolean | null> | null;
 }
 
-export interface EpicCompletionAuditItemView {
-  itemId: string;
-  label: string;
-  status: string;
-  summary: string;
-  evidence: string[];
-}
-
-export interface EpicCompletionAuditReportView {
-  reportId: string;
-  generatedAt: string;
-  summary: string;
-  epicId: string;
-  overallStatus: string;
-  completedItems: EpicCompletionAuditItemView[];
-  remainingItems: EpicCompletionAuditItemView[];
-  blockedOperations: string[];
-  recommendedApproval: string;
-  requiredEvidence: string[];
-  stopConditions: string[];
-  nextSafeActions: string[];
-  readOnly: true;
-  epicComplete: true;
-  remoteDeliveryApproved: true;
-  providerExecutionApproved: false;
-  cleanupApproved: true;
-}
-
-export interface EpicCompletionAuditReportApiEnvelope {
-  data: EpicCompletionAuditReportView;
-  meta?: Record<string, string | number | boolean | null> | null;
-}
-
 export interface MvpProofTrialStepView {
   stepId: string;
   label: string;
