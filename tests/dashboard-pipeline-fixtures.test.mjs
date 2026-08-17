@@ -1374,7 +1374,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   });
   const clarityHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], projection: clarityProjection, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: clarityProjection, projectionError: null, selectedPacket: null,
   }));
   assert.match(clarityHtml, /Manager Execution Lane/);
   assert.match(clarityHtml, /Lane Clarity/);
@@ -1385,7 +1385,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(clarityHtml, /Next safe gate/);
   const pivotHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, posture: { state: "pivot_required", reason: "Review the recorded drift decision.", nextSafeAction: "review_scope_pivot", decisionRef: "decision:pivot", qualification: "operator_drift_concern" } } }, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, posture: { state: "pivot_required", reason: "Review the recorded drift decision.", nextSafeAction: "review_scope_pivot", decisionRef: "decision:pivot", qualification: "operator_drift_concern" } } }, projectionError: null, selectedPacket: null,
   }));
   assert.match(pivotHtml, /Pivot required/);
   assert.match(pivotHtml, /Review the recorded drift decision\./);
@@ -1393,20 +1393,20 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(pivotHtml, /decision:pivot; operator_drift_concern/);
   const notAssessedHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, criteria: [], posture: { state: "not_assessed", reason: "Source criterion evidence is unavailable.", nextSafeAction: "record_current_lane_evidence", decisionRef: null, qualification: null } } }, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, criteria: [], posture: { state: "not_assessed", reason: "Source criterion evidence is unavailable.", nextSafeAction: "record_current_lane_evidence", decisionRef: null, qualification: null } } }, projectionError: null, selectedPacket: null,
   }));
   assert.match(notAssessedHtml, /Not assessed/);
   assert.match(notAssessedHtml, /Source criterion evidence is unavailable\./);
   const absentHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], projection: { ...clarityProjection, activeManagerLaneClarity: null }, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: { ...clarityProjection, activeManagerLaneClarity: null }, projectionError: null, selectedPacket: null,
   }));
   assert.doesNotMatch(absentHtml, /Lane Clarity/);
   assert.match(absentHtml, /Coordination Health/);
   assert.match(absentHtml, /supervisor receipt unavailable/);
   const coordinationHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], projection: {
+    packets: [], operationalProjection: {
       ...clarityProjection,
       coordinationHealth: {
         schemaVersion: "manager-coordination-health/v0",
@@ -1848,7 +1848,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(layoutSource, /data-scroll-behavior="smooth"/);
   assert.match(routeSource, /PipelineCockpit/);
   assert.match(routeSource, /loadPipelineCockpitPackets/);
-  assert.match(routeSource, /projection=\{projection\}/);
+  assert.match(routeSource, /operationalProjection=\{operationalProjection\}/);
   assert.match(routeSource, /projectionError=\{projectionError\}/);
   assert.doesNotMatch(routeSource, /selectedManagerExecutionLaneSummary|manager-execution-lane-summary|managerExecutionLane=/);
   assert.match(demoRouteSource, /selectedManagerExecutionLaneSummary/);

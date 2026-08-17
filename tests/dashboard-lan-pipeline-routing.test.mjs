@@ -21,7 +21,7 @@ test("LAN pipeline route avoids server-side supervisor reads", async () => {
   assert.match(await readFile(pipelineClient, "utf8"), /loadPipelineCockpitPackets/);
 });
 
-test("normal and LAN cockpit callers carry client-safe canonical packets to the named V0 compatibility boundary", async () => {
+test("normal and LAN cockpit callers carry canonical packets and the dashboard-owned operational projection", async () => {
   const [normalSource, lanSource, detailSource, loaderSource, cockpitSource] = await Promise.all([
     readFile(route, "utf8"),
     readFile(pipelineClient, "utf8"),
@@ -33,7 +33,8 @@ test("normal and LAN cockpit callers carry client-safe canonical packets to the 
   assert.match(lanSource, /canonicalPackets=\{result\.canonicalPackets\}/);
   assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketClientV1\[\]/);
   assert.match(loaderSource, /canonicalPackets: canonicalPackets\.map\(projectDashboardCanonicalPacketForClient\)/);
-  assert.match(loaderSource, /function clientSafePipelineProjection/);
+  assert.match(loaderSource, /function clientSafeOperationalProjection/);
+  assert.match(loaderSource, /operationalProjection: DashboardCanonicalOperationalProjectionV1 \| null/);
   assert.match(loaderSource, /canonicalContract: null/);
   assert.match(loaderSource, /productModeMapping: null/);
   assert.match(loaderSource, /canonicalPacket: DashboardCanonicalWorkPacketV1 \| null/);
@@ -43,6 +44,7 @@ test("normal and LAN cockpit callers carry client-safe canonical packets to the 
   assert.doesNotMatch(loaderSource, /evidenceRefs: lifecycle\.history/);
   assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
   assert.match(cockpitSource, /projectDashboardCanonicalPresentationsToCockpitPackets/);
+  assert.match(cockpitSource, /operationalProjection\?: DashboardCanonicalOperationalProjectionV1 \| null/);
   assert.match(detailSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
   assert.match(detailSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);
 });
