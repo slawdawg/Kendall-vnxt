@@ -21,6 +21,27 @@ test("LAN pipeline route avoids server-side supervisor reads", async () => {
   assert.match(await readFile(pipelineClient, "utf8"), /loadPipelineCockpitPackets/);
 });
 
+test("normal and LAN cockpit callers carry canonical packets to the named V0 compatibility boundary", async () => {
+  const [normalSource, lanSource, detailSource, loaderSource, cockpitSource] = await Promise.all([
+    readFile(route, "utf8"),
+    readFile(pipelineClient, "utf8"),
+    readFile(detailRoute, "utf8"),
+    readFile(packetLoader, "utf8"),
+    readFile(cockpit, "utf8"),
+  ]);
+  assert.match(normalSource, /canonicalPackets=\{canonicalPackets\}/);
+  assert.match(lanSource, /canonicalPackets=\{result\.canonicalPackets\}/);
+  assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketV1\[\]/);
+  assert.match(loaderSource, /canonicalPacket: DashboardCanonicalWorkPacketV1 \| null/);
+  assert.doesNotMatch(loaderSource, /packets: PipelineRuntimePacket\[\]/);
+  assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
+  assert.doesNotMatch(loaderSource, /compatibilityProjection/);
+  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.compatibilityProjection\)/);
+  assert.match(cockpitSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(detailSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
+  assert.match(detailSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);
+});
+
 test("LAN pipeline browser reads stay out of the Node UDS module and use the authenticated supervisor proxy", async () => {
   const [client, loader, runtimeSource, transportSource, udsSource, proxySource, cockpitSource] = await Promise.all([
     readFile(pipelineClient, "utf8"),

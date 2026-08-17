@@ -1,8 +1,12 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { LocalDogfoodAttestationPanel } from "./local-dogfood-attestation-panel";
-import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
+import {
+  projectSupervisorWorkPacketsToCockpitPackets,
+  type PipelineDashboardPacket,
+} from "../../lib/pipeline-supervisor-projector";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
+import type { DashboardCanonicalWorkPacketV1 } from "../../lib/pipeline-supervisor-runtime";
 import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
@@ -23,18 +27,32 @@ type SourceBoundaryDeclarationV0 = {
 };
 
 export function PacketDetailPage({
-  packet,
+  canonicalPacket = null,
+  packet: fixturePacket = null,
   snapshot = null,
   sourceBoundaries = [],
   sourceState,
   workGraph = null,
 }: {
-  packet: PipelineFixturePacket;
+  /** Normal runtime detail enters as canonical DTO; this component owns the V0 adapter. */
+  canonicalPacket?: DashboardCanonicalWorkPacketV1 | null;
+  /** Explicit demo/fixture compatibility input only. */
+  packet?: PipelineFixturePacket | null;
   snapshot?: PipelineGoldenPathSnapshot | null;
   sourceBoundaries?: SourceBoundaryDeclarationV0[];
   sourceState?: PipelineRuntimeSourceState;
   workGraph?: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | null;
 }) {
+  const compatibilityProjection = canonicalPacket
+    ? projectSupervisorWorkPacketsToCockpitPackets([canonicalPacket.compatibilityProjection])
+    : null;
+  const compatibilityPacket = compatibilityProjection?.kind === "runtime"
+    ? compatibilityProjection.packets[0] ?? null
+    : fixturePacket;
+  if (!compatibilityPacket) {
+    throw new Error("Canonical packet detail compatibility projection failed validation.");
+  }
+  const packet = compatibilityPacket;
   const isDemoPacket = packet.sourceKind === "demo-fixture" || (
     packet.sourceKind === undefined && packet.fixtureKind !== undefined
   );
