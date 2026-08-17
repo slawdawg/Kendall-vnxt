@@ -1138,8 +1138,44 @@ try {
     const match = source.match(/function run\(commandName[\s\S]*?function samePath/);
     assert(match, "run source not found");
     assert(source.includes("resolveWorkspaceCommand"), "codex-workspace must import shared command resolver");
-    assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments);"), "run must resolve workspace commands");
-    assert(match[0].includes("env: resolved.env ?? process.env"), "run must pass resolved command environment");
+    assert(match[0].includes("const commandEnvironment = options.env ? { ...process.env, ...options.env } : process.env;"), "run must resolve against the caller environment");
+    assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments, { env: commandEnvironment });"), "run must resolve workspace commands against the caller environment");
+    assert(match[0].includes("env: resolved.env ?? commandEnvironment"), "run must pass the resolver-selected command environment");
+  });
+
+  test("run passes caller Git index state without restoring a stripped non-pnpm npm_execpath", () => {
+    const probeRoot = mkdtempSync(join(tmpdir(), "codex-run-env-probe-"));
+    const probeScripts = join(probeRoot, "scripts");
+    const probeBin = join(probeRoot, "bin");
+    const probeScript = join(probeScripts, "codex-workspace.mjs");
+    const marker = "\ntry {\n  switch (command) {";
+    try {
+      mkdirSync(probeScripts, { recursive: true }); mkdirSync(probeBin, { recursive: true });
+      symlinkSync(join(rootDir, "scripts", "lib"), join(probeScripts, "lib"), "dir");
+      symlinkSync(join(rootDir, "scripts", "anti-churn-guidance-hook.mjs"), join(probeScripts, "anti-churn-guidance-hook.mjs"));
+      const source = readFileSync(scriptPath, "utf8");
+      assert(source.includes(marker), "run environment probe could not find command dispatch boundary");
+      const injected = [
+        "",
+        'if (process.env.CODEX_WORKSPACE_TEST_RUN_ENV_PROBE === "1") {',
+        '  const result = run("pnpm", ["--probe"], { env: { GIT_INDEX_FILE: "/tmp/codex-preservation-index" } });',
+        '  process.stdout.write(result.stdout);',
+        '  process.exit(result.code);',
+        "}",
+      ].join("\n");
+      writeFileSync(probeScript, source.replace(marker, `${injected}${marker}`));
+      const fakePnpm = join(probeBin, "pnpm");
+      writeFileSync(fakePnpm, "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ index: process.env.GIT_INDEX_FILE || null, npm: process.env.npm_execpath || null }));\n");
+      chmodSync(fakePnpm, 0o755);
+      const result = spawnSync(process.execPath, [probeScript, "probe"], {
+        cwd: probeRoot,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${probeBin}:${process.env.PATH || ""}`, npm_execpath: "/tmp/mise/shims/pnpm", CODEX_WORKSPACE_TEST_RUN_ENV_PROBE: "1" },
+        stdio: "pipe",
+      });
+      assert(result.status === 0, result.stderr || result.stdout);
+      assert(JSON.stringify(JSON.parse(result.stdout)) === JSON.stringify({ index: "/tmp/codex-preservation-index", npm: null }), result.stdout);
+    } finally { rmSync(probeRoot, { recursive: true, force: true }); }
   });
 
   test("workspace state uses shared resolver", () => {
@@ -1825,6 +1861,55 @@ try {
         assert(branchExists(fixture.root, branch), `${branch} was deleted during summary-json`);
       }
     } finally {
+      cleanupBranchCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-branches retains a branch with pending dirty snapshot intent", () => {
+    const fixture = createBranchCleanupFixture();
+    const stateRoot = `${fixture.root}-state`;
+    const manifestPath = join(stateRoot, "tasks", "pending-dirty.json");
+    try {
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, `${JSON.stringify({
+        task_id: "pending-dirty",
+        branch: "codex/merged",
+        worktree_path: join(fixture.root, "pending-dirty"),
+        base_branch: "main",
+        status: "closed",
+        dirty_superseded_snapshot_intent: {
+          schemaVersion: 1,
+          preparedAt: "2026-08-16T00:00:00Z",
+          owner: "runner-a",
+          snapshotRef: "refs/codex-preservation/pending-dirty/dirty-superseded",
+        },
+      }, null, 2)}\n`);
+      const result = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/main", "--state-root", stateRoot, "--apply"]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("SKIP codex/merged: branch has dirty superseded preservation or pending snapshot evidence"), result.stdout || result.stderr);
+      assert(branchExists(fixture.root, "codex/merged"), "cleanup-branches deleted pending-intent branch");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "cleanup-branches erased pending snapshot intent");
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+      cleanupBranchCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-branches fails closed on an invalid manifest inventory before deletion", () => {
+    const fixture = createBranchCleanupFixture();
+    const stateRoot = `${fixture.root}-invalid-state`;
+    const manifestPath = join(stateRoot, "tasks", "invalid-pending.json");
+    try {
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, `${JSON.stringify({
+        task_id: "invalid-pending", branch: "codex/merged", worktree_path: join(fixture.root, "missing"),
+        status: "active", dirty_superseded_snapshot_intent: { schemaVersion: 1 },
+      }, null, 2)}\n`);
+      const result = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/main", "--state-root", stateRoot, "--apply"]);
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("cannot verify manifest inventory"), result.stderr || result.stdout);
+      assert(branchExists(fixture.root, "codex/merged"), "cleanup-branches deleted a branch despite invalid retained inventory");
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
       cleanupBranchCleanupFixture(fixture);
     }
   });
@@ -11996,15 +12081,22 @@ try {
     const fixture = createCanonicalManagedPrFixture({ existingPr: true });
     try {
       const manifestPath = prepareFixtureForPrHeadRefresh(fixture);
-      runGit(fixture.root, ["checkout", "-q", "-b", "recorded-delivery", "main"]);
+      // Build the former delivery history in the same worktree that later
+      // verifies it.  A separate checkout can make the intentionally
+      // unreachable source lineage dependent on test-runner ref discovery;
+      // retain it explicitly so this test reaches its actual aggregate-count
+      // guard rather than failing on fixture object visibility.
       for (let index = 0; index <= 128; index += 1) {
-        runGit(fixture.root, ["commit", "--allow-empty", "-q", "-m", `bounded recovery commit ${index}`]);
+        runGit(fixture.worktree, ["commit", "--allow-empty", "-q", "-m", `bounded recovery commit ${index}`]);
       }
-      const priorHeadSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      const priorHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const retentionRef = "refs/codex-test/refresh-oversized-recovery";
+      runGit(fixture.worktree, ["update-ref", retentionRef, priorHeadSha]);
       runGit(fixture.worktree, ["reset", "--hard", "main"]);
       commitFile(fixture.worktree, "unrelated-live.txt", "unrelated\n", "unrelated live work");
       runGit(fixture.worktree, ["push", "-q", "--force", "origin", fixture.branch]);
       const liveHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["cat-file", "-e", `${priorHeadSha}^{commit}`]);
 
       const manifest = readJson(manifestPath);
       manifest.pr_delivery_head_sha = priorHeadSha;
@@ -14167,6 +14259,69 @@ try {
     }
   });
 
+  test("cleanup-closed-remote retains pending dirty snapshot intent and remote branch", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed";
+      manifest.closed_at = "2026-08-16T00:00:00.000Z";
+      manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      manifest.dirty_superseded_snapshot_intent = {
+        schemaVersion: 1,
+        preparedAt: "2026-08-16T00:00:00.000Z",
+        owner: "runner-a",
+        snapshotRef: "refs/codex-preservation/cleanup-task/dirty-superseded",
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      installFixtureCanonicalPrRepoAssertion(fixture);
+      installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, ["https://github.com/slawdawg/Kendall-vnxt.git"]);
+      const result = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--summary-json", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false && packet.blockers.some((blocker) => blocker.includes("pending dirty superseded snapshot intent")), result.stdout);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "closed-remote cleanup deleted a branch with pending snapshot intent");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "closed-remote cleanup erased pending snapshot intent");
+    } finally { cleanupMergedCleanupFixture(fixture); }
+  });
+
+  test("cleanup-closed-remote retains completed dirty preservation evidence and remote branch", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.status = "closed";
+      manifest.closed_at = "2026-08-16T00:00:00.000Z";
+      manifest.cleanup_authority_decision = closedRemoteCleanupFixtureAuthority(manifest);
+      manifest.dirty_superseded_preservation = {
+        schemaVersion: 1,
+        recordedAt: "2026-08-16T00:00:00.000Z",
+        owner: "runner-a",
+        snapshotRef: "refs/codex-preservation/cleanup-task/dirty-superseded",
+        verification: { status: "matched_before_reset" },
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      markFixtureAssignmentClosed(fixture);
+      runGit(fixture.root, ["worktree", "remove", "--force", fixture.worktree]);
+      runGit(fixture.root, ["branch", "-D", fixture.branch]);
+      installFixtureCanonicalPrRepoAssertion(fixture);
+      installFixtureOriginIdentityProxy(fixture.root, fixture.fakeBin, ["https://github.com/slawdawg/Kendall-vnxt.git"]);
+      const result = runFixtureScript(fixture, [
+        "cleanup-closed-remote", "cleanup-task", "--summary-json", "--owner", "runner-a", "--remote-delete-authority", closedRemoteCleanupFixtureBinding(manifest), "--state-root", fixture.stateRoot,
+      ], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false && packet.blockers.some((blocker) => blocker.includes("completed dirty superseded preservation evidence")), result.stdout);
+      assert(remoteBranchExists(fixture.root, fixture.branch), "closed-remote cleanup deleted a branch with completed preservation evidence");
+      assert(readJson(manifestPath).dirty_superseded_preservation, "closed-remote cleanup erased completed preservation evidence");
+    } finally { cleanupMergedCleanupFixture(fixture); }
+  });
+
   test("cleanup-closed-remote fails closed for owner, audit, authority, and identity blockers", () => {
     const scenarios = [
       {
@@ -15475,6 +15630,24 @@ try {
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
+  });
+
+  test("cleanup-merged rechecks a dirty preservation that appears before its manifest lock", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const racedManifest = readJson(manifestPath);
+      racedManifest.dirty_superseded_preservation = { schemaVersion: 1, snapshotRef: "refs/codex-preservation/cleanup-task/dirty-superseded" };
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'status'", [], {
+        writeAfterSuccessPath: manifestPath,
+        writeAfterSuccessContents: `${JSON.stringify(racedManifest, null, 2)}\n`,
+      });
+      const result = runFixtureScript(fixture, ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("only cleanup-superseded"), result.stderr || result.stdout);
+      assert(existsSync(fixture.worktree), "locked preservation recheck removed the worktree");
+      assert(branchExists(fixture.root, fixture.branch), "locked preservation recheck deleted the local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "locked preservation recheck deleted the remote branch");
+    } finally { cleanupMergedCleanupFixture(fixture); }
   });
 
   test("cleanup-merged summary-json reports cleanup readiness without mutation", () => {
@@ -17213,6 +17386,1068 @@ try {
     }
   });
 
+  test("preserve-dirty-superseded snapshots, re-reads, and cleans only a proved closed-PR source", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = [
+      "preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead,
+      "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead,
+      "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit,
+      "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot,
+    ];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "dirty but preserved\n");
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).ready === true, preview.stdout || preview.stderr);
+      const applied = runFixtureScript(fixture, [...args, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const evidence = manifest.dirty_superseded_preservation;
+      assert(evidence?.snapshotCommit && evidence?.snapshotRef && evidence.paths?.length === 1, JSON.stringify(manifest));
+      assert(runGit(fixture.worktree, ["rev-parse", "--verify", `${evidence.snapshotRef}^{commit}`]).stdout === evidence.snapshotCommit, "snapshot ref did not re-read");
+      assert(!runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "preservation left source worktree dirty");
+      assert(branchExists(fixture.root, fixture.branch), "preservation deleted local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "preservation deleted remote branch");
+      runGit(fixture.worktree, ["update-ref", "-d", evidence.snapshotRef, evidence.snapshotCommit]);
+      const blocked = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(blocked.code === 0 && JSON.parse(blocked.stdout).counts.blocked === 1, blocked.stderr || blocked.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded rejects a symbolic preservation ref even when its target commit matches", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "direct-ref cleanup regression\n");
+      const preserved = runFixtureScript(fixture, [...args, "--apply", "--approval", "operator approved direct ref regression", "--reason", "cleanup requires a direct durable snapshot ref"], { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const evidence = readJson(manifestPath).dirty_superseded_preservation;
+      runGit(fixture.worktree, ["update-ref", "refs/heads/snapshot-target", evidence.snapshotCommit]);
+      runGit(fixture.worktree, ["symbolic-ref", evidence.snapshotRef, "refs/heads/snapshot-target"]);
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", args[1], ...args.slice(2), "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.blocked === 1, cleanup.stderr || cleanup.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "symbolic preservation ref authorized cleanup");
+      assert(readJson(manifestPath).dirty_superseded_preservation, "symbolic preservation ref erased evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects untracked paths without mutation", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "untracked.bin"), Buffer.from([0, 1, 2, 255]));
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === false, result.stderr || result.stdout);
+      assert(existsSync(join(fixture.worktree, "untracked.bin")), "untracked path was mutated");
+      assert(branchExists(fixture.root, fixture.branch), "untracked rejection deleted local branch");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects nonempty repository object alternates without evidence or reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "alternate-backed dirty bytes\n");
+      const alternatesPath = join(fixture.root, ".git", "objects", "info", "alternates");
+      mkdirSync(dirname(alternatesPath), { recursive: true });
+      writeFileSync(alternatesPath, `${join(fixture.root, "untrusted-object-store")}\n`);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.ready === false && summary.reason.includes("objects/info/alternates"), result.stderr || result.stdout);
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("alternate-backed"), "alternates rejection reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "alternates rejection persisted snapshot evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects repository and ambient graft rewrites without evidence or reset", () => {
+    const cases = [
+      {
+        name: "repository graft",
+        prepare: (fixture) => {
+          const graftPath = join(fixture.root, ".git", "info", "grafts");
+          mkdirSync(dirname(graftPath), { recursive: true });
+          writeFileSync(graftPath, `${fixture.sourceHead} ${fixture.sourceBaseHead}\n`);
+        },
+      },
+      { name: "ambient graft", env: { GIT_GRAFT_FILE: "/tmp/unsafe-graft-file" }, prepare: () => {} },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), `${scenario.name} dirty bytes\n`);
+        scenario.prepare(fixture);
+        const result = runFixtureScript(fixture, args, { env: scenario.env ? { ...fixture.env, ...scenario.env } : fixture.env });
+        assert(result.code !== 0 && /graft/i.test(result.stderr || result.stdout), `${scenario.name}: ${result.stderr || result.stdout}`);
+        assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes(scenario.name), `${scenario.name} reset dirty source`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+        assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, `${scenario.name} persisted preservation evidence`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded rejects shallow repository and ambient shallow-history state before proof", () => {
+    const cases = [
+      {
+        name: "repository shallow history",
+        prepare: (fixture) => {
+          const shallowPath = runGit(fixture.worktree, ["rev-parse", "--git-path", "shallow"]).stdout;
+          writeFileSync(shallowPath, `${fixture.sourceHead}\n`);
+        },
+        expected: "shallow repository history",
+      },
+      { name: "ambient shallow history", env: { GIT_SHALLOW_FILE: "/tmp/unsafe-shallow-file" }, prepare: () => {}, expected: "GIT_SHALLOW_FILE" },
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), `${scenario.name} dirty bytes\n`);
+        scenario.prepare(fixture);
+        const result = runFixtureScript(fixture, args, { env: scenario.env ? { ...fixture.env, ...scenario.env } : fixture.env });
+        assert(result.code !== 0 && (result.stderr || result.stdout).includes(scenario.expected), `${scenario.name}: ${result.stderr || result.stdout}`);
+        assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes(scenario.name), `${scenario.name} reset dirty source`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+        assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, `${scenario.name} persisted preservation evidence`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded raw snapshot retains CRLF bytes under baseline text attributes", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved raw byte preservation", "--reason", "baseline text attributes must not normalize snapshot bytes"];
+    try {
+      const attributes = join(fixture.root, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      writeFileSync(attributes, "carried.txt text=auto eol=lf\n");
+      const raw = Buffer.from("raw\r\nbytes\r\n", "utf8");
+      writeFileSync(join(fixture.worktree, "carried.txt"), raw);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation;
+      const captured = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(captured.status === 0 && Buffer.from(captured.stdout).equals(raw), "text attributes normalized the preserved raw bytes");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects raw CRLF bytes hidden by baseline text attributes", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved raw baseline reproof", "--reason", "hidden CRLF bytes must block destructive preservation"];
+    try {
+      const attributes = join(fixture.root, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      writeFileSync(attributes, "base.txt text=auto eol=lf\n");
+      writeFileSync(join(fixture.worktree, "base.txt"), Buffer.from("base\r\n", "utf8"));
+      runGit(fixture.worktree, ["add", "--", "base.txt"]);
+      writeFileSync(join(fixture.worktree, "carried.txt"), "visible dirty snapshot\n");
+      const visible = runGit(fixture.worktree, ["status", "--porcelain"]).stdout;
+      assert(visible.includes("carried.txt") && !visible.includes("base.txt"), visible);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("raw tracked bytes hidden from porcelain: base.txt"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout.includes("carried.txt"), "hidden raw CRLF change permitted reset");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "hidden raw CRLF change wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded batch-hashes every raw file hidden by porcelain", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, additionalBaseFiles: [{ path: "other.txt", contents: "other\n" }] });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const attributes = join(fixture.root, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      writeFileSync(attributes, "base.txt text=auto eol=lf\nother.txt text=auto eol=lf\n");
+      writeFileSync(join(fixture.worktree, "base.txt"), Buffer.from("base\r\n", "utf8"));
+      writeFileSync(join(fixture.worktree, "other.txt"), Buffer.from("other\r\n", "utf8"));
+      runGit(fixture.worktree, ["add", "--", "base.txt", "other.txt"]);
+      writeFileSync(join(fixture.worktree, "carried.txt"), "visible dirty snapshot\n");
+      const visible = runGit(fixture.worktree, ["status", "--porcelain"]).stdout;
+      assert(visible.includes("carried.txt") && !visible.includes("base.txt") && !visible.includes("other.txt"), visible);
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'hash-object' && args.includes('--stdin-paths')", []);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("raw tracked bytes hidden from porcelain"), result.stderr || result.stdout);
+      const count = Number(readFileSync(join(fixture.root, "post-success-hook-count"), "utf8"));
+      assert(count === 1, `expected one batched raw hash invocation, got ${count}`);
+      const current = readJson(manifestPath);
+      assert(!current.dirty_superseded_snapshot_intent && !current.dirty_superseded_preservation, "batch rejection wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded safely falls back for a clean tracked newline pathname", () => {
+    const newlinePath = "clean\ntracked.txt";
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, additionalBaseFiles: [{ path: newlinePath, contents: "clean newline source\n" }] });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "visible dirty snapshot\n");
+      installFixtureGitPostSuccessHook(fixture, `args[0] === 'hash-object' && args.includes('--') && args.includes(${JSON.stringify(newlinePath)})`, []);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === true, result.stderr || result.stdout);
+      assert(Number(readFileSync(join(fixture.root, "post-success-hook-count"), "utf8")) === 1, "newline path did not use the literal individual hash fallback");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "newline-path preview wrote preservation evidence");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout.includes("carried.txt"), "newline-path preview reset dirty source");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded safely hashes a clean tracked symlink through the raw-link fallback", () => {
+    const linkPath = "clean-link";
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, additionalBaseFiles: [{ path: linkPath, symlinkTarget: "raw-link-target" }] });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "visible dirty snapshot\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'hash-object' && args.includes('--stdin') && args.includes('--no-filters')", []);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === true, result.stderr || result.stdout);
+      assert(Number(readFileSync(join(fixture.root, "post-success-hook-count"), "utf8")) === 1, "clean symlink did not use the raw link-text hash fallback");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "symlink preview wrote preservation evidence");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout.includes("carried.txt"), "symlink preview reset dirty source");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded raw snapshot stores dirty symlink link text", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved symlink byte preservation", "--reason", "snapshot must preserve the dirty symlink target text exactly"];
+    try {
+      const path = join(fixture.worktree, "carried.txt");
+      rmSync(path);
+      symlinkSync("../nonexistent-target-with-raw-text", path);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation;
+      const entry = evidence.paths.find((candidate) => candidate.path === "carried.txt");
+      assert(entry?.mode === "120000", JSON.stringify(entry));
+      const captured = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(captured.status === 0 && Buffer.from(captured.stdout).equals(Buffer.from("../nonexistent-target-with-raw-text", "utf8")), "snapshot followed the dirty symlink target instead of preserving link text");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects emulated symlink checkouts before snapshotting", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved symlink mode rejection", "--reason", "an emulated symlink cannot prove its snapshot mode"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "emulated symlink bytes\n");
+      runGit(fixture.worktree, ["config", "core.symlinks", "false"]);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("core.symlinks=false"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "emulated symlink configuration reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "emulated symlink configuration wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects writeout-only fsync before snapshot and reset", () => {
+    const argsFor = (fixture) => ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable fsync enforcement", "--reason", "writeout-only cannot authorize a destructive reset"];
+    const initial = createSupersededCleanupFixture({ closedSourcePr: true });
+    const late = createSupersededCleanupFixture({ closedSourcePr: true });
+    try {
+      writeFileSync(join(initial.worktree, "carried.txt"), "initial fsync rejection\n");
+      runGit(initial.worktree, ["config", "core.fsyncMethod", "writeout-only"]);
+      const initialResult = runFixtureScript(initial, argsFor(initial), { env: initial.env });
+      assert(initialResult.code !== 0 && (initialResult.stderr || initialResult.stdout).includes("core.fsyncMethod=writeout-only"), initialResult.stderr || initialResult.stdout);
+      assert(runGit(initial.worktree, ["status", "--porcelain"]).stdout, "writeout-only snapshot rejection reset dirty source");
+      assert(!readJson(join(initial.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_snapshot_intent, "writeout-only snapshot rejection wrote intent");
+
+      writeFileSync(join(late.worktree, "carried.txt"), "late fsync rejection\n");
+      installFixtureGitPostSuccessHook(late, "args.includes('write-tree')", ["config", "core.fsyncMethod", "writeout-only"]);
+      const lateResult = runFixtureScript(late, argsFor(late), { env: late.env });
+      assert(lateResult.code !== 0 && (lateResult.stderr || lateResult.stdout).includes("core.fsyncMethod=writeout-only"), lateResult.stderr || lateResult.stdout);
+      assert(runGit(late.worktree, ["status", "--porcelain"]).stdout, "late writeout-only configuration reset dirty source");
+      assert(readJson(join(late.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "late writeout-only configuration lost durable snapshot evidence");
+    } finally { cleanupSupersededCleanupFixture(initial); cleanupSupersededCleanupFixture(late); }
+  });
+
+  test("dirty superseded commands reject ambient alternate replacement and worktree overrides", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+    const cleanup = ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "override dirty bytes\n");
+      const replacement = runFixtureScript(fixture, preserve, { env: { ...fixture.env, GIT_REPLACE_REF_BASE: "refs/alternate-replace" } });
+      assert(replacement.code !== 0 && (replacement.stderr || replacement.stdout).includes("GIT_REPLACE_REF_BASE"), replacement.stderr || replacement.stdout);
+      const redirected = runFixtureScript(fixture, cleanup, { env: { ...fixture.env, GIT_WORK_TREE: join(fixture.root, "redirected") } });
+      assert(redirected.code !== 0 && (redirected.stderr || redirected.stdout).includes("GIT_WORK_TREE"), redirected.stderr || redirected.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "ambient override permitted cleanup");
+      assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "ambient override persisted preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup paths block pending dirty snapshot intents until governed resume", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const cleanupArgs = ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: "2026-08-16T00:00:00Z", owner: "runner-a", snapshotRef: "refs/codex-preservation/superseded-task/dirty-superseded", metadataOnly: true };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const result = runFixtureScript(fixture, cleanupArgs, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.blocked === 1 && summary.results[0].reason.includes("--resume-pending"), result.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "pending intent allowed cleanup");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "cleanup erased pending intent");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rechecks pending evidence under lock and requires governed resume", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, lockedPendingDirtyEvidence: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "locked evidence must never be replaced by ordinary apply"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "locked pending evidence dirty bytes\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("--resume-pending"), result.stderr || result.stdout);
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("locked pending evidence"), "locked pending evidence rejection reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.dirty_superseded_snapshot_intent?.snapshotRef === "refs/codex-preservation/superseded-task/dirty-superseded", JSON.stringify(manifest));
+      assert(!manifest.dirty_superseded_preservation, "ordinary apply replaced locked pending evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded blocks a reset when the checked-out branch head changes after snapshot proof", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "branch identity must remain exact through reset authorization"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "concurrent branch move dirty bytes\n");
+      const sourceTree = runGit(fixture.worktree, ["rev-parse", `${fixture.sourceHead}^{tree}`]).stdout;
+      const concurrentHead = runGit(fixture.worktree, ["commit-tree", sourceTree, "-p", fixture.sourceHead, "-m", "fixture concurrent branch move"]).stdout;
+      installFixtureGitPostSuccessHook(
+        fixture,
+        "args[0] === 'symbolic-ref' && args.includes('--short') && args.includes('HEAD')",
+        ["update-ref", `refs/heads/${fixture.branch}`, concurrentHead],
+      );
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("branch head changed before reset"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === concurrentHead, "fixture did not move the checked-out branch");
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("concurrent branch move"), "branch-head drift reset dirty source");
+      assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "branch-head drift discarded pending snapshot evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded retains preserved snapshot restoration evidence", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "rollback retained dirty\n");
+      const preserved = runFixtureScript(fixture, preserve, { env: fixture.env }); assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation;
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved closed source cleanup", "--reason", "retained dirty snapshot has explicit rollback restoration"], { env: fixture.env });
+      assert(cleanup.code === 0, cleanup.stderr || cleanup.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const restore = manifest.cleanup_supersession_evidence?.preservedDirtySnapshot?.restore || "";
+      assert(manifest.cleanup_supersession_evidence?.preservedDirtySnapshot?.commit === evidence.snapshotCommit, JSON.stringify(manifest));
+      assert(restore.includes("git cat-file blob") && restore.includes("mode 120000") && restore.includes("recorded deletions") && restore.includes("git hash-object --no-filters"), restore);
+      assert(restore.includes("Do not use git checkout, git restore, or git cherry-pick") && manifest.cleanup_supersession_rollback.includes("Do not use git checkout, git restore, or git cherry-pick"), JSON.stringify(manifest));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded rechecks whole-index hidden flags after dirty preservation", () => {
+    for (const [name, options] of [["assume-unchanged", ["--assume-unchanged"]], ["skip-worktree", ["--skip-worktree"]], ["combined assume-unchanged and skip-worktree", ["--assume-unchanged", "--skip-worktree"]]]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), "snapshot before hidden cleanup edit\n");
+        const preserved = runFixtureScript(fixture, preserve, { env: fixture.env }); assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+        for (const option of options) runGit(fixture.worktree, ["update-index", option, "--", "carried.txt"]);
+        writeFileSync(join(fixture.worktree, "carried.txt"), `hidden ${name} post-preservation edit\n`);
+        const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+        assert(cleanup.code !== 0 && (cleanup.stderr || cleanup.stdout).includes("assume-unchanged or skip-worktree"), `${name}: ${cleanup.stderr || cleanup.stdout}`);
+        assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch) && remoteBranchExists(fixture.root, fixture.branch), `${name} hidden post-preservation edit allowed cleanup`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("cleanup-superseded rechecks ignored residue after a completed dirty preservation", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "snapshot before ignored cleanup residue\n");
+      const preserved = runFixtureScript(fixture, preserve, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "post-preservation-ignored.bin\n");
+      writeFileSync(join(fixture.worktree, "post-preservation-ignored.bin"), Buffer.from([0, 1, 2, 255]));
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.blocked === 1, cleanup.stderr || cleanup.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "ignored post-preservation residue allowed local cleanup");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded disables fsmonitor for every destructive status proof", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "fsmonitor-safe dirty bytes\n");
+      installFixtureGitProxy(fixture, "args.includes('status') && args.includes('--porcelain=v1') && !args.includes('core.fsmonitor=false')", "fixture rejected status proof that did not disable fsmonitor");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === true, result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects core.trustctime=false before snapshot mutation", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      runGit(fixture.worktree, ["config", "core.trustctime", "false"]);
+      writeFileSync(join(fixture.worktree, "carried.txt"), "restored-mtime unsafe dirty bytes\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === false && JSON.parse(result.stdout).reason.includes("core.trustctime=false"), result.stderr || result.stdout);
+      assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "trustctime rejection wrote preservation evidence");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "trustctime rejection reset dirty source bytes");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects legacy crlf attributes, ignoreCase, and symbolic snapshot refs", () => {
+    const cases = [
+      ["legacy crlf", (fixture) => writeFileSync(join(fixture.worktree, ".gitattributes"), "carried.txt crlf\n"), "conversion attributes"],
+      ["ignoreCase", (fixture) => runGit(fixture.worktree, ["config", "core.ignoreCase", "true"]), "core.ignoreCase=true"],
+      ["symbolic ref", (fixture) => runGit(fixture.worktree, ["symbolic-ref", "refs/codex-preservation/superseded-task/dirty-superseded", "refs/heads/main"]), "symbolic snapshot refs"],
+    ];
+    for (const [name, setup, expected] of cases) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+      try {
+        setup(fixture); writeFileSync(join(fixture.worktree, "carried.txt"), `${name} unsafe dirty bytes\n`);
+        const result = runFixtureScript(fixture, name === "symbolic ref" ? [...args.slice(0, -1), "--apply", "--approval", "operator approved symbolic-ref regression", "--reason", "symbolic ref must not be dereferenced"] : args, { env: fixture.env });
+        assert(name === "symbolic ref" ? result.code !== 0 && (result.stderr || result.stdout).includes(expected) : result.code === 0 && JSON.parse(result.stdout).ready === false && JSON.parse(result.stdout).reason.includes(expected), `${name}: ${result.stderr || result.stdout}`);
+        assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, `${name} reset source bytes`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded rejects configured and injected Git worktree redirects", () => {
+    for (const mode of ["configured", "injected"]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), `${mode} worktree redirect dirty bytes\n`);
+        const env = mode === "configured"
+          ? fixture.env
+          : { ...fixture.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: fixture.root };
+        if (mode === "configured") runGit(fixture.worktree, ["config", "core.worktree", fixture.root]);
+        const result = runFixtureScript(fixture, args, { env });
+        if (mode === "configured") {
+          assert(result.code === 0 && JSON.parse(result.stdout).ready === false, `${mode}: ${result.stderr || result.stdout}`);
+          assert((JSON.parse(result.stdout).reason || "").includes("core.worktree"), `${mode}: ${result.stdout}`);
+        } else {
+          assert(result.code !== 0 && (result.stderr || result.stdout).includes("GIT_CONFIG_COUNT"), `${mode}: ${result.stderr || result.stdout}`);
+        }
+        assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, `${mode} redirect wrote preservation evidence`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("cleanup-superseded rechecks fileMode, autocrlf, and conversion attributes after preservation", () => {
+    for (const [name, setup] of [["fileMode", (fixture) => runGit(fixture.worktree, ["config", "core.fileMode", "false"])], ["autocrlf", (fixture) => runGit(fixture.worktree, ["config", "core.autocrlf", "true"])], ["filter", (fixture) => writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt filter=drop\n")]]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved preservation", "--reason", "final cleanup must recheck configuration"];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), "preserved bytes\n");
+        const preserved = runFixtureScript(fixture, preserve, { env: fixture.env });
+        assert(preserved.code === 0, `${name}: ${preserved.stderr || preserved.stdout}`);
+        setup(fixture);
+        const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+        const output = cleanup.stderr || cleanup.stdout;
+        assert(name === "fileMode"
+          ? cleanup.code !== 0 && output.includes("core.fileMode=false")
+          : name === "autocrlf"
+            ? cleanup.code !== 0 && output.includes("core.autocrlf")
+            : cleanup.code !== 0 && output.includes("conversion attributes"), `${name}: ${output}`);
+        assert(existsSync(fixture.worktree), `${name} allowed cleanup`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded rejects source-tree conversion attributes removed by live dirty metadata", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, sourceAttribute: "carried.txt filter=source-only\n" });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, ".gitattributes"), "carried.txt !filter\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "live metadata removes source filter\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === false && JSON.parse(result.stdout).reason.includes("source-tree tracked conversion attributes"), result.stderr || result.stdout);
+      assert(readFileSync(join(fixture.worktree, ".gitattributes"), "utf8").includes("!filter"), "source-tree attribute rejection reset dirty metadata");
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("live metadata"), "source-tree attribute rejection reset dirty content");
+      assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "source-tree attribute rejection wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded batches tracked conversion-attribute checks", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "batched attribute proof dirty bytes\n");
+      installFixtureGitProxy(fixture, "args.includes('check-attr') && (!args.includes('--stdin') || !args.includes('-z'))", "fixture rejected unbatched conversion-attribute proof");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === true, result.stderr || result.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded blocks a post-plan trustctime flip before reset or cleanup", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "status settings must remain safe through reset-adjacent proof"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "post-plan trustctime dirty bytes\n");
+      installFixtureGitPostSuccessHook(fixture, "args.includes('write-tree')", ["config", "core.trustctime", "false"]);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("core.trustctime=false"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "post-plan trustctime flip reset source bytes");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.dirty_superseded_preservation?.verification?.status === "pending_reset_adjacent_reproof", JSON.stringify(manifest));
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.blocked === 1, cleanup.stderr || cleanup.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "post-plan trustctime flip allowed cleanup");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded persists non-ASCII paths in UTF-8 byte order", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved byte-ordered dirty preservation", "--reason", "durable path order must not depend on the host locale"];
+    try {
+      writeFileSync(join(fixture.worktree, "z.txt"), "ascii dirty bytes\n");
+      writeFileSync(join(fixture.worktree, "é.txt"), "utf8 dirty bytes\n");
+      runGit(fixture.worktree, ["add", "--", "z.txt", "é.txt"]);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const paths = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation.paths.map((entry) => entry.path);
+      assert(JSON.stringify(paths) === JSON.stringify(["z.txt", "é.txt"]), JSON.stringify(paths));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects ignored binary paths without reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "ignored.bin\n");
+      writeFileSync(join(fixture.worktree, "ignored.bin"), Buffer.from([0, 1, 2, 255]));
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0 && JSON.parse(result.stdout).ready === false, result.stderr || result.stdout);
+      assert(existsSync(join(fixture.worktree, "ignored.bin")), "ignored binary path was reset");
+      assert(branchExists(fixture.root, fixture.branch), "ignored rejection deleted local branch");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects active replacement refs before snapshot evidence", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "replacement ref dirty bytes\n");
+      runGit(fixture.worktree, ["replace", fixture.sourceHead, fixture.sourceBaseHead]);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("replacement refs"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "replacement-ref rejection reset source bytes");
+      assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "replacement-ref rejection wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded retains staged and unstaged tracked deletions as null tree entries", () => {
+    for (const staged of [false, true]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source deletion is retained before local cleanup"];
+      try {
+        rmSync(join(fixture.worktree, "carried.txt"));
+        if (staged) runGit(fixture.worktree, ["add", "-u", "--", "carried.txt"]);
+        const result = runFixtureScript(fixture, args, { env: fixture.env });
+        assert(result.code === 0, result.stderr || result.stdout);
+        const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation;
+        assert(evidence.paths[0].mode === null && evidence.paths[0].objectId === null, JSON.stringify(evidence));
+        assert(!runGit(fixture.worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"]).stdout, "deletion preservation left source worktree dirty");
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded revalidates a dotted task-id snapshot ref", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const oldPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+    const newPath = join(fixture.stateRoot, "tasks", "superseded.task.json");
+    const manifest = readJson(oldPath); manifest.task_id = "superseded.task"; writeFileSync(newPath, `${JSON.stringify(manifest, null, 2)}\n`); rmSync(oldPath);
+    const args = ["preserve-dirty-superseded", "superseded.task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "dotted task source is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "dirty dotted task\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readJson(newPath).dirty_superseded_preservation;
+      assert(evidence.snapshotRef === "refs/codex-preservation/superseded.task/dirty-superseded", JSON.stringify(evidence));
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded.task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.cleanupReady === 1, cleanup.stderr || cleanup.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded blocks deterministic late tracked and untracked drift before reset", () => {
+    for (const drift of ["late.txt", "carried.txt"]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), "initial dirty snapshot\n");
+        // The ref is first read only by the reset-adjacent verification after
+        // its manifest evidence was published. Mutating here proves that the
+        // final reproof—not the earlier durable snapshot—authorizes reset.
+        installFixtureGitPostSuccessHook(fixture, "args[0] === 'rev-parse' && String(args[args.length - 1] || '').includes('refs/codex-preservation/')", [], { writeAfterSuccessPath: join(fixture.worktree, drift), writeAfterSuccessContents: drift === "late.txt" ? "late untracked\n" : "late tracked mutation\n" });
+        const result = runFixtureScript(fixture, args, { env: fixture.env });
+        assert(result.code !== 0, `late ${drift} drift unexpectedly reset source: ${result.stdout} ${result.stderr}`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+        assert(manifest.dirty_superseded_preservation?.snapshotCommit, "late drift did not retain the durable pre-reset snapshot");
+        assert(manifest.events?.some((event) => event.type === "dirty_superseded_reset_blocked"), "late drift did not record the reset hold");
+        assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "late drift reset the source worktree");
+        assert(branchExists(fixture.root, fixture.branch) && remoteBranchExists(fixture.root, fixture.branch), "late drift cleanup removed a branch");
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded rechecks live bytes after the final reset-head proof", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved final live-tree reproof", "--reason", "the reset-adjacent status proof must follow branch and lease checks"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "initial dirty snapshot\n");
+      installFixtureGitPostSuccessHook(
+        fixture,
+        "args[0] === 'symbolic-ref' && args[1] === '--quiet' && args[2] === '--short' && args[3] === 'HEAD'",
+        [],
+        { writeAfterSuccessPath: join(fixture.worktree, "carried.txt"), writeAfterSuccessContents: "writer raced reset-head proof\n" },
+      );
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0, `post-head live-byte drift unexpectedly reset source: ${result.stdout} ${result.stderr}`);
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("writer raced"), "fixture writer did not run");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "post-head live-byte drift reset the source");
+      assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "post-head drift discarded durable evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded leaves pending evidence and blocks cleanup when ignored residue appears after reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "post-reset-ignored.bin\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "initial dirty snapshot\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'reset' && args[1] === '--hard'", [], { writeAfterSuccessPath: join(fixture.worktree, "post-reset-ignored.bin"), writeAfterSuccessContents: "\\u0000ignored residue" });
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0, `post-reset ignored residue unexpectedly completed preservation: ${result.stdout} ${result.stderr}`);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.dirty_superseded_preservation?.verification?.status === "pending_reset_adjacent_reproof", JSON.stringify(manifest));
+      assert(manifest.events?.some((event) => event.type === "dirty_superseded_reset_blocked"), "post-reset residue did not retain a blocked audit event");
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.blocked === 1, cleanup.stderr || cleanup.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "incomplete preservation allowed source cleanup");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects hidden index state, divergent staging, filters, foreign owners, and non-bare apply without mutation", () => {
+    const cases = [
+      { name: "assume unchanged", prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried.txt"), "hidden dirty\n"); runGit(fixture.worktree, ["update-index", "--assume-unchanged", "--", "carried.txt"]); } },
+      { name: "divergent staged and unstaged", prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried.txt"), "staged dirty\n"); runGit(fixture.worktree, ["add", "--", "carried.txt"]); writeFileSync(join(fixture.worktree, "carried.txt"), "unstaged dirty\n"); } },
+      { name: "clean filter", prepare: (fixture) => { writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt filter=fixture\n"); writeFileSync(join(fixture.worktree, "carried.txt"), "filtered dirty\n"); } },
+      { name: "text normalization", prepare: (fixture) => { writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt text eol=crlf\n"); writeFileSync(join(fixture.worktree, "carried.txt"), "normalized dirty\n"); } },
+      { name: "ident expansion", prepare: (fixture) => { writeFileSync(join(fixture.root, ".git", "info", "attributes"), "carried.txt ident\n"); writeFileSync(join(fixture.worktree, "carried.txt"), "$Id: expanded fixture value $\n"); } },
+      { name: "literal-pathspec metacharacter", prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried*.txt"), "literal glob-looking source path\n"); runGit(fixture.worktree, ["add", "--", "carried*.txt"]); } },
+      { name: "hidden mode-only configuration", prepare: (fixture) => { runGit(fixture.worktree, ["config", "core.fileMode", "false"]); writeFileSync(join(fixture.worktree, "carried.txt"), "mode guard dirty\n"); } },
+      { name: "foreign owner", prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried.txt"), "foreign dirty\n"); const path = join(fixture.stateRoot, "tasks", "superseded-task.json"); const manifest = readJson(path); manifest.owner = "runner-b"; writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`); }, expectError: true },
+      { name: "valued apply", prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried.txt"), "valued apply dirty\n"); }, extra: ["--apply=false"], expectCode: false },
+      { name: "takeover option", prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried.txt"), "takeover dirty\n"); }, extra: ["--take-ownership", "--takeover-reason", "incorrect direct preservation takeover"], expectCode: false },
+      ...["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"].map((name) => ({ name: `ambient ${name}`, prepare: (fixture) => { writeFileSync(join(fixture.worktree, "carried.txt"), "ambient override dirty\n"); }, env: { [name]: join("/tmp", "unsafe-git-override") }, expectError: true })),
+    ];
+    for (const scenario of cases) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, ...(scenario.extra || ["--summary-json"])];
+      try {
+        scenario.prepare(fixture);
+        const result = runFixtureScript(fixture, args, { env: scenario.env ? { ...fixture.env, ...scenario.env } : fixture.env });
+        if (scenario.extra || scenario.expectError) assert(result.code !== 0, `${scenario.name} unexpectedly succeeded`);
+        else assert(result.code === 0 && JSON.parse(result.stdout).ready === false, `${scenario.name}: ${result.stderr || result.stdout}`);
+        assert(existsSync(join(fixture.worktree, "carried.txt")), `${scenario.name} reset source data`);
+        assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, `${scenario.name} published preservation evidence`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded rejects mixed hidden and visible dirty paths before snapshot or reset", () => {
+    for (const [flag, option] of [["assume-unchanged", "--assume-unchanged"], ["skip-worktree", "--skip-worktree"]]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+      try {
+        writeFileSync(join(fixture.worktree, "base.txt"), `${flag} hidden mutation\n`);
+        runGit(fixture.worktree, ["update-index", option, "--", "base.txt"]);
+        writeFileSync(join(fixture.worktree, "carried.txt"), `${flag} visible mutation\n`);
+        const result = runFixtureScript(fixture, args, { env: fixture.env });
+        assert(result.code === 0 && JSON.parse(result.stdout).ready === false, `${flag}: ${result.stderr || result.stdout}`);
+        assert(readFileSync(join(fixture.worktree, "base.txt"), "utf8").includes("hidden mutation"), `${flag} hidden path was reset`);
+        assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("visible mutation"), `${flag} visible path was reset`);
+        assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, `${flag} hidden path published preservation evidence`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("preserve-dirty-superseded resumes exact pending evidence and rejects transient object stores", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const base = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "initial dirty snapshot\n");
+      const transient = runFixtureScript(fixture, ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: { ...fixture.env, GIT_OBJECT_DIRECTORY: join(fixture.root, "transient-objects") } });
+      assert(transient.code !== 0, "transient object store was accepted");
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "post-reset-ignored.bin\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'reset' && args[1] === '--hard'", [], { writeAfterSuccessPath: join(fixture.worktree, "post-reset-ignored.bin"), writeAfterSuccessContents: "residue" });
+      const interrupted = runFixtureScript(fixture, base, { env: fixture.env });
+      assert(interrupted.code !== 0, "post-reset residue unexpectedly completed preservation");
+      rmSync(join(fixture.worktree, "post-reset-ignored.bin"));
+      const resumed = runFixtureScript(fixture, [...base, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation;
+      assert(evidence.verification.status === "matched_before_reset" && evidence.verification.settledAfterInterruption === true, JSON.stringify(evidence));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded accepts persisted snapshot field names during an exact pending resume", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "persisted snapshot fields must resume exactly"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "resume-ignored.bin\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "persisted field resume fixture\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'reset' && args[1] === '--hard'", [], { writeAfterSuccessPath: join(fixture.worktree, "resume-ignored.bin"), writeAfterSuccessContents: "residue" });
+      const interrupted = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(interrupted.code !== 0, "fixture did not create pending persisted preservation evidence");
+      rmSync(join(fixture.worktree, "resume-ignored.bin"));
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      assert(readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation?.verification?.status === "matched_before_reset", "persisted snapshot fields were not normalized on resume");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded resumes a published pending snapshot with non-ASCII byte-ordered paths", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved byte-ordered pending recovery", "--reason", "durable pending path comparison must not depend on host locale"];
+    try {
+      writeFileSync(join(fixture.worktree, "z.txt"), "ascii pending bytes\n");
+      writeFileSync(join(fixture.worktree, "é.txt"), "utf8 pending bytes\n");
+      runGit(fixture.worktree, ["add", "--", "z.txt", "é.txt"]);
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      for (const path of ["z.txt", "é.txt"]) {
+        const contents = spawnSync("git", ["show", `${evidence.snapshotTree}:${path}`], { cwd: fixture.worktree, stdio: "pipe" });
+        assert(contents.status === 0, `could not restore pending bytes for ${path}`);
+        writeFileSync(join(fixture.worktree, path), contents.stdout);
+      }
+      runGit(fixture.worktree, ["add", "--", "z.txt", "é.txt"]);
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: evidence.recordedAt, owner: evidence.owner, sourceHead: evidence.sourceHead, closedSourcePr: evidence.closedSourcePr, carryForwardPr: evidence.carryForwardPr, carryForwardCommit: evidence.carryForwardCommit, snapshotRef: evidence.snapshotRef, paths: evidence.paths.map(({ path, status }) => ({ path, status })), approval: evidence.approval, reason: evidence.reason, metadataOnly: true };
+      delete manifest.dirty_superseded_preservation;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const recovered = readJson(manifestPath).dirty_superseded_preservation;
+      assert(recovered?.verification?.status === "matched_before_reset" && JSON.stringify(recovered.paths.map((entry) => entry.path)) === JSON.stringify(["z.txt", "é.txt"]), JSON.stringify(recovered));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects a symbolic published intent ref before reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved direct ref recovery", "--reason", "published pending snapshot ref must remain direct before reset"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "symbolic pending snapshot bytes\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      const contents = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(contents.status === 0, "could not restore pending source bytes");
+      writeFileSync(join(fixture.worktree, "carried.txt"), contents.stdout);
+      const target = "refs/heads/pending-snapshot-target";
+      runGit(fixture.worktree, ["update-ref", target, evidence.snapshotCommit]);
+      runGit(fixture.worktree, ["symbolic-ref", evidence.snapshotRef, target]);
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: evidence.recordedAt, owner: evidence.owner, sourceHead: evidence.sourceHead, closedSourcePr: evidence.closedSourcePr, carryForwardPr: evidence.carryForwardPr, carryForwardCommit: evidence.carryForwardCommit, snapshotRef: evidence.snapshotRef, paths: evidence.paths.map(({ path, status }) => ({ path, status })), approval: evidence.approval, reason: evidence.reason, metadataOnly: true };
+      delete manifest.dirty_superseded_preservation;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0 && (resumed.stderr || resumed.stdout).includes("snapshot ref must remain direct"), resumed.stderr || resumed.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "symbolic published intent ref permitted reset");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "symbolic published intent ref erased recovery evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded accepts recorded owner lineage for durable evidence", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "recorded owner lineage remains reviewable after takeover"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "lineage-preserved dirty bytes\n");
+      const preserved = runFixtureScript(fixture, preserve, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.owner = "runner-b";
+      manifest.ownership_takeovers = [{ previous_owner: "runner-a", new_owner: "runner-b", reason: "operator approved governed owner transition", at: new Date().toISOString() }];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-b", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.cleanupReady === 1, cleanup.stderr || cleanup.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects an adopted snapshot ref whose full tree differs", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "adopted snapshot tree must prove every recorded dirty path"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "adopted snapshot dirty bytes\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      const wrongCommit = runGit(fixture.worktree, ["commit-tree", `${fixture.sourceHead}^{tree}`, "-p", fixture.sourceHead, "-m", "wrong adopted snapshot tree"]).stdout;
+      runGit(fixture.worktree, ["update-ref", evidence.snapshotRef, wrongCommit, evidence.snapshotCommit]);
+      writeFileSync(join(fixture.worktree, "carried.txt"), "adopted snapshot dirty bytes\n");
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: evidence.recordedAt, owner: evidence.owner, sourceHead: evidence.sourceHead, closedSourcePr: evidence.closedSourcePr, carryForwardPr: evidence.carryForwardPr, carryForwardCommit: evidence.carryForwardCommit, snapshotRef: evidence.snapshotRef, paths: evidence.paths.map(({ path, status }) => ({ path, status })), approval: evidence.approval, reason: evidence.reason, metadataOnly: true };
+      delete manifest.dirty_superseded_preservation;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0 && (resumed.stderr || resumed.stdout).includes("full tree"), resumed.stderr || resumed.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "mismatched adopted snapshot reset source bytes");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "mismatched adopted snapshot erased recovery intent");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("cleanup-superseded validates preservation evidence without a removed partial worktree", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "partial cleanup must retain immutable snapshot proof"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "partial absent worktree preservation\n");
+      const preserved = runFixtureScript(fixture, preserve, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      markSupersededCleanupPartial(fixture, { removeWorktree: true, deleteLocalBranch: true, closedSourcePr: true });
+      const cleanup = runFixtureScript(fixture, ["cleanup-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(cleanup.code === 0 && JSON.parse(cleanup.stdout).counts.cleanupReady === 1, cleanup.stderr || cleanup.stdout);
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded blocks pending-resume ref drift after initial validation without reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "resume still-dirty snapshot\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath);
+      const evidence = manifest.dirty_superseded_preservation;
+      assert(runGit(fixture.worktree, ["rev-parse", "--verify", `${evidence.snapshotRef}^{commit}`]).stdout === evidence.snapshotCommit, "pending fixture lost its durable snapshot ref before resume");
+      const snapshotContents = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(snapshotContents.status === 0, "could not reconstruct exact pending snapshot fixture");
+      writeFileSync(join(fixture.worktree, "carried.txt"), snapshotContents.stdout);
+      assert(runGit(fixture.worktree, ["hash-object", "carried.txt"]).stdout === evidence.paths[0].objectId, "pending fixture did not restore exact snapshot bytes");
+      manifest.dirty_superseded_preservation.verification = { status: "pending_reset_adjacent_reproof", recordedAt: new Date().toISOString(), pathCount: evidence.paths.length, metadataOnly: true };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "pending fixture did not restore the exact dirty source");
+      installFixtureGitPostSuccessHook(fixture, `args[0] === 'rev-parse' && String(args[args.length - 1] || '').includes(${JSON.stringify(evidence.snapshotRef)})`, ["update-ref", "-d", evidence.snapshotRef, evidence.snapshotCommit]);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0, "post-validation ref drift unexpectedly permitted reset");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "post-validation ref drift reset the dirty source");
+      assert(readJson(manifestPath).dirty_superseded_preservation.verification.status === "pending_reset_adjacent_reproof", "post-validation ref drift marked pending evidence complete");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded recovers an exact orphan snapshot-publication intent", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "orphan snapshot dirty\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env }); assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json"); const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      const snapshotContents = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(snapshotContents.status === 0, "could not restore exact orphan snapshot bytes");
+      writeFileSync(join(fixture.worktree, "carried.txt"), snapshotContents.stdout);
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: evidence.recordedAt, owner: evidence.owner, sourceHead: evidence.sourceHead, closedSourcePr: evidence.closedSourcePr, carryForwardPr: evidence.carryForwardPr, carryForwardCommit: evidence.carryForwardCommit, snapshotRef: evidence.snapshotRef, paths: evidence.paths.map(({ path, status }) => ({ path, status })), approval: evidence.approval, reason: evidence.reason, metadataOnly: true };
+      delete manifest.dirty_superseded_preservation; writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env }); assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const recovered = readJson(manifestPath); assert(!recovered.dirty_superseded_snapshot_intent && recovered.dirty_superseded_preservation?.verification?.status === "matched_before_reset", JSON.stringify(recovered));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded retires an exact unpublished snapshot intent without resetting source", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "unpublished intent must remain safely retryable"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "unpublished intent dirty bytes\n");
+      installFixtureGitProxy(fixture, "args[0] === '-c' && args.includes('core.fsync=loose-object,reference') && args.includes('commit-tree')", "simulated pre-publication commit failure");
+      const interrupted = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(interrupted.code !== 0, "pre-publication fixture unexpectedly completed preservation");
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const pending = readJson(manifestPath);
+      assert(pending.dirty_superseded_snapshot_intent && !pending.dirty_superseded_preservation, JSON.stringify(pending));
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code === 0 && resumed.stdout.includes("Retired unpublished dirty preservation intent"), resumed.stderr || resumed.stdout);
+      const retired = readJson(manifestPath);
+      assert(!retired.dirty_superseded_snapshot_intent && !retired.dirty_superseded_preservation, JSON.stringify(retired));
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "unpublished-intent recovery reset source bytes");
+      rmSync(join(fixture.fakeBin, "git"));
+      const retried = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(retried.code === 0, retried.stderr || retried.stdout);
+      assert(readJson(manifestPath).dirty_superseded_preservation?.verification?.status === "matched_before_reset", "ordinary retry did not create a fresh snapshot");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded retains an unpublished intent when its absence probe errors", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "ref probe errors must retain durable intent evidence"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "ref probe failure dirty bytes\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env }); assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      runGit(fixture.worktree, ["update-ref", "-d", evidence.snapshotRef, evidence.snapshotCommit]);
+      writeFileSync(join(fixture.worktree, "carried.txt"), "ref probe failure dirty bytes\n");
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: evidence.recordedAt, owner: evidence.owner, sourceHead: evidence.sourceHead, closedSourcePr: evidence.closedSourcePr, carryForwardPr: evidence.carryForwardPr, carryForwardCommit: evidence.carryForwardCommit, snapshotRef: evidence.snapshotRef, paths: evidence.paths.map(({ path, status }) => ({ path, status })), approval: evidence.approval, reason: evidence.reason, metadataOnly: true };
+      delete manifest.dirty_superseded_preservation; writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+      installFixtureGitProxy(fixture, `args[0] === 'show-ref' && args[1] === '--verify' && args.includes(${JSON.stringify(evidence.snapshotRef)})`, "simulated snapshot ref probe I/O failure", { failureExitCode: 2 });
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0 && (resumed.stderr || resumed.stdout).includes("could not be proved absent"), resumed.stderr || resumed.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "probe error retired or rewrote the pending intent");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "probe error reset source bytes");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded fails closed for a proper-subset interrupted reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "base.txt"), "partial base dirty\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "partial carried dirty\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      const carried = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(carried.status === 0, "could not restore partial-reset fixture path");
+      writeFileSync(join(fixture.worktree, "carried.txt"), carried.stdout);
+      manifest.dirty_superseded_preservation.verification = { status: "pending_reset_adjacent_reproof", recordedAt: new Date().toISOString(), pathCount: evidence.paths.length, metadataOnly: true };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0, "proper-subset reset unexpectedly continued without a full live snapshot proof");
+      const completed = readJson(manifestPath).dirty_superseded_preservation;
+      assert(completed.verification.status === "pending_reset_adjacent_reproof" && runGit(fixture.worktree, ["status", "--porcelain"]).stdout, JSON.stringify(completed));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("generic merged and integrated cleanup never remove a lane with dirty preservation evidence", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "preserved\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const integrated = runFixtureScript(fixture, ["cleanup-integrated", "superseded-task", "--base", "origin/main", "--state-root", fixture.stateRoot, "--summary-json"], { env: fixture.env });
+      assert(integrated.code === 0 && JSON.parse(integrated.stdout).counts.skipped >= 1, integrated.stderr || integrated.stdout);
+      const merged = runFixtureScript(fixture, ["cleanup-merged", "superseded-task", "--state-root", fixture.stateRoot, "--owner", "runner-a", "--summary-json"], { env: fixture.env });
+      assert(merged.code === 0 && JSON.parse(merged.stdout).results[0].status === "skipped_dirty_superseded_preservation", merged.stderr || merged.stdout);
+      assert(existsSync(fixture.worktree) && branchExists(fixture.root, fixture.branch), "generic cleanup removed preserved source resources");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects non-UTF-8 dirty names and recursive gitlinks before evidence", () => {
+    const invalidName = createSupersededCleanupFixture({ closedSourcePr: true });
+    const gitlink = createSupersededCleanupFixture({ closedSourcePr: true });
+    const argsFor = (fixture) => ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+    try {
+      const raw = spawnSync("bash", ["-c", "printf x > $'invalid-\\377-name'; git add -- $'invalid-\\377-name'"], { cwd: invalidName.worktree, encoding: "utf8" });
+      assert(raw.status === 0, raw.stderr || "could not create invalid UTF-8 fixture path");
+      const invalid = runFixtureScript(invalidName, argsFor(invalidName), { env: invalidName.env });
+      assert(invalid.code === 0 && JSON.parse(invalid.stdout).ready === false, invalid.stderr || invalid.stdout);
+      const nested = mkdtempSync(join(tmpdir(), "codex-dirty-gitlink-"));
+      try {
+        runGit(nested, ["init", "-q"]); runGit(nested, ["config", "user.email", "fixture@example.test"]); runGit(nested, ["config", "user.name", "Fixture"]); commitFile(nested, "nested.txt", "nested\n", "nested");
+        const nestedHead = runGit(nested, ["rev-parse", "HEAD"]).stdout;
+        runGit(gitlink.worktree, ["update-index", "--add", "--cacheinfo", `160000,${nestedHead},nested-module`]);
+        const linked = runFixtureScript(gitlink, argsFor(gitlink), { env: gitlink.env });
+        assert(linked.code === 0 && JSON.parse(linked.stdout).ready === false, linked.stderr || linked.stdout);
+        assert(!readJson(join(gitlink.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "gitlink rejection wrote evidence");
+      } finally { rmSync(nested, { recursive: true, force: true }); }
+    } finally { cleanupSupersededCleanupFixture(invalidName); cleanupSupersededCleanupFixture(gitlink); }
+  });
+
+  test("preserve-dirty-superseded rechecks the active producer lease after final tree proof before reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "closed source delta is retained before local cleanup"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "lease-bound dirty snapshot\n");
+      const rootRecord = join(fixture.stateRoot, "tasks", ".leases", "superseded-task", "root.json");
+      installFixtureGitPostSuccessHook(fixture, "args.includes('write-tree')", [], { afterMatchCount: 2, writeAfterSuccessPath: rootRecord, writeAfterSuccessContents: "{\\\"invalid\\\":true}\n" });
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0, "replaced producer lease unexpectedly permitted reset");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "lease replacement reset the dirty source");
+      assert(branchExists(fixture.root, fixture.branch) && remoteBranchExists(fixture.root, fixture.branch), "lease replacement removed source branches");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects a lease replacement after its final live-tree proof", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved post-proof lease fence", "--reason", "the producer lease must be rechecked after final live-tree proof"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "lease fence dirty snapshot\n");
+      const rootRecord = join(fixture.stateRoot, "tasks", ".leases", "superseded-task", "root.json");
+      installFixtureGitPostSuccessHook(fixture, "args.includes('status')", [], { afterMatchCount: 4, writeAfterSuccessPath: rootRecord, writeAfterSuccessContents: "{\"invalid\":true}\n" });
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && /Task lease ownership changed|Task lease owner identity changed before release/.test(result.stderr || result.stdout), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "post-proof lease replacement reset dirty source");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rechecks branch and HEAD after the reset-adjacent heartbeat", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved post-heartbeat branch fence", "--reason", "branch and head must be rechecked after the final producer heartbeat"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "post heartbeat branch fence dirty\n");
+      runGit(fixture.root, ["checkout", "-q", "main"]);
+      commitFile(fixture.root, "concurrent-reset-fence.txt", "concurrent branch move\n", "concurrent reset fence");
+      const concurrentHead = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'symbolic-ref' && args[1] === '--quiet' && args[2] === '--short' && args[3] === 'HEAD'", ["update-ref", `refs/heads/${fixture.branch}`, concurrentHead], { afterMatchCount: 2 });
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("branch head changed before reset"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === concurrentHead, "post-heartbeat branch move was reset");
+      assert(readFileSync(join(fixture.worktree, "carried.txt"), "utf8").includes("post heartbeat"), "post-heartbeat branch move reset dirty bytes");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded creates a SHA-256 snapshot with the matching null ref value", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true, objectFormat: "sha256" });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved SHA-256 dirty preservation", "--reason", "SHA-256 source snapshot is retained before local cleanup"];
+    try {
+      assert(runGit(fixture.worktree, ["rev-parse", "--show-object-format"]).stdout === "sha256", "SHA-256 fixture was not initialized with its requested object format");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "sha256 dirty snapshot\n");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation;
+      assert(evidence.snapshotCommit.length === 64 && evidence.snapshotTree.length === 64, JSON.stringify(evidence));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded blocks before reset when durable snapshot publication fails", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "durable object publication must precede reset"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "durable failure dirty\n");
+      installFixtureGitProxy(fixture, "args[0] === '-c' && args.includes('core.fsync=loose-object,reference') && args.includes('commit-tree')", "simulated durable snapshot commit failure");
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0, "failed durable snapshot unexpectedly reset source");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "durable snapshot failure reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, JSON.stringify(manifest));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded fsyncs raw blob and tree writers before reset", () => {
+    for (const command of ["hash-object", "write-tree"]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable dirty preservation", "--reason", "raw loose blob and tree writes must be durable before reset"];
+      try {
+        writeFileSync(join(fixture.worktree, "carried.txt"), `${command} durability dirty\n`);
+        installFixtureGitProxy(fixture, `args[0] === '-c' && args.includes('core.fsync=loose-object,reference') && args.includes(${JSON.stringify(command)})`, `simulated durable ${command} failure`);
+        const result = runFixtureScript(fixture, args, { env: fixture.env });
+        assert(result.code !== 0, `non-durable ${command} unexpectedly allowed reset`);
+        assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, `${command} durability failure reset dirty source`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+        assert(manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, `${command}: ${JSON.stringify(manifest)}`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
   test("cleanup-superseded closed-unmerged PR mode refuses a non-equivalent patch pair before mutation", () => {
     const fixture = createSupersededCleanupFixture({ closedSourcePr: true, mutation: "content" });
     const args = [
@@ -18126,6 +19361,67 @@ try {
     assert(existsSync(metadataPath), "cleanup-orphans summary-json removed hidden metadata");
   });
 
+  test("cleanup-orphans retains an unregistered directory with pending dirty snapshot intent", () => {
+    const isolatedStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-pending-dirty-state-"));
+    const orphanPath = join(isolatedStateRoot, "worktrees", "pending-dirty-orphan");
+    const manifestPath = join(isolatedStateRoot, "tasks", "pending-dirty-orphan.json");
+    try {
+      mkdirSync(orphanPath, { recursive: true });
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, `${JSON.stringify({
+        task_id: "pending-dirty-orphan",
+        branch: "codex/pending-dirty-orphan",
+        worktree_path: orphanPath,
+        base_branch: "dev",
+        status: "closed",
+        dirty_superseded_snapshot_intent: {
+          schemaVersion: 1,
+          preparedAt: "2026-08-16T00:00:00.000Z",
+          owner: "runner-a",
+          snapshotRef: "refs/codex-preservation/pending-dirty-orphan/dirty-superseded",
+        },
+      }, null, 2)}\n`);
+      const preview = run(["cleanup-orphans", "--summary-json", "--state-root", isolatedStateRoot]);
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const previewPacket = JSON.parse(preview.stdout);
+      assert(previewPacket.counts.retainedDirtyEvidence === 1, preview.stdout || preview.stderr);
+      assert(previewPacket.retainedDirtyEvidenceDirectories.some((entry) => entry.path === orphanPath), preview.stdout || preview.stderr);
+      assert(!previewPacket.orphanDirectories.some((entry) => entry.path === orphanPath), "orphan preview advertised a pending-intent directory as removable");
+      const result = run(["cleanup-orphans", "pending-dirty-orphan", "--apply", "--state-root", isolatedStateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("retains dirty superseded evidence"), result.stdout || result.stderr);
+      assert(existsSync(orphanPath), "cleanup-orphans removed a pending-intent worktree directory");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "cleanup-orphans erased pending snapshot intent");
+    } finally { rmSync(isolatedStateRoot, { recursive: true, force: true }); }
+  });
+
+  test("cleanup-orphans fails closed on an invalid manifest retaining dirty snapshot intent", () => {
+    const isolatedStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-invalid-pending-state-"));
+    const orphanPath = join(isolatedStateRoot, "worktrees", "invalid-pending-orphan");
+    const manifestPath = join(isolatedStateRoot, "tasks", "invalid-pending-orphan.json");
+    try {
+      mkdirSync(orphanPath, { recursive: true });
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, `${JSON.stringify({
+        task_id: "invalid-pending-orphan",
+        branch: "codex/invalid-pending-orphan",
+        worktree_path: orphanPath,
+        // Deliberately omit base_branch, making this retained-evidence record
+        // invalid rather than safe to ignore.
+        status: "closed",
+        dirty_superseded_snapshot_intent: { schemaVersion: 1, snapshotRef: "refs/codex-preservation/invalid-pending-orphan/dirty-superseded" },
+      }, null, 2)}\n`);
+      const preview = run(["cleanup-orphans", "invalid-pending-orphan", "--state-root", isolatedStateRoot]);
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(preview.stdout.includes(orphanPath), preview.stdout || preview.stderr);
+      assert(existsSync(orphanPath), "cleanup-orphans read-only preview removed an invalid retained-evidence directory");
+      const result = run(["cleanup-orphans", "invalid-pending-orphan", "--apply", "--state-root", isolatedStateRoot]);
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("cannot verify manifest inventory"), result.stderr || result.stdout);
+      assert(existsSync(orphanPath), "cleanup-orphans removed an invalid retained-evidence directory");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "cleanup-orphans erased invalid retained evidence");
+    } finally { rmSync(isolatedStateRoot, { recursive: true, force: true }); }
+  });
+
   test("cleanup-orphans rejects symlinked managed roots and child entries before directory inspection", () => {
     const externalRoot = mkdtempSync(join(tmpdir(), "codex-orphan-external-"));
     const symlinkStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-root-link-state-"));
@@ -18156,14 +19452,19 @@ try {
   });
 
   test("cleanup-orphans refuses hidden workspace metadata even when queried", () => {
-    const metadataPath = join(stateRoot, "worktrees", ".codex");
-    mkdirSync(metadataPath, { recursive: true });
+    const isolatedStateRoot = mkdtempSync(join(tmpdir(), "codex-orphan-hidden-metadata-state-"));
+    try {
+      const metadataPath = join(isolatedStateRoot, "worktrees", ".codex");
+      mkdirSync(metadataPath, { recursive: true });
 
-    const result = run(["cleanup-orphans", ".codex", "--apply", "--state-root", stateRoot]);
+      const result = run(["cleanup-orphans", ".codex", "--apply", "--state-root", isolatedStateRoot]);
 
-    assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("No orphan worktree directories matched"), result.stdout || result.stderr);
-    assert(existsSync(metadataPath), "cleanup-orphans removed hidden workspace metadata");
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("No orphan worktree directories matched"), result.stdout || result.stderr);
+      assert(existsSync(metadataPath), "cleanup-orphans removed hidden workspace metadata");
+    } finally {
+      rmSync(isolatedStateRoot, { recursive: true, force: true });
+    }
   });
 
   test("cleanup-orphans removes targeted orphan directory when applied", () => {
@@ -19460,9 +20761,10 @@ function installFixtureOriginIdentityProxy(root, fakeBin, originUrls = ["git@git
   return fakeGit;
 }
 
-function installFixtureGitProxy(fixture, failureCondition, failureMessage) {
+function installFixtureGitProxy(fixture, failureCondition, failureMessage, options = {}) {
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
   const fakeGit = join(fixture.fakeBin, "git");
+  const failureExitCode = Number.isInteger(options.failureExitCode) && options.failureExitCode > 1 ? options.failureExitCode : 1;
   writeFileSync(
     fakeGit,
     [
@@ -19471,7 +20773,7 @@ function installFixtureGitProxy(fixture, failureCondition, failureMessage) {
       "const args = process.argv.slice(2);",
       `if (${failureCondition}) {`,
       `  console.error(${JSON.stringify(failureMessage)});`,
-      "  process.exit(1);",
+      `  process.exit(${failureExitCode});`,
       "}",
       `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
       "process.exit(result.status ?? 1);",
@@ -19486,12 +20788,13 @@ function installFixtureGitPostSuccessHook(fixture, successCondition, hookArgs, o
   const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
   const fakeGit = join(fixture.fakeBin, "git");
   const probeFailureSentinel = join(fixture.root, "post-push-probe-failure-sentinel");
+  const hookCountSentinel = join(fixture.root, "post-success-hook-count");
   writeFileSync(
     fakeGit,
     [
       "#!/usr/bin/env node",
       "import { spawnSync } from 'node:child_process';",
-      "import { existsSync, rmSync, writeFileSync } from 'node:fs';",
+      "import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';",
       "const args = process.argv.slice(2);",
       "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === '--all' && args[4] === 'origin') { console.log('git@github.com:slawdawg/Kendall-vnxt.git'); process.exit(0); }",
       `if (${Boolean(options.failNextRemoteProbe)} && args[0] === 'ls-remote' && existsSync(${JSON.stringify(probeFailureSentinel)})) { rmSync(${JSON.stringify(probeFailureSentinel)}); console.error('fixture post-push probe unavailable'); process.exit(1); }`,
@@ -19502,8 +20805,12 @@ function installFixtureGitPostSuccessHook(fixture, successCondition, hookArgs, o
       "const result = spawnSync('git', args, { cwd: process.cwd(), env, stdio: 'inherit' });",
       "if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);",
       `if (${successCondition}) {`,
-      `  const hook = spawnSync('git', ${JSON.stringify(hookArgs)}, { cwd: process.cwd(), env, stdio: 'inherit' });`,
+      `  const count = (existsSync(${JSON.stringify(hookCountSentinel)}) ? Number(readFileSync(${JSON.stringify(hookCountSentinel)}, 'utf8')) || 0 : 0) + 1;`,
+      `  writeFileSync(${JSON.stringify(hookCountSentinel)}, String(count));`,
+      `  if (count < ${Number.isInteger(options.afterMatchCount) ? options.afterMatchCount : 1}) process.exit(0);`,
+      Array.isArray(hookArgs) && hookArgs.length > 0 ? `  const hook = spawnSync('git', ${JSON.stringify(hookArgs)}, { cwd: process.cwd(), env, stdio: 'inherit' });` : "  const hook = { status: 0 };",
       "  if ((hook.status ?? 1) !== 0) process.exit(hook.status ?? 1);",
+      options.writeAfterSuccessPath ? `  writeFileSync(${JSON.stringify(options.writeAfterSuccessPath)}, ${JSON.stringify(options.writeAfterSuccessContents || "")});` : "",
       `  if (${Boolean(options.failNextRemoteProbe)}) writeFileSync(${JSON.stringify(probeFailureSentinel)}, 'fail once\\n');`,
       "}",
       "process.exit(0);",
@@ -20061,7 +21368,7 @@ function replaceOption(args, option, value) {
   return replaced;
 }
 
-function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBranch }) {
+function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBranch, closedSourcePr = false }) {
   if (removeWorktree) {
     runGit(fixture.root, ["worktree", "remove", fixture.worktree]);
   }
@@ -20082,8 +21389,16 @@ function markSupersededCleanupPartial(fixture, { removeWorktree, deleteLocalBran
     remoteBranchPolicy: "retained",
     proof: {
       source: { requestedHead: fixture.sourceHead },
-      carryForward: { prNumber: 456, requestedCommit: fixture.carryForwardCommit },
-      scope: { paths: ["carried.txt"] },
+      carryForward: { prNumber: 456, requestedCommit: closedSourcePr ? fixture.mergeCommit : fixture.carryForwardCommit },
+      scope: { paths: closedSourcePr ? [] : ["carried.txt"] },
+      ...(closedSourcePr ? {
+        patchEquivalence: {
+          status: "matched",
+          sourcePr: 789,
+          sourceCommits: [fixture.sourceHead],
+          carryForwardCommits: [fixture.carryForwardCommit],
+        },
+      } : {}),
     },
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -20128,14 +21443,26 @@ function createSupersededCleanupFixture(options = {}) {
 
   copyWorkspaceScriptFixture(fixtureRoot);
   mkdirSync(fakeBin, { recursive: true });
-  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, options.objectFormat === "sha256" ? ["init", "--object-format=sha256", "-q"] : ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  for (const file of options.additionalBaseFiles || []) {
+    if (typeof file.symlinkTarget === "string") {
+      const path = join(fixtureRoot, file.path);
+      mkdirSync(dirname(path), { recursive: true });
+      symlinkSync(file.symlinkTarget, path);
+      runGit(fixtureRoot, ["add", "--", file.path]);
+      runGit(fixtureRoot, ["commit", "-q", "-m", `additional symlink base ${file.path}`]);
+    } else {
+      commitFile(fixtureRoot, file.path, file.contents, `additional base ${file.path}`);
+    }
+  }
+  if (options.sourceAttribute) commitFile(fixtureRoot, ".gitattributes", options.sourceAttribute, "source attributes");
   if (options.firstUseRepair) commitFile(fixtureRoot, "hardened.txt", "original hardening surface\n", "add hardening surface");
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
-  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(remoteRoot, options.objectFormat === "sha256" ? ["init", "--bare", "--object-format=sha256", "-q"] : ["init", "--bare", "-q"]);
   runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
   runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
   const baseBranch = options.firstUseRepair ? "dev" : "main";
@@ -20380,6 +21707,22 @@ function createSupersededCleanupFixture(options = {}) {
         "}",
       ]
     : [];
+  // This mutates the on-disk manifest during the initial, unlocked proof.
+  // preserve-dirty-superseded still holds its stale in-memory copy at that
+  // point, so a subsequent locked re-read must reject it rather than replace
+  // the newly durable recovery evidence.
+  const lockedPendingDirtyEvidence = options.lockedPendingDirtyEvidence
+    ? [
+        `const pendingManifestPath = ${JSON.stringify(join(stateRootFixture, "tasks", "superseded-task.json"))};`,
+        "if (args[0] === 'pr' && args[1] === 'view' && args[2] === '456') {",
+        "  const manifest = JSON.parse(fs.readFileSync(pendingManifestPath, 'utf8'));",
+        "  if (!manifest.dirty_superseded_snapshot_intent) {",
+        "    manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: '2026-08-16T00:00:00Z', owner: 'runner-a', snapshotRef: 'refs/codex-preservation/superseded-task/dirty-superseded', metadataOnly: true };",
+        "    fs.writeFileSync(pendingManifestPath, `${JSON.stringify(manifest, null, 2)}\\n`);",
+        "  }",
+        "}",
+      ]
+    : [];
   writeFileSync(
     fakeGh,
     [
@@ -20388,6 +21731,7 @@ function createSupersededCleanupFixture(options = {}) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       ...lockedDrift,
+      ...lockedPendingDirtyEvidence,
       "if (args[0] === 'pr' && args[1] === 'list' && args[2] === '--head') {",
       "  if (args[args.indexOf('--limit') + 1] !== '1') { console.error('source PR existence proof must request one record'); process.exit(1); }",
       `  console.log(JSON.stringify(${options.sourcePrRecord ? "[{ number: 789 }]" : "[]"}));`,

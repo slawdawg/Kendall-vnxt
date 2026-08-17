@@ -645,6 +645,84 @@ do not treat an operator authorization as a bypass.
    scoped tree entries, then repeats that proof under lock before a local-only
    apply. This path never deletes the remote source branch and never applies to
    a held workspace or a source lane with PR evidence.
+   A dirty closed-source PR lane must first use
+   `preserve-dirty-superseded <task>` with the same exact closed-source PR and
+   ordered carry-forward patch arguments. Its dry run rejects untracked or
+   ignored files, renamed, copied, malformed, non-UTF-8, literal-pathspec
+   metacharacters, active replacement refs, repository/ambient graft history,
+   or repository/ambient shallow history,
+   any whole-index hidden
+   assume-unchanged/skip-worktree entry (including the combined lowercase
+   `s` `git ls-files -v` representation),
+   filtered, legacy `crlf`-normalized, ident-expanded, mode-hidden, encoded,
+   or drifting paths. The repository baseline `text=auto eol=lf` is supported
+   by hashing raw working-tree bytes with `--no-filters` into the temporary
+   snapshot index, rather than by filtered `git add`; it
+   disables Git fsmonitor for every status proof, refuses `core.trustctime=false`,
+   `core.ignoreCase=true`, and `core.autocrlf=true|input`, and repeats the
+   configuration and conversion-attribute checks at the final cleanup boundary.
+   Those bounded, NUL-delimited attribute checks cover both the live tracked
+   paths and the recorded source tree, so deleting a conversion rule in dirty
+   metadata cannot authorize a reset that restores it. Its preservation ref must be
+   a direct, non-symbolic ref and is written without dereferencing, so a
+   pre-existing symbolic ref cannot redirect the snapshot. It persists dirty
+   paths in UTF-8 byte order rather than host-locale order, forces
+   dirty-submodule visibility, and rejects every ambient Git index,
+   repository/worktree, common-directory, object-store, or alternate
+   replacement-ref-base override, and also
+   refuses a nonempty repository `objects/info/alternates` file so durable
+   snapshot objects cannot depend on another object store. Snapshot
+   blobs, tree, commit, and ref are written with Git's loose-object/reference
+   durability enabled before reset. The exact current manifest owner must run it—dirty-lane
+   takeover is a separate governed operation. Its apply re-reads the exact
+   porcelain set under lock, stages only those named paths in a temporary
+   index, and repeats the porcelain/tree proof immediately before reset. The
+   final producer-lease heartbeat and exact checked-out branch/HEAD reproof are
+   adjacent to that reset, so governed
+   writers cannot publish during the destructive boundary. It publishes a
+   lane-qualified `refs/codex-preservation/<task>/dirty-superseded` snapshot
+   commit/tree, records exact dirty path/status/blob identities plus owner and
+   successor bindings in the manifest, and re-reads every binding before it
+   cleans the source worktree. Ordinary apply repeats the absence of pending
+   snapshot intent or preservation evidence after taking the manifest lock;
+   if either appears, only the separately authorized `--resume-pending` route
+   may recover it. Every generic cleanup path (merged, integrated, orphan,
+   branch, and closed-remote) likewise rejects either pending intent or
+   completed preservation evidence; only the governed resume and
+   `cleanup-superseded` routes may settle the durable record. Persisted snapshot identity fields are normalized
+   only when their aliases agree. An adopted pending snapshot must have the
+   recorded source head as its sole parent and match a separately rebuilt full
+   tree from the still-dirty source, not merely the named dirty entries. A
+   recorded prior owner is accepted
+   only through a valid ownership-takeover lineage. It never removes a
+   worktree, local branch, or remote branch. If later local cleanup needs to
+   recover a preserved snapshot, use the retained path/object/mode evidence to
+   write each regular-file blob directly with `git cat-file blob`, recreate
+   mode `120000` entries as symlinks from their raw link-text blobs, and remove
+   recorded deletions; then verify raw object IDs with `git hash-object
+   --no-filters`. Do not use `git checkout`, `git restore`, or `git
+   cherry-pick` for this recovery because working-tree attributes can normalize
+   the preserved bytes. `cleanup-superseded` re-validates
+   any recorded snapshot as a direct (non-symbolic) ref and, while the worktree remains present, rechecks
+   full status including ignored/untracked residue and whole-index hidden flags
+   before local cleanup; a missing, changed, or unreadable preservation object,
+   live residue, or hidden index entry is a hard stop line. Preservation
+   refuses emulated symlinks and non-durable Git fsync settings; its raw
+   object, tree, commit, and ref writes explicitly use Git's `fsync` method
+   before the source reset. A proven partial
+   cleanup validates the immutable evidence from its stable checkout without
+   probing the deliberately absent worktree. A crash or blocked post-reset check
+   leaves immutable pending evidence. If a pre-publication intent has no published
+   ref, `--resume-pending` re-reads the exact still-dirty source, retires only
+   that empty intent without reset, and requires a new ordinary snapshot. Re-run
+   any published pending snapshot with
+   `preserve-dirty-superseded <task> --resume-pending --apply` and fresh
+   approval/reason (which is retained with the resumed reset): it settles only
+   an exact re-read clean source or an exact still-dirty snapshot, and otherwise
+   makes no reset. Generic
+   `cleanup-merged`, `cleanup-current`, `cleanup-integrated`, and branch
+   cleanup deliberately refuse a lane with this evidence; only the final
+   `cleanup-superseded` route may remove its local resources.
    A clean lane with a retained, non-open PR can instead use the narrowly
    approved closed-PR form only for one exact task:
    `cleanup-integrated <task> --allow-closed-pr-integrated --approval "<recorded operator approval>" --base origin/<base> --summary-json`.
@@ -662,8 +740,10 @@ do not treat an operator authorization as a bypass.
    rerun the same governed command—do not delete resources manually.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface. Use
-   `cleanup-orphans --summary-json` to inspect matched orphan directories before
-   applying removal.
+   `cleanup-orphans --summary-json` to inspect matched orphan directories and
+   retained dirty-preservation holds before applying removal. Invalid manifest
+   inventory blocks any destructive orphan or branch cleanup rather than being
+   treated as evidence absence.
    For local codex branch cleanup, use `cleanup-branches --summary-json` to
    inspect safe and skipped branches before any delete apply.
    For assignment closeout, use `close-assignments --summary-json` to inspect

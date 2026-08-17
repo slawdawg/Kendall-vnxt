@@ -38,3 +38,17 @@ test("does not treat npm npm_execpath as a pnpm entrypoint", () => {
   assert.equal(resolved.env?.PATH, "/usr/bin");
   assert.equal("npm_execpath" in resolved.env, false);
 });
+
+test("resolver keeps caller command state while stripping a non-pnpm ambient npm_execpath", () => {
+  const resolved = resolveWorkspaceCommand("pnpm", ["install"], {
+    env: { PATH: process.env.PATH || "", npm_execpath: "/tmp/mise/shims/pnpm", GIT_INDEX_FILE: "/tmp/preservation-index" },
+  });
+
+  assert.equal(resolved.command, "pnpm");
+  assert.equal(resolved.env?.GIT_INDEX_FILE, "/tmp/preservation-index");
+  assert.equal("npm_execpath" in resolved.env, false);
+  assert.deepEqual(
+    { index: resolved.env?.GIT_INDEX_FILE || null, npm: resolved.env?.npm_execpath || null },
+    { index: "/tmp/preservation-index", npm: null },
+  );
+});
