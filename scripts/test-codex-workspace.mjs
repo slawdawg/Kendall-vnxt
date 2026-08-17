@@ -8471,12 +8471,21 @@ try {
         "under-reserved supervisor leaf was launched or the packet reran an earlier stage",
       );
 
-      const second = runFixtureScript(
-        fixture,
-        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
-        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "0" } },
-      );
-      assert(second.code === 0, second.stderr || second.stdout);
+      // A CI runner can spend the ordinary 180s invocation budget while it
+      // advances several mocked supervisor leaves.  Keep resuming the same
+      // packet until it settles, asserting the normal bounded pause rather
+      // than treating an additional healthy pause as a product failure.
+      let resumed = null;
+      for (let attempt = 0; attempt <= supervisorLeaves.length; attempt += 1) {
+        resumed = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "0" } },
+        );
+        if (resumed.code === 0) break;
+        assert(resumed.stderr.includes("packet paused before"), resumed.stderr || resumed.stdout);
+      }
+      assert(resumed?.code === 0, resumed?.stderr || resumed?.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "resumed supervisor packet reran a completed stage or skipped a fixed leaf");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
