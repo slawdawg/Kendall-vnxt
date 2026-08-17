@@ -18,6 +18,9 @@ Status: current navigation index
 - `kendall-vnxt-phase-2-completion-and-phase-3-retirement-readiness-2026-08-17.md`:
   Phase 2 completion evidence, exact remaining V0 compatibility inventory, and
   the dependency-ordered Phase 3 deletion/rollback plan.
+- `kendall-vnxt-phase-3-canonical-presentation-preparation-2026-08-17.md`:
+  implementation-ready first-slice plan for replacing the live V0 cockpit
+  presentation and operational projection before any legacy deletion.
 - `kendall-vnxt-orchestration-boundary-decision-2026-08-16.md`: current Phase 1
   no-adoption decision and the supervisor-owned lifecycle-evidence / governed
   workspace-outcome contract boundary for any future engine evaluation.
