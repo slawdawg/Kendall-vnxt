@@ -14,6 +14,12 @@ const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/,
 ];
+const CANONICAL_PACKET_READ_PATH = /^\/pipeline-control-plane\/(?:work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/;
+const CLIENT_SAFE_PROJECTION_METADATA_KEYS = new Set(`schemaVersion projectionId generatedAt sourceUpdatedAt sourceLabel freshnessState staleAfterSeconds backendReachability fixtureMode truthSummary stageSummaries sourceStates workPackets selectedPacketDetails managerSummary activeManagerLaneClarity coordinationHealth workerSummary reliabilityProblems gatedControls runtimeReadiness actionCapabilities actionCapabilitiesV1 executeAdmission queueSummary evidenceRefs packetId title currentStage status truthLabel sourceRef canonicalContract productModeMapping blocker nextAction unblocker readyToTest workItemId queueLease executionAttempts correlationIds updatedAt metadataOnly sourceRefs latestTransitionEventRef recentTransitionEventRefs latestMovementSummary canSatisfyLiveMovementProof parentPacketId lineageKind operatorTestState operatorTestNote actionResults actionResultsV1 reviewRoute workGraph refId sourceType pathOrUrl contentSha256 readyId userFacingSummary testableSurface verificationRefs rawPayloadRetained leaseId attemptCount heartbeatAt leaseExpiresAt fencingToken active state attemptId routeDecisionId workerId lane eventRefs availability routeState reasonCode reason safeFallback exactIdentity issuanceState findingSummary count highestSeverity dataClass execution deliveryEvidenceEligible retention sourceSchemaVersion executionJobId reportIdentity waveMembership dependencyState reservation capacity posture owner nextSafeAction label emptyReason backendEmpty backendUnavailable fixtureBacked stale summary stage packetCount sourceId sourceKind runId observedAt source freshness activeWorkCount staleOwnerTargetCount staleOwnerProjectedCount dirtyPreserveCount missingWorktreeJournalHold reliabilityState checkedAt enabled allowedForEnvironment visibleLabelRequired canSatisfyLiveProof activeLeaseCount activeWorkerCount warmWorkerCount blockedQueueCount dispatchableQueueCount closedQueueCount healthySourceCount exhaustedSourceCount blockedSourceCount gatedSourceCount staleSourceCount unavailableSourceCount refillingSourceCount unknownSourceCount sourceExhausted inactivityReason warmCount waitingCount stalledCount failedCount drainingCount killedCount completeCount unavailableCount unknownCount workerRefs problemId kind severity likelyIssue controlId operation authorityFamily stopLine blockedCount gatedCount limits observed blockingDimensions policyVersion capacityAvailable actionId targetType targetId capabilityState authorityState riskTier typedReason expectedResultSummary correlationRequired idempotencyRequired actionContext actionContextDigestSha256 sourceMode serverBound expectedRuntimeMode expectedRuntimeRevision expectedActiveWorkCount expectedActiveLeaseCount expectedRunningAttemptCount expectedPacketCurrentEventId expectedCurrentOwnerId newOwnerId expectedWorkItemState expectedWorkItemUpdatedAt expectedActiveLeaseId expectedRunningAttemptId expectedOriginalAttemptId expectedRetryIntentId expectedLinkedWorkItemId expectedLinkedPacketId outcome resultingStage resultingStatus actionRecordId approvalId childPacketId idempotencyKey successEvidence replayed originalAttemptId retryIntentId linkedWorkItemId linkedPacketId resultingPacketCurrentEventId originalAttemptPreserved providerOrWorkerLaunched resultingRuntimeMode resultingRuntimeRevision runningAttemptCount intakeStopped activeWorkPreserved activeWorkAllowedToConverge workersKilled intakeResumed previousOwnerId activeLeaseTransferred workerLaunched`.split(" "));
+[
+  "executionAttemptId", "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
+  "stateSource", "activeCount", "closedCount", "staleCount", "refillingCount",
+].forEach((key) => CLIENT_SAFE_PROJECTION_METADATA_KEYS.add(key));
 // This is deliberately smaller than the operator read surface. It is the
 // complete browser-to-supervisor capability of the fixed verification account.
 const TEST_VIEWER_READ_PATHS = [
@@ -205,15 +211,197 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
           return true;
         }
       }
+      const browserSafeBody = request.method === "GET"
+        ? CANONICAL_PACKET_READ_PATH.test(targetPath)
+          ? redactCanonicalPacketResponse(upstream.body)
+          : targetPath === "/pipeline-control-plane/projection"
+            ? redactPipelineProjectionResponse(upstream.body)
+            : upstream.body
+        : upstream.body;
       const headers = { "cache-control": "no-store", "content-type": upstream.contentType || "application/json; charset=utf-8" };
       if (upstream.setCookie) headers["set-cookie"] = upstream.setCookie;
       response.writeHead(upstream.statusCode, headers);
-      response.end(upstream.body);
+      response.end(browserSafeBody);
     } catch {
       if (response.headersSent) response.destroy();
       else sendJson(response, 503, { state: "unavailable" });
     }
     return true;
+  };
+}
+
+function redactCanonicalPacketResponse(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    return Buffer.from(JSON.stringify({ state: "unavailable" }));
+  }
+  const redact = (packet) => redactCanonicalPacket(packet);
+  const safePayload = Array.isArray(payload)
+    ? payload.map(redact)
+    : payload && typeof payload === "object" && Array.isArray(payload.data)
+      ? { data: payload.data.map(redact) }
+      : payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
+        ? { data: redact(payload.data) }
+        : redact(payload);
+  return Buffer.from(JSON.stringify(safePayload));
+}
+
+function redactPipelineProjectionResponse(body) {
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    return Buffer.from(JSON.stringify({ state: "unavailable" }));
+  }
+  const redactWorkPacket = (packet) => packet && typeof packet === "object" && !Array.isArray(packet)
+    ? {
+        packetId: packet.packetId,
+        title: packet.title,
+        currentStage: packet.currentStage,
+        status: packet.status,
+        truthLabel: packet.truthLabel,
+        sourceRef: packet.sourceRef,
+        canonicalContract: null,
+        productModeMapping: null,
+        blocker: packet.blocker,
+        nextAction: packet.nextAction,
+        unblocker: packet.unblocker,
+        readyToTest: packet.readyToTest,
+        evidenceRefs: packet.evidenceRefs,
+        workItemId: packet.workItemId,
+        queueLease: packet.queueLease,
+        executionAttempts: packet.executionAttempts,
+        correlationIds: packet.correlationIds,
+        updatedAt: packet.updatedAt,
+        metadataOnly: packet.metadataOnly,
+      }
+    : packet;
+  const redactSelectedPacketDetail = (detail) => detail && typeof detail === "object" && !Array.isArray(detail)
+    ? {
+        packetId: detail.packetId,
+        sourceRefs: detail.sourceRefs,
+        canonicalContract: null,
+        productModeMapping: null,
+        evidenceRefs: detail.evidenceRefs,
+        currentStage: detail.currentStage,
+        status: detail.status,
+        truthLabel: detail.truthLabel,
+        blocker: detail.blocker,
+        nextAction: detail.nextAction,
+        unblocker: detail.unblocker,
+        readyToTest: detail.readyToTest,
+        latestTransitionEventRef: detail.latestTransitionEventRef,
+        recentTransitionEventRefs: detail.recentTransitionEventRefs,
+        latestMovementSummary: detail.latestMovementSummary,
+        canSatisfyLiveMovementProof: detail.canSatisfyLiveMovementProof,
+        parentPacketId: detail.parentPacketId,
+        lineageKind: detail.lineageKind,
+        operatorTestState: detail.operatorTestState,
+        operatorTestNote: detail.operatorTestNote,
+        actionCapabilities: detail.actionCapabilities,
+        actionCapabilitiesV1: detail.actionCapabilitiesV1,
+        actionResults: detail.actionResults,
+        actionResultsV1: detail.actionResultsV1,
+        workItemId: detail.workItemId,
+        queueLease: detail.queueLease,
+        executionAttempts: detail.executionAttempts,
+        correlationIds: detail.correlationIds,
+        reviewRoute: detail.reviewRoute,
+        workGraph: detail.workGraph,
+        metadataOnly: detail.metadataOnly,
+      }
+    : detail;
+  const redact = (projection) => {
+    if (!projection || typeof projection !== "object" || Array.isArray(projection)) return { state: "unavailable" };
+    return redactNestedProjectionMetadata({
+      schemaVersion: projection.schemaVersion,
+      projectionId: projection.projectionId,
+      generatedAt: projection.generatedAt,
+      sourceUpdatedAt: projection.sourceUpdatedAt,
+      sourceLabel: projection.sourceLabel,
+      freshnessState: projection.freshnessState,
+      staleAfterSeconds: projection.staleAfterSeconds,
+      backendReachability: projection.backendReachability,
+      fixtureMode: projection.fixtureMode,
+      truthSummary: projection.truthSummary,
+      stageSummaries: projection.stageSummaries,
+      sourceStates: projection.sourceStates,
+      workPackets: Array.isArray(projection.workPackets) ? projection.workPackets.map(redactWorkPacket) : projection.workPackets,
+      selectedPacketDetails: Array.isArray(projection.selectedPacketDetails) ? projection.selectedPacketDetails.map(redactSelectedPacketDetail) : projection.selectedPacketDetails,
+      managerSummary: projection.managerSummary,
+      activeManagerLaneClarity: projection.activeManagerLaneClarity,
+      coordinationHealth: projection.coordinationHealth,
+      workerSummary: projection.workerSummary,
+      reliabilityProblems: projection.reliabilityProblems,
+      gatedControls: projection.gatedControls,
+      runtimeReadiness: projection.runtimeReadiness,
+      actionCapabilities: projection.actionCapabilities,
+      actionCapabilitiesV1: projection.actionCapabilitiesV1,
+      executeAdmission: projection.executeAdmission,
+      queueSummary: projection.queueSummary,
+      evidenceRefs: projection.evidenceRefs,
+    });
+  };
+  const safePayload = payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
+    ? { data: redact(payload.data) }
+    : redact(payload);
+  return Buffer.from(JSON.stringify(safePayload));
+}
+
+function redactNestedProjectionMetadata(value) {
+  if (Array.isArray(value)) return value.map(redactNestedProjectionMetadata);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => CLIENT_SAFE_PROJECTION_METADATA_KEYS.has(key))
+    .map(([key, nested]) => [key, redactNestedProjectionMetadata(nested)]));
+}
+
+function redactCanonicalPacket(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { state: "unavailable" };
+  const packet = value;
+  const packetId = typeof packet.packetId === "string" ? packet.packetId : null;
+  if (!packetId) return { state: "unavailable" };
+  const sourceRef = { refId: `authoritative:${packetId}`, sourceType: "workflow", pathOrUrl: null, title: "Authoritative lifecycle metadata", contentSha256: null };
+  const rawHistory = Array.isArray(packet.history) ? packet.history : [];
+  const currentIndex = rawHistory.findIndex((event) => event && typeof event === "object" && event.eventId === packet.currentEventId);
+  const history = rawHistory.map((event, index) => {
+    const rawEvent = event && typeof event === "object" ? event : {};
+    return {
+      eventId: `event:${index + 1}`,
+      packetId,
+      schemaVersion: 1,
+      eventType: rawEvent.eventType,
+      previousStage: rawEvent.previousStage ?? null,
+      targetStage: rawEvent.targetStage,
+      status: rawEvent.status,
+      truthLabel: rawEvent.truthLabel,
+      sourceRef,
+      actor: { actorType: rawEvent.actor?.actorType },
+      occurredAt: rawEvent.occurredAt,
+      payloadSummary: "Redacted metadata-only lifecycle event.",
+      evidenceRefs: [],
+      metadataOnly: true,
+    };
+  });
+  return {
+    packetId,
+    title: "Canonical supervisor packet",
+    currentStage: packet.currentStage,
+    status: packet.status,
+    truthLabel: packet.truthLabel,
+    sourceRef,
+    createdAt: packet.createdAt,
+    updatedAt: packet.updatedAt,
+    currentEventId: currentIndex >= 0 ? `event:${currentIndex + 1}` : null,
+    parentPacketId: null,
+    lineageKind: "root",
+    readyToTest: null,
+    operatorTestState: "not_ready",
+    operatorTestNote: null,
+    history,
+    metadataOnly: true,
   };
 }
 

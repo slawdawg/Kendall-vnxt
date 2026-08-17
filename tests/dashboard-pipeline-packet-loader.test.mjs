@@ -70,11 +70,11 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   assert.equal(listed.fixtureMode.kind, "runtime");
   assert.equal(listed.fixtureMode.label, "Supervisor runtime");
   assert.equal(listed.fixtureMode.canSatisfyLiveProof, false);
-  assert.equal(listed.canonicalPackets[0].authoritativeLifecycle.packetId, authoritativePacket.packetId);
+  assert.equal(listed.canonicalPackets[0].canonicalLifecycle.packetId, authoritativePacket.packetId);
   assert.equal(listed.canonicalPackets[0].compatibilityProjection.packetId, listed.packets[0].packetId);
   assert.equal(Object.hasOwn(canonicalListed, "packets"), false);
   assert.equal(Object.hasOwn(canonicalDetailed, "packet"), false);
-  assert.equal(canonicalListed.canonicalPackets[0].authoritativeLifecycle.packetId, authoritativePacket.packetId);
+  assert.equal(canonicalListed.canonicalPackets[0].canonicalLifecycle.packetId, authoritativePacket.packetId);
   assert.equal(canonicalDetailed.canonicalPacket?.authoritativeLifecycle.packetId, authoritativePacket.packetId);
   assert.equal(listed.packets[0].packetId, authoritativePacket.packetId);
   assert.equal(detailed.fixtureMode.kind, "runtime");
@@ -90,7 +90,7 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   ]);
 });
 
-test("pipeline loader retains canonical extensions while naming the temporary compatibility projection", async () => {
+test("pipeline loader exposes only the client-safe canonical lifecycle while naming the temporary compatibility projection", async () => {
   const authoritativePacket = {
     ...authoritativeWorkPacket(),
     canonicalContract: { productMode: "operator_assisted" },
@@ -106,9 +106,10 @@ test("pipeline loader retains canonical extensions while naming the temporary co
   const listed = await loader.loadPipelineCockpitPackets();
   const detailed = await loader.loadPipelineCockpitPacket(authoritativePacket.packetId);
 
-  assert.deepEqual(listed.canonicalPackets[0].canonicalContract, authoritativePacket.canonicalContract);
-  assert.deepEqual(listed.canonicalPackets[0].evidenceChain, authoritativePacket.evidenceChain);
-  assert.deepEqual(listed.canonicalPackets[0].productModeMapping, authoritativePacket.productModeMapping);
+  assert.equal(listed.canonicalPackets[0].canonicalLifecycle.packetId, authoritativePacket.packetId);
+  assert.equal(Object.hasOwn(listed.canonicalPackets[0], "canonicalContract"), false);
+  assert.equal(Object.hasOwn(listed.canonicalPackets[0], "evidenceChain"), false);
+  assert.equal(Object.hasOwn(listed.canonicalPackets[0], "productModeMapping"), false);
   assert.equal(listed.packets[0].packetId, listed.canonicalPackets[0].compatibilityProjection.packetId);
   assert.deepEqual(detailed.canonicalPacket?.evidenceChain, authoritativePacket.evidenceChain);
   assert.equal(detailed.packet?.packetId, detailed.canonicalPacket?.compatibilityProjection.packetId);
@@ -121,7 +122,7 @@ test("normal loader and packet-detail route keep the canonical DTO until their n
     readFile(detailComponentPath, "utf8"),
   ]);
 
-  assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketV1\[\]/);
+  assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketClientV1\[\]/);
   assert.match(loaderSource, /canonicalPacket: DashboardCanonicalWorkPacketV1 \| null/);
   assert.doesNotMatch(loaderSource, /packets: PipelineRuntimePacket\[\]/);
   assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
@@ -129,6 +130,7 @@ test("normal loader and packet-detail route keep the canonical DTO until their n
   assert.match(detailRouteSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);
   assert.match(detailComponentSource, /canonicalPacket\.compatibilityProjection/);
   assert.match(detailComponentSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(loaderSource, /canonicalPackets: canonicalPackets\.map\(projectDashboardCanonicalPacketForClient\)/);
 });
 
 test("pipeline packet reads use the transport selected by the caller runtime", async () => {
@@ -170,6 +172,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
       summary: "Supervisor returned zero persisted WorkPacketV0 rows.",
     },
   });
+  emptyProjection.rawProviderResponse = "python-only extension";
   const loader = await loadPipelinePacketLoader(fixtures, {
     getPipelineDashboardProjection: async () => emptyProjection,
     getWorkPackets: async () => [],
@@ -179,7 +182,8 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   const empty = await loader.loadPipelineCockpitPackets();
   assert.equal(empty.fixtureMode.kind, "empty");
   assert.equal(empty.packets.length, 0);
-  assert.equal(empty.projection, emptyProjection);
+  assert.notEqual(empty.projection, emptyProjection);
+  assert.doesNotMatch(JSON.stringify(empty.projection), /python-only extension/i);
 
   for (const emptyReason of ["blocked", "refilling", "source_exhausted"]) {
     const reasonProjection = runtimeProjection([], {
@@ -1679,6 +1683,57 @@ test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evide
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
 });
 
+test("pipeline loader strips raw canonical lifecycle fields before cockpit client transport", async () => {
+  const lifecycle = authoritativeLifecyclePacket("manager-source-authoritative-only");
+  lifecycle.history[0].payloadSummary = "provider payload: raw browser secret";
+  lifecycle.history[0].evidenceRefs = ["credential token: raw browser secret"];
+  const rawCanonicalPacket = {
+    authoritativeLifecycle: lifecycle,
+    canonicalContract: { raw: "server-only extension" },
+    evidenceChain: { raw: "server-only evidence" },
+    productModeMapping: { raw: "server-only mapping" },
+    compatibilityProjection: authoritativeWorkPacket(),
+  };
+  const projection = runtimeProjection([lifecycle.packetId]);
+  projection.rawProviderResponse = "python-only extension";
+  projection.workPackets[0].canonicalContract = { extra: "server-only extension" };
+  projection.workPackets[0].productModeMapping = { extra: "server-only extension" };
+  projection.workPackets[0].rawProviderResponse = "python-only extension";
+  projection.workPackets[0].sourceRef = { refId: "doc:packet", sourceType: "workflow", pathOrUrl: null, title: "Packet", contentSha256: null, rawProviderResponse: "python-only extension" };
+  projection.backendReachability.checkedAt = "2026-08-17T00:00:00.000Z";
+  projection.fixtureMode.enabled = false;
+  projection.managerSummary = { stateSource: "supervisor_projection", activeLeaseCount: 2, freshnessState: "live" };
+  projection.workerSummary = { stateSource: "supervisor_projection", workerRefs: ["worker:1"], freshnessState: "live" };
+  projection.queueSummary = { activeCount: 1, dispatchableCount: 2, closedCount: 3, staleCount: 4, refillingCount: 5, unknownCount: 6, emptyReason: null };
+  projection.selectedPacketDetails = [{
+    packetId: lifecycle.packetId,
+    canonicalContract: { extra: "server-only extension" },
+    productModeMapping: { extra: "server-only extension" },
+    rawProviderResponse: "python-only extension",
+  }];
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getPipelineDashboardProjection: async () => projection,
+    getWorkPackets: async () => [rawCanonicalPacket],
+  });
+
+  const result = await loader.__canonicalListForTest();
+  const clientPacket = JSON.parse(JSON.stringify(result.canonicalPackets[0]));
+  assert.deepEqual(Object.keys(clientPacket).sort(), ["canonicalLifecycle", "compatibilityProjection"]);
+  assert.equal(Object.hasOwn(clientPacket.canonicalLifecycle.history[0], "payloadSummary"), false);
+  assert.equal(Object.hasOwn(clientPacket.canonicalLifecycle.history[0], "evidenceRefs"), false);
+  assert.doesNotMatch(JSON.stringify(clientPacket), /provider payload|credential token|server-only/i);
+  assert.equal(clientPacket.compatibilityProjection.packetId, lifecycle.packetId);
+  assert.equal(result.projection.workPackets[0].canonicalContract, null);
+  assert.equal(result.projection.workPackets[0].productModeMapping, null);
+  assert.equal(result.projection.selectedPacketDetails[0].canonicalContract, null);
+  assert.equal(result.projection.selectedPacketDetails[0].productModeMapping, null);
+  assert.equal(result.projection.backendReachability.checkedAt, "2026-08-17T00:00:00.000Z");
+  assert.equal(result.projection.managerSummary.activeLeaseCount, 2);
+  assert.deepEqual(result.projection.workerSummary.workerRefs, ["worker:1"]);
+  assert.equal(result.projection.queueSummary.dispatchableCount, 2);
+  assert.doesNotMatch(JSON.stringify(result.projection), /python-only extension/i);
+});
+
 test("dedicated runtime treats a successful empty canonical list as authoritative", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
@@ -2941,8 +2996,15 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
         compatibilityProjection: authoritativeWorkPacket(),
       };
     }
+    const currentStage = packet.currentStage === "human_gate" ? "needs_approval" : packet.currentStage;
+    const lifecycle = authoritativeLifecyclePacket(packet.packetId);
+    lifecycle.title = packet.title;
+    lifecycle.currentStage = currentStage;
+    lifecycle.status = packet.status;
+    lifecycle.history[0].targetStage = currentStage;
+    lifecycle.history[0].status = packet.status;
     return {
-      authoritativeLifecycle: packet,
+      authoritativeLifecycle: lifecycle,
       canonicalContract: packet?.canonicalContract ?? null,
       evidenceChain: packet?.evidenceChain ?? null,
       productModeMapping: packet?.productModeMapping ?? null,

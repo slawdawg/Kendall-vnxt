@@ -50,8 +50,7 @@ import {
   requestPipelineOperationalApproval,
   requestPipelineOperationalApprovalV1,
 } from "../../lib/pipeline-supervisor-actions";
-import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
-import type { DashboardCanonicalWorkPacketV1 } from "../../lib/pipeline-supervisor-runtime";
+import type { DashboardCanonicalWorkPacketClientV1, PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
 
@@ -125,8 +124,8 @@ export function PipelineCockpit({
   managerExecutionLane?: PipelineManagerExecutionLaneState | null;
   /** Fixed test_viewer sessions can inspect truth but never receive action affordances. */
   readOnly?: boolean;
-  /** Canonical runtime rows; this boundary owns the temporary V0 adapter. */
-  canonicalPackets?: readonly DashboardCanonicalWorkPacketV1[];
+  /** Client-safe canonical runtime rows; this boundary owns the temporary V0 adapter. */
+  canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
   /** Explicit-demo V0 fixtures only. Normal runtime callers pass canonicalPackets. */
   packets?: PipelineFixturePacket[];
   projection?: PipelineDashboardProjectionV0 | null;

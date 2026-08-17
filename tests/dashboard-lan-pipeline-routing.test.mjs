@@ -21,7 +21,7 @@ test("LAN pipeline route avoids server-side supervisor reads", async () => {
   assert.match(await readFile(pipelineClient, "utf8"), /loadPipelineCockpitPackets/);
 });
 
-test("normal and LAN cockpit callers carry canonical packets to the named V0 compatibility boundary", async () => {
+test("normal and LAN cockpit callers carry client-safe canonical packets to the named V0 compatibility boundary", async () => {
   const [normalSource, lanSource, detailSource, loaderSource, cockpitSource] = await Promise.all([
     readFile(route, "utf8"),
     readFile(pipelineClient, "utf8"),
@@ -31,11 +31,16 @@ test("normal and LAN cockpit callers carry canonical packets to the named V0 com
   ]);
   assert.match(normalSource, /canonicalPackets=\{canonicalPackets\}/);
   assert.match(lanSource, /canonicalPackets=\{result\.canonicalPackets\}/);
-  assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketV1\[\]/);
+  assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketClientV1\[\]/);
+  assert.match(loaderSource, /canonicalPackets: canonicalPackets\.map\(projectDashboardCanonicalPacketForClient\)/);
+  assert.match(loaderSource, /function clientSafePipelineProjection/);
+  assert.match(loaderSource, /canonicalContract: null/);
+  assert.match(loaderSource, /productModeMapping: null/);
   assert.match(loaderSource, /canonicalPacket: DashboardCanonicalWorkPacketV1 \| null/);
   assert.doesNotMatch(loaderSource, /packets: PipelineRuntimePacket\[\]/);
   assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
-  assert.doesNotMatch(loaderSource, /compatibilityProjection/);
+  assert.doesNotMatch(loaderSource, /payloadSummary: lifecycle\.history/);
+  assert.doesNotMatch(loaderSource, /evidenceRefs: lifecycle\.history/);
   assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.compatibilityProjection\)/);
   assert.match(cockpitSource, /projectSupervisorWorkPacketsToCockpitPackets/);
   assert.match(detailSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
@@ -57,6 +62,7 @@ test("LAN pipeline browser reads stay out of the Node UDS module and use the aut
   assert.match(runtimeSource, /requestSupervisorJson/);
   assert.match(transportSource, /\$\{window\.location\.origin\}\/api\/supervisor/);
   assert.match(proxySource, /READ_ONLY_SUPERVISOR_PATHS/);
+  assert.match(proxySource, /redactPipelineProjectionResponse/);
   assert.match(proxySource, /projection\|work-packets.*work-items/);
   assert.match(proxySource, /\/work-packets/);
   assert.match(proxySource, /work-items\\\/\[A-Za-z0-9\._:%-\]\+\\\/packet/);

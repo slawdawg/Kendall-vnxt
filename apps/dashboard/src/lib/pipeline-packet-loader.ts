@@ -1,4 +1,4 @@
-import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type { AuthoritativeWorkPacketLifecycleView, PipelineDashboardProjectionV0, WorkPacketV0View } from "@kendall/contracts";
 
 import {
   getPipelineDashboardProjection,
@@ -6,10 +6,66 @@ import {
   getWorkPackets,
   type DashboardCanonicalWorkPacketV1,
 } from "./pipeline-supervisor-runtime";
+
+/** The only canonical form that is allowed to cross the dashboard client boundary. */
+export type DashboardCanonicalWorkPacketClientV1 = {
+  canonicalLifecycle: {
+    packetId: string;
+    title: string;
+    currentStage: AuthoritativeWorkPacketLifecycleView["currentStage"];
+    status: AuthoritativeWorkPacketLifecycleView["status"];
+    truthLabel: AuthoritativeWorkPacketLifecycleView["truthLabel"];
+    currentEventId: string;
+    createdAt: string;
+    updatedAt: string;
+    metadataOnly: true;
+    history: Array<{
+      eventId: string;
+      eventType: AuthoritativeWorkPacketLifecycleView["history"][number]["eventType"];
+      previousStage: AuthoritativeWorkPacketLifecycleView["history"][number]["previousStage"];
+      targetStage: AuthoritativeWorkPacketLifecycleView["history"][number]["targetStage"];
+      status: AuthoritativeWorkPacketLifecycleView["history"][number]["status"];
+      truthLabel: AuthoritativeWorkPacketLifecycleView["history"][number]["truthLabel"];
+      occurredAt: string;
+      actorType: AuthoritativeWorkPacketLifecycleView["history"][number]["actor"]["actorType"];
+    }>;
+  };
+  compatibilityProjection: WorkPacketV0View;
+};
+
+function projectDashboardCanonicalPacketForClient(
+  packet: DashboardCanonicalWorkPacketV1,
+): DashboardCanonicalWorkPacketClientV1 {
+  const lifecycle = packet.authoritativeLifecycle;
+  return {
+    canonicalLifecycle: {
+      packetId: lifecycle.packetId,
+      title: lifecycle.title,
+      currentStage: lifecycle.currentStage,
+      status: lifecycle.status,
+      truthLabel: lifecycle.truthLabel,
+      currentEventId: lifecycle.currentEventId,
+      createdAt: lifecycle.createdAt,
+      updatedAt: lifecycle.updatedAt,
+      metadataOnly: true,
+      history: lifecycle.history.map((event) => ({
+        eventId: event.eventId,
+        eventType: event.eventType,
+        previousStage: event.previousStage,
+        targetStage: event.targetStage,
+        status: event.status,
+        truthLabel: event.truthLabel,
+        occurredAt: event.occurredAt,
+        actorType: event.actor.actorType,
+      })),
+    },
+    compatibilityProjection: packet.compatibilityProjection,
+  };
+}
 export type PipelineCockpitPacketLoad = {
   fixtureMode: PipelineRuntimeSourceState;
-  /** Canonical source state for the normal dashboard cockpit. */
-  canonicalPackets: DashboardCanonicalWorkPacketV1[];
+  /** Client-safe canonical source state for the dashboard cockpit. */
+  canonicalPackets: DashboardCanonicalWorkPacketClientV1[];
   projection: PipelineDashboardProjectionV0 | null;
   projectionError: string | null;
 };
@@ -88,8 +144,8 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       }
       return {
         fixtureMode: runtimeSourceState("empty", "Supervisor empty", emptyRuntimeSummary(projectionResult.projection)),
-        canonicalPackets,
-        projection: projectionResult.projection,
+        canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
+        projection: clientSafePipelineProjection(verifiedProjection),
         projectionError: projectionResult.error,
       };
     }
@@ -121,8 +177,8 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
           ? "Persisted supervisor canonical packet rows are stale and read-only; no provider, worker, GitHub, or Obsidian calls are made by this route."
           : "Persisted supervisor canonical packet rows only. No provider, worker, GitHub, or Obsidian calls are made by this route.",
       ),
-      canonicalPackets,
-      projection: projectionResult.projection,
+      canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
+      projection: clientSafePipelineProjection(verifiedProjection),
       projectionError: projectionResult.error,
     };
   } catch (error) {
@@ -136,6 +192,118 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       projectionError: workPacketError,
     };
   }
+}
+
+/**
+ * Projection extensions are useful to server-side read assembly, but the
+ * cockpit client only needs the already-validated lifecycle state. Do not
+ * serialize contracts or mode mappings (including any permissive upstream
+ * extension keys) over this boundary.
+ */
+function clientSafePipelineProjection(projection: PipelineDashboardProjectionV0): PipelineDashboardProjectionV0 {
+  return clientSafeProjectionMetadata({
+    schemaVersion: projection.schemaVersion,
+    projectionId: projection.projectionId,
+    generatedAt: projection.generatedAt,
+    sourceUpdatedAt: projection.sourceUpdatedAt,
+    sourceLabel: projection.sourceLabel,
+    freshnessState: projection.freshnessState,
+    staleAfterSeconds: projection.staleAfterSeconds,
+    backendReachability: projection.backendReachability,
+    fixtureMode: projection.fixtureMode,
+    truthSummary: projection.truthSummary,
+    stageSummaries: projection.stageSummaries,
+    sourceStates: projection.sourceStates,
+    workPackets: projection.workPackets.map((packet) => ({
+      packetId: packet.packetId,
+      title: packet.title,
+      currentStage: packet.currentStage,
+      status: packet.status,
+      truthLabel: packet.truthLabel,
+      sourceRef: packet.sourceRef,
+      canonicalContract: null,
+      productModeMapping: null,
+      blocker: packet.blocker,
+      nextAction: packet.nextAction,
+      unblocker: packet.unblocker,
+      readyToTest: packet.readyToTest,
+      evidenceRefs: packet.evidenceRefs,
+      workItemId: packet.workItemId,
+      queueLease: packet.queueLease,
+      executionAttempts: packet.executionAttempts,
+      correlationIds: packet.correlationIds,
+      updatedAt: packet.updatedAt,
+      metadataOnly: packet.metadataOnly,
+    })),
+    selectedPacketDetails: projection.selectedPacketDetails.map((detail) => ({
+      packetId: detail.packetId,
+      sourceRefs: detail.sourceRefs,
+      canonicalContract: null,
+      productModeMapping: null,
+      evidenceRefs: detail.evidenceRefs,
+      currentStage: detail.currentStage,
+      status: detail.status,
+      truthLabel: detail.truthLabel,
+      blocker: detail.blocker,
+      nextAction: detail.nextAction,
+      unblocker: detail.unblocker,
+      readyToTest: detail.readyToTest,
+      latestTransitionEventRef: detail.latestTransitionEventRef,
+      recentTransitionEventRefs: detail.recentTransitionEventRefs,
+      latestMovementSummary: detail.latestMovementSummary,
+      canSatisfyLiveMovementProof: detail.canSatisfyLiveMovementProof,
+      parentPacketId: detail.parentPacketId,
+      lineageKind: detail.lineageKind,
+      operatorTestState: detail.operatorTestState,
+      operatorTestNote: detail.operatorTestNote,
+      actionCapabilities: detail.actionCapabilities,
+      actionCapabilitiesV1: detail.actionCapabilitiesV1,
+      actionResults: detail.actionResults,
+      actionResultsV1: detail.actionResultsV1,
+      workItemId: detail.workItemId,
+      queueLease: detail.queueLease,
+      executionAttempts: detail.executionAttempts,
+      correlationIds: detail.correlationIds,
+      reviewRoute: detail.reviewRoute,
+      workGraph: detail.workGraph,
+      metadataOnly: detail.metadataOnly,
+    })),
+    managerSummary: projection.managerSummary,
+    activeManagerLaneClarity: projection.activeManagerLaneClarity,
+    coordinationHealth: projection.coordinationHealth,
+    workerSummary: projection.workerSummary,
+    reliabilityProblems: projection.reliabilityProblems,
+    gatedControls: projection.gatedControls,
+    runtimeReadiness: projection.runtimeReadiness,
+    actionCapabilities: projection.actionCapabilities,
+    actionCapabilitiesV1: projection.actionCapabilitiesV1,
+    executeAdmission: projection.executeAdmission,
+    queueSummary: projection.queueSummary,
+    evidenceRefs: projection.evidenceRefs,
+  });
+}
+
+/** Strip unknown nested extension keys as well as the explicit root/row allowlists. */
+const CLIENT_SAFE_PROJECTION_METADATA_KEYS = new Set([
+  "schemaVersion", "projectionId", "generatedAt", "sourceUpdatedAt", "sourceLabel", "freshnessState", "staleAfterSeconds", "backendReachability", "fixtureMode", "truthSummary", "stageSummaries", "sourceStates", "workPackets", "selectedPacketDetails", "managerSummary", "activeManagerLaneClarity", "coordinationHealth", "workerSummary", "reliabilityProblems", "gatedControls", "runtimeReadiness", "actionCapabilities", "actionCapabilitiesV1", "executeAdmission", "queueSummary", "evidenceRefs",
+  "packetId", "title", "currentStage", "status", "truthLabel", "sourceRef", "canonicalContract", "productModeMapping", "blocker", "nextAction", "unblocker", "readyToTest", "workItemId", "queueLease", "executionAttempts", "correlationIds", "updatedAt", "metadataOnly", "sourceRefs", "latestTransitionEventRef", "recentTransitionEventRefs", "latestMovementSummary", "canSatisfyLiveMovementProof", "parentPacketId", "lineageKind", "operatorTestState", "operatorTestNote", "actionResults", "actionResultsV1", "reviewRoute", "workGraph",
+  "refId", "sourceType", "pathOrUrl", "contentSha256", "readyId", "userFacingSummary", "testableSurface", "verificationRefs", "rawPayloadRetained", "leaseId", "attemptCount", "heartbeatAt", "leaseExpiresAt", "fencingToken", "active", "state", "attemptId", "routeDecisionId", "workerId", "lane", "eventRefs", "availability", "routeState", "reasonCode", "reason", "safeFallback", "exactIdentity", "issuanceState", "findingSummary", "count", "highestSeverity", "dataClass", "execution", "deliveryEvidenceEligible", "retention", "sourceSchemaVersion", "executionJobId", "reportIdentity", "waveMembership", "dependencyState", "reservation", "capacity", "posture", "owner", "nextSafeAction",
+  "label", "emptyReason", "backendEmpty", "backendUnavailable", "fixtureBacked", "stale", "summary", "stage", "packetCount", "sourceId", "sourceKind", "runId", "observedAt", "source", "freshness", "availability", "activeWorkCount", "staleOwnerTargetCount", "staleOwnerProjectedCount", "dirtyPreserveCount", "missingWorktreeJournalHold", "reliabilityState", "activeLeaseCount", "activeWorkerCount", "warmWorkerCount", "blockedQueueCount", "dispatchableQueueCount", "closedQueueCount", "healthySourceCount", "exhaustedSourceCount", "blockedSourceCount", "gatedSourceCount", "staleSourceCount", "unavailableSourceCount", "refillingSourceCount", "unknownSourceCount", "sourceExhausted", "inactivityReason", "warmCount", "waitingCount", "stalledCount", "failedCount", "drainingCount", "killedCount", "completeCount", "unavailableCount", "unknownCount", "workerRefs", "problemId", "kind", "severity", "likelyIssue", "controlId", "operation", "authorityFamily", "stopLine", "dispatchableCount", "blockedCount", "gatedCount", "limits", "observed", "blockingDimensions", "policyVersion", "capacityAvailable", "checkedAt", "enabled", "allowedForEnvironment", "visibleLabelRequired", "canSatisfyLiveProof",
+  "actionId", "targetType", "targetId", "capabilityState", "authorityState", "riskTier", "typedReason", "expectedResultSummary", "correlationRequired", "idempotencyRequired", "actionContext", "actionContextDigestSha256", "sourceMode", "serverBound", "executionAttemptId", "expectedRuntimeMode", "expectedRuntimeRevision", "expectedActiveWorkCount", "expectedActiveLeaseCount", "expectedRunningAttemptCount", "expectedPacketCurrentEventId", "expectedCurrentOwnerId", "newOwnerId", "expectedWorkItemState", "expectedWorkItemUpdatedAt", "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive", "expectedActiveLeaseId", "expectedRunningAttemptId", "expectedOriginalAttemptId", "expectedRetryIntentId", "expectedLinkedWorkItemId", "expectedLinkedPacketId", "outcome", "resultingStage", "resultingStatus", "actionRecordId", "approvalId", "childPacketId", "idempotencyKey", "successEvidence", "replayed", "originalAttemptId", "retryIntentId", "linkedWorkItemId", "linkedPacketId", "resultingPacketCurrentEventId", "originalAttemptPreserved", "providerOrWorkerLaunched", "resultingRuntimeMode", "resultingRuntimeRevision", "runningAttemptCount", "intakeStopped", "activeWorkPreserved", "activeWorkAllowedToConverge", "workersKilled", "intakeResumed", "previousOwnerId", "activeLeaseTransferred", "workerLaunched",
+]);
+[
+  "executionAttemptId", "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
+  "stateSource", "activeCount", "closedCount", "staleCount", "refillingCount",
+].forEach((key) => CLIENT_SAFE_PROJECTION_METADATA_KEYS.add(key));
+
+function clientSafeProjectionMetadata<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(clientSafeProjectionMetadata) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => CLIENT_SAFE_PROJECTION_METADATA_KEYS.has(key))
+      .map(([key, nested]) => [key, clientSafeProjectionMetadata(nested)]),
+  ) as T;
 }
 
 export async function loadPipelineCockpitPacket(packetId: unknown): Promise<PipelineCockpitPacketDetailLoad> {
