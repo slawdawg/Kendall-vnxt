@@ -1331,7 +1331,8 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(contractSource, /canSatisfyLiveProof:\s*false;/);
   assert.match(cockpitSource, /projectionHasRenderableBackendPackets/);
   assert.match(cockpitSource, /projectionLiveProofState/);
-  assert.match(cockpitSource, /projectionEffectiveLabels\(currentProjection(?:, projectionTruthClock)?\)/);
+  assert.match(cockpitSource, /projectionEffectiveLabels\(currentOperationalTruth, projectionTruthClock\)/);
+  assert.doesNotMatch(cockpitSource, /projectionEffectiveLabels\(currentProjection(?:, projectionTruthClock)?\)/);
   assert.match(cockpitSource, /projectionDisplayLabels/);
   assert.match(cockpitSource, /projectionLiveProofLabel/);
   assert.match(cockpitSource, /explicitNonRuntimeSource[\s\S]*\?\s*"unavailable"/);
@@ -1476,25 +1477,25 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   );
   assert.match(
     actionGuardSource,
-    /currentProjectionAllowsOperationalActions\(currentProjection\)/,
+    /currentProjectionAllowsOperationalActions\(currentOperationalTruth\)/,
     "the action handler must recompute time-effective live proof before requesting approval"
   );
   assert.ok(
-    actionGuardSource.indexOf("currentProjectionAllowsOperationalActions(currentProjection)")
+    actionGuardSource.indexOf("currentProjectionAllowsOperationalActions(currentOperationalTruth)")
       < actionGuardSource.indexOf("requestPipelineOperationalApprovalV1"),
     "the stale-tab guard must run before a v1 approval request"
   );
   assert.ok(
-    actionGuardSource.indexOf("currentProjectionAllowsOperationalActions(currentProjection)")
+    actionGuardSource.indexOf("currentProjectionAllowsOperationalActions(currentOperationalTruth)")
       < actionGuardSource.indexOf("requestPipelineOperationalApproval(approvalRequest)"),
     "the stale-tab guard must run before a legacy approval request"
   );
-  const v1ApplyGuard = actionGuardSource.lastIndexOf("currentProjectionAllowsOperationalActions(currentProjection)", actionGuardSource.indexOf("applyPipelineOperationalActionV1(request)"));
+  const v1ApplyGuard = actionGuardSource.lastIndexOf("currentProjectionAllowsOperationalActions(currentOperationalTruth)", actionGuardSource.indexOf("applyPipelineOperationalActionV1(request)"));
   assert.ok(
     v1ApplyGuard > actionGuardSource.indexOf("requestPipelineOperationalApprovalV1"),
     "the stale-tab guard must run again after v1 approval and before applying the action"
   );
-  const legacyApplyGuard = actionGuardSource.lastIndexOf("currentProjectionAllowsOperationalActions(currentProjection)", actionGuardSource.indexOf("applyPipelineOperationalAction(request)"));
+  const legacyApplyGuard = actionGuardSource.lastIndexOf("currentProjectionAllowsOperationalActions(currentOperationalTruth)", actionGuardSource.indexOf("applyPipelineOperationalAction(request)"));
   assert.ok(
     legacyApplyGuard > actionGuardSource.indexOf("requestPipelineOperationalApproval(approvalRequest)"),
     "the stale-tab guard must run again after legacy approval and before applying the action"

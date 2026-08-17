@@ -70,6 +70,9 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   assert.equal(listed.fixtureMode.kind, "runtime");
   assert.equal(listed.fixtureMode.label, "Supervisor runtime");
   assert.equal(listed.fixtureMode.canSatisfyLiveProof, false);
+  assert.equal(listed.operationalTruth?.schemaVersion, "dashboard-canonical-operational-projection/v1");
+  assert.equal(JSON.stringify(listed.operationalTruth?.workPackets), JSON.stringify([{ packetId: authoritativePacket.packetId }]));
+  assert.equal(Object.hasOwn(listed.operationalTruth ?? {}, "rawProviderResponse"), false);
   assert.equal(listed.canonicalPackets[0].presentation.packetId, authoritativePacket.packetId);
   assert.equal(listed.canonicalPackets[0].presentation.packetId, listed.packets[0].packetId);
   assert.equal(Object.hasOwn(canonicalListed, "packets"), false);

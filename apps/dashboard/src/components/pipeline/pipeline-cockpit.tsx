@@ -51,6 +51,7 @@ import {
   requestPipelineOperationalApprovalV1,
 } from "../../lib/pipeline-supervisor-actions";
 import type { DashboardCanonicalWorkPacketClientV1, PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
+import type { DashboardCanonicalOperationalProjectionTruthV1 } from "../../lib/pipeline/canonical-operational-projection";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
 
@@ -115,6 +116,7 @@ export function PipelineCockpit({
   managerExecutionLane,
   readOnly = false,
   canonicalPackets,
+  operationalTruth,
   packets,
   projection,
   projectionError,
@@ -126,6 +128,8 @@ export function PipelineCockpit({
   readOnly?: boolean;
   /** Client-safe canonical runtime rows; this boundary owns the temporary V0 adapter. */
   canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
+  /** Versioned canonical truth for action gating; the board projection migrates next. */
+  operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
   /** Explicit-demo V0 fixtures only. Normal runtime callers pass canonicalPackets. */
   packets?: PipelineFixturePacket[];
   projection?: PipelineDashboardProjectionV0 | null;
@@ -149,6 +153,7 @@ export function PipelineCockpit({
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [projectionTruthClock, setProjectionTruthClock] = useState(() => Date.now());
   const currentProjection = projection ?? null;
+  const currentOperationalTruth = operationalTruth ?? null;
   const activeManagerLaneClarity = currentProjection?.activeManagerLaneClarity ?? null;
   const currentProjectionError = projectionError ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -210,10 +215,10 @@ export function PipelineCockpit({
   const selectedContextualActionStrip = !readOnly && selectedItem?.type === "packet"
     ? activeBoardViewModel?.contextualActions.byPacketId[selectedItem.id] ?? null
     : null;
-  const effectiveProjectionLabels = currentProjection ? projectionEffectiveLabels(currentProjection, projectionTruthClock) : null;
-  const projectionSupportsOperationalActions = currentProjection
+  const effectiveProjectionLabels = currentOperationalTruth ? projectionEffectiveLabels(currentOperationalTruth, projectionTruthClock) : null;
+  const projectionSupportsOperationalActions = currentOperationalTruth
     ? projectionLiveProofState(
-        currentProjection,
+        currentOperationalTruth,
         effectiveProjectionLabels?.sourceLabel ?? "unavailable",
         effectiveProjectionLabels?.freshnessState ?? "unavailable"
       ).canSatisfyLiveProof
@@ -274,7 +279,7 @@ export function PipelineCockpit({
       setActionFeedback("Operational actions are unavailable outside supervisor runtime mode.");
       return;
     }
-    if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+    if (!currentProjectionAllowsOperationalActions(currentOperationalTruth)) {
       setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
       return;
     }
@@ -306,7 +311,7 @@ export function PipelineCockpit({
         rawPayloadRetained: false,
       } as PipelineOperationalActionApprovalRequestV1;
       try {
-        if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+        if (!currentProjectionAllowsOperationalActions(currentOperationalTruth)) {
           setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
           return;
         }
@@ -329,7 +334,7 @@ export function PipelineCockpit({
           metadataOnly: true,
           rawPayloadRetained: false,
         } as PipelineOperationalActionRequestV1;
-        if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+        if (!currentProjectionAllowsOperationalActions(currentOperationalTruth)) {
           setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
           return;
         }
@@ -363,7 +368,7 @@ export function PipelineCockpit({
       rawPayloadRetained: false,
     };
     try {
-      if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+      if (!currentProjectionAllowsOperationalActions(currentOperationalTruth)) {
         setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
         return;
       }
@@ -386,7 +391,7 @@ export function PipelineCockpit({
         metadataOnly: true,
         rawPayloadRetained: false,
       };
-      if (!currentProjectionAllowsOperationalActions(currentProjection)) {
+      if (!currentProjectionAllowsOperationalActions(currentOperationalTruth)) {
         setActionFeedback("Operational actions are unavailable until the supervisor projection is current live truth.");
         return;
       }
@@ -396,7 +401,7 @@ export function PipelineCockpit({
     } catch (error) {
       setActionFeedback(error instanceof Error ? error.message : "Operational action failed.");
     }
-  }, [currentProjection, fixtureMode.kind, readOnly]);
+  }, [currentOperationalTruth, fixtureMode.kind, readOnly]);
   const registerPacketButton = useCallback((packetId: string, node: HTMLButtonElement | null) => {
     if (node) {
       packetButtonRefs.current.set(packetId, node);
