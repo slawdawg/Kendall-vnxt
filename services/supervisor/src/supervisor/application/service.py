@@ -1056,6 +1056,9 @@ class SupervisorService:
         session: AsyncSession,
         payload: AuthoritativeWorkPacketCreateRequest,
     ) -> AuthoritativeWorkPacketLifecycleView:
+        canonical_contract = await self._canonical_contract_for_authoritative_create(session, payload)
+        if canonical_contract is not payload.canonicalContract:
+            payload = payload.model_copy(update={"canonicalContract": canonical_contract})
         _validate_authoritative_metadata_text(payload.title, path="title")
         parallel_work_graph = self._authoritative_parallel_work_graph_evidence(payload)
         review_route = self._authoritative_review_route_evidence(payload)
@@ -1177,6 +1180,12 @@ class SupervisorService:
                 if replay_event and (not payload.packetId or replay_event.packet_id == payload.packetId):
                     replay_packet = await session.get(AuthoritativeWorkPacket, replay_event.packet_id)
                     if replay_packet:
+                        if self._is_manager_source_intake_actor(payload.actor.model_dump()):
+                            replay_contract = self._canonical_contract_from_packet_metadata(replay_packet.source_ref_json)
+                            if replay_contract is None:
+                                raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
+                            payload = payload.model_copy(update={"canonicalContract": replay_contract})
+                            source_ref = self._authoritative_source_ref_payload(payload.sourceRef, replay_contract)
                         if not self._authoritative_create_event_matches(
                             replay_event,
                             payload,
@@ -4222,6 +4231,114 @@ class SupervisorService:
             for key in ("refId", "sourceType", "pathOrUrl", "title", "contentSha256")
             if key in stored_payload
         }
+
+    async def _canonical_contract_for_authoritative_create(
+        self,
+        session: AsyncSession,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> PipelineCanonicalContractV1View | None:
+        """Mint the contract for the one manager intake adapter, never accept it from that adapter.
+
+        Manager intake may nominate bounded source metadata, but supervisor owns
+        the resulting product-lifecycle contract.  Keeping this derivation at
+        the creation boundary makes the persisted contract and its product-mode
+        mapping available to the manager's canonical readback without turning
+        the manager into a peer lifecycle author.
+        """
+        if not self._is_manager_source_intake_actor(payload.actor.model_dump()):
+            return payload.canonicalContract
+        if payload.canonicalContract is not None:
+            raise ValueError("Manager source intake must not supply its own canonical contract.")
+        if payload.packetId:
+            existing_packet = await session.get(AuthoritativeWorkPacket, payload.packetId)
+            if existing_packet is not None:
+                existing_contract = self._canonical_contract_from_packet_metadata(existing_packet.source_ref_json)
+                if existing_contract is None:
+                    raise ValueError("Manager source intake refresh requires the persisted server-minted canonical contract.")
+                return existing_contract
+        if payload.idempotencyKey:
+            existing_event = await self._authoritative_lifecycle_event_by_idempotency(
+                session,
+                payload.idempotencyKey,
+                event_type="packet.created",
+            )
+            if existing_event is None:
+                existing_event = await self._authoritative_lifecycle_event_by_idempotency(
+                    session,
+                    payload.idempotencyKey,
+                    event_type="packet.parallel_work_graph_refreshed",
+                )
+            if existing_event is not None:
+                existing_packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
+                existing_contract = self._canonical_contract_from_packet_metadata(
+                    existing_packet.source_ref_json if existing_packet is not None else None
+                )
+                if existing_contract is None:
+                    raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
+                return existing_contract
+        source_ref = payload.sourceRef.model_dump(mode="json", exclude_none=True)
+        packet_id = payload.packetId or "manager-source-intake"
+        evidence_ref = f"supervisor:manager-source-intake:{packet_id}"
+        authority = {
+            "sourceMutationAllowed": False,
+            "providerCallsAllowed": False,
+            "workerLaunchAllowed": False,
+            "githubMutationAllowed": False,
+            "rawPayloadRetentionAllowed": False,
+        }
+        required_components = {
+            component_id: {
+                "componentId": component_id,
+                "requirement": "required",
+                "state": "pass",
+                "evidenceRefs": [evidence_ref],
+            }
+            for component_id in (
+                "source_provenance",
+                "trust_boundary",
+                "authority_boundary",
+                "evidence_retention",
+                "quality_gates",
+            )
+        }
+        required_components["delivery_evidence"] = {
+            "componentId": "delivery_evidence",
+            "requirement": "not_applicable",
+            "state": "not_applicable",
+            "notApplicableReason": "Manager source intake records no delivery action.",
+            "evidenceRefs": [],
+        }
+        return PipelineCanonicalContractV1View.model_validate(
+            {
+                "schemaVersion": "pipeline-canonical-contract/v1",
+                "productMode": self.settings.pipeline_product_mode,
+                "canonicalSource": {
+                    "sourceId": "supervisor-manager-source-intake",
+                    "role": "canonical",
+                    "trust": "authoritative",
+                    "provenance": {
+                        "sourceRef": source_ref,
+                        "observedAt": datetime.now(timezone.utc),
+                        "evidenceRefs": [evidence_ref],
+                    },
+                    "authority": authority,
+                    "metadataOnly": True,
+                    "rawPayloadRetained": False,
+                },
+                "qualityGates": {
+                    "kind": "gate",
+                    "gateId": "manager-source-intake-metadata",
+                    "requirement": "required",
+                    "state": "pass",
+                    "evidenceRefs": [evidence_ref],
+                },
+                "readinessComponents": required_components,
+                "deliveryEvidence": [],
+                "authority": authority,
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+        )
 
     @staticmethod
     def _canonical_contract_from_packet_metadata(stored_payload: object) -> PipelineCanonicalContractV1View | None:

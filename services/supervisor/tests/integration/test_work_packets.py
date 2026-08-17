@@ -893,6 +893,97 @@ def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_
         assert restarted["history"][4]["previousStage"] == "route"
 
 
+def test_manager_source_intake_receives_server_minted_canonical_contract(tmp_path, monkeypatch) -> None:
+    db_name = "manager-source-canonical-contract.db"
+    payload = {
+        "packetId": "packet-manager-source-canonical",
+        "title": "Manager source canonical readback",
+        "initialStage": "capture",
+        "status": "waiting",
+        "truthLabel": "source_owned",
+        "sourceRef": {
+            "refId": "repo_doc:docs/workflows/current-session-runbook.md",
+            "sourceType": "repo_doc",
+            "pathOrUrl": "docs/workflows/current-session-runbook.md",
+        },
+        "actor": {
+            "actorType": "manager",
+            "actorId": "manager-source-intake",
+            "actorLabel": "Manager source intake adapter",
+        },
+        "idempotencyKey": "manager-source-canonical-create",
+        "correlationId": "manager-source-canonical",
+        "payloadSummary": "Eligible manager source candidate accepted as metadata-only intake.",
+        "evidenceRefs": ["manager-candidate:canonical", "manager-eligibility:eligible"],
+    }
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        created_response = client.post("/pipeline-control-plane/work-packets", json=payload)
+        assert created_response.status_code == 200
+        created = created_response.json()["data"]
+        contract = created["canonicalContract"]
+        mapping = created["productModeMapping"]
+        assert contract["canonicalSource"]["sourceId"] == "supervisor-manager-source-intake"
+        provenance_source = contract["canonicalSource"]["provenance"]["sourceRef"]
+        assert provenance_source["refId"] == payload["sourceRef"]["refId"]
+        assert provenance_source["sourceType"] == payload["sourceRef"]["sourceType"]
+        assert provenance_source["pathOrUrl"] == payload["sourceRef"]["pathOrUrl"]
+        assert contract["canonicalSource"]["authority"] == {
+            "sourceMutationAllowed": False,
+            "providerCallsAllowed": False,
+            "workerLaunchAllowed": False,
+            "githubMutationAllowed": False,
+            "rawPayloadRetentionAllowed": False,
+        }
+        assert contract["deliveryEvidence"] == []
+        assert contract["readinessComponents"]["delivery_evidence"] == {
+            "componentId": "delivery_evidence",
+            "requirement": "not_applicable",
+            "state": "not_applicable",
+            "notApplicableReason": "Manager source intake records no delivery action.",
+            "evidenceRefs": [],
+        }
+        assert mapping is not None
+        assert mapping["requestedProductMode"] == "contract_only"
+
+        replay_response = client.post("/pipeline-control-plane/work-packets", json=payload)
+        assert replay_response.status_code == 200
+        assert replay_response.json()["data"]["canonicalContract"] == contract
+
+        manager_supplied_contract = {**payload, "packetId": "packet-manager-supplied-contract", "idempotencyKey": "manager-supplied-contract", "canonicalContract": contract}
+        assert client.post("/pipeline-control-plane/work-packets", json=manager_supplied_contract).status_code == 400
+
+
+def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_contract(tmp_path, monkeypatch) -> None:
+    db_name = "manager-source-canonical-contract-concurrent.db"
+    payload = {
+        "packetId": "packet-manager-source-canonical-concurrent",
+        "title": "Concurrent manager source canonical readback",
+        "sourceRef": {
+            "refId": "repo_doc:docs/workflows/current-session-runbook.md",
+            "sourceType": "repo_doc",
+            "pathOrUrl": "docs/workflows/current-session-runbook.md",
+        },
+        "actor": {
+            "actorType": "manager",
+            "actorId": "manager-source-intake",
+            "actorLabel": "Manager source intake adapter",
+        },
+        "idempotencyKey": "manager-source-canonical-concurrent-create",
+        "correlationId": "manager-source-canonical-concurrent",
+        "payloadSummary": "Eligible manager source candidate accepted as metadata-only intake.",
+        "evidenceRefs": ["manager-candidate:canonical-concurrent"],
+    }
+
+    with _running_http_supervisor(tmp_path, monkeypatch, db_name) as (_main, base_url):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _index: _http_post(base_url, "/pipeline-control-plane/work-packets", payload), range(2)))
+        assert [response.status_code for response in responses] == [200, 200]
+        contracts = [response.json()["data"]["canonicalContract"] for response in responses]
+        assert contracts[0] == contracts[1]
+        assert contracts[0]["canonicalSource"]["sourceId"] == "supervisor-manager-source-intake"
+
+
 def test_authoritative_packet_projects_canonical_contract_without_granting_write_authority(tmp_path, monkeypatch) -> None:
     db_name = "canonical-contract-projection.db"
     db_path = _db_path(tmp_path, db_name)

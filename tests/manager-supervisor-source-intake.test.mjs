@@ -183,10 +183,11 @@ test("manager source intake allowlists eligible source metadata and validates ex
   const packet = sourcePacket({ internalPlanningMetadata: { marker: "must never cross the boundary" } });
   const calls = [];
   const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
     fetchImpl: async (url, options) => {
       const request = JSON.parse(options.body);
       calls.push({ url, options, request });
-      return responseFor(request);
+      return responseFor(request, canonicalFields(request));
     },
   });
 
@@ -203,8 +204,8 @@ test("manager source intake allowlists eligible source metadata and validates ex
   assert.equal(result.summary.seedPacket.supervisorIntake.packetId, calls[0].request.packetId);
   assert.equal(result.summary.seedPacket.supervisorIntake.currentEventId, "event-source-intake-test");
   assert.equal(result.summary.seedPacket.supervisorIntake.metadataOnly, true);
-  assert.equal(result.summary.seedPacket.supervisorIntake.truthSource, "legacy_lifecycle_fallback");
-  assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth, null);
+  assert.equal(result.summary.seedPacket.supervisorIntake.truthSource, "supervisor_canonical");
+  assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth.capabilityState, "gated");
   assert.equal(result.summary.seedPacket.rawPayloadRetained, false);
 });
 
@@ -329,7 +330,7 @@ test("manager source intake sends graph evidence over private UDS without using 
     request.on("end", async () => {
       receivedRequest = JSON.parse(body);
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+      response.end(JSON.stringify(await responseFor(receivedRequest, canonicalFields(receivedRequest)).json()));
     });
   });
   await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
@@ -343,6 +344,7 @@ test("manager source intake sends graph evidence over private UDS without using 
       generatedAt: "2026-07-22T12:00:00.000Z", usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } }, resourceContext: { status: "normal" },
     }), { now: "2026-07-22T12:01:00.000Z" });
     const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+      now: "2026-07-12T12:01:00.000Z",
       supervisorUdsPath: socketPath,
       fetchImpl: () => { throw new Error("private UDS intake must not use fetch"); },
     });
@@ -366,12 +368,13 @@ test("manager source intake sends ordinary metadata over UDS through the public 
     request.on("end", async () => {
       receivedRequest = JSON.parse(body);
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+      response.end(JSON.stringify(await responseFor(receivedRequest, canonicalFields(receivedRequest)).json()));
     });
   });
   await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
   try {
     const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+      now: "2026-07-12T12:01:00.000Z",
       supervisorUdsPath: socketPath,
       fetchImpl: () => { throw new Error("UDS intake must not use fetch"); },
     });
@@ -414,7 +417,9 @@ test("manager source intake accepts a graph-refresh replay after a later termina
     idempotencyKey: "terminal-transition-after-refresh",
   };
   const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
     fetchImpl: async () => responseFor(request, {
+      ...canonicalFields(request),
       currentStage: "deliver",
       status: "complete",
       currentEventId: terminalEvent.eventId,
@@ -460,6 +465,7 @@ test("manager source intake consumes canonical supervisor truth without inferrin
 
 test("canonical supervisor consumer rejects missing stale and contradictory fields and never falls back", async (t) => {
   const scenarios = [
+    ["missing canonical truth", "manager_supervisor_canonical_fields_invalid", () => ({})],
     ["missing mapping", "manager_supervisor_canonical_fields_invalid", (request) => ({ canonicalContract: canonicalFields(request).canonicalContract })],
     ["stale mapping", "manager_supervisor_canonical_fields_stale", (request) => canonicalFields(request, { productModeMapping: { ...canonicalFields(request).productModeMapping, expiresAt: "2026-07-12T11:59:00.000Z" } })],
     ["contradictory mode", "manager_supervisor_canonical_fields_invalid", (request) => canonicalFields(request, { productModeMapping: { ...canonicalFields(request).productModeMapping, requestedProductMode: "operator_review" } })],

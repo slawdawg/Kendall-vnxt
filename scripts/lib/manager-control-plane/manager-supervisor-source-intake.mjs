@@ -237,11 +237,11 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   }
 
   const canonicalSupervisor = projectCanonicalSupervisorPacket(lifecycle, { now: context.now });
-  if (canonicalSupervisor.present && !canonicalSupervisor.valid) {
+  if (!canonicalSupervisor.present || !canonicalSupervisor.valid) {
     const stale = canonicalSupervisor.blockers.some((blocker) => blocker.code === "evidence_stale");
     throw new ManagerSupervisorSourceIntakeError(
       stale ? "manager_supervisor_canonical_fields_stale" : "manager_supervisor_canonical_fields_invalid",
-      canonicalSupervisor.blockers[0]?.message || "Supervisor source intake returned unusable canonical packet truth.",
+      canonicalSupervisor.blockers[0]?.message || "Supervisor source intake requires usable canonical packet truth; legacy lifecycle fallback is not permitted.",
       sourcePacket,
     );
   }
@@ -257,7 +257,7 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
       currentEventId: lifecycle.currentEventId,
       persistedAt: new Date(lifecycle.updatedAt).toISOString(),
       evidenceRef: `supervisor-work-packet:${lifecycle.packetId}`,
-      truthSource: canonicalSupervisor.present ? "supervisor_canonical" : "legacy_lifecycle_fallback",
+      truthSource: "supervisor_canonical",
       canonicalSource: canonicalSupervisor.source,
       readinessComponents: canonicalSupervisor.readinessComponents,
       productModeMapping: canonicalSupervisor.productModeMapping,
