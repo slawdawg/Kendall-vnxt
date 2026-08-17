@@ -344,7 +344,7 @@ function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardVie
       }
       if (specifier === "../../lib/pipeline-supervisor-projector") {
         return {
-          projectSupervisorWorkPacketsToCockpitPackets: (packets) => ({
+          projectDashboardCanonicalPresentationsToCockpitPackets: (packets) => ({
             kind: "runtime",
             packets: packets.map((packet) => ({ ...packet, sourceKind: "supervisor-runtime", sourceId: packet.packetId })),
           }),
@@ -1940,8 +1940,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   assert.match(pipelinePacketLoaderSource, /projectionError: projectionResult\.error/);
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
-  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.compatibilityProjection\)/);
-  assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, compatibilityPackets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
+  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
+  assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
   assert.match(cockpitSource, /runtimePacketIds = new Set\(runtimePackets\.map/);
   assert.match(cockpitSource, /!runtimePacketIds\.has\(card\.packetId\)/);
   assert.match(cockpitSource, /selectedDetailByPacketId = new Map\(projection\.selectedPacketDetails\.map/);
@@ -2862,11 +2862,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
     /export interface Pipeline(Read)?Packet(V0|View)?\s*\{/,
     "dashboard fixtures should not define a parallel dashboard model"
   );
-  assert.match(cockpitSource, /import \{[\s\S]*projectSupervisorWorkPacketsToCockpitPackets[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
+  assert.match(cockpitSource, /import \{[\s\S]*projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
   assert.match(cockpitSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
-  assert.match(packetDetailSource, /projectSupervisorWorkPacketsToCockpitPackets[\s\S]*type PipelineDashboardPacket[\s\S]*from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
+  assert.match(packetDetailSource, /projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*type PipelineDashboardPacket[\s\S]*from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
   assert.match(packetDetailSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
-  assert.match(packetDetailSource, /canonicalPacket\.compatibilityProjection/);
+  assert.match(packetDetailSource, /canonicalPacket\.presentation/);
   assert.match(fixtureSource, /type: "approve_execution"/);
   assert.match(fixtureSource, /type: "approve_delivery"/);
   assert.match(fixtureSource, /type: "request_clarification"/);

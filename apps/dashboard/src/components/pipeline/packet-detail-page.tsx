@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { LocalDogfoodAttestationPanel } from "./local-dogfood-attestation-panel";
 import {
-  projectSupervisorWorkPacketsToCockpitPackets,
+  projectDashboardCanonicalPresentationsToCockpitPackets,
   type PipelineDashboardPacket,
 } from "../../lib/pipeline-supervisor-projector";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
@@ -43,11 +43,11 @@ export function PacketDetailPage({
   sourceState?: PipelineRuntimeSourceState;
   workGraph?: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | null;
 }) {
-  const compatibilityProjection = canonicalPacket
-    ? projectSupervisorWorkPacketsToCockpitPackets([canonicalPacket.compatibilityProjection])
+  const canonicalPresentation = canonicalPacket
+    ? projectDashboardCanonicalPresentationsToCockpitPackets([canonicalPacket.presentation])
     : null;
-  const compatibilityPacket = compatibilityProjection?.kind === "runtime"
-    ? compatibilityProjection.packets[0] ?? null
+  const compatibilityPacket = canonicalPresentation?.kind === "runtime"
+    ? canonicalPresentation.packets[0] ?? null
     : fixturePacket;
   if (!compatibilityPacket) {
     throw new Error("Canonical packet detail compatibility projection failed validation.");

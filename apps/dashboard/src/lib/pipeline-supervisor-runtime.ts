@@ -18,7 +18,6 @@ import {
   isPipelineDashboardProjection,
   normalizePipelineDashboardProjection,
 } from "./pipeline-supervisor-projection";
-import { isWorkPacketV0View } from "./pipeline-supervisor-projector";
 import { requestSupervisorJson, type SupervisorReadOptions } from "./dashboard-supervisor-transport";
 
 function requestJson<T>(path: string, options: SupervisorReadOptions = {}): Promise<T> {
@@ -52,7 +51,78 @@ export type DashboardCanonicalWorkPacketV1 = {
   canonicalContract: PipelineCanonicalContractV1 | null;
   evidenceChain: PipelineEpic25EvidenceChainReadV0 | PipelineEpic25EvidenceChainReadV1 | null;
   productModeMapping: PipelineProductModeMappingV0 | null;
-  compatibilityProjection: WorkPacketV0View;
+  presentation: DashboardCanonicalPresentationV1;
+};
+
+/**
+ * Versioned dashboard presentation assembled only from the authoritative
+ * lifecycle response. The property set intentionally mirrors the current
+ * cockpit/detail display requirements while the V0 projector is retired.
+ */
+export type DashboardCanonicalPresentationV1 = {
+  schemaVersion: "dashboard-canonical-presentation/v1";
+  packetId: string;
+  title: string;
+  requestedOutcome: string;
+  currentStage: "capture" | "classify" | "route" | "shape" | "human_gate" | "execute" | "review" | "promote" | "deliver" | "learn";
+  currentOwner: "kendall" | "operator" | "local_model" | "hermes_worker_mock" | "codex_worker" | "claude_reviewer" | "github" | "memory_review" | "blocked";
+  status: "active" | "waiting" | "blocked" | "failed" | "complete" | "deferred";
+  lifecycleState: {
+    source: "workflow_event";
+    stage: "capture" | "classify" | "route" | "shape" | "human_gate" | "execute" | "review" | "promote" | "deliver" | "learn";
+    owner: "kendall" | "operator" | "local_model" | "hermes_worker_mock" | "codex_worker" | "claude_reviewer" | "github" | "memory_review" | "blocked";
+    status: "active" | "waiting" | "blocked" | "failed" | "complete" | "deferred";
+    reasonCodes: string[];
+    authoritativeRef: string;
+    derivedFromRefs: string[];
+    transitionEventRefs: string[];
+    latestTransitionEventRef: string | null;
+    attemptRef: null;
+    metadataOnly: true;
+    sourceMutationAllowed: false;
+    providerCallsAllowed: false;
+    workerLaunchAllowed: false;
+    githubMutationAllowed: false;
+    cleanupAllowed: false;
+  };
+  riskLevel: "low" | "medium" | "high";
+  priority: "low" | "normal" | "high" | "urgent";
+  sourceRefs: Array<{
+    refId: string;
+    sourceType: "bmad_artifact" | "manual";
+    label: string;
+    pathOrUrl: string | null;
+    freshness: "unknown" | "stale";
+    accessState: "allowed" | "blocked";
+    canonical: true;
+    summaryOnly: true;
+    blockedReason: string | null;
+  }>;
+  evidenceRefs: Array<{
+    refId: string;
+    evidenceType: "event";
+    label: string;
+    artifactPath: null;
+    retentionClass: "metadata_only";
+    rawPayloadRetained: false;
+  }>;
+  transitionEvents: Array<{
+    eventId: string;
+    eventType: string;
+    summary: string;
+    createdAt: string;
+    sourceStage: DashboardCanonicalPresentationV1["currentStage"] | null;
+    targetStage: DashboardCanonicalPresentationV1["currentStage"];
+    sourceOwner: DashboardCanonicalPresentationV1["currentOwner"] | null;
+    targetOwner: DashboardCanonicalPresentationV1["currentOwner"];
+    sourceStatus: null;
+    targetStatus: DashboardCanonicalPresentationV1["status"];
+    reasonCodes: string[];
+    evidenceRefs: string[];
+    durable: true;
+    sourceEventId: null;
+    actorLabel: string;
+  }>;
 };
 
 function canonicalDetailPacket(value: unknown): DashboardCanonicalWorkPacketV1 {
@@ -60,10 +130,7 @@ function canonicalDetailPacket(value: unknown): DashboardCanonicalWorkPacketV1 {
     throw new Error("Canonical WorkPacket detail response is not authoritative lifecycle-shaped.");
   }
   const payload = value as CanonicalSupervisorPacketPayload;
-  const compatibilityProjection = projectAuthoritativeWorkPacket(payload);
-  if (!isWorkPacketV0View(compatibilityProjection)) {
-    throw new Error("Canonical authoritative WorkPacket detail projection failed validation.");
-  }
+  const presentation = projectAuthoritativeWorkPacket(payload);
   const canonicalContract = nullableCanonicalExtension(payload.canonicalContract, isPipelineCanonicalContractV1, "canonicalContract");
   const evidenceChain = nullableEvidenceChainExtension(payload.evidenceChain, payload.packetId);
   const productModeMapping = nullableCanonicalExtension(payload.productModeMapping, isPipelineProductModeMappingV0, "productModeMapping");
@@ -73,7 +140,7 @@ function canonicalDetailPacket(value: unknown): DashboardCanonicalWorkPacketV1 {
     canonicalContract,
     evidenceChain,
     productModeMapping,
-    compatibilityProjection,
+    presentation,
   };
 }
 
@@ -199,13 +266,13 @@ function isAuthoritativeWorkPacketLifecycleView(value: unknown): value is Author
     currentEvent.truthLabel === packet.truthLabel;
 }
 
-function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycleView): WorkPacketV0View {
+function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycleView): DashboardCanonicalPresentationV1 {
   const stage = legacyStage(packet.currentStage);
   const owner = legacyOwner(packet.currentStage, packet.status);
   const currentEvent = packet.history.find((event) => event.eventId === packet.currentEventId)!;
   const supersededBy = supersededPlanningSource(packet.sourceRef.pathOrUrl);
   const sourceType = packet.sourceRef.sourceType === "prd" || packet.sourceRef.sourceType === "bmad_story" ? "bmad_artifact" as const : "manual" as const;
-  const sourceRef: WorkPacketV0View["sourceRefs"][number] = supersededBy === null
+  const sourceRef: DashboardCanonicalPresentationV1["sourceRefs"][number] = supersededBy === null
     ? {
         refId: packet.sourceRef.refId,
         sourceType,
@@ -245,11 +312,12 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
     targetStatus: event.status,
     reasonCodes: ["supervisor.authoritative_lifecycle_event", `supervisor.truth.${event.truthLabel}`],
     evidenceRefs: [...new Set([`event:${event.eventId}`, ...projectionSafeLifecycleRefs(event.evidenceRefs)])],
-    durable: true,
+    durable: true as const,
     sourceEventId: null,
     actorLabel: event.actor.actorLabel || event.actor.actorId || event.actor.actorType,
   }));
   return {
+    schemaVersion: "dashboard-canonical-presentation/v1",
     packetId: packet.packetId,
     title: packet.title,
     requestedOutcome: projectionSafeLifecycleSummary(currentEvent.payloadSummary),
@@ -280,12 +348,6 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
     },
     riskLevel: "medium",
     priority: "normal",
-    candidateWork: null,
-    workItem: null,
-    taskPacket: null,
-    routingPreview: null,
-    routeSummary: null,
-    executionAttempts: [],
     transitionEvents,
     sourceRefs: [sourceRef],
     evidenceRefs: evidenceRefs.map((refId) => ({
@@ -296,19 +358,6 @@ function projectAuthoritativeWorkPacket(packet: AuthoritativeWorkPacketLifecycle
       retentionClass: "metadata_only",
       rawPayloadRetained: false,
     })),
-    artifactRefs: [],
-    humanGateActions: [],
-    humanGateActionRequests: [],
-    laneCards: [],
-    memoryProposals: [],
-    deliveryEvidence: null,
-    learnOutcome: null,
-    learnRefill: null,
-    alphaMemorySourceStatus: null,
-    gateStateValidation: null,
-    loopStopStates: [],
-    reviewSummaries: [],
-    recoveryActions: [],
   };
 }
 

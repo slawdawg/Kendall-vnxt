@@ -14,6 +14,7 @@ import {
   getWorkItems,
   getWorkPacketForWorkItem,
 } from "../../../lib/supervisor";
+import { projectDashboardCanonicalPresentationForWorkItemHold } from "../../../lib/pipeline-supervisor-projector";
 
 export default async function WorkItemDetailRoute({ params }: { params: Promise<{ "work-item-id": string }> }) {
   const { "work-item-id": workItemId } = await params;
@@ -24,7 +25,7 @@ export default async function WorkItemDetailRoute({ params }: { params: Promise<
   const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket] = await Promise.all([
     getWorkItem(workItemId), getWorkItemEvents(workItemId), getWorkItems(), getRoutingPreview(workItemId), getExecutionAttempts(workItemId),
     getRuntimeEvidenceExport(workItemId), getRuntimeEvidenceReviewReport(), getWorkItemTrustedDeliveryEligibilityReport(workItemId),
-    getWorkItemLowRiskDeliveryPlan(workItemId), getWorkItemCleanupPlan(workItemId), getWorkPacketForWorkItem(workItemId).then((packet) => packet?.compatibilityProjection ?? null),
+    getWorkItemLowRiskDeliveryPlan(workItemId), getWorkItemCleanupPlan(workItemId), getWorkPacketForWorkItem(workItemId).then((packet) => packet ? projectDashboardCanonicalPresentationForWorkItemHold(packet.presentation) : null),
   ]);
   const [recipeGateAudit, localWorktreePlan] = await Promise.all([
     item.executionRecipe ? getRecipeGateAudit(workItemId) : null,

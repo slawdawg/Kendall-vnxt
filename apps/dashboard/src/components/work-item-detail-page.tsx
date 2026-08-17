@@ -40,6 +40,7 @@ import {
   getWorkItemEvents,
   getWorkItems,
 } from "../lib/supervisor";
+import { projectDashboardCanonicalPresentationForWorkItemHold } from "../lib/pipeline-supervisor-projector";
 import { formatLane, formatWorkflowState } from "../lib/workflow-display";
 
 export type WorkItemDetailData = Awaited<ReturnType<typeof loadWorkItemDetail>>;
@@ -61,7 +62,7 @@ export async function loadWorkItemDetail(workItemId: string, signal?: AbortSigna
   ] = await Promise.all([
     getWorkItem(workItemId, options), getWorkItemEvents(workItemId, options), getWorkItems(options), getRoutingPreview(workItemId, options),
     getExecutionAttempts(workItemId, options), getRuntimeEvidenceExport(workItemId, options), getRuntimeEvidenceReviewReport(options),
-    getWorkItemTrustedDeliveryEligibilityReport(workItemId, options), getWorkItemLowRiskDeliveryPlan(workItemId, options), getWorkItemCleanupPlan(workItemId, options), getWorkPacketForWorkItem(workItemId, options).then((packet) => packet?.compatibilityProjection ?? null),
+    getWorkItemTrustedDeliveryEligibilityReport(workItemId, options), getWorkItemLowRiskDeliveryPlan(workItemId, options), getWorkItemCleanupPlan(workItemId, options), getWorkPacketForWorkItem(workItemId, options).then((packet) => packet ? projectDashboardCanonicalPresentationForWorkItemHold(packet.presentation) : null),
   ]);
   const [recipeGateAudit, localWorktreePlan] = await Promise.all([
     item.executionRecipe ? getRecipeGateAudit(workItemId, options) : null,

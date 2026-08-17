@@ -11,7 +11,7 @@ test("authoritative packet detail returns the explicit canonical DTO without leg
   assert.match(runtimeSource, /AuthoritativeWorkPacketLifecycleView/);
   assert.match(runtimeSource, /DashboardCanonicalWorkPacketV1/);
   assert.match(runtimeSource, /authoritativeLifecycle/);
-  assert.match(runtimeSource, /compatibilityProjection/);
+  assert.match(runtimeSource, /presentation/);
   assert.match(runtimeSource, /getWorkPacketForWorkItem/);
   assert.match(runtimeSource, /isAuthoritativeWorkPacketLifecycleView/);
   assert.match(runtimeSource, /projectAuthoritativeWorkPacket/);

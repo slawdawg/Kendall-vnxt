@@ -1,65 +1,23 @@
-import type { AuthoritativeWorkPacketLifecycleView, PipelineDashboardProjectionV0, WorkPacketV0View } from "@kendall/contracts";
+import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
 
 import {
   getPipelineDashboardProjection,
   getWorkPacket,
   getWorkPackets,
+  type DashboardCanonicalPresentationV1,
   type DashboardCanonicalWorkPacketV1,
 } from "./pipeline-supervisor-runtime";
 
 /** The only canonical form that is allowed to cross the dashboard client boundary. */
 export type DashboardCanonicalWorkPacketClientV1 = {
-  canonicalLifecycle: {
-    packetId: string;
-    title: string;
-    currentStage: AuthoritativeWorkPacketLifecycleView["currentStage"];
-    status: AuthoritativeWorkPacketLifecycleView["status"];
-    truthLabel: AuthoritativeWorkPacketLifecycleView["truthLabel"];
-    currentEventId: string;
-    createdAt: string;
-    updatedAt: string;
-    metadataOnly: true;
-    history: Array<{
-      eventId: string;
-      eventType: AuthoritativeWorkPacketLifecycleView["history"][number]["eventType"];
-      previousStage: AuthoritativeWorkPacketLifecycleView["history"][number]["previousStage"];
-      targetStage: AuthoritativeWorkPacketLifecycleView["history"][number]["targetStage"];
-      status: AuthoritativeWorkPacketLifecycleView["history"][number]["status"];
-      truthLabel: AuthoritativeWorkPacketLifecycleView["history"][number]["truthLabel"];
-      occurredAt: string;
-      actorType: AuthoritativeWorkPacketLifecycleView["history"][number]["actor"]["actorType"];
-    }>;
-  };
-  compatibilityProjection: WorkPacketV0View;
+  presentation: DashboardCanonicalPresentationV1;
 };
 
 function projectDashboardCanonicalPacketForClient(
   packet: DashboardCanonicalWorkPacketV1,
 ): DashboardCanonicalWorkPacketClientV1 {
-  const lifecycle = packet.authoritativeLifecycle;
   return {
-    canonicalLifecycle: {
-      packetId: lifecycle.packetId,
-      title: lifecycle.title,
-      currentStage: lifecycle.currentStage,
-      status: lifecycle.status,
-      truthLabel: lifecycle.truthLabel,
-      currentEventId: lifecycle.currentEventId,
-      createdAt: lifecycle.createdAt,
-      updatedAt: lifecycle.updatedAt,
-      metadataOnly: true,
-      history: lifecycle.history.map((event) => ({
-        eventId: event.eventId,
-        eventType: event.eventType,
-        previousStage: event.previousStage,
-        targetStage: event.targetStage,
-        status: event.status,
-        truthLabel: event.truthLabel,
-        occurredAt: event.occurredAt,
-        actorType: event.actor.actorType,
-      })),
-    },
-    compatibilityProjection: packet.compatibilityProjection,
+    presentation: packet.presentation,
   };
 }
 export type PipelineCockpitPacketLoad = {
