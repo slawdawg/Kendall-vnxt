@@ -188,3 +188,13 @@ The governing program remains
 and its [Phase 0 inventory](kendall-vnxt-cleanup-phase-0-inventory-2026-08-13.md).
 The active schema rules are in
 [the supervisor migration runbook](../workflows/supervisor-schema-migrations.md).
+
+## Completion record
+
+The Phase 2 gates above were completed by the merged #852, #853, #854, and
+#855 delivery sequence. The source-backed closeout inventory and the bounded
+Phase 3 deletion/rollback order are recorded in
+[Phase 2 Completion and Phase 3 Retirement Readiness](kendall-vnxt-phase-2-completion-and-phase-3-retirement-readiness-2026-08-17.md).
+That record retains the distinction between Phase 2 convergence and Phase 3
+legacy deletion; it does not authorize a route, contract, or persistence
+removal by itself.
