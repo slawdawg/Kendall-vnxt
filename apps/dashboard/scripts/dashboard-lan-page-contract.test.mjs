@@ -69,7 +69,8 @@ test("named pages use the authenticated LAN client boundary rather than SSR supe
   assert.match(detailClient, /useAuthenticatedPageRead/);
   assert.match(detailClient, /AuthenticatedPageState/);
   assert.match(detailClient, /loadWorkItemDetail\(workItemId, signal\)/);
-  assert.match(detailClient, /getWorkPacketForWorkItem\(workItemId, options\)/);
+  assert.match(detailClient, /getWorkItemMemoryReview\(workItemId, options\)/);
+  assert.doesNotMatch(detailClient, /getWorkPacketForWorkItem\(workItemId, options\)/);
   assert.doesNotMatch(detailClient, /getWorkPacket\(`work_item:/);
 });
 
