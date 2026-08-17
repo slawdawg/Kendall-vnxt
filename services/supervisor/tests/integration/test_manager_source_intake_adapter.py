@@ -50,6 +50,16 @@ def _json_get(url: str) -> dict[str, object]:
         return json.loads(response.read().decode("utf8"))
 
 
+def _normalize_read_time_product_mode_mapping(record: dict[str, object], reference: dict[str, object]) -> None:
+    """Normalize only the deliberately fresh capability timestamps for equality proofs."""
+    mapping = record.get("productModeMapping")
+    reference_mapping = reference.get("productModeMapping")
+    assert isinstance(mapping, dict)
+    assert isinstance(reference_mapping, dict)
+    for field in ("checkedAt", "expiresAt"):
+        mapping[field] = reference_mapping[field]
+
+
 def _json_post(url: str, payload: dict[str, object], *, expected_status: int = 200) -> dict[str, object]:
     request = urllib.request.Request(
         url,
@@ -416,6 +426,14 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         restarted_lifecycle = _json_get(
             f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets/{packet_id}"
         )["data"]
+        # Product-mode mapping is a read-time capability view; retain the
+        # persisted lifecycle equality assertion while normalizing its
+        # deliberately fresh observation timestamp.
+        assert restarted_lifecycle["productModeMapping"] is not None
+        assert lifecycle["productModeMapping"] is not None
+        assert restarted_lifecycle["productModeMapping"]["requestedProductMode"] == "contract_only"
+        assert restarted_lifecycle["productModeMapping"]["effectiveProductMode"] == "contract_only"
+        _normalize_read_time_product_mode_mapping(restarted_lifecycle, lifecycle)
         assert restarted_lifecycle == lifecycle
         assert len(restarted_lifecycle["history"]) == 1  # type: ignore[arg-type,index]
         assert restarted_lifecycle["history"][0]["eventType"] == "packet.created"  # type: ignore[index]
@@ -428,6 +446,7 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
             for packet in restarted_projection["workPackets"]  # type: ignore[index,union-attr]
             if packet["packetId"] == packet_id
         )
+        _normalize_read_time_product_mode_mapping(restarted_projected, projected)
         assert restarted_projected == projected
 
         restarted_work_packet_list = _json_get(f"http://127.0.0.1:{port}/work-packets")["data"]

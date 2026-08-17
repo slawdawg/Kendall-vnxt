@@ -4278,7 +4278,10 @@ class SupervisorService:
                 return existing_contract
         source_ref = payload.sourceRef.model_dump(mode="json", exclude_none=True)
         packet_id = payload.packetId or "manager-source-intake"
-        evidence_ref = f"supervisor:manager-source-intake:{packet_id}"
+        evidence_ref = (
+            "opaque-ref:sha256:"
+            f"{hashlib.sha256(f'manager-source-intake:{packet_id}'.encode('utf8')).hexdigest()}"
+        )
         authority = {
             "sourceMutationAllowed": False,
             "providerCallsAllowed": False,
