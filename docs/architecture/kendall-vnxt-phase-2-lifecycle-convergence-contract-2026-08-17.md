@@ -119,10 +119,10 @@ supervisor identity, event, and evidence references.
 | --- | --- | --- |
 | Product work-packet identity, current state, transitions, evidence, and terminal outcome | Supervisor authoritative packet and event records | Manager and dashboard may retain bounded display/session metadata, but must not independently decide or persist the same product lifecycle state. |
 | Candidate intake | Manager may submit one eligible, bounded source-backed candidate; supervisor records the resulting authoritative packet. | Intake is loopback-only/metadata-only and validates the returned persisted identity. It is not a manager-owned lifecycle write model. |
-| Dashboard read model | Supervisor canonical list/detail envelope | Dashboard may render a derived view, but derived state must be traceable to canonical packet/event references and must not initiate legacy fallback after Phase 2 convergence. |
+| Dashboard read model | Supervisor canonical list/detail envelope | `pipeline-packet-loader` keeps `DashboardCanonicalWorkPacketV1` server-side, then carries deliberately client-safe lifecycle metadata and a named `compatibilityProjection` through normal and LAN cockpit source state. Raw lifecycle payload summaries, evidence refs, Python-only extension records, and projection `canonicalContract`/`productModeMapping` values do not cross the client boundary. The cockpit consumes its named compatibility adapter only at the remaining V0 projection boundary; it does not initiate a legacy fallback. |
 | Canonical response extensions | Supervisor Python schema owns `canonicalContract`, `evidenceChain`, and `productModeMapping` until a cross-language decision is recorded. | A dashboard/manager DTO must either carry, safely project, or deliberately omit each extension with a test and documented reason; it may not accidentally lose fields by treating the TypeScript core as the whole response. |
 | WorkItem-to-packet identity | `WorkItem.authoritative_packet_id` is the unique persisted canonical mapping. | Dashboard work-item detail reads use the canonical lookup backed by that column. Missing link, missing packet, or metadata/link disagreement is unavailable rather than a legacy assembly fallback. |
-| Legacy V0 data | Transitional compatibility only | Every caller must be inventoried and migrated or placed behind a bounded adapter before deletion. No new V0 field, route, fixture-backed production fallback, or parallel parity logic is allowed. |
+| Legacy V0 data | Transitional compatibility only | The remaining dashboard V0-only boundaries are `pipeline-supervisor-projector.ts`, explicit demo fixtures and their focused tests, and the two WorkItem detail consumers (`app/work-items/[work-item-id]/page.tsx` and `components/work-item-detail-page.tsx`). Direct pipeline packet detail now carries its canonical DTO to `PacketDetailPage`, which owns its named read-only adapter. Normal cockpit callers carry canonical DTOs to the cockpit before its named adapter. No new V0 field, route, fixture-backed production fallback, or parallel parity logic is allowed. |
 | Schema history | Ordered supervisor migrations | The migration table and frozen baseline preserve prior schemas; data migration must be additive and recoverable before any V0 persistence retirement. |
 
 ## Phase 2 exit gates
@@ -144,6 +144,12 @@ permission to delete in the same change.
    canonical response never calls `/work-packets`, performs a V0 merge, or
    substitutes a fixture. A canonical contract failure is surfaced as a
    bounded unavailable/invalid state, not silently hidden by legacy data.
+   The convergence metric records zero normal dashboard loaders or routes that
+   return a bare `WorkPacketV0View`; the temporary cockpit and `PacketDetailPage`
+   `compatibilityProjection` adapters, the two WorkItem detail consumers
+   (`app/work-items/[work-item-id]/page.tsx` and
+   `components/work-item-detail-page.tsx`), and
+   the demo/fixture boundary remain explicitly counted until retired.
 3. **Manager as adapter:** manager source intake and local-proof flows consume
    and retain supervisor packet/event references. Tests prove manager ledgers
    are session/delivery coordination only and do not become peer lifecycle

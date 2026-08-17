@@ -64,10 +64,18 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
 
   const listed = await loader.loadPipelineCockpitPackets();
   const detailed = await loader.loadPipelineCockpitPacket(authoritativePacket.packetId);
+  const canonicalListed = await loader.__canonicalListForTest();
+  const canonicalDetailed = await loader.__canonicalDetailForTest(authoritativePacket.packetId);
 
   assert.equal(listed.fixtureMode.kind, "runtime");
   assert.equal(listed.fixtureMode.label, "Supervisor runtime");
   assert.equal(listed.fixtureMode.canSatisfyLiveProof, false);
+  assert.equal(listed.canonicalPackets[0].canonicalLifecycle.packetId, authoritativePacket.packetId);
+  assert.equal(listed.canonicalPackets[0].compatibilityProjection.packetId, listed.packets[0].packetId);
+  assert.equal(Object.hasOwn(canonicalListed, "packets"), false);
+  assert.equal(Object.hasOwn(canonicalDetailed, "packet"), false);
+  assert.equal(canonicalListed.canonicalPackets[0].canonicalLifecycle.packetId, authoritativePacket.packetId);
+  assert.equal(canonicalDetailed.canonicalPacket?.authoritativeLifecycle.packetId, authoritativePacket.packetId);
   assert.equal(listed.packets[0].packetId, authoritativePacket.packetId);
   assert.equal(detailed.fixtureMode.kind, "runtime");
   assert.equal(detailed.fixtureMode.label, "Supervisor runtime");
@@ -76,7 +84,53 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   assert.equal(detailed.packet.sourceId, authoritativePacket.packetId);
   assert.equal(detailed.packet.fixtureId, undefined);
   assert.equal(detailed.packet.fixtureKind, undefined);
-  assert.deepEqual(calls, ["projection", "list", "projection", `detail:${authoritativePacket.packetId}`]);
+  assert.deepEqual(calls, [
+    "projection", "list", "projection", `detail:${authoritativePacket.packetId}`,
+    "projection", "list", "projection", `detail:${authoritativePacket.packetId}`,
+  ]);
+});
+
+test("pipeline loader exposes only the client-safe canonical lifecycle while naming the temporary compatibility projection", async () => {
+  const authoritativePacket = {
+    ...authoritativeWorkPacket(),
+    canonicalContract: { productMode: "operator_assisted" },
+    evidenceChain: { authoritativePacketId: "manager-source-authoritative-only", freshnessState: "stale" },
+    productModeMapping: { requestedProductMode: "operator_assisted" },
+  };
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getPipelineDashboardProjection: async () => runtimeProjection([authoritativePacket.packetId]),
+    getWorkPackets: async () => [authoritativePacket],
+    getWorkPacket: async () => authoritativePacket,
+  });
+
+  const listed = await loader.loadPipelineCockpitPackets();
+  const detailed = await loader.loadPipelineCockpitPacket(authoritativePacket.packetId);
+
+  assert.equal(listed.canonicalPackets[0].canonicalLifecycle.packetId, authoritativePacket.packetId);
+  assert.equal(Object.hasOwn(listed.canonicalPackets[0], "canonicalContract"), false);
+  assert.equal(Object.hasOwn(listed.canonicalPackets[0], "evidenceChain"), false);
+  assert.equal(Object.hasOwn(listed.canonicalPackets[0], "productModeMapping"), false);
+  assert.equal(listed.packets[0].packetId, listed.canonicalPackets[0].compatibilityProjection.packetId);
+  assert.deepEqual(detailed.canonicalPacket?.evidenceChain, authoritativePacket.evidenceChain);
+  assert.equal(detailed.packet?.packetId, detailed.canonicalPacket?.compatibilityProjection.packetId);
+});
+
+test("normal loader and packet-detail route keep the canonical DTO until their named compatibility boundaries", async () => {
+  const [loaderSource, detailRouteSource, detailComponentSource] = await Promise.all([
+    readFile(loaderPath, "utf8"),
+    readFile(detailRoutePath, "utf8"),
+    readFile(detailComponentPath, "utf8"),
+  ]);
+
+  assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketClientV1\[\]/);
+  assert.match(loaderSource, /canonicalPacket: DashboardCanonicalWorkPacketV1 \| null/);
+  assert.doesNotMatch(loaderSource, /packets: PipelineRuntimePacket\[\]/);
+  assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
+  assert.match(detailRouteSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
+  assert.match(detailRouteSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);
+  assert.match(detailComponentSource, /canonicalPacket\.compatibilityProjection/);
+  assert.match(detailComponentSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(loaderSource, /canonicalPackets: canonicalPackets\.map\(projectDashboardCanonicalPacketForClient\)/);
 });
 
 test("pipeline packet reads use the transport selected by the caller runtime", async () => {
@@ -118,6 +172,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
       summary: "Supervisor returned zero persisted WorkPacketV0 rows.",
     },
   });
+  emptyProjection.rawProviderResponse = "python-only extension";
   const loader = await loadPipelinePacketLoader(fixtures, {
     getPipelineDashboardProjection: async () => emptyProjection,
     getWorkPackets: async () => [],
@@ -127,7 +182,8 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   const empty = await loader.loadPipelineCockpitPackets();
   assert.equal(empty.fixtureMode.kind, "empty");
   assert.equal(empty.packets.length, 0);
-  assert.equal(empty.projection, emptyProjection);
+  assert.notEqual(empty.projection, emptyProjection);
+  assert.doesNotMatch(JSON.stringify(empty.projection), /python-only extension/i);
 
   for (const emptyReason of ["blocked", "refilling", "source_exhausted"]) {
     const reasonProjection = runtimeProjection([], {
@@ -1022,7 +1078,7 @@ test("contradictory projection empty and populated states fail closed", async ()
   });
   const duplicateRuntime = await duplicateRuntimeLoader.loadPipelineCockpitPackets();
   assert.equal(duplicateRuntime.fixtureMode.kind, "invalid");
-  assert.match(duplicateRuntime.fixtureMode.summary, /duplicate WorkPacketV0 identity|duplicate runtime packet identity/);
+  assert.match(duplicateRuntime.fixtureMode.summary, /duplicate WorkPacketV0 identity|duplicate runtime packet identity|Canonical supervisor packet identities are duplicated/);
 });
 
 test("projection and runtime list identities must match exactly with unique packet IDs", async () => {
@@ -1625,6 +1681,57 @@ test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evide
   assert.deepEqual(packets[0].transitionEvents[0].evidenceRefs, ["event:created", "safe:event-evidence"]);
   assert.doesNotMatch(JSON.stringify(packets[0]), /provider payload|credential token|oversized:/i);
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
+});
+
+test("pipeline loader strips raw canonical lifecycle fields before cockpit client transport", async () => {
+  const lifecycle = authoritativeLifecyclePacket("manager-source-authoritative-only");
+  lifecycle.history[0].payloadSummary = "provider payload: raw browser secret";
+  lifecycle.history[0].evidenceRefs = ["credential token: raw browser secret"];
+  const rawCanonicalPacket = {
+    authoritativeLifecycle: lifecycle,
+    canonicalContract: { raw: "server-only extension" },
+    evidenceChain: { raw: "server-only evidence" },
+    productModeMapping: { raw: "server-only mapping" },
+    compatibilityProjection: authoritativeWorkPacket(),
+  };
+  const projection = runtimeProjection([lifecycle.packetId]);
+  projection.rawProviderResponse = "python-only extension";
+  projection.workPackets[0].canonicalContract = { extra: "server-only extension" };
+  projection.workPackets[0].productModeMapping = { extra: "server-only extension" };
+  projection.workPackets[0].rawProviderResponse = "python-only extension";
+  projection.workPackets[0].sourceRef = { refId: "doc:packet", sourceType: "workflow", pathOrUrl: null, title: "Packet", contentSha256: null, rawProviderResponse: "python-only extension" };
+  projection.backendReachability.checkedAt = "2026-08-17T00:00:00.000Z";
+  projection.fixtureMode.enabled = false;
+  projection.managerSummary = { stateSource: "supervisor_projection", activeLeaseCount: 2, freshnessState: "live" };
+  projection.workerSummary = { stateSource: "supervisor_projection", workerRefs: ["worker:1"], freshnessState: "live" };
+  projection.queueSummary = { activeCount: 1, dispatchableCount: 2, closedCount: 3, staleCount: 4, refillingCount: 5, unknownCount: 6, emptyReason: null };
+  projection.selectedPacketDetails = [{
+    packetId: lifecycle.packetId,
+    canonicalContract: { extra: "server-only extension" },
+    productModeMapping: { extra: "server-only extension" },
+    rawProviderResponse: "python-only extension",
+  }];
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getPipelineDashboardProjection: async () => projection,
+    getWorkPackets: async () => [rawCanonicalPacket],
+  });
+
+  const result = await loader.__canonicalListForTest();
+  const clientPacket = JSON.parse(JSON.stringify(result.canonicalPackets[0]));
+  assert.deepEqual(Object.keys(clientPacket).sort(), ["canonicalLifecycle", "compatibilityProjection"]);
+  assert.equal(Object.hasOwn(clientPacket.canonicalLifecycle.history[0], "payloadSummary"), false);
+  assert.equal(Object.hasOwn(clientPacket.canonicalLifecycle.history[0], "evidenceRefs"), false);
+  assert.doesNotMatch(JSON.stringify(clientPacket), /provider payload|credential token|server-only/i);
+  assert.equal(clientPacket.compatibilityProjection.packetId, lifecycle.packetId);
+  assert.equal(result.projection.workPackets[0].canonicalContract, null);
+  assert.equal(result.projection.workPackets[0].productModeMapping, null);
+  assert.equal(result.projection.selectedPacketDetails[0].canonicalContract, null);
+  assert.equal(result.projection.selectedPacketDetails[0].productModeMapping, null);
+  assert.equal(result.projection.backendReachability.checkedAt, "2026-08-17T00:00:00.000Z");
+  assert.equal(result.projection.managerSummary.activeLeaseCount, 2);
+  assert.deepEqual(result.projection.workerSummary.workerRefs, ["worker:1"]);
+  assert.equal(result.projection.queueSummary.dispatchableCount, 2);
+  assert.doesNotMatch(JSON.stringify(result.projection), /python-only extension/i);
 });
 
 test("dedicated runtime treats a successful empty canonical list as authoritative", async () => {
@@ -2845,32 +2952,19 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
     issuePipelineOperationalApproval: async () => { throw new Error("operational approvals are outside this proof"); },
     ...supervisorOverrides,
   };
-  // The loader consumes the named temporary compatibility adapter. Existing
-  // fixture callers remain V0-shaped so this harness models the adapter at its
-  // boundary rather than teaching each unrelated loader assertion DTO details.
-  if (typeof supervisor.getWorkPackets === "function") {
-    const getWorkPackets = supervisor.getWorkPackets;
-    supervisor.getWorkPackets = async (...args) => (await getWorkPackets(...args)).map((packet) => (
-      packet?.compatibilityProjection ? packet : { compatibilityProjection: packet }
-    ));
-  }
-  if (typeof supervisor.getWorkPacket === "function") {
-    const getWorkPacket = supervisor.getWorkPacket;
-    supervisor.getWorkPacket = async (...args) => {
-      const packet = await getWorkPacket(...args);
-      return packet?.compatibilityProjection ? packet : { compatibilityProjection: packet };
-    };
-  }
+  let projectorModule;
   const context = {
     exports: {},
     module: { exports: {} },
     process: { env: { KENDALL_LAN_AUTH_ENABLED: lanAuthEnabled ? "true" : "false" } },
     require: (specifier) => {
       if (specifier === "./pipeline-supervisor-projector") {
+        if (projectorModule) return projectorModule;
         const projectorContext = { exports: {}, module: { exports: {} }, require: () => fixtures };
         projectorContext.exports = projectorContext.module.exports;
         vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
-        return projectorContext.module.exports;
+        projectorModule = projectorContext.module.exports;
+        return projectorModule;
       }
       if (specifier === "./pipeline-supervisor-runtime") return supervisor;
       if (specifier === "./pipeline-supervisor-uds") return {
@@ -2881,7 +2975,104 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
   };
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-packet-loader.ts" });
-  return context.module.exports;
+  projectorModule = context.require("./pipeline-supervisor-projector");
+  let fixtureAdapterError = null;
+  // Existing fixture callers are V0-shaped. Adapt them only after the real
+  // projector validates the same bounded shape that historical tests cover;
+  // malformed V0 inputs therefore remain fail-closed rather than acquiring a
+  // synthetic canonical wrapper.
+  const canonicalFixtureAdapter = (packet) => {
+    if (packet?.compatibilityProjection) return packet;
+    const projection = projectorModule.projectSupervisorWorkPacketsToCockpitPackets([packet]);
+    if (projection.kind !== "runtime" || projection.packets.length !== 1) {
+      fixtureAdapterError = projection.kind === "invalid"
+        ? projection.error
+        : "Fixture packet did not produce one runtime compatibility projection.";
+      return {
+        authoritativeLifecycle: authoritativeWorkPacket(),
+        canonicalContract: null,
+        evidenceChain: null,
+        productModeMapping: null,
+        compatibilityProjection: authoritativeWorkPacket(),
+      };
+    }
+    const currentStage = packet.currentStage === "human_gate" ? "needs_approval" : packet.currentStage;
+    const lifecycle = authoritativeLifecyclePacket(packet.packetId);
+    lifecycle.title = packet.title;
+    lifecycle.currentStage = currentStage;
+    lifecycle.status = packet.status;
+    lifecycle.history[0].targetStage = currentStage;
+    lifecycle.history[0].status = packet.status;
+    return {
+      authoritativeLifecycle: lifecycle,
+      canonicalContract: packet?.canonicalContract ?? null,
+      evidenceChain: packet?.evidenceChain ?? null,
+      productModeMapping: packet?.productModeMapping ?? null,
+      compatibilityProjection: packet,
+    };
+  };
+  if (typeof supervisor.getWorkPackets === "function") {
+    const getWorkPackets = supervisor.getWorkPackets;
+    supervisor.getWorkPackets = async (...args) => (await getWorkPackets(...args)).map(canonicalFixtureAdapter);
+  }
+  if (typeof supervisor.getWorkPacket === "function") {
+    const getWorkPacket = supervisor.getWorkPacket;
+    supervisor.getWorkPacket = async (...args) => canonicalFixtureAdapter(await getWorkPacket(...args));
+  }
+  const invalidFixtureMode = (label, summary) => ({
+    kind: "invalid",
+    label,
+    summary: `${summary} No runtime or demo packets are shown.`,
+    matrixRows: 0,
+    fixtureCatalogEntries: 0,
+    canSatisfyLiveProof: false,
+  });
+  // Legacy assertions intentionally inspect the existing V0 cockpit projector.
+  // Production loader results now expose only canonical packets; this harness
+  // keeps those unrelated V0 assertions at their explicit test adapter.
+  const loadCanonicalList = context.module.exports.loadPipelineCockpitPackets;
+  const loadCanonicalDetail = context.module.exports.loadPipelineCockpitPacket;
+  context.module.exports.loadPipelineCockpitPackets = async (...args) => {
+    fixtureAdapterError = null;
+    const result = await loadCanonicalList(...args);
+    if (fixtureAdapterError) {
+      return {
+        fixtureMode: invalidFixtureMode("Supervisor invalid", fixtureAdapterError),
+        canonicalPackets: [],
+        projection: null,
+        projectionError: fixtureAdapterError,
+        packets: [],
+      };
+    }
+    const projection = projectorModule.projectSupervisorWorkPacketsToCockpitPackets(
+      result.canonicalPackets.map((packet) => packet.compatibilityProjection),
+    );
+    return { ...result, packets: projection.kind === "runtime" ? projection.packets : [] };
+  };
+  context.module.exports.loadPipelineCockpitPacket = async (...args) => {
+    fixtureAdapterError = null;
+    const result = await loadCanonicalDetail(...args);
+    if (fixtureAdapterError) {
+      return {
+        fixtureMode: {
+          ...invalidFixtureMode("Supervisor packet invalid", fixtureAdapterError),
+          summary: `${fixtureAdapterError} No demo packet was substituted.`,
+        },
+        canonicalPacket: null,
+        workGraph: null,
+        packet: null,
+      };
+    }
+    const projection = result.canonicalPacket
+      ? projectorModule.projectSupervisorWorkPacketsToCockpitPackets([result.canonicalPacket.compatibilityProjection])
+      : null;
+    return { ...result, packet: projection?.kind === "runtime" ? projection.packets[0] ?? null : null };
+  };
+  return {
+    ...context.module.exports,
+    __canonicalListForTest: loadCanonicalList,
+    __canonicalDetailForTest: loadCanonicalDetail,
+  };
 }
 
 async function loadCompiledDashboardFixtures() {

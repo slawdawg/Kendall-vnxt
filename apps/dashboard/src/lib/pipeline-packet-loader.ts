@@ -1,20 +1,79 @@
-import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type { AuthoritativeWorkPacketLifecycleView, PipelineDashboardProjectionV0, WorkPacketV0View } from "@kendall/contracts";
 
-import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";
 import {
-  projectSupervisorWorkPacketsToCockpitPackets,
-  type PipelineRuntimePacket,
-} from "./pipeline-supervisor-projector";
+  getPipelineDashboardProjection,
+  getWorkPacket,
+  getWorkPackets,
+  type DashboardCanonicalWorkPacketV1,
+} from "./pipeline-supervisor-runtime";
+
+/** The only canonical form that is allowed to cross the dashboard client boundary. */
+export type DashboardCanonicalWorkPacketClientV1 = {
+  canonicalLifecycle: {
+    packetId: string;
+    title: string;
+    currentStage: AuthoritativeWorkPacketLifecycleView["currentStage"];
+    status: AuthoritativeWorkPacketLifecycleView["status"];
+    truthLabel: AuthoritativeWorkPacketLifecycleView["truthLabel"];
+    currentEventId: string;
+    createdAt: string;
+    updatedAt: string;
+    metadataOnly: true;
+    history: Array<{
+      eventId: string;
+      eventType: AuthoritativeWorkPacketLifecycleView["history"][number]["eventType"];
+      previousStage: AuthoritativeWorkPacketLifecycleView["history"][number]["previousStage"];
+      targetStage: AuthoritativeWorkPacketLifecycleView["history"][number]["targetStage"];
+      status: AuthoritativeWorkPacketLifecycleView["history"][number]["status"];
+      truthLabel: AuthoritativeWorkPacketLifecycleView["history"][number]["truthLabel"];
+      occurredAt: string;
+      actorType: AuthoritativeWorkPacketLifecycleView["history"][number]["actor"]["actorType"];
+    }>;
+  };
+  compatibilityProjection: WorkPacketV0View;
+};
+
+function projectDashboardCanonicalPacketForClient(
+  packet: DashboardCanonicalWorkPacketV1,
+): DashboardCanonicalWorkPacketClientV1 {
+  const lifecycle = packet.authoritativeLifecycle;
+  return {
+    canonicalLifecycle: {
+      packetId: lifecycle.packetId,
+      title: lifecycle.title,
+      currentStage: lifecycle.currentStage,
+      status: lifecycle.status,
+      truthLabel: lifecycle.truthLabel,
+      currentEventId: lifecycle.currentEventId,
+      createdAt: lifecycle.createdAt,
+      updatedAt: lifecycle.updatedAt,
+      metadataOnly: true,
+      history: lifecycle.history.map((event) => ({
+        eventId: event.eventId,
+        eventType: event.eventType,
+        previousStage: event.previousStage,
+        targetStage: event.targetStage,
+        status: event.status,
+        truthLabel: event.truthLabel,
+        occurredAt: event.occurredAt,
+        actorType: event.actor.actorType,
+      })),
+    },
+    compatibilityProjection: packet.compatibilityProjection,
+  };
+}
 export type PipelineCockpitPacketLoad = {
   fixtureMode: PipelineRuntimeSourceState;
-  packets: PipelineRuntimePacket[];
+  /** Client-safe canonical source state for the dashboard cockpit. */
+  canonicalPackets: DashboardCanonicalWorkPacketClientV1[];
   projection: PipelineDashboardProjectionV0 | null;
   projectionError: string | null;
 };
 
 export type PipelineCockpitPacketDetailLoad = {
   fixtureMode: PipelineRuntimeSourceState;
-  packet: PipelineRuntimePacket | null;
+  /** Canonical source state; PacketDetailPage owns the temporary V0 adapter. */
+  canonicalPacket: DashboardCanonicalWorkPacketV1 | null;
   workGraph: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | null;
 };
 
@@ -28,11 +87,11 @@ export type PipelineRuntimeSourceState = {
 };
 
 async function readWorkPackets() {
-  return (await getWorkPackets()).map((packet) => packet.compatibilityProjection);
+  return getWorkPackets();
 }
 
 async function readWorkPacket(packetId: CanonicalRuntimePacketId) {
-  return (await getWorkPacket(packetId)).compatibilityProjection;
+  return getWorkPacket(packetId);
 }
 
 async function readPipelineDashboardProjection() {
@@ -44,7 +103,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
   if (projectionResult.error) {
     return {
       fixtureMode: projectionReadErrorSourceState(projectionResult.error),
-      packets: [],
+      canonicalPackets: [],
       projection: null,
       projectionError: projectionResult.error,
     };
@@ -57,7 +116,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         projectionRuntimeError.kind === "invalid" ? "Supervisor invalid" : "Supervisor unavailable",
         projectionRuntimeError.summary,
       ),
-      packets: [],
+      canonicalPackets: [],
       projection: null,
       projectionError: projectionRuntimeError.summary,
     };
@@ -66,46 +125,46 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
   if (!verifiedProjection) {
     return {
       fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", "Supervisor projection is missing after runtime validation; no runtime or demo packets are shown."),
-      packets: [],
+      canonicalPackets: [],
       projection: null,
       projectionError: "Supervisor projection is missing after runtime validation.",
     };
   }
   try {
-    const projection = projectSupervisorWorkPacketsToCockpitPackets(await readWorkPackets());
-    if (projection.kind === "empty") {
+    const canonicalPackets = await readWorkPackets();
+    if (canonicalPackets.length === 0) {
       const emptyContradiction = emptyRuntimeContradiction(projectionResult.projection);
       if (emptyContradiction) {
         return {
           fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${emptyContradiction} No runtime or demo packets are shown.`),
-          packets: [],
+          canonicalPackets: [],
           projection: null,
           projectionError: emptyContradiction,
         };
       }
       return {
         fixtureMode: runtimeSourceState("empty", "Supervisor empty", emptyRuntimeSummary(projectionResult.projection)),
-        packets: [],
-        projection: projectionResult.projection,
+        canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
+        projection: clientSafePipelineProjection(verifiedProjection),
         projectionError: projectionResult.error,
       };
     }
-    if (projection.kind === "invalid") {
+    const packetIds = canonicalPackets.map((packet) => packet.authoritativeLifecycle.packetId);
+    if (new Set(packetIds).size !== packetIds.length) {
       return {
-        fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", projection.error + " No runtime or demo packets are shown."),
-        packets: [],
+        fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", "Canonical supervisor packet identities are duplicated; no runtime or demo packets are shown."),
+        canonicalPackets: [],
         projection: null,
-        projectionError: projection.error,
+        projectionError: "Canonical supervisor packet identities are duplicated.",
       };
     }
-    const packetIds = projection.packets.map((packet) => packet.packetId);
     const packetContradiction = canonicalStaleProjectionTruth(verifiedProjection)
       ? staleRuntimeContradiction(verifiedProjection) ?? packetIdentityContradiction(verifiedProjection, packetIds)
       : populatedRuntimeContradiction(verifiedProjection, packetIds);
     if (packetContradiction) {
       return {
         fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${packetContradiction} No runtime or demo packets are shown.`),
-        packets: [],
+        canonicalPackets: [],
         projection: null,
         projectionError: packetContradiction,
       };
@@ -115,24 +174,136 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         canonicalStaleProjectionTruth(verifiedProjection) ? "stale" : "runtime",
         canonicalStaleProjectionTruth(verifiedProjection) ? "Supervisor stale read-only" : "Supervisor runtime",
         canonicalStaleProjectionTruth(verifiedProjection)
-          ? "Persisted supervisor WorkPacketV0 rows are stale and read-only; no provider, worker, GitHub, or Obsidian calls are made by this route."
-          : "Persisted supervisor WorkPacketV0 rows only. No provider, worker, GitHub, or Obsidian calls are made by this route.",
+          ? "Persisted supervisor canonical packet rows are stale and read-only; no provider, worker, GitHub, or Obsidian calls are made by this route."
+          : "Persisted supervisor canonical packet rows only. No provider, worker, GitHub, or Obsidian calls are made by this route.",
       ),
-      packets: projection.packets,
-      projection: projectionResult.projection,
+      canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
+      projection: clientSafePipelineProjection(verifiedProjection),
       projectionError: projectionResult.error,
     };
   } catch (error) {
     const workPacketError = error && typeof error === "object" && "message" in error
       ? String(error.message)
-      : "Supervisor WorkPacketV0 state could not be read.";
+      : "Supervisor canonical packet state could not be read.";
     return {
-      fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor WorkPacketV0 state could not be read; no demo packets are substituted."),
-      packets: [],
+      fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor canonical packet state could not be read; no demo packets are substituted."),
+      canonicalPackets: [],
       projection: null,
       projectionError: workPacketError,
     };
   }
+}
+
+/**
+ * Projection extensions are useful to server-side read assembly, but the
+ * cockpit client only needs the already-validated lifecycle state. Do not
+ * serialize contracts or mode mappings (including any permissive upstream
+ * extension keys) over this boundary.
+ */
+function clientSafePipelineProjection(projection: PipelineDashboardProjectionV0): PipelineDashboardProjectionV0 {
+  return clientSafeProjectionMetadata({
+    schemaVersion: projection.schemaVersion,
+    projectionId: projection.projectionId,
+    generatedAt: projection.generatedAt,
+    sourceUpdatedAt: projection.sourceUpdatedAt,
+    sourceLabel: projection.sourceLabel,
+    freshnessState: projection.freshnessState,
+    staleAfterSeconds: projection.staleAfterSeconds,
+    backendReachability: projection.backendReachability,
+    fixtureMode: projection.fixtureMode,
+    truthSummary: projection.truthSummary,
+    stageSummaries: projection.stageSummaries,
+    sourceStates: projection.sourceStates,
+    workPackets: projection.workPackets.map((packet) => ({
+      packetId: packet.packetId,
+      title: packet.title,
+      currentStage: packet.currentStage,
+      status: packet.status,
+      truthLabel: packet.truthLabel,
+      sourceRef: packet.sourceRef,
+      canonicalContract: null,
+      productModeMapping: null,
+      blocker: packet.blocker,
+      nextAction: packet.nextAction,
+      unblocker: packet.unblocker,
+      readyToTest: packet.readyToTest,
+      evidenceRefs: packet.evidenceRefs,
+      workItemId: packet.workItemId,
+      queueLease: packet.queueLease,
+      executionAttempts: packet.executionAttempts,
+      correlationIds: packet.correlationIds,
+      updatedAt: packet.updatedAt,
+      metadataOnly: packet.metadataOnly,
+    })),
+    selectedPacketDetails: projection.selectedPacketDetails.map((detail) => ({
+      packetId: detail.packetId,
+      sourceRefs: detail.sourceRefs,
+      canonicalContract: null,
+      productModeMapping: null,
+      evidenceRefs: detail.evidenceRefs,
+      currentStage: detail.currentStage,
+      status: detail.status,
+      truthLabel: detail.truthLabel,
+      blocker: detail.blocker,
+      nextAction: detail.nextAction,
+      unblocker: detail.unblocker,
+      readyToTest: detail.readyToTest,
+      latestTransitionEventRef: detail.latestTransitionEventRef,
+      recentTransitionEventRefs: detail.recentTransitionEventRefs,
+      latestMovementSummary: detail.latestMovementSummary,
+      canSatisfyLiveMovementProof: detail.canSatisfyLiveMovementProof,
+      parentPacketId: detail.parentPacketId,
+      lineageKind: detail.lineageKind,
+      operatorTestState: detail.operatorTestState,
+      operatorTestNote: detail.operatorTestNote,
+      actionCapabilities: detail.actionCapabilities,
+      actionCapabilitiesV1: detail.actionCapabilitiesV1,
+      actionResults: detail.actionResults,
+      actionResultsV1: detail.actionResultsV1,
+      workItemId: detail.workItemId,
+      queueLease: detail.queueLease,
+      executionAttempts: detail.executionAttempts,
+      correlationIds: detail.correlationIds,
+      reviewRoute: detail.reviewRoute,
+      workGraph: detail.workGraph,
+      metadataOnly: detail.metadataOnly,
+    })),
+    managerSummary: projection.managerSummary,
+    activeManagerLaneClarity: projection.activeManagerLaneClarity,
+    coordinationHealth: projection.coordinationHealth,
+    workerSummary: projection.workerSummary,
+    reliabilityProblems: projection.reliabilityProblems,
+    gatedControls: projection.gatedControls,
+    runtimeReadiness: projection.runtimeReadiness,
+    actionCapabilities: projection.actionCapabilities,
+    actionCapabilitiesV1: projection.actionCapabilitiesV1,
+    executeAdmission: projection.executeAdmission,
+    queueSummary: projection.queueSummary,
+    evidenceRefs: projection.evidenceRefs,
+  });
+}
+
+/** Strip unknown nested extension keys as well as the explicit root/row allowlists. */
+const CLIENT_SAFE_PROJECTION_METADATA_KEYS = new Set([
+  "schemaVersion", "projectionId", "generatedAt", "sourceUpdatedAt", "sourceLabel", "freshnessState", "staleAfterSeconds", "backendReachability", "fixtureMode", "truthSummary", "stageSummaries", "sourceStates", "workPackets", "selectedPacketDetails", "managerSummary", "activeManagerLaneClarity", "coordinationHealth", "workerSummary", "reliabilityProblems", "gatedControls", "runtimeReadiness", "actionCapabilities", "actionCapabilitiesV1", "executeAdmission", "queueSummary", "evidenceRefs",
+  "packetId", "title", "currentStage", "status", "truthLabel", "sourceRef", "canonicalContract", "productModeMapping", "blocker", "nextAction", "unblocker", "readyToTest", "workItemId", "queueLease", "executionAttempts", "correlationIds", "updatedAt", "metadataOnly", "sourceRefs", "latestTransitionEventRef", "recentTransitionEventRefs", "latestMovementSummary", "canSatisfyLiveMovementProof", "parentPacketId", "lineageKind", "operatorTestState", "operatorTestNote", "actionResults", "actionResultsV1", "reviewRoute", "workGraph",
+  "refId", "sourceType", "pathOrUrl", "contentSha256", "readyId", "userFacingSummary", "testableSurface", "verificationRefs", "rawPayloadRetained", "leaseId", "attemptCount", "heartbeatAt", "leaseExpiresAt", "fencingToken", "active", "state", "attemptId", "routeDecisionId", "workerId", "lane", "eventRefs", "availability", "routeState", "reasonCode", "reason", "safeFallback", "exactIdentity", "issuanceState", "findingSummary", "count", "highestSeverity", "dataClass", "execution", "deliveryEvidenceEligible", "retention", "sourceSchemaVersion", "executionJobId", "reportIdentity", "waveMembership", "dependencyState", "reservation", "capacity", "posture", "owner", "nextSafeAction",
+  "label", "emptyReason", "backendEmpty", "backendUnavailable", "fixtureBacked", "stale", "summary", "stage", "packetCount", "sourceId", "sourceKind", "runId", "observedAt", "source", "freshness", "availability", "activeWorkCount", "staleOwnerTargetCount", "staleOwnerProjectedCount", "dirtyPreserveCount", "missingWorktreeJournalHold", "reliabilityState", "activeLeaseCount", "activeWorkerCount", "warmWorkerCount", "blockedQueueCount", "dispatchableQueueCount", "closedQueueCount", "healthySourceCount", "exhaustedSourceCount", "blockedSourceCount", "gatedSourceCount", "staleSourceCount", "unavailableSourceCount", "refillingSourceCount", "unknownSourceCount", "sourceExhausted", "inactivityReason", "warmCount", "waitingCount", "stalledCount", "failedCount", "drainingCount", "killedCount", "completeCount", "unavailableCount", "unknownCount", "workerRefs", "problemId", "kind", "severity", "likelyIssue", "controlId", "operation", "authorityFamily", "stopLine", "dispatchableCount", "blockedCount", "gatedCount", "limits", "observed", "blockingDimensions", "policyVersion", "capacityAvailable", "checkedAt", "enabled", "allowedForEnvironment", "visibleLabelRequired", "canSatisfyLiveProof",
+  "actionId", "targetType", "targetId", "capabilityState", "authorityState", "riskTier", "typedReason", "expectedResultSummary", "correlationRequired", "idempotencyRequired", "actionContext", "actionContextDigestSha256", "sourceMode", "serverBound", "executionAttemptId", "expectedRuntimeMode", "expectedRuntimeRevision", "expectedActiveWorkCount", "expectedActiveLeaseCount", "expectedRunningAttemptCount", "expectedPacketCurrentEventId", "expectedCurrentOwnerId", "newOwnerId", "expectedWorkItemState", "expectedWorkItemUpdatedAt", "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive", "expectedActiveLeaseId", "expectedRunningAttemptId", "expectedOriginalAttemptId", "expectedRetryIntentId", "expectedLinkedWorkItemId", "expectedLinkedPacketId", "outcome", "resultingStage", "resultingStatus", "actionRecordId", "approvalId", "childPacketId", "idempotencyKey", "successEvidence", "replayed", "originalAttemptId", "retryIntentId", "linkedWorkItemId", "linkedPacketId", "resultingPacketCurrentEventId", "originalAttemptPreserved", "providerOrWorkerLaunched", "resultingRuntimeMode", "resultingRuntimeRevision", "runningAttemptCount", "intakeStopped", "activeWorkPreserved", "activeWorkAllowedToConverge", "workersKilled", "intakeResumed", "previousOwnerId", "activeLeaseTransferred", "workerLaunched",
+]);
+[
+  "executionAttemptId", "expectedAttemptStatus", "expectedAttemptUpdatedAt", "expectedLeaseId", "expectedLeaseFencingToken", "expectedLeaseActive",
+  "stateSource", "activeCount", "closedCount", "staleCount", "refillingCount",
+].forEach((key) => CLIENT_SAFE_PROJECTION_METADATA_KEYS.add(key));
+
+function clientSafeProjectionMetadata<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(clientSafeProjectionMetadata) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => CLIENT_SAFE_PROJECTION_METADATA_KEYS.has(key))
+      .map(([key, nested]) => [key, clientSafeProjectionMetadata(nested)]),
+  ) as T;
 }
 
 export async function loadPipelineCockpitPacket(packetId: unknown): Promise<PipelineCockpitPacketDetailLoad> {
@@ -140,13 +311,13 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
   if (!canonicalPacketId) {
     return {
       fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Malformed runtime packet identity; no supervisor lookup or demo packet substitution was attempted."),
-      packet: null,
+      canonicalPacket: null,
       workGraph: null,
     };
   }
   const projectionResult = await loadPipelineDashboardProjection();
   if (projectionResult.error) {
-    return { fixtureMode: projectionReadErrorSourceState(projectionResult.error), packet: null, workGraph: null };
+    return { fixtureMode: projectionReadErrorSourceState(projectionResult.error), canonicalPacket: null, workGraph: null };
   }
   const projectionRuntimeError = runtimeProjectionError(projectionResult.projection, "detail");
   if (projectionRuntimeError) {
@@ -156,32 +327,28 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
         projectionRuntimeError.kind === "invalid" ? "Supervisor packet invalid" : "Supervisor unavailable",
         `${projectionRuntimeError.summary} No demo packet was substituted.`,
       ),
-      packet: null,
+      canonicalPacket: null,
       workGraph: null,
     };
   }
   try {
-    const projection = projectSupervisorWorkPacketsToCockpitPackets([await readWorkPacket(canonicalPacketId)]);
-    if (projection.kind === "invalid") {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", projection.error + " No demo packet was substituted."), packet: null, workGraph: null };
+    const canonicalPacket = await readWorkPacket(canonicalPacketId);
+    if (canonicalPacket.authoritativeLifecycle.packetId !== canonicalPacketId) {
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), canonicalPacket: null, workGraph: null };
     }
-    const [supervisorPacket] = projection.kind === "runtime" ? projection.packets : [];
-    if (!supervisorPacket || supervisorPacket.packetId !== canonicalPacketId) {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", "Supervisor returned a packet that did not match the requested runtime identity; no demo packet was substituted."), packet: null, workGraph: null };
-    }
-    const detailProjectionContradictionMessage = detailProjectionContradiction(projectionResult.projection, canonicalPacketId, supervisorPacket);
+    const detailProjectionContradictionMessage = detailProjectionContradiction(projectionResult.projection, canonicalPacketId, canonicalPacket);
     if (detailProjectionContradictionMessage) {
-      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), packet: null, workGraph: null };
+      return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), canonicalPacket: null, workGraph: null };
     }
     return {
       fixtureMode: runtimeSourceState(
         projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection) ? "stale" : "runtime",
         projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection) ? "Supervisor stale read-only" : "Supervisor runtime",
         projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection)
-          ? "This detail is a stale, read-only supervisor WorkPacketV0 projection resolved by packet identity."
-          : "This detail is a read-only supervisor WorkPacketV0 projection resolved by packet identity.",
+          ? "This detail is a stale, read-only canonical supervisor packet resolved by packet identity."
+          : "This detail is a read-only canonical supervisor packet resolved by packet identity.",
       ),
-      packet: supervisorPacket,
+      canonicalPacket,
       workGraph: projectionResult.projection?.selectedPacketDetails.find((detail) => detail.packetId === canonicalPacketId)?.workGraph ?? null,
     };
   } catch (error) {
@@ -191,9 +358,9 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
     const missing = /\(404\)/.test(errorMessage);
     return {
       fixtureMode: runtimeSourceState(missing ? "invalid" : "unavailable", missing ? "Supervisor packet missing" : "Supervisor unavailable", missing
-        ? "Supervisor has no WorkPacketV0 detail for this packet identity; no demo packet was substituted."
-        : "Supervisor WorkPacketV0 detail could not be read; no demo packet was substituted."),
-      packet: null,
+        ? "Supervisor has no canonical packet detail for this packet identity; no demo packet was substituted."
+        : "Supervisor canonical packet detail could not be read; no demo packet was substituted."),
+      canonicalPacket: null,
       workGraph: null,
     };
   }
@@ -490,7 +657,7 @@ function firstDuplicate(values: readonly string[]): string | null {
 function detailProjectionContradiction(
   projection: PipelineDashboardProjectionV0 | null,
   packetId: CanonicalRuntimePacketId,
-  supervisorPacket: PipelineRuntimePacket,
+  canonicalPacket: DashboardCanonicalWorkPacketV1,
 ): string | null {
   if (!projection) {
     return "Supervisor detail projection is missing.";
@@ -500,8 +667,14 @@ function detailProjectionContradiction(
     return "Supervisor projection did not contain exactly one matching runtime packet identity.";
   }
   const projectionPacket = projectionPackets[0];
-  if (projectionPacket.currentStage !== supervisorPacket.currentStage || projectionPacket.status !== supervisorPacket.status) {
-    return "Supervisor detail disagrees with the verified projection stage or status for the requested runtime identity.";
+  const canonicalStage = canonicalPacket.authoritativeLifecycle.currentStage === "needs_approval"
+    ? "human_gate"
+    : canonicalPacket.authoritativeLifecycle.currentStage;
+  if (
+    projectionPacket.currentStage !== canonicalStage
+    || projectionPacket.status !== canonicalPacket.authoritativeLifecycle.status
+  ) {
+    return "Supervisor detail disagrees with the verified canonical lifecycle stage or status for the requested runtime identity.";
   }
   const details = projection.selectedPacketDetails.filter((detail) => detail.packetId === packetId);
   if (details.length > 1) {

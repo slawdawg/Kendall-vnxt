@@ -31,8 +31,9 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
   try {
     supervisor = http.createServer((request, response) => {
       if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
-      if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "packet-1" }] })); return; }
-      if (request.url === "/pipeline-control-plane/work-items/work-item-1/packet") { response.end(JSON.stringify({ data: { packetId: "packet-1" } })); return; }
+      if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [canonicalPacketWithRawBrowserUnsafeFields()] })); return; }
+      if (request.url === "/pipeline-control-plane/work-items/work-item-1/packet") { response.end(JSON.stringify({ data: canonicalPacketWithRawBrowserUnsafeFields() })); return; }
+      if (request.url === "/pipeline-control-plane/projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
       if (request.url === "/operator-views?scope=queue") { forwarded.push(request.url); response.end(JSON.stringify({ data: [] })); return; }
@@ -45,10 +46,23 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: `https://127.0.0.1:${port}` });
     const allowed = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { headers: { cookie: "session=ok" } });
     assert.equal(allowed.status, 200);
-    assert.deepEqual(allowed.body.data, [{ packetId: "packet-1" }]);
+    assert.equal(allowed.body.data[0].packetId, "packet-1");
+    assert.equal(allowed.body.data[0].title, "Canonical supervisor packet");
+    assert.equal(allowed.body.data[0].history[0].payloadSummary, "Redacted metadata-only lifecycle event.");
+    assert.deepEqual(allowed.body.data[0].history[0].evidenceRefs, []);
+    assert.doesNotMatch(JSON.stringify(allowed.body), /provider payload|credential token|python-only extension/i);
     const workItemPacket = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet", { headers: { cookie: "session=ok" } });
     assert.equal(workItemPacket.status, 200);
-    assert.deepEqual(workItemPacket.body.data, { packetId: "packet-1" });
+    assert.equal(workItemPacket.body.data.packetId, "packet-1");
+    assert.equal(workItemPacket.body.data.title, "Canonical supervisor packet");
+    assert.doesNotMatch(JSON.stringify(workItemPacket.body), /provider payload|credential token|python-only extension/i);
+    const projection = await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers: { cookie: "session=ok" } });
+    assert.equal(projection.status, 200);
+    assert.equal(projection.body.data.workPackets[0].canonicalContract, null);
+    assert.equal(projection.body.data.workPackets[0].productModeMapping, null);
+    assert.equal(projection.body.data.selectedPacketDetails[0].canonicalContract, null);
+    assert.equal(projection.body.data.selectedPacketDetails[0].productModeMapping, null);
+    assert.doesNotMatch(JSON.stringify(projection.body), /python-only extension/i);
     const malformedCanonicalLookup = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet/extra", { headers: { cookie: "session=ok" } });
     assert.equal(malformedCanonicalLookup.status, 404);
     const canonicalMutation = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
@@ -79,6 +93,56 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     if (supervisor?.listening) await close(supervisor);
   }
 });
+
+function canonicalPacketWithRawBrowserUnsafeFields() {
+  return {
+    packetId: "packet-1",
+    title: "provider payload: raw packet title",
+    currentStage: "capture",
+    status: "waiting",
+    truthLabel: "source_owned",
+    sourceRef: { refId: "doc:secret", sourceType: "repo_doc", pathOrUrl: "private/provider-payload.txt", title: "credential token", contentSha256: null },
+    createdAt: "2026-08-17T00:00:00.000Z",
+    updatedAt: "2026-08-17T00:00:00.000Z",
+    currentEventId: "created",
+    history: [{
+      eventId: "created",
+      eventType: "packet.created",
+      previousStage: null,
+      targetStage: "capture",
+      status: "waiting",
+      truthLabel: "source_owned",
+      actor: { actorType: "system", actorLabel: "provider payload" },
+      occurredAt: "2026-08-17T00:00:00.000Z",
+      payloadSummary: "provider payload: raw browser secret",
+      evidenceRefs: ["credential token: raw browser secret"],
+      metadataOnly: true,
+    }],
+    canonicalContract: { extension: "python-only extension" },
+    evidenceChain: { extension: "python-only extension" },
+    productModeMapping: { extension: "python-only extension" },
+    metadataOnly: true,
+  };
+}
+
+function projectionWithRawCanonicalExtensions() {
+  return {
+    rawProviderResponse: "python-only extension",
+    workPackets: [{
+      packetId: "packet-1",
+      canonicalContract: { extra: "python-only extension" },
+      productModeMapping: { extra: "python-only extension" },
+      rawProviderResponse: "python-only extension",
+      sourceRef: { refId: "doc:packet", sourceType: "workflow", pathOrUrl: null, title: "Packet", contentSha256: null, rawProviderResponse: "python-only extension" },
+    }],
+    selectedPacketDetails: [{
+      packetId: "packet-1",
+      canonicalContract: { extra: "python-only extension" },
+      productModeMapping: { extra: "python-only extension" },
+      rawProviderResponse: "python-only extension",
+    }],
+  };
+}
 
 test("authenticated POST forwards the follow-up subresource exactly and rejects unknown targets", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kendall-supervisor-proxy-follow-up-"));

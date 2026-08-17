@@ -12,7 +12,10 @@ import type {
   PipelineOperationalActionRequestV1,
   PipelineStage,
 } from "@kendall/contracts";
-import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
+import {
+  projectSupervisorWorkPacketsToCockpitPackets,
+  type PipelineDashboardPacket,
+} from "../../lib/pipeline-supervisor-projector";
 import {
   projectionDisplayLabels,
   projectionEffectiveLabels,
@@ -47,7 +50,7 @@ import {
   requestPipelineOperationalApproval,
   requestPipelineOperationalApprovalV1,
 } from "../../lib/pipeline-supervisor-actions";
-import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
+import type { DashboardCanonicalWorkPacketClientV1, PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
 
@@ -111,6 +114,7 @@ export function PipelineCockpit({
   fixtureMode,
   managerExecutionLane,
   readOnly = false,
+  canonicalPackets,
   packets,
   projection,
   projectionError,
@@ -120,11 +124,21 @@ export function PipelineCockpit({
   managerExecutionLane?: PipelineManagerExecutionLaneState | null;
   /** Fixed test_viewer sessions can inspect truth but never receive action affordances. */
   readOnly?: boolean;
-  packets: PipelineFixturePacket[];
+  /** Client-safe canonical runtime rows; this boundary owns the temporary V0 adapter. */
+  canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
+  /** Explicit-demo V0 fixtures only. Normal runtime callers pass canonicalPackets. */
+  packets?: PipelineFixturePacket[];
   projection?: PipelineDashboardProjectionV0 | null;
   projectionError?: string | null;
-  selectedPacket: PipelineFixturePacket | null;
+  selectedPacket?: PipelineFixturePacket | null;
 }) {
+  const compatibilityPackets = useMemo(() => {
+    if (!canonicalPackets) return packets ?? [];
+    const compatibilityProjection = projectSupervisorWorkPacketsToCockpitPackets(
+      canonicalPackets.map((packet) => packet.compatibilityProjection),
+    );
+    return compatibilityProjection.kind === "runtime" ? compatibilityProjection.packets : [];
+  }, [canonicalPackets, packets]);
   const [selectedItem, setSelectedItem] = useState<SelectedMapItem>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedStage, setFocusedStage] = useState<PipelineStage>("capture");
@@ -154,8 +168,8 @@ export function PipelineCockpit({
     [currentProjection]
   );
   const dashboardPackets = useMemo(
-    () => projectionToCockpitPackets(currentProjection, packets, currentProjectionError, activeBoardViewModel, fixtureMode),
-    [activeBoardViewModel, currentProjection, currentProjectionError, fixtureMode, packets]
+    () => projectionToCockpitPackets(currentProjection, compatibilityPackets, currentProjectionError, activeBoardViewModel, fixtureMode),
+    [activeBoardViewModel, compatibilityPackets, currentProjection, currentProjectionError, fixtureMode]
   );
   const stageSummaryByStage = useMemo(
     () => buildStageSummaryByStage(currentProjection, currentProjectionError, fixtureMode),
