@@ -12,6 +12,9 @@ Status: current navigation index
   for lifecycle convergence, technical-debt retirement, refactoring, and
   documentation/verification simplification. It carries the accepted standing
   cleanup mandate but changes no runtime authority.
+- `kendall-vnxt-phase-2-lifecycle-convergence-contract-2026-08-17.md`: active
+  Phase 2 supervisor-owned lifecycle contract, compatibility-boundary
+  inventory, consumer migration constraints, and convergence exit gates.
 - `kendall-vnxt-orchestration-boundary-decision-2026-08-16.md`: current Phase 1
   no-adoption decision and the supervisor-owned lifecycle-evidence / governed
   workspace-outcome contract boundary for any future engine evaluation.
