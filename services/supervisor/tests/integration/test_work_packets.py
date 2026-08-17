@@ -428,6 +428,42 @@ def _create_work_item(client: TestClient, *, title: str = "Direct active packet"
     return response.json()["data"]
 
 
+def test_canonical_work_item_packet_lookup_uses_only_persisted_authoritative_link(tmp_path, monkeypatch) -> None:
+    db_name = "canonical-work-item-packet-lookup.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        created = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-work-item-lookup",
+                "title": "Canonical WorkItem packet lookup",
+                "sourceRef": {"refId": "repo:lookup", "sourceType": "repo_doc", "pathOrUrl": "docs/lookup.md", "title": "Lookup"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "work-item-canonical-lookup",
+                "payloadSummary": "Resolve the durable WorkItem canonical packet link.",
+            },
+        )
+        assert created.status_code == 200
+        item = _create_work_item(client, title="Persisted canonical packet link")
+        unlinked = _create_work_item(client, title="No canonical packet link")
+
+        _update_work_item_fixture(
+            db_path,
+            item["id"],
+            authoritative_packet_id="packet-work-item-lookup",
+            metadata_json={"authoritativePacketId": "packet-work-item-lookup"},
+        )
+        resolved = client.get(f"/pipeline-control-plane/work-items/{item['id']}/packet")
+        assert resolved.status_code == 200
+        assert resolved.json()["data"]["packetId"] == "packet-work-item-lookup"
+
+        assert client.get(f"/pipeline-control-plane/work-items/{unlinked['id']}/packet").status_code == 404
+        _update_work_item_fixture(db_path, item["id"], metadata_json={"authoritativePacketId": "packet-other"})
+        assert client.get(f"/pipeline-control-plane/work-items/{item['id']}/packet").status_code == 404
+        _update_work_item_fixture(db_path, item["id"], authoritative_packet_id="packet-missing", metadata_json={"authoritativePacketId": "packet-missing"})
+        assert client.get(f"/pipeline-control-plane/work-items/{item['id']}/packet").status_code == 404
+
+
 def test_work_packets_include_candidate_only_work_item_only_combined_and_dangling_promoted_packets(tmp_path, monkeypatch) -> None:
     db_name = "work-packets.db"
     db_path = _db_path(tmp_path, db_name)

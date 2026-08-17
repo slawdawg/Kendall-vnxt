@@ -1207,6 +1207,29 @@ class SupervisorService:
             return None
         return await self.to_authoritative_work_packet_view(session, packet)
 
+    async def get_authoritative_work_packet_for_work_item(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+    ) -> AuthoritativeWorkPacketLifecycleView | None:
+        """Resolve the one persisted WorkItem-to-authoritative-packet link.
+
+        This is a read-only canonical identity lookup for dashboard detail
+        routes.  It intentionally does not assemble a legacy WorkPacketV0
+        fallback when the link is absent or inconsistent.
+        """
+        item = await session.get(WorkItem, work_item_id)
+        if not item or not item.authoritative_packet_id:
+            return None
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        metadata_packet_id = metadata.get("authoritativePacketId")
+        if metadata_packet_id is not None and metadata_packet_id != item.authoritative_packet_id:
+            return None
+        packet = await session.get(AuthoritativeWorkPacket, item.authoritative_packet_id)
+        if not packet:
+            return None
+        return await self.to_authoritative_work_packet_view(session, packet)
+
     async def ingest_pipeline_epic_25_evidence_chain(
         self,
         session: AsyncSession,

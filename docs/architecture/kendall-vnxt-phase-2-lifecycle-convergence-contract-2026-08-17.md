@@ -2,8 +2,10 @@
 
 Date: 2026-08-17
 Status: active Phase 2 contract and consumer inventory
-Scope: lifecycle read-model convergence and retirement preparation; no route,
-schema, runtime-authority, or service behavior change
+Scope: lifecycle read-model convergence and retirement preparation. The first
+slice authorizes one bounded read-only supervisor mapping endpoint for
+URL-preserving WorkItem detail reads; it makes no schema, action, legacy-write,
+or runtime-authority change.
 
 ## Decision
 
@@ -59,7 +61,7 @@ or transition history.
 
 ## Compatibility boundary that Phase 2 must remove
 
-The dashboard runtime currently makes the compatibility boundary concrete in
+The pre-slice dashboard runtime made the compatibility boundary concrete in
 [`apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`](../../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts):
 
 1. Canonical detail is validated as an authoritative lifecycle view and then
@@ -72,13 +74,21 @@ The dashboard runtime currently makes the compatibility boundary concrete in
 3. When the canonical list itself is V0-shaped, the runtime loads the legacy
    list and merges by `packetId`, with canonical rows overwriting legacy rows.
 
-This means a successful dashboard read can still depend on a legacy endpoint,
-and it explains why route or type deletion is unsafe today. The Phase 2 target
-is a dashboard-facing canonical view that does not request, project into,
-merge with, or otherwise require `/work-packets` for normal list or detail
-operation. A temporary adapter, if still required for a named caller, must be
-explicit, isolated, time-bounded, read-only, and covered by an
-absence-of-canonical-data test; it cannot be the dashboard's default path.
+This explains why route or type deletion is unsafe today. The first Phase 2
+read-model slice replaces normal dashboard list and packet-detail reads with a
+dashboard-owned `DashboardCanonicalWorkPacketV1`: it requests only canonical
+list/detail data, carries the Python-only extensions under explicit validation,
+and exposes the named, read-only `compatibilityProjection` adapter for current
+V0 visual consumers. It does not remove `/work-packets` or its transports for
+unmigrated callers.
+
+To preserve existing `/work-items/{id}` URLs without a synthetic legacy
+identity, this slice also admits exactly
+`GET /pipeline-control-plane/work-items/{work_item_id}/packet`. The supervisor
+resolves that read through the persisted unique
+`WorkItem.authoritative_packet_id`; absent item/link/packet or metadata-link
+disagreement is unavailable. This narrow lookup is not a new lifecycle action,
+schema, write path, or general work-item-to-packet query surface.
 
 ## Consumer inventory
 
@@ -93,9 +103,9 @@ reference is a runtime authority.
 | Supervisor API and application: [`main.py`](../../services/supervisor/src/supervisor/api/main.py), [`schemas.py`](../../services/supervisor/src/supervisor/api/schemas.py), and [`service.py`](../../services/supervisor/src/supervisor/application/service.py) | Canonical create/list/detail/transition/local-proof routes coexist with `GET /work-packets`, legacy detail, and the legacy learn follow-up route. Application service still materializes V0 views. | Keep canonical routes stable while a bounded migration maps each legacy read/action. Do not remove a legacy route until its request/response, caller, persisted-data, and rollback proof are recorded. |
 | Supervisor persistence: [`models.py`](../../services/supervisor/src/supervisor/infrastructure/db/models.py), frozen [`models_baseline.py`](../../services/supervisor/src/supervisor/infrastructure/db/models_baseline.py), and [`migrations.py`](../../services/supervisor/src/supervisor/infrastructure/db/migrations.py) | `authoritative_work_packets` and `authoritative_work_packet_lifecycle_events` are durable tables; frozen `0001_model_baseline` and additive `0002_legacy_compatibility` preserve existing installations. | Any canonical read-model or V0-retirement persistence change is a new ordered migration. Prove clean install, legacy upgrade, restart/idempotence, data retention, and capability rollback; never edit the frozen baseline or introduce startup-only schema mutation. |
 | Manager source intake: [`manager-supervisor-source-intake.mjs`](../../scripts/lib/manager-control-plane/manager-supervisor-source-intake.mjs) and [`manager-supervisor-local-proof.mjs`](../../scripts/lib/manager-control-plane/manager-supervisor-local-proof.mjs) | The manager posts bounded metadata to canonical intake (or the private loopback graph route), validates the returned authoritative history, and records supervisor references. Its worker/receipt/checkpoint ledgers still model manager session and delivery coordination. | Keep manager state adapter/session-only. Migrate any lifecycle presentation to supervisor references and prove the manager neither reconstructs a peer product lifecycle nor falls back to legacy packet reads. |
-| Dashboard runtime and pages: [`pipeline-supervisor-runtime.ts`](../../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts), [`pipeline-packet-loader.ts`](../../apps/dashboard/src/lib/pipeline-packet-loader.ts), and work-item pages/components | The runtime performs canonical projection, legacy list/detail fallback, and list merge; loaders describe persisted `WorkPacketV0` state. | Replace with a canonical dashboard read model. Prove a nonempty canonical list and detail cause no legacy request, no V0 merge, and no fixture substitution. |
+| Dashboard runtime and pages: [`pipeline-supervisor-runtime.ts`](../../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts), [`pipeline-packet-loader.ts`](../../apps/dashboard/src/lib/pipeline-packet-loader.ts), and work-item pages/components | `DashboardCanonicalWorkPacketV1` carries the validated authoritative lifecycle plus the Python-only `canonicalContract`, `evidenceChain`, and `productModeMapping` extensions. Its named `compatibilityProjection` is a temporary read-only `WorkPacketV0View` adapter for existing visual components. Work-item detail URLs resolve through the persisted `WorkItem.authoritative_packet_id` canonical lookup, never a synthetic `work_item:` legacy read. | Prove list, direct detail, and WorkItem lookup issue no legacy request. An absent WorkItem mapping or malformed canonical lookup is displayed as an unavailable packet state; malformed present extensions fail closed. Retire `compatibilityProjection` only after every remaining V0 UI consumer is migrated. |
 | Dashboard V0 projections and UI: [`pipeline-supervisor-projector.ts`](../../apps/dashboard/src/lib/pipeline-supervisor-projector.ts), [`active-board-view-model.ts`](../../apps/dashboard/src/lib/pipeline/active-board-view-model.ts), [`memory-proposal-review-panel.tsx`](../../apps/dashboard/src/components/memory-proposal-review-panel.tsx), and [`pipeline-fixtures.ts`](../../apps/dashboard/src/lib/pipeline-fixtures.ts) | These import or manufacture V0-shaped data for cockpit, review, and fixture views. | Classify each as canonical consumer, fixture-only adapter, or removable projection. Fixture support stays explicitly fixture-only and cannot be used as a production fallback. |
-| Dashboard transport and allowlists: [`dashboard-supervisor-proxy.mjs`](../../apps/dashboard/scripts/dashboard-supervisor-proxy.mjs), [`pipeline-supervisor-uds.ts`](../../apps/dashboard/src/lib/pipeline-supervisor-uds.ts), and [`dashboard-page-read-manifest.json`](../../apps/dashboard/src/lib/dashboard-page-read-manifest.json) | The proxy/UDS/read manifest still permit legacy packet paths beside canonical paths. | Remove legacy paths only after the dashboard migration proof; add a focused allowlist test that canonical reads remain allowed and legacy paths are absent. |
+| Dashboard transport and allowlists: [`dashboard-supervisor-proxy.mjs`](../../apps/dashboard/scripts/dashboard-supervisor-proxy.mjs), [`pipeline-supervisor-uds.ts`](../../apps/dashboard/src/lib/pipeline-supervisor-uds.ts), and [`dashboard-page-read-manifest.json`](../../apps/dashboard/src/lib/dashboard-page-read-manifest.json) | The proxy/UDS/read manifest still permit legacy packet paths beside canonical paths. The current work-item detail caller additionally needs only the exact canonical `/pipeline-control-plane/work-items/{id}/packet` read. | Admit that exact canonical lookup with focused tests while retaining legacy paths for unmigrated callers. Remove legacy paths only after their callers are migrated and their replacement/rollback proof is recorded. |
 | Operational scripts and tests: [`pipeline_operational_smoke.py`](../../services/supervisor/scripts/pipeline_operational_smoke.py), [`test_work_packets.py`](../../services/supervisor/tests/integration/test_work_packets.py), [`gate4-bmad-dashboard-e2e.mjs`](../../scripts/gate4-bmad-dashboard-e2e.mjs), and [`check-dashboard-pipeline-import-boundary.mjs`](../../scripts/check-dashboard-pipeline-import-boundary.mjs) | Canonical lifecycle behavior is heavily exercised, but integration/E2E/readiness coverage also calls or expects legacy V0 routes. | Split canonical contract proof from bounded legacy compatibility proof. Retirement requires replacement assertions for every legacy call, not deletion of coverage. |
 
 The dashboard supervisor proxy is a transport allowlist, not evidence that a
@@ -111,6 +121,7 @@ supervisor identity, event, and evidence references.
 | Candidate intake | Manager may submit one eligible, bounded source-backed candidate; supervisor records the resulting authoritative packet. | Intake is loopback-only/metadata-only and validates the returned persisted identity. It is not a manager-owned lifecycle write model. |
 | Dashboard read model | Supervisor canonical list/detail envelope | Dashboard may render a derived view, but derived state must be traceable to canonical packet/event references and must not initiate legacy fallback after Phase 2 convergence. |
 | Canonical response extensions | Supervisor Python schema owns `canonicalContract`, `evidenceChain`, and `productModeMapping` until a cross-language decision is recorded. | A dashboard/manager DTO must either carry, safely project, or deliberately omit each extension with a test and documented reason; it may not accidentally lose fields by treating the TypeScript core as the whole response. |
+| WorkItem-to-packet identity | `WorkItem.authoritative_packet_id` is the unique persisted canonical mapping. | Dashboard work-item detail reads use the canonical lookup backed by that column. Missing link, missing packet, or metadata/link disagreement is unavailable rather than a legacy assembly fallback. |
 | Legacy V0 data | Transitional compatibility only | Every caller must be inventoried and migrated or placed behind a bounded adapter before deletion. No new V0 field, route, fixture-backed production fallback, or parallel parity logic is allowed. |
 | Schema history | Ordered supervisor migrations | The migration table and frozen baseline preserve prior schemas; data migration must be additive and recoverable before any V0 persistence retirement. |
 
@@ -156,11 +167,11 @@ permission to delete in the same change.
 
 This document does not deprecate or remove `/work-packets`, `WorkPacketV0`,
 the dashboard proxy allowlist, fixtures, manager ledgers, or persisted columns.
-It establishes the source-owned contract and inventory required before a
-narrow canonical dashboard read-model slice. That slice should own the
-dashboard runtime and focused tests only; route/schema/persistence retirement
-must remain separately reviewed after its consumer and migration evidence is
-fresh.
+It establishes the source-owned contract and inventory required before and
+during the narrow canonical dashboard read-model slice. That slice owns the
+dashboard runtime, focused tests, and the one URL-preservation lookup described
+above; route/schema/persistence retirement and all legacy action changes remain
+separately reviewed after consumer and migration evidence is fresh.
 
 The governing program remains
 [the holistic cleanup program](kendall-vnxt-holistic-cleanup-program-2026-08-13.md)

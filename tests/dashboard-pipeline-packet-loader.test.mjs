@@ -16,6 +16,32 @@ const detailComponentPath = new URL("../apps/dashboard/src/components/pipeline/p
 const normalRoutePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
 const demoRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/page.tsx", import.meta.url);
 const demoDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/demo/packets/[packetId]/page.tsx", import.meta.url);
+const pipelineControlPlaneContractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
+
+const runtimeContractValidators = {
+  AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES: [
+    "packet.created",
+    "packet.stage_transitioned",
+    "packet.operational_action_applied",
+    "packet.parallel_work_graph_refreshed",
+  ],
+  isPipelineCanonicalContractV1: () => true,
+  isPipelineProductModeMappingV0: () => true,
+  validatePipelineEpic25EvidenceChainV0: () => ["evidence-chain extension omitted from this fixture"],
+  validatePipelineEpic25EvidenceChainV1: () => ["evidence-chain extension omitted from this fixture"],
+};
+
+async function loadActualPipelineControlPlaneContracts() {
+  const source = await readFile(pipelineControlPlaneContractPath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const context = { exports: {}, module: { exports: {} } };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-control-plane/index.ts" });
+  return context.module.exports;
+}
 
 test("authoritative-only WorkPacketV0 is listed and loaded by the same detail identity", async () => {
   const fixtures = populatedFixtureCatalog();
@@ -1136,6 +1162,7 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return {
           normalizePipelineDashboardProjection: (projection) => projection,
@@ -1164,7 +1191,7 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
   );
 });
 
-test("dedicated runtime falls back to legacy work-packet reads only for legacy identities on canonical 404", async () => {
+test("dedicated runtime surfaces canonical list and detail 404s without legacy reads", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1176,6 +1203,7 @@ test("dedicated runtime falls back to legacy work-packet reads only for legacy i
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1184,22 +1212,7 @@ test("dedicated runtime falls back to legacy work-packet reads only for legacy i
         return {
           requestSupervisorJson: async (path) => {
             calls.push(path);
-            if (path === "/pipeline-control-plane/work-packets") {
-              throw new Error("Request failed for /pipeline-control-plane/work-packets (404)");
-            }
-            if (path === "/pipeline-control-plane/work-packets/work_item%3Apacket-1") {
-              throw new Error("Request failed for /pipeline-control-plane/work-packets/work_item%3Apacket-1 (404)");
-            }
-            if (path === "/pipeline-control-plane/work-packets/candidate_work%3Acandidate-1") {
-              throw new Error("Request failed for /pipeline-control-plane/work-packets/candidate_work%3Acandidate-1 (404)");
-            }
-            if (path === "/work-packets/work_item%3Apacket-1") {
-              return { packetId: "work_item:packet-1" };
-            }
-            if (path === "/work-packets/candidate_work%3Acandidate-1") {
-              return { packetId: "candidate_work:candidate-1" };
-            }
-            return [{ packetId: "legacy-packet" }];
+            throw new Error(`Request failed for ${path} (404)`);
           },
         };
       }
@@ -1208,19 +1221,22 @@ test("dedicated runtime falls back to legacy work-packet reads only for legacy i
   };
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
-  const packets = await context.module.exports.getWorkPackets();
-  assert.deepEqual(packets, [{ packetId: "legacy-packet" }]);
-  const packet = await context.module.exports.getWorkPacket("work_item:packet-1");
-  assert.deepEqual(packet, { packetId: "work_item:packet-1" });
-  const candidatePacket = await context.module.exports.getWorkPacket("candidate_work:candidate-1");
-  assert.deepEqual(candidatePacket, { packetId: "candidate_work:candidate-1" });
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Request failed for \/pipeline-control-plane\/work-packets \(404\)/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("work_item:packet-1"),
+    /Request failed for \/pipeline-control-plane\/work-packets\/work_item%3Apacket-1 \(404\)/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("candidate_work:candidate-1"),
+    /Request failed for \/pipeline-control-plane\/work-packets\/candidate_work%3Acandidate-1 \(404\)/,
+  );
   assert.deepEqual(calls, [
     "/pipeline-control-plane/work-packets",
-    "/work-packets",
     "/pipeline-control-plane/work-packets/work_item%3Apacket-1",
-    "/work-packets/work_item%3Apacket-1",
     "/pipeline-control-plane/work-packets/candidate_work%3Acandidate-1",
-    "/work-packets/candidate_work%3Acandidate-1",
   ]);
 });
 
@@ -1236,6 +1252,7 @@ test("dedicated runtime fails closed on canonical 404 for authoritative identity
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1277,6 +1294,7 @@ test("dedicated runtime projects consistent authoritative list and detail withou
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1305,17 +1323,22 @@ test("dedicated runtime projects consistent authoritative list and detail withou
   const packets = JSON.parse(JSON.stringify(await context.module.exports.getWorkPackets()));
   const packet = JSON.parse(JSON.stringify(await context.module.exports.getWorkPacket("packet-1")));
   assert.equal(packets.length, 1);
-  assert.equal(packet.packetId, "packet-1");
-  assert.equal(packet.requestedOutcome, "Created from authoritative metadata.");
-  assert.equal(packet.currentStage, "capture");
-  assert.equal(packet.currentOwner, "kendall");
-  assert.equal(packet.lifecycleState.latestTransitionEventRef, "event:created");
-  assert.deepEqual(packet.sourceRefs.map((ref) => ref.refId), ["doc:source"]);
-  assert.equal(packet.sourceRefs[0].pathOrUrl, null);
-  assert.equal(packet.sourceRefs[0].freshness, "stale");
-  assert.equal(packet.sourceRefs[0].accessState, "blocked");
+  assert.equal(packet.authoritativeLifecycle.packetId, "packet-1");
+  assert.equal(packet.canonicalContract, null);
+  assert.equal(packet.evidenceChain, null);
+  assert.equal(packet.productModeMapping, null);
+  const display = packet.compatibilityProjection;
+  assert.equal(display.packetId, "packet-1");
+  assert.equal(display.requestedOutcome, "Created from authoritative metadata.");
+  assert.equal(display.currentStage, "capture");
+  assert.equal(display.currentOwner, "kendall");
+  assert.equal(display.lifecycleState.latestTransitionEventRef, "event:created");
+  assert.deepEqual(display.sourceRefs.map((ref) => ref.refId), ["doc:source"]);
+  assert.equal(display.sourceRefs[0].pathOrUrl, null);
+  assert.equal(display.sourceRefs[0].freshness, "stale");
+  assert.equal(display.sourceRefs[0].accessState, "blocked");
   assert.equal(
-    packet.sourceRefs[0].blockedReason,
+    display.sourceRefs[0].blockedReason,
     "Source is superseded by _bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md.",
   );
   assert.deepEqual(packets[0], packet);
@@ -1323,6 +1346,204 @@ test("dedicated runtime projects consistent authoritative list and detail withou
     "/pipeline-control-plane/work-packets",
     "/pipeline-control-plane/work-packets/packet-1",
   ]);
+});
+
+test("dashboard canonical DTO carries validated extensions and resolves WorkItem detail without a legacy read", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const canonicalPacket = authoritativeLifecyclePacket("packet-work-item-1");
+  canonicalPacket.history[0].eventType = "packet.parallel_work_graph_refreshed";
+  canonicalPacket.evidenceChain = supervisorEvidenceChainRead(canonicalPacket.packetId);
+  const mismatchedEvidencePacket = {
+    ...canonicalPacket,
+    evidenceChain: supervisorEvidenceChainRead("packet-work-item-2"),
+  };
+  const malformedEvidencePacket = {
+    ...canonicalPacket,
+    evidenceChain: { ...supervisorEvidenceChainRead(canonicalPacket.packetId), chainDigestSha256: "sha256:not-a-digest" },
+  };
+  const calls = [];
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") {
+        return {
+          AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES: runtimeContractValidators.AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES,
+          isPipelineCanonicalContractV1: () => false,
+          isPipelineProductModeMappingV0: () => false,
+          validatePipelineEpic25EvidenceChainV0: () => ["expected v1 read DTO"],
+          validatePipelineEpic25EvidenceChainV1: (value) => isSupervisorEvidenceChainBase(value) ? [] : ["invalid supervisor evidence-chain base"],
+        };
+      }
+      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          requestSupervisorJson: async (path) => {
+            calls.push(path);
+            if (path === "/pipeline-control-plane/work-packets") return [canonicalPacket];
+            if (path === "/pipeline-control-plane/work-items/work-item-1/packet") return canonicalPacket;
+            if (path === "/pipeline-control-plane/work-packets/packet-evidence-mismatch") return mismatchedEvidencePacket;
+            if (path === "/pipeline-control-plane/work-items/work-item-malformed/packet") return malformedEvidencePacket;
+            if (path === "/pipeline-control-plane/work-items/work-item-missing/packet") throw new Error(`Request failed for ${path} (404)`);
+            throw new Error(`Unexpected request ${path}`);
+          },
+        };
+      }
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  const listed = JSON.parse(JSON.stringify(await context.module.exports.getWorkPackets()));
+  const workItemDetail = JSON.parse(JSON.stringify(await context.module.exports.getWorkPacketForWorkItem("work-item-1")));
+  assert.deepEqual(listed[0].authoritativeLifecycle, canonicalPacket);
+  assert.equal(workItemDetail.authoritativeLifecycle.history[0].eventType, "packet.parallel_work_graph_refreshed");
+  assert.equal(workItemDetail.canonicalContract, null);
+  assert.deepEqual(workItemDetail.evidenceChain, canonicalPacket.evidenceChain);
+  assert.equal(workItemDetail.productModeMapping, null);
+  assert.equal(workItemDetail.compatibilityProjection.packetId, "packet-work-item-1");
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("packet-evidence-mismatch"),
+    /Canonical WorkPacket evidenceChain does not bind its authoritative packet identity/,
+  );
+  assert.equal(await context.module.exports.getWorkPacketForWorkItem("work-item-malformed"), null);
+  assert.equal(await context.module.exports.getWorkPacketForWorkItem("work-item-missing"), null);
+  assert.deepEqual(calls, [
+    "/pipeline-control-plane/work-packets",
+    "/pipeline-control-plane/work-items/work-item-1/packet",
+    "/pipeline-control-plane/work-packets/packet-evidence-mismatch",
+    "/pipeline-control-plane/work-items/work-item-malformed/packet",
+    "/pipeline-control-plane/work-items/work-item-missing/packet",
+  ]);
+});
+
+test("dashboard canonical DTO rejects extension provenance and mode cross-bindings", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const packet = authoritativeLifecyclePacket("packet-extension-bindings");
+  const canonicalContract = {
+    productMode: "read_only",
+    canonicalSource: { provenance: { sourceRef: { ...packet.sourceRef } } },
+  };
+  const productModeMapping = { requestedProductMode: "read_only" };
+  const provenanceMismatch = {
+    ...packet,
+    canonicalContract: {
+      ...canonicalContract,
+      canonicalSource: { provenance: { sourceRef: { ...packet.sourceRef, refId: "doc:other-source" } } },
+    },
+  };
+  const modeMismatch = {
+    ...packet,
+    canonicalContract,
+    productModeMapping: { requestedProductMode: "operator_review" },
+  };
+  const mappingWithoutContract = { ...packet, productModeMapping };
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") return {
+        AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES: runtimeContractValidators.AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES,
+        isPipelineCanonicalContractV1: (value) => value?.canonicalSource?.provenance?.sourceRef?.refId?.startsWith("doc:"),
+        isPipelineProductModeMappingV0: (value) => typeof value?.requestedProductMode === "string",
+        validatePipelineEpic25EvidenceChainV0: () => ["evidence chain omitted"],
+        validatePipelineEpic25EvidenceChainV1: () => ["evidence chain omitted"],
+      };
+      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+      if (specifier === "./dashboard-supervisor-transport") return {
+        requestSupervisorJson: async (path) => {
+          if (path.endsWith("packet-provenance-mismatch")) return provenanceMismatch;
+          if (path.endsWith("packet-mode-mismatch")) return modeMismatch;
+          if (path.endsWith("packet-mapping-without-contract")) return mappingWithoutContract;
+          throw new Error(`Unexpected request ${path}`);
+        },
+      };
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("packet-provenance-mismatch"),
+    /canonicalContract provenance does not bind its authoritative source/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("packet-mode-mismatch"),
+    /productModeMapping does not match the canonical contract mode/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPacket("packet-mapping-without-contract"),
+    /productModeMapping requires its canonical contract/,
+  );
+});
+
+test("dashboard canonical DTO accepts a structurally valid stale supervisor evidence read and rejects incoherent read posture", async () => {
+  const contracts = await loadActualPipelineControlPlaneContracts();
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const packet = authoritativeLifecyclePacket("packet-stale-evidence");
+  const staleEvidence = supervisorEvidenceChainRead(packet.packetId);
+  const baseEvidence = { ...staleEvidence };
+  delete baseEvidence.chainDigestSha256;
+  delete baseEvidence.freshnessState;
+  delete baseEvidence.effectiveDecision;
+  delete baseEvidence.typedBlockers;
+  assert.equal(
+    contracts.validatePipelineEpic25EvidenceChainV1(baseEvidence, Date.parse(baseEvidence.checkedAt)).length,
+    0,
+    "the shared contract accepts the exact stale-read base at its recorded check time",
+  );
+  const freshWithStaleBlocker = { ...staleEvidence, freshnessState: "fresh" };
+  const staleWithoutFreshnessReason = { ...staleEvidence, typedBlockers: ["quality_gate_not_passed"] };
+  const staleNonHoldDecision = { ...staleEvidence, effectiveDecision: "limited_rollout" };
+  const futureDated = { ...staleEvidence, checkedAt: new Date(Date.now() + (2 * 60_000)).toISOString() };
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") return contracts;
+      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+      if (specifier === "./dashboard-supervisor-transport") return {
+        requestSupervisorJson: async (path) => {
+          if (path.endsWith("packet-stale-evidence")) return { ...packet, evidenceChain: staleEvidence };
+          if (path.endsWith("packet-fresh-stale")) return { ...packet, evidenceChain: freshWithStaleBlocker };
+          if (path.endsWith("packet-stale-no-reason")) return { ...packet, evidenceChain: staleWithoutFreshnessReason };
+          if (path.endsWith("packet-stale-non-hold")) return { ...packet, evidenceChain: staleNonHoldDecision };
+          if (path.endsWith("packet-future-dated")) return { ...packet, evidenceChain: futureDated };
+          throw new Error(`Unexpected request ${path}`);
+        },
+      };
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  const accepted = JSON.parse(JSON.stringify(await context.module.exports.getWorkPacket("packet-stale-evidence")));
+  assert.equal(accepted.evidenceChain.freshnessState, "stale");
+  assert.deepEqual(accepted.evidenceChain.typedBlockers, ["evidence_chain_stale"]);
+  for (const packetId of ["packet-fresh-stale", "packet-stale-no-reason", "packet-stale-non-hold", "packet-future-dated"]) {
+    await assert.rejects(() => context.module.exports.getWorkPacket(packetId), /Canonical WorkPacket evidenceChain extension is invalid/);
+  }
 });
 
 test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evidence refs before rendering", async () => {
@@ -1365,6 +1586,7 @@ test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evide
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1389,7 +1611,7 @@ test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evide
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
 
-  const packets = JSON.parse(JSON.stringify(await context.module.exports.getWorkPackets()));
+  const packets = JSON.parse(JSON.stringify(await context.module.exports.getWorkPackets())).map((packet) => packet.compatibilityProjection);
   assert.equal(packets.length, unsafeSummaries.length);
   for (const packet of packets) {
     assert.equal(packet.requestedOutcome, "Redacted metadata-only lifecycle summary.");
@@ -1417,6 +1639,7 @@ test("dedicated runtime treats a successful empty canonical list as authoritativ
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1440,7 +1663,7 @@ test("dedicated runtime treats a successful empty canonical list as authoritativ
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
 });
 
-test("dedicated runtime safely falls back when canonical list events have missing or non-object actors", async () => {
+test("dedicated runtime rejects malformed canonical list actors without legacy reads", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1459,16 +1682,16 @@ test("dedicated runtime safely falls back when canonical list events have missin
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
             calls.push(path);
             if (path === "/pipeline-control-plane/work-packets") return [malformedPackets[canonicalIndex++]];
-            if (path === "/work-packets") return [{ shape: "valid", packetId: `legacy-${canonicalIndex}` }];
             throw new Error(`Unexpected request ${path}`);
           },
         };
@@ -1479,23 +1702,31 @@ test("dedicated runtime safely falls back when canonical list events have missin
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
 
-  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-1" }]);
-  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-2" }]);
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
   assert.deepEqual(calls, [
     "/pipeline-control-plane/work-packets",
-    "/work-packets",
     "/pipeline-control-plane/work-packets",
-    "/work-packets",
   ]);
 });
 
-test("dedicated runtime safely falls back when canonical ready-to-test evidence is malformed", async () => {
+test("dedicated runtime rejects malformed canonical ready-to-test evidence without legacy reads", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
     compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const malformedPackets = [42, { evidenceRefs: 42 }].map((readyToTest, index) => {
+  const malformedPackets = [
+    42,
+    { evidenceRefs: 42 },
+    { readyId: "ready:partial", evidenceRefs: [], metadataOnly: true, rawPayloadRetained: false },
+  ].map((readyToTest, index) => {
     const packet = authoritativeLifecyclePacket(`malformed-ready-to-test-${index + 1}`);
     packet.readyToTest = readyToTest;
     return packet;
@@ -1507,16 +1738,16 @@ test("dedicated runtime safely falls back when canonical ready-to-test evidence 
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
             calls.push(path);
             if (path === "/pipeline-control-plane/work-packets") return [malformedPackets[canonicalIndex++]];
-            if (path === "/work-packets") return [{ shape: "valid", packetId: `legacy-${canonicalIndex}` }];
             throw new Error(`Unexpected request ${path}`);
           },
         };
@@ -1527,13 +1758,22 @@ test("dedicated runtime safely falls back when canonical ready-to-test evidence 
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
 
-  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-1" }]);
-  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-2" }]);
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
   assert.deepEqual(calls, [
     "/pipeline-control-plane/work-packets",
-    "/work-packets",
     "/pipeline-control-plane/work-packets",
-    "/work-packets",
+    "/pipeline-control-plane/work-packets",
   ]);
 });
 
@@ -1549,6 +1789,7 @@ test("dedicated runtime does not legacy-fallback unsafe slash-containing packet 
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1588,6 +1829,7 @@ test("dedicated runtime fails closed without legacy fallback when canonical pack
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1613,7 +1855,7 @@ test("dedicated runtime fails closed without legacy fallback when canonical pack
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/packet-1"]);
 });
 
-test("dedicated runtime uses legacy list fallback when the canonical list is malformed", async () => {
+test("dedicated runtime surfaces malformed canonical list results without legacy reads", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1625,16 +1867,16 @@ test("dedicated runtime uses legacy list fallback when the canonical list is mal
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
             calls.push(path);
             if (path === "/pipeline-control-plane/work-packets") return [{ packetId: "malformed-canonical" }];
-            if (path === "/work-packets") return [{ shape: "valid", packetId: "legacy-only-1" }];
             throw new Error(`Unexpected request ${path}`);
           },
         };
@@ -1645,11 +1887,14 @@ test("dedicated runtime uses legacy list fallback when the canonical list is mal
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
 
-  assert.deepEqual(await context.module.exports.getWorkPackets(), [{ shape: "valid", packetId: "legacy-only-1" }]);
-  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets", "/work-packets"]);
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
 });
 
-test("dedicated runtime merges legacy-only packets when canonical list succeeds", async () => {
+test("dedicated runtime rejects V0-shaped canonical lists without legacy merge", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
@@ -1661,19 +1906,16 @@ test("dedicated runtime merges legacy-only packets when canonical list succeeds"
     module: { exports: {} },
     process: { env: {} },
     require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
             calls.push(path);
             if (path === "/pipeline-control-plane/work-packets") return [{ shape: "valid", packetId: "canonical-1", title: "Canonical" }];
-            if (path === "/work-packets") return [
-              { shape: "legacy", packetId: "canonical-1", title: "Legacy duplicate" },
-              { shape: "valid", packetId: "legacy-only-1", title: "Legacy only" },
-            ];
             throw new Error(`Unexpected request ${path}`);
           },
         };
@@ -1683,12 +1925,11 @@ test("dedicated runtime merges legacy-only packets when canonical list succeeds"
   };
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
-  const merged = await context.module.exports.getWorkPackets();
-  assert.deepEqual(JSON.parse(JSON.stringify(merged)), [
-    { shape: "valid", packetId: "canonical-1", title: "Canonical" },
-    { shape: "valid", packetId: "legacy-only-1", title: "Legacy only" },
-  ]);
-  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets", "/work-packets"]);
+  await assert.rejects(
+    () => context.module.exports.getWorkPackets(),
+    /Canonical WorkPacket response is not authoritative lifecycle-shaped/,
+  );
+  assert.deepEqual(calls, ["/pipeline-control-plane/work-packets"]);
 });
 
 function runtimeProjection(packetIds = ["manager-source-authoritative-only"], overrides = {}) {
@@ -1833,6 +2074,126 @@ function authoritativeLifecyclePacket(packetId) {
     }],
     metadataOnly: true,
   };
+}
+
+function supervisorEvidenceChainRead(authoritativePacketId) {
+  // Keep the base record genuinely stale at runtime while validating it at its
+  // own observation time. The dashboard must accept that retained read DTO,
+  // but reject an observation timestamp forged ahead of the local clock.
+  const checkedAt = new Date(Date.now() - (10 * 60_000)).toISOString();
+  const expiresAt = new Date(Date.now() - (6 * 60_000)).toISOString();
+  const retentionExpiresAt = new Date(Date.parse(checkedAt) + (30 * 24 * 60 * 60_000)).toISOString();
+  const targetRevision = "a".repeat(40);
+  const outcomes = { readiness: "no_go", canary: "hold", ramp: "hold", recovery: "hold", hardening: "hold", decision: "hold" };
+  const schemas = {
+    readiness: "pipeline-operational-readiness-contract/v0",
+    canary: "pipeline-one-worker-live-canary/v0",
+    ramp: "pipeline-live-capacity-ramp/v0",
+    recovery: "pipeline-resilience-recovery-validation/v0",
+    hardening: "pipeline-operational-hardening-runbooks/v0",
+    decision: "pipeline-production-readiness-decision/v0",
+  };
+  const packets = {};
+  let predecessorPacketId = null;
+  for (const slot of Object.keys(schemas)) {
+    const packetId = `epic25-${slot}`;
+    const details = slot === "readiness"
+      ? { kind: slot, backendTruth: "dry_run", authorityState: "blocked", gateCount: 10, thresholdsComplete: false, telemetryReady: false, rollbackReady: true, recoveryReady: true, configurationValid: true }
+      : slot === "canary"
+        ? { kind: slot, workerCount: 1, backendTruth: "dry_run", leaseState: "blocked", checkpointState: "blocked", measurementsComplete: false, canaryAuthorityProven: false, rampAllowed: false }
+        : slot === "ramp"
+          ? { kind: slot, canaryPacketId: packets.canary.packetId, canaryOutcome: packets.canary.outcome, stageWorkerCounts: [1, 2, 4, 6], stageOutcomes: ["hold", "hold", "hold", "hold"], scaleEvidenceReady: false }
+          : slot === "recovery"
+            ? { kind: slot, rampPacketId: packets.ramp.packetId, predecessorOutcome: packets.ramp.outcome, drillCount: 1, allDrillsPassed: false, idempotencyProven: false, silentRetryObserved: false, reliabilityEvidenceReady: false }
+            : slot === "hardening"
+              ? { kind: slot, recoveryPacketId: packets.recovery.packetId, predecessorOutcome: packets.recovery.outcome, domainCount: 1, unresolvedHighRiskGap: true, readinessHandoffReady: false }
+              : { kind: slot, predecessorPacketIds: Object.fromEntries(["canary", "ramp", "recovery", "hardening"].map((name) => [name, packets[name].packetId])), predecessorOutcomes: Object.fromEntries(["canary", "ramp", "recovery", "hardening"].map((name) => [name, packets[name].outcome])), authorityReady: false, simulatedEvidence: true, staleEvidence: false, fixtureEvidence: false };
+    packets[slot] = {
+      slot,
+      packetId,
+      packetSchemaVersion: schemas[slot],
+      predecessorPacketId,
+      evidenceClass: "integrated_local",
+      outcome: outcomes[slot],
+      sourceRefs: ["prd:epic25"],
+      evidenceRefs: [`evidence:${slot}`],
+      checkedAt,
+      expiresAt,
+      observedEvidenceAttestation: null,
+      details,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+    predecessorPacketId = packetId;
+  }
+  return {
+    schemaVersion: "pipeline-epic-25-evidence-chain/v1",
+    authoritativePacketId,
+    evidenceClass: "integrated_local",
+    packets,
+    checkedAt,
+    expiresAt,
+    executionAllowed: false,
+    providerCallsAllowed: false,
+    mutationAllowed: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    policyProfile: {
+      schemaVersion: "pipeline-epic-25-policy-profile/v0",
+      targetRevision,
+      checkedAt,
+      expiresAt,
+      qualityGates: ["security", "retention", "rollback", "runbook", "telemetry", "recovery"].map((family) => ({
+        family,
+        requirement: family === "runbook" ? "not_applicable" : "required",
+        state: family === "runbook" ? "not_applicable" : "pass",
+        typedReason: null,
+        nextSafeAction: family === "runbook" ? "No action is required." : "Preserve passing evidence and continue review.",
+        notApplicableReason: family === "runbook" ? "Runbook publication is outside this validation target." : null,
+        targetRevision,
+        checkedAt,
+        expiresAt,
+        evidenceRefs: [`evidence:${family}-gate`],
+      })),
+      retentionPolicy: {
+        sourceOwner: "epic25-source-owner",
+        toolOwner: "supervisor",
+        disposition: "metadata_only",
+        redactionState: "verified_redacted",
+        expiresAt: retentionExpiresAt,
+        retentionPeriodDays: 30,
+        disposalAction: "delete_metadata",
+        verificationStatus: "verified",
+        policyReason: "Retain bounded validation metadata for audit and then dispose it.",
+        evidenceRefs: ["evidence:retention-policy"],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      executionAllowed: false,
+      providerCallsAllowed: false,
+      mutationAllowed: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    chainDigestSha256: `sha256:${"b".repeat(64)}`,
+    freshnessState: "stale",
+    effectiveDecision: "hold",
+    typedBlockers: ["evidence_chain_stale"],
+  };
+}
+
+function isSupervisorEvidenceChainBase(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) &&
+    value.schemaVersion === "pipeline-epic-25-evidence-chain/v1" &&
+    typeof value.authoritativePacketId === "string" &&
+    value.evidenceClass === "integrated_local" &&
+    value.packets && typeof value.packets === "object" &&
+    value.policyProfile && typeof value.policyProfile === "object" &&
+    typeof value.checkedAt === "string" && typeof value.expiresAt === "string" &&
+    value.executionAllowed === false && value.providerCallsAllowed === false && value.mutationAllowed === false &&
+    value.metadataOnly === true && value.rawPayloadRetained === false &&
+    !("chainDigestSha256" in value) && !("freshnessState" in value) &&
+    !("effectiveDecision" in value) && !("typedBlockers" in value));
 }
 
 function supersededAuthoritativeLifecyclePacket(packetId) {
@@ -2484,6 +2845,22 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
     issuePipelineOperationalApproval: async () => { throw new Error("operational approvals are outside this proof"); },
     ...supervisorOverrides,
   };
+  // The loader consumes the named temporary compatibility adapter. Existing
+  // fixture callers remain V0-shaped so this harness models the adapter at its
+  // boundary rather than teaching each unrelated loader assertion DTO details.
+  if (typeof supervisor.getWorkPackets === "function") {
+    const getWorkPackets = supervisor.getWorkPackets;
+    supervisor.getWorkPackets = async (...args) => (await getWorkPackets(...args)).map((packet) => (
+      packet?.compatibilityProjection ? packet : { compatibilityProjection: packet }
+    ));
+  }
+  if (typeof supervisor.getWorkPacket === "function") {
+    const getWorkPacket = supervisor.getWorkPacket;
+    supervisor.getWorkPacket = async (...args) => {
+      const packet = await getWorkPacket(...args);
+      return packet?.compatibilityProjection ? packet : { compatibilityProjection: packet };
+    };
+  }
   const context = {
     exports: {},
     module: { exports: {} },

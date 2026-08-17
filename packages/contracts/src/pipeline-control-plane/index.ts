@@ -185,11 +185,23 @@ export function isAuthoritativePacketSourceRef(value: unknown): value is Authori
   );
 }
 
+export const AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES = [
+  "packet.created",
+  "packet.stage_transitioned",
+  "packet.operational_action_applied",
+  "packet.parallel_work_graph_refreshed",
+] as const;
+export type AuthoritativePacketLifecycleEventType = (typeof AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES)[number];
+
+export function isAuthoritativePacketLifecycleEventType(value: unknown): value is AuthoritativePacketLifecycleEventType {
+  return typeof value === "string" && (AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(value);
+}
+
 export interface AuthoritativePacketLifecycleEvent {
   eventId: string;
   packetId: string;
   schemaVersion: 1;
-  eventType: "packet.created" | "packet.stage_transitioned" | "packet.operational_action_applied";
+  eventType: AuthoritativePacketLifecycleEventType;
   previousStage?: AuthoritativePacketStage | null;
   targetStage: AuthoritativePacketStage;
   status: AuthoritativePacketStatus;

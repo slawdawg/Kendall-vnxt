@@ -174,6 +174,17 @@ test("authoritative pipeline control plane lifecycle contracts are namespaced an
   assert.match(workflowCoreIndex, /export \* from "\.\/pipeline-control-plane";/);
 });
 
+test("shared authoritative lifecycle event contract accepts the supervisor graph-refresh event", async () => {
+  const {
+    AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES,
+    isAuthoritativePacketLifecycleEventType,
+  } = await loadCompiledContractModule();
+
+  assert.ok(AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES.includes("packet.parallel_work_graph_refreshed"));
+  assert.equal(isAuthoritativePacketLifecycleEventType("packet.parallel_work_graph_refreshed"), true);
+  assert.equal(isAuthoritativePacketLifecycleEventType("packet.parallel_work_graph_refresh"), false);
+});
+
 test("canonical contract inputs fail closed across source, retention, gate, readiness, and product-mode boundaries", async () => {
   const {
     PIPELINE_CANONICAL_CONTRACT_SCHEMA_VERSION,

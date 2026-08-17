@@ -9,6 +9,7 @@ const detailClient = new URL("../apps/dashboard/src/components/pipeline/lan-pack
 const packetLoader = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
 const runtime = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
 const transport = new URL("../apps/dashboard/src/lib/dashboard-supervisor-transport.ts", import.meta.url);
+const uds = new URL("../apps/dashboard/src/lib/pipeline-supervisor-uds.ts", import.meta.url);
 const supervisorProxy = new URL("../apps/dashboard/scripts/dashboard-supervisor-proxy.mjs", import.meta.url);
 const cockpit = new URL("../apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", import.meta.url);
 
@@ -21,11 +22,12 @@ test("LAN pipeline route avoids server-side supervisor reads", async () => {
 });
 
 test("LAN pipeline browser reads stay out of the Node UDS module and use the authenticated supervisor proxy", async () => {
-  const [client, loader, runtimeSource, transportSource, proxySource, cockpitSource] = await Promise.all([
+  const [client, loader, runtimeSource, transportSource, udsSource, proxySource, cockpitSource] = await Promise.all([
     readFile(pipelineClient, "utf8"),
     readFile(packetLoader, "utf8"),
     readFile(runtime, "utf8"),
     readFile(transport, "utf8"),
+    readFile(uds, "utf8"),
     readFile(supervisorProxy, "utf8"),
     readFile(cockpit, "utf8"),
   ]);
@@ -34,8 +36,12 @@ test("LAN pipeline browser reads stay out of the Node UDS module and use the aut
   assert.match(runtimeSource, /requestSupervisorJson/);
   assert.match(transportSource, /\$\{window\.location\.origin\}\/api\/supervisor/);
   assert.match(proxySource, /READ_ONLY_SUPERVISOR_PATHS/);
-  assert.match(proxySource, /projection\|work-packets/);
+  assert.match(proxySource, /projection\|work-packets.*work-items/);
   assert.match(proxySource, /\/work-packets/);
+  assert.match(proxySource, /work-items\\\/\[A-Za-z0-9\._:%-\]\+\\\/packet/);
+  assert.match(udsSource, /CANONICAL_WORK_ITEM_PACKET_PATH/);
+  assert.match(udsSource, /\^\\\/pipeline-control-plane\\\/work-items\\\//);
+  assert.doesNotMatch(udsSource, /work-items.*\(\.\*\|\.\+\)/);
   assert.match(proxySource, /requestSupervisor\(supervisorUdsPath, "\/auth\/session"/);
   assert.match(cockpitSource, /projectionSupportsOperationalActions/);
   assert.match(cockpitSource, /readOnly/);
