@@ -11500,7 +11500,10 @@ function preserveDirtySuperseded(argv) {
       assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
       assertDirtySupersededResetHead(fresh);
       const resetProof = verifyDirtySupersededSnapshot(manifest, fresh, snapshot, { requireLiveMatch: true });
-      heartbeat(() => assertDirtySupersededResetHead(fresh));
+      heartbeat(() => {
+        assertDirtySupersededSnapshotConfiguration(fresh.worktreePath);
+        assertDirtySupersededResetHead(fresh);
+      });
       runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
       if (dirtySupersededStatusRecords(fresh.worktreePath, fresh.expectedHeadSha).length) throw new Error("Dirty superseded preservation cleaned source worktree incompletely; cleanup remains blocked.");
       manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset" };
@@ -11580,7 +11583,10 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
     assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
     assertDirtySupersededResetHead(fresh);
     const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
-    heartbeat(() => assertDirtySupersededResetHead(fresh));
+    heartbeat(() => {
+      assertDirtySupersededSnapshotConfiguration(fresh.worktreePath);
+      assertDirtySupersededResetHead(fresh);
+    });
     runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
     if (dirtySupersededStatusRecords(fresh.worktreePath, fresh.expectedHeadSha).length) throw new Error("Dirty superseded preservation resumed reset left source worktree dirty; cleanup remains blocked.");
     manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset", resumedAfterInterruption: true };
@@ -11793,6 +11799,18 @@ function assertDirtySupersededStatusConfiguration(worktreePath) {
   if (configuredWorktree.code === 0 && configuredWorktree.stdout.trim()) {
     throw new Error("dirty superseded preservation refuses configured core.worktree because Git commands must inspect the managed worktree");
   }
+  assertDirtySupersededSnapshotConfiguration(worktreePath);
+}
+
+function assertDirtySupersededSnapshotConfiguration(worktreePath) {
+  const symlinks = git(["config", "--bool", "core.symlinks"], { cwd: worktreePath });
+  if (symlinks.code === 0 && symlinks.stdout.trim() === "false") {
+    throw new Error("dirty superseded preservation refuses core.symlinks=false because an emulated symlink cannot prove its preserved tree mode");
+  }
+  const fsyncMethod = git(["config", "--get", "core.fsyncMethod"], { cwd: worktreePath });
+  if (fsyncMethod.code === 0 && fsyncMethod.stdout.trim().toLowerCase() === "writeout-only") {
+    throw new Error("dirty superseded preservation refuses core.fsyncMethod=writeout-only because snapshot objects must be fsynced before reset");
+  }
 }
 
 function assertDurablePreservationGitEnvironment() {
@@ -11834,6 +11852,7 @@ function assertNoDirtySupersededRepositoryAlternates(worktreePath) {
 }
 
 function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
+  assertDirtySupersededSnapshotConfiguration(plan.worktreePath);
   assertNoDirtySupersededRepositoryAlternates(plan.worktreePath);
   const currentDirty = dirtySupersededTrackedPaths(plan.worktreePath, plan.expectedHeadSha);
   if (JSON.stringify(currentDirty.paths) !== JSON.stringify(plan.dirty.paths)) throw new Error("dirty superseded preservation changed before snapshot staging");
@@ -11848,7 +11867,7 @@ function writeDirtySupersededSnapshot(manifest, plan, proofInput) {
   const digest = createHash("sha256").update(JSON.stringify({ sourceHead: plan.expectedHeadSha, tree, paths: plan.dirty.paths })).digest("hex");
   // The snapshot is the only copy of the dirty bytes after reset. Ask Git to
   // durably flush loose objects and the ref transaction before that boundary.
-  const durableGit = ["-c", "core.fsync=loose-object,reference"];
+  const durableGit = ["-c", "core.fsyncMethod=fsync", "-c", "core.fsync=loose-object,reference"];
   const immutableGitEnvironment = { GIT_NO_REPLACE_OBJECTS: "1" };
   const commit = requireExactGitObjectId(runChecked("git", [...durableGit, "commit-tree", tree, "-p", plan.expectedHeadSha, "-m", `preserve-dirty-superseded:${manifest.task_id}:${digest}`], { cwd: plan.worktreePath, env: immutableGitEnvironment }).stdout.trim(), "dirty preservation commit");
   const objectFormat = git(["rev-parse", "--show-object-format"], { cwd: plan.worktreePath });
@@ -11934,6 +11953,7 @@ function recoverDirtySupersededSnapshotIntent(manifest, intent, proofInput, mani
 }
 
 function dirtySupersededSnapshotTree(plan) {
+  assertDirtySupersededSnapshotConfiguration(plan.worktreePath);
   const indexPathResult = git(["rev-parse", "--git-path", "index"], { cwd: plan.worktreePath });
   if (indexPathResult.code !== 0) throw new Error("cannot locate source Git index for dirty preservation");
   const indexPath = resolve(plan.worktreePath, indexPathResult.stdout.trim());
@@ -11943,7 +11963,7 @@ function dirtySupersededSnapshotTree(plan) {
   // `update-index` records their exact modes, and `write-tree` writes the
   // preserved tree. They are the only copy after reset, so durability covers
   // those writers as well as commit-tree/update-ref below.
-  const durableGit = ["-c", "core.fsync=loose-object,reference"];
+  const durableGit = ["-c", "core.fsyncMethod=fsync", "-c", "core.fsync=loose-object,reference"];
   try {
     runChecked("git", [...durableGit, "read-tree", plan.expectedHeadSha], { cwd: plan.worktreePath, env });
     for (const entry of plan.dirty.paths) {

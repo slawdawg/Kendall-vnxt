@@ -698,7 +698,10 @@ do not treat an operator authorization as a bypass.
    any recorded snapshot as a direct (non-symbolic) ref and, while the worktree remains present, rechecks
    full status including ignored/untracked residue and whole-index hidden flags
    before local cleanup; a missing, changed, or unreadable preservation object,
-   live residue, or hidden index entry is a hard stop line. A proven partial
+   live residue, or hidden index entry is a hard stop line. Preservation
+   refuses emulated symlinks and non-durable Git fsync settings; its raw
+   object, tree, commit, and ref writes explicitly use Git's `fsync` method
+   before the source reset. A proven partial
    cleanup validates the immutable evidence from its stable checkout without
    probing the deliberately absent worktree. A crash or blocked post-reset check
    leaves immutable pending evidence. If a pre-publication intent has no published

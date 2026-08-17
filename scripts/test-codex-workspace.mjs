@@ -17523,6 +17523,41 @@ try {
     } finally { cleanupSupersededCleanupFixture(fixture); }
   });
 
+  test("preserve-dirty-superseded rejects emulated symlink checkouts before snapshotting", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved symlink mode rejection", "--reason", "an emulated symlink cannot prove its snapshot mode"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "emulated symlink bytes\n");
+      runGit(fixture.worktree, ["config", "core.symlinks", "false"]);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("core.symlinks=false"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "emulated symlink configuration reset dirty source");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "emulated symlink configuration wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects writeout-only fsync before snapshot and reset", () => {
+    const argsFor = (fixture) => ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved durable fsync enforcement", "--reason", "writeout-only cannot authorize a destructive reset"];
+    const initial = createSupersededCleanupFixture({ closedSourcePr: true });
+    const late = createSupersededCleanupFixture({ closedSourcePr: true });
+    try {
+      writeFileSync(join(initial.worktree, "carried.txt"), "initial fsync rejection\n");
+      runGit(initial.worktree, ["config", "core.fsyncMethod", "writeout-only"]);
+      const initialResult = runFixtureScript(initial, argsFor(initial), { env: initial.env });
+      assert(initialResult.code !== 0 && (initialResult.stderr || initialResult.stdout).includes("core.fsyncMethod=writeout-only"), initialResult.stderr || initialResult.stdout);
+      assert(runGit(initial.worktree, ["status", "--porcelain"]).stdout, "writeout-only snapshot rejection reset dirty source");
+      assert(!readJson(join(initial.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_snapshot_intent, "writeout-only snapshot rejection wrote intent");
+
+      writeFileSync(join(late.worktree, "carried.txt"), "late fsync rejection\n");
+      installFixtureGitPostSuccessHook(late, "args.includes('write-tree')", ["config", "core.fsyncMethod", "writeout-only"]);
+      const lateResult = runFixtureScript(late, argsFor(late), { env: late.env });
+      assert(lateResult.code !== 0 && (lateResult.stderr || lateResult.stdout).includes("core.fsyncMethod=writeout-only"), lateResult.stderr || lateResult.stdout);
+      assert(runGit(late.worktree, ["status", "--porcelain"]).stdout, "late writeout-only configuration reset dirty source");
+      assert(readJson(join(late.stateRoot, "tasks", "superseded-task.json")).dirty_superseded_preservation, "late writeout-only configuration lost durable snapshot evidence");
+    } finally { cleanupSupersededCleanupFixture(initial); cleanupSupersededCleanupFixture(late); }
+  });
+
   test("dirty superseded commands reject ambient alternate replacement and worktree overrides", () => {
     const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
     const preserve = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
