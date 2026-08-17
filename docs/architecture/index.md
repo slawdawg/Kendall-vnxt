@@ -15,6 +15,9 @@ Status: current navigation index
 - `kendall-vnxt-phase-2-lifecycle-convergence-contract-2026-08-17.md`: active
   Phase 2 supervisor-owned lifecycle contract, compatibility-boundary
   inventory, consumer migration constraints, and convergence exit gates.
+- `kendall-vnxt-phase-2-completion-and-phase-3-retirement-readiness-2026-08-17.md`:
+  Phase 2 completion evidence, exact remaining V0 compatibility inventory, and
+  the dependency-ordered Phase 3 deletion/rollback plan.
 - `kendall-vnxt-orchestration-boundary-decision-2026-08-16.md`: current Phase 1
   no-adoption decision and the supervisor-owned lifecycle-evidence / governed
   workspace-outcome contract boundary for any future engine evaluation.
