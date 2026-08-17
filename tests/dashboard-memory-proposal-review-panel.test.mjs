@@ -13,7 +13,8 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(runtimeSource, /\/pipeline-control-plane\/work-packets\/\$\{encodeURIComponent\(packetId\)\}/);
   assert.match(runtimeSource, /export async function getWorkPackets\(\): Promise<DashboardCanonicalWorkPacketV1\[\]>/);
   assert.match(runtimeSource, /canonicalPackets\(await requestJson<unknown>\("\/pipeline-control-plane\/work-packets"\)\)/);
-  assert.match(pageSource, /getWorkPacketForWorkItem\(workItemId, options\)\.then\(\(packet\) => packet\?\.compatibilityProjection \?\? null\)/);
+  assert.match(pageSource, /getWorkPacketForWorkItem\(workItemId, options\)\.then\(\(packet\) => packet \? projectDashboardCanonicalPresentationForWorkItemHold\(packet\.presentation\) : null\)/);
+  assert.match(pageSource, /import \{ projectDashboardCanonicalPresentationForWorkItemHold \} from "\.\.\/lib\/pipeline-supervisor-projector"/);
   assert.doesNotMatch(pageSource, /getWorkPacket\(`work_item:/);
   assert.match(pageSource, /workPacket \? <MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/> : null/);
   assert.match(pageSource, /<MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/>/);

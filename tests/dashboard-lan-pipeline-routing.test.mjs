@@ -41,8 +41,8 @@ test("normal and LAN cockpit callers carry client-safe canonical packets to the 
   assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
   assert.doesNotMatch(loaderSource, /payloadSummary: lifecycle\.history/);
   assert.doesNotMatch(loaderSource, /evidenceRefs: lifecycle\.history/);
-  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.compatibilityProjection\)/);
-  assert.match(cockpitSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
+  assert.match(cockpitSource, /projectDashboardCanonicalPresentationsToCockpitPackets/);
   assert.match(detailSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
   assert.match(detailSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);
 });

@@ -1,4 +1,5 @@
 import type { PipelineStage, WorkPacketLifecycleSourceV0, WorkPacketV0View } from "@kendall/contracts";
+import type { DashboardCanonicalPresentationV1 } from "./pipeline-supervisor-runtime";
 
 export type PipelineSourceTrustState =
   | "included"
@@ -67,8 +68,18 @@ export type PipelineRuntimePacket = Omit<PipelineDashboardPacket, "fixtureId" | 
   sourceId: string;
 };
 
+/** Canonical dashboard packet rendered from the versioned presentation DTO. */
+export type PipelineCanonicalPresentationPacketV1 = PipelineRuntimePacket & {
+  schemaVersion: "dashboard-canonical-presentation/v1";
+};
+
 export type PipelineSupervisorProjectionResult =
   | { kind: "runtime"; packets: PipelineRuntimePacket[] }
+  | { kind: "empty"; packets: [] }
+  | { kind: "invalid"; packets: []; error: string };
+
+export type PipelineCanonicalPresentationProjectionResult =
+  | { kind: "runtime"; packets: PipelineCanonicalPresentationPacketV1[] }
   | { kind: "empty"; packets: [] }
   | { kind: "invalid"; packets: []; error: string };
 
@@ -223,6 +234,219 @@ export function projectSupervisorWorkPacketsToCockpitPackets(
   } catch {
     return { kind: "invalid", packets: [], error: "Supervisor WorkPacketV0 projection failed validation." };
   }
+}
+
+/**
+ * Transitional renderer adapter for normal runtime callers. It accepts only
+ * the canonical presentation DTO, not a supervisor V0 response; fixture/demo
+ * callers continue using the explicit V0 projector above.
+ */
+export function projectDashboardCanonicalPresentationsToCockpitPackets(
+  presentations: readonly DashboardCanonicalPresentationV1[] | unknown,
+): PipelineCanonicalPresentationProjectionResult {
+  if (!Array.isArray(presentations)) {
+    return { kind: "invalid", packets: [], error: "Dashboard canonical presentation collection is malformed." };
+  }
+  if (presentations.some((presentation) => !isDashboardCanonicalPresentationV1(presentation))) {
+    return { kind: "invalid", packets: [], error: "Dashboard canonical presentation row is malformed." };
+  }
+  return {
+    kind: "runtime",
+    packets: presentations.map(projectDashboardCanonicalPresentationToCockpitPacket),
+  };
+}
+
+/** Explicit Phase 3 hold for the WorkItem memory-review panel until its own canonical DTO lands. */
+export function projectDashboardCanonicalPresentationForWorkItemHold(
+  presentation: DashboardCanonicalPresentationV1,
+): WorkPacketV0View {
+  if (!isDashboardCanonicalPresentationV1(presentation)) {
+    throw new TypeError("Dashboard canonical presentation is malformed.");
+  }
+  return canonicalPresentationBase(presentation);
+}
+
+function isDashboardCanonicalPresentationV1(value: unknown): value is DashboardCanonicalPresentationV1 {
+  return isRecord(value) &&
+    value.schemaVersion === "dashboard-canonical-presentation/v1" &&
+    Object.keys(value).every((key) => DASHBOARD_CANONICAL_PRESENTATION_V1_KEYS.has(key)) &&
+    isCanonicalPresentationLifecycleState(value.lifecycleState) &&
+    isCanonicalPresentationSourceRefs(value.sourceRefs) &&
+    isCanonicalPresentationEvidenceRefs(value.evidenceRefs) &&
+    isCanonicalPresentationTransitionEvents(value.transitionEvents) &&
+    isNonEmptyString(value.packetId) &&
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.requestedOutcome) &&
+    isEnumValue(value.currentStage, pipelineStages) &&
+    isEnumValue(value.currentOwner, workPacketOwners) &&
+    isEnumValue(value.status, workPacketStatuses) &&
+    isEnumValue(value.riskLevel, riskLevels) &&
+    isEnumValue(value.priority, priorities);
+}
+
+const DASHBOARD_CANONICAL_PRESENTATION_V1_KEYS = new Set([
+  "schemaVersion", "packetId", "title", "requestedOutcome", "currentStage", "currentOwner", "status", "lifecycleState",
+  "riskLevel", "priority", "transitionEvents", "sourceRefs", "evidenceRefs",
+]);
+
+function isCanonicalPresentationLifecycleState(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const allowed = new Set([
+    "source", "stage", "owner", "status", "reasonCodes", "authoritativeRef", "derivedFromRefs", "transitionEventRefs",
+    "latestTransitionEventRef", "attemptRef", "metadataOnly", "sourceMutationAllowed", "providerCallsAllowed",
+    "workerLaunchAllowed", "githubMutationAllowed", "cleanupAllowed",
+  ]);
+  return Object.keys(value).every((key) => allowed.has(key)) &&
+    value.source === "workflow_event" &&
+    isEnumValue(value.stage, pipelineStages) &&
+    isEnumValue(value.owner, workPacketOwners) &&
+    isEnumValue(value.status, workPacketStatuses) &&
+    isStringArray(value.reasonCodes) &&
+    isNonEmptyString(value.authoritativeRef) &&
+    isStringArray(value.derivedFromRefs) &&
+    isStringArray(value.transitionEventRefs) &&
+    (value.latestTransitionEventRef === null || isNonEmptyString(value.latestTransitionEventRef)) &&
+    value.attemptRef === null &&
+    hasExactBooleanFields(value, ["metadataOnly"], true) &&
+    hasExactBooleanFields(value, ["sourceMutationAllowed", "providerCallsAllowed", "workerLaunchAllowed", "githubMutationAllowed", "cleanupAllowed"], false);
+}
+
+function isCanonicalPresentationSourceRefs(value: unknown): boolean {
+  const allowed = new Set(["refId", "sourceType", "label", "pathOrUrl", "freshness", "accessState", "canonical", "summaryOnly", "blockedReason"]);
+  return Array.isArray(value) && value.every((ref) => isRecord(ref) &&
+    Object.keys(ref).every((key) => allowed.has(key)) &&
+    isNonEmptyString(ref.refId) && isEnumValue(ref.sourceType, canonicalPresentationSourceTypes) && isNonEmptyString(ref.label) &&
+    (ref.pathOrUrl === null || typeof ref.pathOrUrl === "string") && isEnumValue(ref.freshness, canonicalPresentationFreshness) &&
+    isEnumValue(ref.accessState, canonicalPresentationAccessStates) && ref.canonical === true && ref.summaryOnly === true &&
+    (ref.blockedReason === null || isNonEmptyString(ref.blockedReason))
+  );
+}
+
+function isCanonicalPresentationEvidenceRefs(value: unknown): boolean {
+  const allowed = new Set(["refId", "evidenceType", "label", "artifactPath", "retentionClass", "rawPayloadRetained"]);
+  return Array.isArray(value) && value.every((ref) => isRecord(ref) &&
+    Object.keys(ref).every((key) => allowed.has(key)) && isNonEmptyString(ref.refId) && ref.evidenceType === "event" &&
+    isNonEmptyString(ref.label) && ref.artifactPath === null && ref.retentionClass === "metadata_only" && ref.rawPayloadRetained === false
+  );
+}
+
+function isCanonicalPresentationTransitionEvents(value: unknown): boolean {
+  const allowed = new Set(["eventId", "eventType", "summary", "createdAt", "sourceStage", "targetStage", "sourceOwner", "targetOwner", "sourceStatus", "targetStatus", "reasonCodes", "evidenceRefs", "durable", "sourceEventId", "actorLabel"]);
+  return Array.isArray(value) && value.every((event) => isRecord(event) &&
+    Object.keys(event).every((key) => allowed.has(key)) && isNonEmptyString(event.eventId) && isNonEmptyString(event.eventType) &&
+    isNonEmptyString(event.summary) && isNonEmptyString(event.createdAt) && (event.sourceStage === null || isEnumValue(event.sourceStage, pipelineStages)) &&
+    isEnumValue(event.targetStage, pipelineStages) && (event.sourceOwner === null || isEnumValue(event.sourceOwner, workPacketOwners)) &&
+    isEnumValue(event.targetOwner, workPacketOwners) && event.sourceStatus === null && isEnumValue(event.targetStatus, workPacketStatuses) &&
+    isStringArray(event.reasonCodes) && isStringArray(event.evidenceRefs) && event.durable === true && event.sourceEventId === null && isNonEmptyString(event.actorLabel)
+  );
+}
+
+const canonicalPresentationSourceTypes = new Set(["bmad_artifact", "manual"]);
+const canonicalPresentationFreshness = new Set(["unknown", "stale"]);
+const canonicalPresentationAccessStates = new Set(["allowed", "blocked"]);
+
+function projectDashboardCanonicalPresentationToCockpitPacket(
+  presentation: DashboardCanonicalPresentationV1,
+): PipelineCanonicalPresentationPacketV1 {
+  const base = canonicalPresentationBase(presentation);
+  return {
+    ...projectCanonicalBaseToCockpitPacket(base),
+    schemaVersion: "dashboard-canonical-presentation/v1",
+  };
+}
+
+function canonicalPresentationBase(presentation: DashboardCanonicalPresentationV1): WorkPacketV0View {
+  return {
+    packetId: presentation.packetId,
+    title: presentation.title,
+    requestedOutcome: presentation.requestedOutcome,
+    currentStage: presentation.currentStage,
+    currentOwner: presentation.currentOwner,
+    status: presentation.status,
+    lifecycleState: presentation.lifecycleState,
+    riskLevel: presentation.riskLevel,
+    priority: presentation.priority,
+    candidateWork: null,
+    workItem: null,
+    taskPacket: null,
+    routingPreview: null,
+    routeSummary: null,
+    executionAttempts: [],
+    transitionEvents: presentation.transitionEvents,
+    sourceRefs: presentation.sourceRefs.map((ref) => ref.accessState === "allowed"
+      ? {
+          refId: ref.refId,
+          sourceType: ref.sourceType,
+          label: ref.label,
+          pathOrUrl: ref.pathOrUrl,
+          freshness: ref.freshness,
+          accessState: "allowed" as const,
+          canonical: true,
+          summaryOnly: true,
+          blockedReason: null,
+        }
+      : {
+          refId: ref.refId,
+          sourceType: ref.sourceType,
+          label: ref.label,
+          pathOrUrl: null,
+          freshness: ref.freshness,
+          accessState: "blocked" as const,
+          canonical: true,
+          summaryOnly: true,
+          blockedReason: ref.blockedReason ?? "Canonical source is unavailable.",
+        }),
+    evidenceRefs: presentation.evidenceRefs,
+    artifactRefs: [],
+    humanGateActions: [],
+    humanGateActionRequests: [],
+    laneCards: [],
+    memoryProposals: [],
+    deliveryEvidence: null,
+    learnOutcome: null,
+    learnRefill: null,
+    alphaMemorySourceStatus: null,
+    gateStateValidation: null,
+    loopStopStates: [],
+    reviewSummaries: [],
+    recoveryActions: [],
+  };
+}
+
+function projectCanonicalBaseToCockpitPacket(packet: WorkPacketV0View): PipelineRuntimePacket {
+  const sourceTrustStates = sourceTrustStatesFor(packet);
+  const freshnessLabel = freshnessLabelFor(packet);
+  const reasonCodes = supervisorReasonCodes(packet);
+  return {
+    ...packet,
+    sourceKind: "supervisor-runtime",
+    sourceId: packet.packetId,
+    fixtureLabel: "Supervisor runtime",
+    summary: packet.requestedOutcome,
+    nextAction: plainStageLabel(packet.currentStage),
+    confidenceLabel: "Medium confidence",
+    freshnessLabel,
+    sourceTrustState: sourceTrustStates[0] ?? "included",
+    sourceTrustStates,
+    sourceTrustSummary: sourceTrustSummaryFor(packet),
+    routeFork: {
+      selectedRoute: packet.currentStage,
+      rejectedRoutes: rejectedRoutesFor(packet.currentStage),
+      tags: ["supervisor runtime", packet.currentStage, packet.currentOwner, packet.status],
+      sourceContext: sourceTrustSummaryFor(packet),
+      lowConfidenceActions: [],
+    },
+    lastEvent: `Canonical dashboard presentation rendered from ${reasonCodes[0]}.`,
+    riskFlags: riskFlagsFor(packet.riskLevel, freshnessLabel),
+    matrixRowIds: reasonCodes,
+    humanGateFixtureEvents: [],
+    recoveryFixtureEvents: [],
+    actionGuardFixtures: [],
+    localModelHealth: null,
+    hermesJob: null,
+    codexWorker: null,
+    claudeReview: null,
+  };
 }
 export function isWorkPacketV0View(value: unknown): value is WorkPacketV0View {
   if (!value || typeof value !== "object") {

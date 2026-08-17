@@ -13,7 +13,7 @@ import type {
   PipelineStage,
 } from "@kendall/contracts";
 import {
-  projectSupervisorWorkPacketsToCockpitPackets,
+  projectDashboardCanonicalPresentationsToCockpitPackets,
   type PipelineDashboardPacket,
 } from "../../lib/pipeline-supervisor-projector";
 import {
@@ -132,12 +132,12 @@ export function PipelineCockpit({
   projectionError?: string | null;
   selectedPacket?: PipelineFixturePacket | null;
 }) {
-  const compatibilityPackets = useMemo(() => {
+  const presentationPackets = useMemo(() => {
     if (!canonicalPackets) return packets ?? [];
-    const compatibilityProjection = projectSupervisorWorkPacketsToCockpitPackets(
-      canonicalPackets.map((packet) => packet.compatibilityProjection),
+    const canonicalPresentation = projectDashboardCanonicalPresentationsToCockpitPackets(
+      canonicalPackets.map((packet) => packet.presentation),
     );
-    return compatibilityProjection.kind === "runtime" ? compatibilityProjection.packets : [];
+    return canonicalPresentation.kind === "runtime" ? canonicalPresentation.packets : [];
   }, [canonicalPackets, packets]);
   const [selectedItem, setSelectedItem] = useState<SelectedMapItem>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -168,8 +168,8 @@ export function PipelineCockpit({
     [currentProjection]
   );
   const dashboardPackets = useMemo(
-    () => projectionToCockpitPackets(currentProjection, compatibilityPackets, currentProjectionError, activeBoardViewModel, fixtureMode),
-    [activeBoardViewModel, compatibilityPackets, currentProjection, currentProjectionError, fixtureMode]
+    () => projectionToCockpitPackets(currentProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode),
+    [activeBoardViewModel, presentationPackets, currentProjection, currentProjectionError, fixtureMode]
   );
   const stageSummaryByStage = useMemo(
     () => buildStageSummaryByStage(currentProjection, currentProjectionError, fixtureMode),
