@@ -1312,9 +1312,11 @@ class SupervisorService:
             self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}")
             for proposal in await self.list_memory_proposals(session, item.id)
         ]
-        workflow_events = await self.list_work_item_events(session, item.id)
         source_refs = self._work_packet_source_refs(candidate_view, item_view)
-        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [], workflow_events)
+        # This read DTO has no event-history surface. Keep its provenance set
+        # bounded to the source-owned metadata it actually returns/readiness
+        # checks, rather than materializing all historical workflow events.
+        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [])
         alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views) if alpha_source_refs else None
         return WorkItemMemoryReviewV1View(
@@ -35120,6 +35122,7 @@ class SupervisorService:
         ready_proposals: list[MemoryProposalV0View] = []
 
         source_ref_by_id = {source_ref.refId: source_ref for source_ref in source_refs}
+        evidence_ref_ids = {evidence_ref.refId for evidence_ref in evidence_refs}
         for source_ref in source_refs:
             if source_ref.sourceType == "llm_wiki":
                 blocked_reasons.append(f"source_ref.derived_non_canonical.{source_ref.refId}")
@@ -35132,6 +35135,15 @@ class SupervisorService:
 
         for proposal in memory_proposals:
             proposal_ref = f"memory_proposal:{proposal.proposalId}"
+            invalid_source_refs = [
+                ref_id
+                for ref_id in proposal.sourceRefs
+                if (source_ref := source_ref_by_id.get(ref_id)) is None
+                or source_ref.sourceType == "llm_wiki"
+                or source_ref.accessState != "allowed"
+                or source_ref.freshness != "fresh"
+            ]
+            unknown_evidence_refs = [ref_id for ref_id in proposal.evidenceRefs if ref_id not in evidence_ref_ids]
             safe_state = (
                 proposal.status == "approved"
                 and proposal.operatorAction == "approve"
@@ -35141,6 +35153,8 @@ class SupervisorService:
                 and proposal.contradictionStatus == "none"
                 and len(proposal.sourceRefs) > 0
                 and len(proposal.evidenceRefs) > 0
+                and not invalid_source_refs
+                and not unknown_evidence_refs
             )
             if safe_state:
                 ready_proposals.append(proposal)
@@ -35156,14 +35170,10 @@ class SupervisorService:
                 blocked_reasons.append(f"memory_proposal.missing_source_refs.{proposal.proposalId}")
             if len(proposal.evidenceRefs) == 0:
                 blocked_reasons.append(f"memory_proposal.missing_evidence_refs.{proposal.proposalId}")
-            for proposal_source_ref in proposal.sourceRefs:
-                known_source_ref = source_ref_by_id.get(proposal_source_ref)
-                if known_source_ref and (
-                    known_source_ref.sourceType == "llm_wiki"
-                    or known_source_ref.accessState != "allowed"
-                    or known_source_ref.freshness != "fresh"
-                ):
-                    blocked_reasons.append(f"memory_proposal.unsafe_source_ref.{proposal.proposalId}.{proposal_source_ref}")
+            for proposal_source_ref in invalid_source_refs:
+                blocked_reasons.append(f"memory_proposal.unsafe_or_unknown_source_ref.{proposal.proposalId}.{proposal_source_ref}")
+            for proposal_evidence_ref in unknown_evidence_refs:
+                blocked_reasons.append(f"memory_proposal.unknown_evidence_ref.{proposal.proposalId}.{proposal_evidence_ref}")
             if proposal.freshness != "fresh":
                 blocked_reasons.append(f"memory_proposal.unsafe_freshness.{proposal.proposalId}")
             if proposal.contradictionStatus != "none":

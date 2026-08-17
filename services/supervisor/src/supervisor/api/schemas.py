@@ -1630,8 +1630,8 @@ class MemoryProposalV0View(BaseModel):
     status: MemoryProposalStatusV0
     summary: str
     targetRef: SourceRefV0View | None = None
-    sourceRefs: list[str] = Field(min_length=1)
-    evidenceRefs: list[str] = Field(min_length=1)
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
     targetVaultPath: str | None = None
     targetVaultFolder: str
     proposalType: MemoryProposalTypeV0
@@ -1656,8 +1656,11 @@ class WorkItemMemoryReviewProposalV1View(BaseModel):
     label: str
     status: MemoryProposalStatusV0
     summary: str
-    sourceRefs: list[str] = Field(min_length=1)
-    evidenceRefs: list[str] = Field(min_length=1)
+    # Persisted rows predate the write-time reference requirement. The
+    # read-only review surfaces them as blocked instead of losing the entire
+    # WorkItem response; write schemas continue to require references.
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
     targetVaultPath: str | None = None
     targetVaultFolder: str
     proposalType: MemoryProposalTypeV0

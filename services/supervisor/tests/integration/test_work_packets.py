@@ -4370,7 +4370,9 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
 
 def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-readiness.db") as client:
+    db_name = "work-packet-llm-wiki-readiness.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
         work_item_response = client.post(
             "/work-items",
             json={
@@ -4388,7 +4390,8 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
                             "freshness": "fresh",
                             "accessState": "allowed",
                         }
-                    ]
+                    ],
+                    "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
                 },
             },
         )
@@ -4400,7 +4403,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
                 "proposalId": "mp-llm-wiki-ready",
                 "label": "LLM-Wiki ready proposal",
                 "summary": "Metadata-only summary for derived index readiness.",
-                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "sourceRefs": ["source:obsidian-approved"],
                 "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
                 "targetVaultPath": "01 Dashboard Queue/AI Drafts/llm-wiki-ready-proposal-mp-llm-wiki-ready.md",
                 "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
@@ -4447,7 +4450,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert preview["retentionClass"] == "metadata_only"
         assert preview["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
-        assert "obsidian:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
+        assert "source:obsidian-approved" in preview["inputRefs"]
         assert "evidence:read-only-proof:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
         assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
         assert "do not write LLM-Wiki index" in preview["stopLine"]
@@ -4477,6 +4480,43 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert plan["durableWriteAllowed"] is False
         assert plan["writePerformed"] is False
         assert plan["backupCreated"] is False
+
+        # Nonempty references still need to bind to the exact supplied
+        # source/evidence inventory before the readiness view can be ready.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set source_refs_json = ?, evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps(["source:unknown"]), json.dumps(["evidence:unknown"]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        unbound_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert unbound_review.status_code == 200
+        unbound_readiness = unbound_review.json()["data"]["llmWikiReadiness"]
+        assert unbound_readiness["decisionState"] == "blocked"
+        assert "memory_proposal.unsafe_or_unknown_source_ref.mp-llm-wiki-ready.source:unknown" in unbound_readiness["blockedReasons"]
+        assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-ready.evidence:unknown" in unbound_readiness["blockedReasons"]
+
+        # A compatibility-migrated proposal may have blank persisted refs.
+        # It remains visible as a blocked read model; it must not turn a
+        # WorkItem detail request into a 500 or a ready rebuild plan.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set source_refs_json = ?, evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps([]), json.dumps([]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        migrated_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert migrated_review.status_code == 200
+        migrated_payload = migrated_review.json()["data"]
+        assert migrated_payload["proposals"][0]["sourceRefs"] == []
+        assert migrated_payload["proposals"][0]["evidenceRefs"] == []
+        assert migrated_payload["llmWikiReadiness"]["decisionState"] == "blocked"
+        assert "memory_proposal.missing_source_refs.mp-llm-wiki-ready" in migrated_payload["llmWikiReadiness"]["blockedReasons"]
+        assert "memory_proposal.missing_evidence_refs.mp-llm-wiki-ready" in migrated_payload["llmWikiReadiness"]["blockedReasons"]
 
 
 def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, monkeypatch) -> None:

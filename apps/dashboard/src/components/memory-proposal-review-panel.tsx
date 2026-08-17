@@ -87,6 +87,10 @@ function aiDraftQueued(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return /AI draft (written|already exists)/.test(proposal.patchSummary ?? "");
 }
 
+function targetsAiDraftQueue(proposal: DashboardCanonicalMemoryProposalV1): boolean {
+  return proposal.targetVaultFolder.trim().replace(/^\/+|\/+$/g, "").endsWith("/AI Drafts") || proposal.targetVaultFolder.trim() === "AI Drafts";
+}
+
 function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return (
     proposal.status === "approved" &&
@@ -95,6 +99,7 @@ function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean
     proposal.writeBackAllowed === false &&
     proposal.freshness === "fresh" &&
     proposal.contradictionStatus === "none" &&
+    targetsAiDraftQueue(proposal) &&
     !aiDraftQueued(proposal)
   );
 }
@@ -161,8 +166,9 @@ export function MemoryProposalReviewPanel({
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Searching derived LLM-Wiki artifact for ${proposal.proposalId}...`);
+      const query = llmWikiQuery.trim().slice(0, 120);
       const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/llm-wiki-artifact?query=${encodeURIComponent(llmWikiQuery)}`,
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/llm-wiki-artifact?query=${encodeURIComponent(query)}`,
         { method: "GET" },
       );
 
@@ -366,6 +372,7 @@ export function MemoryProposalReviewPanel({
                       <input
                         type="search"
                         value={llmWikiQuery}
+                        maxLength={120}
                         onChange={(event) => setLlmWikiQuery(event.target.value)}
                         className="mt-2 w-full rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-sm font-normal outline-none focus:border-[var(--accent)]"
                       />
