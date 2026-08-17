@@ -570,7 +570,7 @@ function canonicalMemoryReviewRecord(value: unknown, keys: readonly string[]): R
 }
 
 function canonicalMemoryStringArray(value: unknown): string[] {
-  if (!Array.isArray(value) || !value.every(isNonEmptyString)) throw new Error("Canonical WorkItem memory review is malformed.");
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) throw new Error("Canonical WorkItem memory review is malformed.");
   return [...value];
 }
 
@@ -586,7 +586,7 @@ function canonicalMemoryProposal(value: unknown): DashboardCanonicalMemoryPropos
     "suggestedContentSummary", "sensitivity", "freshness", "contradictionStatus", "confidence",
     "operatorAction", "backupRecoveryPath", "writeBackStatus",
   ];
-  if (!requiredStrings.every((key) => isNonEmptyString(proposal[key])) ||
+  if (!requiredStrings.every((key) => typeof proposal[key] === "string") ||
     !isOptionalString(proposal.targetVaultPath) || !isOptionalString(proposal.patchSummary) ||
     !isOptionalString(proposal.decisionNeededContext) || proposal.writeBackAllowed !== false) {
     throw new Error("Canonical WorkItem memory review is malformed.");
@@ -657,7 +657,7 @@ function isCanonicalWorkItemPacketUnavailable(error: unknown): boolean {
       ? (error as { message: string }).message
       : null;
   return message !== null && (
-    /\/pipeline-control-plane\/work-items\/[^/]+\/packet \(404\)$/.test(message) ||
+    /\/pipeline-control-plane\/work-items\/[^/]+\/(?:packet|memory-review) \(404\)$/.test(message) ||
     message.startsWith("Canonical WorkPacket")
   );
 }

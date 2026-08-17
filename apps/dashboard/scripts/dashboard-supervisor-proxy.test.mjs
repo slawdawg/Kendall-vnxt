@@ -218,6 +218,7 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     const headers = { cookie: "viewer=ok" };
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/memory-review", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/audit-events", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 404);

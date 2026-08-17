@@ -78,6 +78,7 @@
       { "method": "GET", "path": "/work-items/:id/recipe-gate-audit" },
       { "method": "GET", "path": "/work-items/:id/local-worktree-plan" },
       { "method": "GET", "path": "/pipeline-control-plane/work-items/:id/packet" },
+      { "method": "GET", "path": "/pipeline-control-plane/work-items/:id/memory-review" },
       { "method": "GET", "path": "/supervisor/runtime-evidence-review-report" }
     ]
   },

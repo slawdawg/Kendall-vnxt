@@ -1374,6 +1374,17 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
             ...review,
             proposals: [{ ...review.proposals[0], targetVaultPath: 42, untrustedNestedPayload: "must not cross the DTO boundary" }],
           };
+          if (path.endsWith("work-item-missing/memory-review")) {
+            throw new Error(`Request failed for ${path} (404)`);
+          }
+          if (path.endsWith("work-item-blank/memory-review")) return {
+            ...review,
+            workItemId: "work-item-blank",
+            proposals: [{
+              ...review.proposals[0], proposalId: "", label: "", summary: "", sourceRefs: [""], evidenceRefs: [""],
+              targetVaultFolder: "", suggestedContentSummary: "", backupRecoveryPath: "",
+            }],
+          };
           throw new Error(`Unexpected request ${path}`);
         },
       };
@@ -1386,6 +1397,9 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
   const valid = JSON.parse(JSON.stringify(await context.module.exports.getWorkItemMemoryReview("work-item-a")));
   assert.equal(valid.workItemId, "work-item-a");
   assert.equal(valid.proposals[0].targetVaultPath, null);
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-missing"), null);
+  const persistedBlank = JSON.parse(JSON.stringify(await context.module.exports.getWorkItemMemoryReview("work-item-blank")));
+  assert.equal(persistedBlank.proposals[0].sourceRefs[0], "");
   await assert.rejects(
     () => context.module.exports.getWorkItemMemoryReview("work-item-b"),
     /does not bind its requested WorkItem identity/,

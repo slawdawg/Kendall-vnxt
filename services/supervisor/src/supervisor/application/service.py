@@ -1286,8 +1286,10 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
-        candidates = await self.list_candidate_work(session)
-        candidate = self._candidate_by_work_item_id(candidates, [item]).get(item.id)
+        candidate = await session.scalar(
+            select(CandidateWork).where(CandidateWork.promoted_work_item_id == item.id)
+        )
+        canonical_packet = await self.get_authoritative_work_packet_for_work_item(session, work_item_id)
         item_view = self.to_work_item_view(item)
         candidate_view = self.to_candidate_work_view(candidate) if candidate else None
         proposal_views = [
@@ -1301,7 +1303,10 @@ class SupervisorService:
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views) if alpha_source_refs else None
         return WorkItemMemoryReviewV1View(
             workItemId=item.id,
-            authoritativePacketId=item.authoritative_packet_id,
+            # The nullable database link is not a foreign key. Publish it only
+            # after the canonical lookup has proved the packet and metadata
+            # agree, rather than exposing dangling provenance to the dashboard.
+            authoritativePacketId=canonical_packet.packetId if canonical_packet else None,
             proposals=[self._work_item_memory_review_proposal_view(proposal) for proposal in proposal_views],
             llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
         )

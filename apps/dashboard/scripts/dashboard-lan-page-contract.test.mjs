@@ -32,6 +32,8 @@ test("LAN operator pages declare exact read contracts and do not replace the ser
   );
   assert.ok(controls.reads.every((read) => read.method === "GET" && !("query" in read)));
   assert.deepEqual(manifest.at(-1).roles, ["operator", "test_viewer"]);
+  const workItemDetail = manifest.find((entry) => entry.page === "work-item-detail");
+  assert.ok(workItemDetail.reads.some((read) => read.path === "/pipeline-control-plane/work-items/:id/memory-review"));
   const [boundary, state, transport] = await Promise.all([readFile(boundaryUrl, "utf8"), readFile(stateUrl, "utf8"), readFile(transportUrl, "utf8")]);
   assert.match(boundary, /8_000/);
   assert.match(boundary, /sign_in_required/);
