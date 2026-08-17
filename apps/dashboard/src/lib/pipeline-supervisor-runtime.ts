@@ -1,6 +1,17 @@
+import {
+  AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES,
+  isPipelineCanonicalContractV1,
+  isPipelineProductModeMappingV0,
+  validatePipelineEpic25EvidenceChainV0,
+  validatePipelineEpic25EvidenceChainV1,
+} from "@kendall/contracts";
 import type {
   AuthoritativeWorkPacketLifecycleView,
+  PipelineCanonicalContractV1,
   PipelineDashboardProjectionV0,
+  PipelineEpic25EvidenceChainReadV0,
+  PipelineEpic25EvidenceChainReadV1,
+  PipelineProductModeMappingV0,
   WorkPacketV0View,
 } from "@kendall/contracts";
 import {
@@ -14,41 +25,148 @@ function requestJson<T>(path: string, options: SupervisorReadOptions = {}): Prom
   return requestSupervisorJson<T>(path, { ...options, timeoutMs: options.timeoutMs ?? 10_000, rejectServerLanAuth: true });
 }
 
-function requestLegacyJson<T>(path: string, options: SupervisorReadOptions = {}): Promise<T> {
-  return requestJson<T>(path, options);
-}
-
-const SAFE_PACKET_ID = /^[A-Za-z0-9._:%-]+$/;
-const LEGACY_PACKET_ID = /^(?:work_item|candidate_work):[A-Za-z0-9._:%-]+$/;
 const AUTHORITATIVE_STAGES = new Set(["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"]);
 const AUTHORITATIVE_STATUSES = new Set(["active", "waiting", "blocked", "failed", "complete", "deferred"]);
 const AUTHORITATIVE_TRUTH_LABELS = new Set(["source_owned", "derived_projection", "operator_asserted"]);
 const AUTHORITATIVE_SOURCE_TYPES = new Set(["prd", "bmad_story", "operator_input", "workflow", "repo_doc"]);
 const AUTHORITATIVE_ACTOR_TYPES = new Set(["system", "operator", "manager", "worker"]);
-const AUTHORITATIVE_EVENT_TYPES = new Set([
-  "packet.created",
-  "packet.stage_transitioned",
-  "packet.operational_action_applied",
-  "packet.parallel_work_graph_refreshed",
-]);
+const AUTHORITATIVE_EVENT_TYPES = new Set<string>(AUTHORITATIVE_PACKET_LIFECYCLE_EVENT_TYPES);
 const AUTHORITATIVE_PLANNING_SOURCE_PATH = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md";
 const CURRENT_OPERATIONAL_ACTION_LOOP_PRD_PATH = "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-operational-pipeline-action-loop/prd.md";
 const PLANNING_SOURCE_MARKER = "_bmad-output/planning-artifacts/prds/";
+const EVIDENCE_CHAIN_ALLOWED_FUTURE_SKEW_MS = 60_000;
 const UNSAFE_LIFECYCLE_TEXT_RE = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
 
-function isCanonicalShapeError(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "message" in error && typeof error.message === "string" && error.message.startsWith("Canonical WorkPacket response"));
-}
+type CanonicalSupervisorPacketPayload = AuthoritativeWorkPacketLifecycleView & {
+  canonicalContract?: unknown;
+  evidenceChain?: unknown;
+  productModeMapping?: unknown;
+};
 
-function canonicalDetailPacket(value: unknown): WorkPacketV0View {
+/**
+ * Dashboard-owned canonical read model. The compatibility projection is a
+ * temporary, read-only adapter for components that have not yet retired V0.
+ */
+export type DashboardCanonicalWorkPacketV1 = {
+  authoritativeLifecycle: AuthoritativeWorkPacketLifecycleView;
+  canonicalContract: PipelineCanonicalContractV1 | null;
+  evidenceChain: PipelineEpic25EvidenceChainReadV0 | PipelineEpic25EvidenceChainReadV1 | null;
+  productModeMapping: PipelineProductModeMappingV0 | null;
+  compatibilityProjection: WorkPacketV0View;
+};
+
+function canonicalDetailPacket(value: unknown): DashboardCanonicalWorkPacketV1 {
   if (!isAuthoritativeWorkPacketLifecycleView(value)) {
     throw new Error("Canonical WorkPacket detail response is not authoritative lifecycle-shaped.");
   }
-  const packet = projectAuthoritativeWorkPacket(value);
-  if (!isWorkPacketV0View(packet)) {
+  const payload = value as CanonicalSupervisorPacketPayload;
+  const compatibilityProjection = projectAuthoritativeWorkPacket(payload);
+  if (!isWorkPacketV0View(compatibilityProjection)) {
     throw new Error("Canonical authoritative WorkPacket detail projection failed validation.");
   }
-  return packet;
+  const canonicalContract = nullableCanonicalExtension(payload.canonicalContract, isPipelineCanonicalContractV1, "canonicalContract");
+  const evidenceChain = nullableEvidenceChainExtension(payload.evidenceChain, payload.packetId);
+  const productModeMapping = nullableCanonicalExtension(payload.productModeMapping, isPipelineProductModeMappingV0, "productModeMapping");
+  validateCanonicalExtensionBindings(payload, canonicalContract, evidenceChain, productModeMapping);
+  return {
+    authoritativeLifecycle: payload,
+    canonicalContract,
+    evidenceChain,
+    productModeMapping,
+    compatibilityProjection,
+  };
+}
+
+function nullableCanonicalExtension<T>(value: unknown, validator: (candidate: unknown) => candidate is T, field: string): T | null {
+  if (value == null) return null;
+  if (!validator(value)) throw new Error(`Canonical WorkPacket ${field} extension is invalid.`);
+  return value;
+}
+
+function nullableEvidenceChainExtension(
+  value: unknown,
+  authoritativePacketId: string,
+): PipelineEpic25EvidenceChainReadV0 | PipelineEpic25EvidenceChainReadV1 | null {
+  if (value == null) return null;
+  const chain = value as { authoritativePacketId?: unknown };
+  if (chain.authoritativePacketId !== authoritativePacketId) {
+    throw new Error("Canonical WorkPacket evidenceChain does not bind its authoritative packet identity.");
+  }
+  const readRecord = evidenceChainReadRecord(value);
+  const baseRecord = { ...readRecord };
+  delete baseRecord.chainDigestSha256;
+  delete baseRecord.freshnessState;
+  delete baseRecord.effectiveDecision;
+  delete baseRecord.typedBlockers;
+  const structuralCheckMs = typeof baseRecord.checkedAt === "string" ? Date.parse(baseRecord.checkedAt) : Number.NaN;
+  if (!Number.isFinite(structuralCheckMs) || structuralCheckMs > Date.now() + EVIDENCE_CHAIN_ALLOWED_FUTURE_SKEW_MS) {
+    throw new Error("Canonical WorkPacket evidenceChain extension is invalid.");
+  }
+  if (validatePipelineEpic25EvidenceChainV0(baseRecord, structuralCheckMs).length === 0 && isEvidenceChainReadExtension(readRecord, false)) {
+    return value as PipelineEpic25EvidenceChainReadV0;
+  }
+  if (validatePipelineEpic25EvidenceChainV1(baseRecord, structuralCheckMs).length === 0 && isEvidenceChainReadExtension(readRecord, true)) {
+    return value as PipelineEpic25EvidenceChainReadV1;
+  }
+  throw new Error("Canonical WorkPacket evidenceChain extension is invalid.");
+}
+
+function evidenceChainReadRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Canonical WorkPacket evidenceChain extension is invalid.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function isEvidenceChainReadExtension(value: Record<string, unknown>, isV1: boolean): boolean {
+  const allowedBlockers = isV1
+    ? new Set(["evidence_chain_stale", "live_evidence_unavailable", "policy_profile_stale", "source_revision_attestation_required", "retention_policy_expired", "retention_policy_unverified", "quality_gate_not_passed"])
+    : new Set(["evidence_chain_stale", "live_evidence_unavailable", "policy_profile_upgrade_required", "legacy_upgrade_unavailable"]);
+  if (!(typeof value.chainDigestSha256 === "string" && /^sha256:[0-9a-f]{64}$/.test(value.chainDigestSha256) &&
+    (value.freshnessState === "fresh" || value.freshnessState === "stale") &&
+    (value.effectiveDecision === "go" || value.effectiveDecision === "hold" || value.effectiveDecision === "limited_rollout") &&
+    Array.isArray(value.typedBlockers) && value.typedBlockers.every((blocker) => typeof blocker === "string" && allowedBlockers.has(blocker)))) {
+    return false;
+  }
+  const blockers = value.typedBlockers as string[];
+  const freshnessOrRetentionBlockers = new Set([
+    "evidence_chain_stale",
+    "policy_profile_stale",
+    "retention_policy_expired",
+    "retention_policy_unverified",
+    "policy_profile_upgrade_required",
+    "legacy_upgrade_unavailable",
+  ]);
+  if (value.effectiveDecision === "go" && blockers.length > 0) return false;
+  if (value.freshnessState === "fresh") return !blockers.some((blocker) => freshnessOrRetentionBlockers.has(blocker));
+  return value.effectiveDecision === "hold" && blockers.some((blocker) => freshnessOrRetentionBlockers.has(blocker));
+}
+
+function validateCanonicalExtensionBindings(
+  packet: CanonicalSupervisorPacketPayload,
+  canonicalContract: PipelineCanonicalContractV1 | null,
+  evidenceChain: PipelineEpic25EvidenceChainReadV0 | PipelineEpic25EvidenceChainReadV1 | null,
+  productModeMapping: PipelineProductModeMappingV0 | null,
+): void {
+  if (evidenceChain && evidenceChain.authoritativePacketId !== packet.packetId) {
+    throw new Error("Canonical WorkPacket evidenceChain does not bind its authoritative packet identity.");
+  }
+  if (canonicalContract && !sameAuthoritativeSourceRef(canonicalContract.canonicalSource.provenance.sourceRef, packet.sourceRef)) {
+    throw new Error("Canonical WorkPacket canonicalContract provenance does not bind its authoritative source.");
+  }
+  if (productModeMapping && !canonicalContract) {
+    throw new Error("Canonical WorkPacket productModeMapping requires its canonical contract.");
+  }
+  if (canonicalContract && productModeMapping && productModeMapping.requestedProductMode !== canonicalContract.productMode) {
+    throw new Error("Canonical WorkPacket productModeMapping does not match the canonical contract mode.");
+  }
+}
+
+function sameAuthoritativeSourceRef(left: unknown, right: unknown): boolean {
+  if (!left || typeof left !== "object" || !right || typeof right !== "object") return false;
+  const leftRef = left as Record<string, unknown>;
+  const rightRef = right as Record<string, unknown>;
+  return ["refId", "sourceType", "pathOrUrl", "title", "contentSha256"].every((field) => (leftRef[field] ?? null) === (rightRef[field] ?? null));
 }
 
 function isAuthoritativeWorkPacketLifecycleView(value: unknown): value is AuthoritativeWorkPacketLifecycleView {
@@ -235,7 +353,15 @@ function isAuthoritativeReadyToTest(value: unknown): boolean {
   if (value == null) return true;
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const readyToTest = value as Record<string, unknown>;
-  return Array.isArray(readyToTest.evidenceRefs) && readyToTest.evidenceRefs.every(isSafeCanonicalRef);
+  return isSafeCanonicalRef(readyToTest.readyId) &&
+    isNonEmptyString(readyToTest.userFacingSummary) &&
+    isNonEmptyString(readyToTest.testableSurface) &&
+    Array.isArray(readyToTest.verificationRefs) &&
+    readyToTest.verificationRefs.every(isSafeCanonicalRef) &&
+    Array.isArray(readyToTest.evidenceRefs) &&
+    readyToTest.evidenceRefs.every(isSafeCanonicalRef) &&
+    readyToTest.metadataOnly === true &&
+    readyToTest.rawPayloadRetained === false;
 }
 
 function supersededPlanningSource(pathOrUrl: string | null | undefined): string | null {
@@ -298,65 +424,49 @@ function isSafeCanonicalRef(value: unknown): value is string {
   return !normalized.startsWith("fixture:") && !normalized.startsWith("demo:");
 }
 
-type CanonicalPacketCollection =
-  | { kind: "authoritative"; packets: WorkPacketV0View[] }
-  | { kind: "legacy"; packets: WorkPacketV0View[] };
-
-function canonicalPackets(value: unknown): CanonicalPacketCollection {
+function canonicalPackets(value: unknown): DashboardCanonicalWorkPacketV1[] {
   if (!Array.isArray(value)) {
     throw new Error("Canonical WorkPacket response is not a collection.");
   }
-  if (value.length === 0 || value.every((packet) => isAuthoritativeWorkPacketLifecycleView(packet))) {
-    const packets = value.map((packet) => projectAuthoritativeWorkPacket(packet));
-    if (packets.some((packet) => !isWorkPacketV0View(packet)) || new Set(packets.map((packet) => packet.packetId)).size !== packets.length) {
-      throw new Error("Canonical WorkPacket response authoritative projection failed validation.");
-    }
-    return { kind: "authoritative", packets };
+  if (!value.every((packet) => isAuthoritativeWorkPacketLifecycleView(packet))) {
+    throw new Error("Canonical WorkPacket response is not authoritative lifecycle-shaped.");
   }
-  if (value.some((packet) => isAuthoritativeWorkPacketLifecycleView(packet)) || value.some((packet) => !isWorkPacketV0View(packet))) {
-    throw new Error("Canonical WorkPacket response is not WorkPacketV0-shaped.");
+  const packets = value.map(canonicalDetailPacket);
+  if (new Set(packets.map((packet) => packet.authoritativeLifecycle.packetId)).size !== packets.length) {
+    throw new Error("Canonical WorkPacket response authoritative projection failed validation.");
   }
-  return { kind: "legacy", packets: value };
+  return packets;
 }
 
-function mergeWorkPackets(canonical: WorkPacketV0View[], legacy: WorkPacketV0View[]): WorkPacketV0View[] {
-  const merged = new Map<string, WorkPacketV0View>();
-  for (const packet of legacy) merged.set(packet.packetId, packet);
-  for (const packet of canonical) merged.set(packet.packetId, packet);
-  return [...merged.values()];
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "message" in error && typeof error.message === "string" && /\(404\)$/.test(error.message));
-}
-
-export async function getWorkPacket(packetId: string, options?: SupervisorReadOptions): Promise<WorkPacketV0View> {
+export async function getWorkPacket(packetId: string, options?: SupervisorReadOptions): Promise<DashboardCanonicalWorkPacketV1> {
   const canonicalPath = `/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`;
-  const legacyPath = `/work-packets/${encodeURIComponent(packetId)}`;
+  return canonicalDetailPacket(await requestJson<unknown>(canonicalPath, options));
+}
+
+export async function getWorkPacketForWorkItem(workItemId: string, options?: SupervisorReadOptions): Promise<DashboardCanonicalWorkPacketV1 | null> {
+  const canonicalPath = `/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`;
   try {
     return canonicalDetailPacket(await requestJson<unknown>(canonicalPath, options));
   } catch (error) {
-    if (!isNotFoundError(error) || typeof packetId !== "string" || !SAFE_PACKET_ID.test(packetId) || !LEGACY_PACKET_ID.test(packetId)) throw error;
-    return requestLegacyJson<WorkPacketV0View>(legacyPath, options);
+    if (isCanonicalWorkItemPacketUnavailable(error)) return null;
+    throw error;
   }
 }
 
-export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
-  let canonical: CanonicalPacketCollection;
-  try {
-    canonical = canonicalPackets(await requestJson<unknown>("/pipeline-control-plane/work-packets"));
-  } catch (error) {
-    if (!isNotFoundError(error) && !isCanonicalShapeError(error)) throw error;
-    return requestLegacyJson<WorkPacketV0View[]>("/work-packets");
-  }
-  if (canonical.kind === "authoritative") return canonical.packets;
-  try {
-    const legacy = await requestLegacyJson<WorkPacketV0View[]>("/work-packets");
-    return mergeWorkPackets(canonical.packets, legacy);
-  } catch (error) {
-    if (isNotFoundError(error)) return canonical.packets;
-    throw error;
-  }
+export async function getWorkPackets(): Promise<DashboardCanonicalWorkPacketV1[]> {
+  return canonicalPackets(await requestJson<unknown>("/pipeline-control-plane/work-packets"));
+}
+
+function isCanonicalWorkItemPacketUnavailable(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : null;
+  return message !== null && (
+    /\/pipeline-control-plane\/work-items\/[^/]+\/packet \(404\)$/.test(message) ||
+    message.startsWith("Canonical WorkPacket")
+  );
 }
 
 export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {

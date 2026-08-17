@@ -7,11 +7,17 @@ import { fileURLToPath } from "node:url";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const runtimeSource = fs.readFileSync(path.join(appRoot, "lib/pipeline-supervisor-runtime.ts"), "utf8");
 
-test("authoritative packet detail projects canonical lifecycle before narrow legacy fallback", () => {
+test("authoritative packet detail returns the explicit canonical DTO without legacy fallback", () => {
   assert.match(runtimeSource, /AuthoritativeWorkPacketLifecycleView/);
+  assert.match(runtimeSource, /DashboardCanonicalWorkPacketV1/);
+  assert.match(runtimeSource, /authoritativeLifecycle/);
+  assert.match(runtimeSource, /compatibilityProjection/);
+  assert.match(runtimeSource, /getWorkPacketForWorkItem/);
   assert.match(runtimeSource, /isAuthoritativeWorkPacketLifecycleView/);
   assert.match(runtimeSource, /projectAuthoritativeWorkPacket/);
-  assert.match(runtimeSource, /LEGACY_PACKET_ID/);
+  assert.match(runtimeSource, /isPipelineCanonicalContractV1/);
+  assert.match(runtimeSource, /validatePipelineEpic25EvidenceChainV0/);
   assert.match(runtimeSource, /Canonical WorkPacket detail response is not authoritative lifecycle-shaped/);
-  assert.match(runtimeSource, /canonical\.kind === "authoritative"/);
+  assert.match(runtimeSource, /Canonical WorkPacket response is not authoritative lifecycle-shaped/);
+  assert.doesNotMatch(runtimeSource, /requestLegacyJson|mergeWorkPackets|["'`]\/work-packets(?:\/|["'`])/);
 });

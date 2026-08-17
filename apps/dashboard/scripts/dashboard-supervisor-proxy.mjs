@@ -12,7 +12,7 @@ const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/projection$/,
   /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/revisions\/[1-9][0-9]*\/reader$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/,
 ];
 // This is deliberately smaller than the operator read surface. It is the
 // complete browser-to-supervisor capability of the fixed verification account.
@@ -21,7 +21,7 @@ const TEST_VIEWER_READ_PATHS = [
   // a second decoder in an upstream library can never reinterpret a permitted
   // viewer packet ID as a path separator or dot segment.
   /^\/work-packets(?:\/[A-Za-z0-9._:-]+)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:-]+)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:-]+)?|work-items\/[A-Za-z0-9._:-]+\/packet)$/,
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
@@ -35,7 +35,7 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
 export const MEMORY_INBOX_MUTATION_PATHS = new Set([

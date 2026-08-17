@@ -3,9 +3,10 @@ import http from "node:http";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const WORK_PACKET_PATH = /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/;
+const CANONICAL_WORK_ITEM_PACKET_PATH = /^\/pipeline-control-plane\/work-items\/[A-Za-z0-9._:%-]+\/packet$/;
 
 function assertAllowedPath(path: string) {
-  if (path === "/pipeline-control-plane/projection" || WORK_PACKET_PATH.test(path)) return;
+  if (path === "/pipeline-control-plane/projection" || WORK_PACKET_PATH.test(path) || CANONICAL_WORK_ITEM_PACKET_PATH.test(path)) return;
   throw new Error("LAN-auth pipeline read path is not allowed.");
 }
 

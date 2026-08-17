@@ -28,11 +28,11 @@ export type PipelineRuntimeSourceState = {
 };
 
 async function readWorkPackets() {
-  return getWorkPackets();
+  return (await getWorkPackets()).map((packet) => packet.compatibilityProjection);
 }
 
 async function readWorkPacket(packetId: CanonicalRuntimePacketId) {
-  return getWorkPacket(packetId);
+  return (await getWorkPacket(packetId)).compatibilityProjection;
 }
 
 async function readPipelineDashboardProjection() {

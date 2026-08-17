@@ -32,6 +32,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     supervisor = http.createServer((request, response) => {
       if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
       if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "packet-1" }] })); return; }
+      if (request.url === "/pipeline-control-plane/work-items/work-item-1/packet") { response.end(JSON.stringify({ data: { packetId: "packet-1" } })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
       if (request.url === "/operator-views?scope=queue") { forwarded.push(request.url); response.end(JSON.stringify({ data: [] })); return; }
@@ -45,6 +46,11 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     const allowed = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { headers: { cookie: "session=ok" } });
     assert.equal(allowed.status, 200);
     assert.deepEqual(allowed.body.data, [{ packetId: "packet-1" }]);
+    const workItemPacket = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet", { headers: { cookie: "session=ok" } });
+    assert.equal(workItemPacket.status, 200);
+    assert.deepEqual(workItemPacket.body.data, { packetId: "packet-1" });
+    const malformedCanonicalLookup = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet/extra", { headers: { cookie: "session=ok" } });
+    assert.equal(malformedCanonicalLookup.status, 404);
     const canonicalMutation = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
     assert.equal(canonicalMutation.status, 405);
     const projectionMutation = await request(port, "/api/supervisor/pipeline-control-plane/projection", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });

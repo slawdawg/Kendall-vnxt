@@ -35,7 +35,7 @@ import {
   getRuntimeEvidenceReviewReport,
   getWorkItemLowRiskDeliveryPlan,
   getWorkItemTrustedDeliveryEligibilityReport,
-  getWorkPacket,
+  getWorkPacketForWorkItem,
   getWorkItem,
   getWorkItemEvents,
   getWorkItems,
@@ -61,7 +61,7 @@ export async function loadWorkItemDetail(workItemId: string, signal?: AbortSigna
   ] = await Promise.all([
     getWorkItem(workItemId, options), getWorkItemEvents(workItemId, options), getWorkItems(options), getRoutingPreview(workItemId, options),
     getExecutionAttempts(workItemId, options), getRuntimeEvidenceExport(workItemId, options), getRuntimeEvidenceReviewReport(options),
-    getWorkItemTrustedDeliveryEligibilityReport(workItemId, options), getWorkItemLowRiskDeliveryPlan(workItemId, options), getWorkItemCleanupPlan(workItemId, options), getWorkPacket(`work_item:${workItemId}`, options),
+    getWorkItemTrustedDeliveryEligibilityReport(workItemId, options), getWorkItemLowRiskDeliveryPlan(workItemId, options), getWorkItemCleanupPlan(workItemId, options), getWorkPacketForWorkItem(workItemId, options).then((packet) => packet?.compatibilityProjection ?? null),
   ]);
   const [recipeGateAudit, localWorktreePlan] = await Promise.all([
     item.executionRecipe ? getRecipeGateAudit(workItemId, options) : null,
@@ -250,7 +250,7 @@ export function WorkItemDetailPage({
           <GreenGateReadinessPanel report={trustedDeliveryReport} attempts={executionAttempts} />
           <DeliveryCleanupPlanPanel deliveryPlan={lowRiskDeliveryPlan} cleanupPlan={cleanupPlan} />
           <SubscriptionLaunchReadinessPanel events={events} runtimeEvidenceExport={runtimeEvidenceExport} />
-          <MemoryProposalReviewPanel packet={workPacket} workItemId={item.id} />
+              {workPacket ? <MemoryProposalReviewPanel packet={workPacket} workItemId={item.id} /> : null}
           <RoutingPreviewPanel preview={routingPreview} />
           <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />

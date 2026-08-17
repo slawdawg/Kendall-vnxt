@@ -1328,6 +1328,17 @@ async def list_authoritative_work_packets(session: AsyncSession = Depends(get_se
     return AuthoritativeWorkPacketListApiEnvelope(data=await service.list_authoritative_work_packets(session))
 
 
+@app.get("/pipeline-control-plane/work-items/{work_item_id}/packet", response_model=AuthoritativeWorkPacketApiEnvelope)
+async def get_authoritative_work_packet_for_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    packet = await service.get_authoritative_work_packet_for_work_item(session, work_item_id)
+    if not packet:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Authoritative WorkPacket link not found.", "authoritative_work_packet_link_not_found").model_dump(),
+        )
+    return AuthoritativeWorkPacketApiEnvelope(data=packet)
+
+
 @app.get("/pipeline-control-plane/projection", response_model=PipelineDashboardProjectionApiEnvelope)
 async def get_pipeline_dashboard_projection(request: Request, session: AsyncSession = Depends(get_session)):
     return PipelineDashboardProjectionApiEnvelope(
