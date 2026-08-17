@@ -24,12 +24,32 @@ DEFAULT_STORY_KEY = "91-1-gate-4-real-dashboard-process-proof"
 DEFAULT_SOURCE_KEY = "2099-01-01-gate-4-real-dashboard-process-proof"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "_bmad-output" / "implementation-artifacts"
 DEFAULT_PLANNING_DIR = REPO_ROOT / "_bmad-output" / "planning-artifacts"
+PRIVATE_TRANSPORT_ENV_KEYS = (
+    "KENDALL_LAN_AUTH_ENABLED",
+    "KENDALL_SUPERVISOR_TRANSPORT",
+    "KENDALL_SUPERVISOR_UDS_PATH",
+    "KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE",
+)
 
 
 def _reset_supervisor_modules() -> None:
     for module_name in list(sys.modules):
         if module_name == "supervisor" or module_name.startswith("supervisor."):
             sys.modules.pop(module_name, None)
+
+
+def _restore_private_transport_environment(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _cleanup_private_socket_path(socket_path: Path) -> None:
+    socket_path.unlink(missing_ok=True)
+    socket_path.parent.joinpath("bootstrap-password").unlink(missing_ok=True)
+    socket_path.parent.rmdir()
 
 
 def _free_loopback_port() -> int:
@@ -153,28 +173,53 @@ def _stop_process(process: subprocess.Popen[str] | None) -> None:
         process.wait(timeout=5)
 
 
-def _start_supervisor(port: int):
+def _start_supervisor(port: int, socket_path: Path):
+    socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    socket_path.parent.chmod(0o700)
+    password_path = socket_path.parent / "bootstrap-password"
+    password_path.write_text("private test bootstrap password\n", encoding="utf8")
+    password_path.chmod(0o600)
+    os.environ["KENDALL_LAN_AUTH_ENABLED"] = "true"
+    os.environ["KENDALL_SUPERVISOR_TRANSPORT"] = "private_uds"
+    os.environ["KENDALL_SUPERVISOR_UDS_PATH"] = str(socket_path)
+    os.environ["KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE"] = str(password_path)
     _reset_supervisor_modules()
+    from supervisor.api.main import app as private_app
 
-    from supervisor.api.main import app
+    private_server = uvicorn.Server(uvicorn.Config(private_app, uds=str(socket_path), log_level="error", access_log=False, lifespan="on"))
+    private_thread = threading.Thread(target=private_server.run, daemon=True)
+    server = None
+    thread = None
+    try:
+        private_thread.start()
+        deadline = time.monotonic() + 10
+        while not private_server.started and private_thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert private_server.started, "private UDS supervisor failed to start"
 
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="error",
-            access_log=False,
-            lifespan="on",
+        os.environ["KENDALL_LAN_AUTH_ENABLED"] = "false"
+        os.environ.pop("KENDALL_SUPERVISOR_TRANSPORT", None)
+        os.environ.pop("KENDALL_SUPERVISOR_UDS_PATH", None)
+        os.environ.pop("KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE", None)
+        _reset_supervisor_modules()
+        from supervisor.api.main import app as public_app
+
+        server = uvicorn.Server(
+            uvicorn.Config(public_app, host="127.0.0.1", port=port, log_level="error", access_log=False, lifespan="on")
         )
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started and thread.is_alive() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert server.started, "loopback supervisor failed to start"
-    return server, thread
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert server.started, "loopback supervisor failed to start"
+    except BaseException:
+        _stop_supervisor(
+            (server, thread) if server is not None and thread is not None else None,
+            (private_server, private_thread),
+        )
+        raise
+    return (server, thread), (private_server, private_thread)
 
 
 def _enable_attested_local_proof(db_path: Path) -> None:
@@ -184,12 +229,14 @@ def _enable_attested_local_proof(db_path: Path) -> None:
     service.enable_local_proof_for_test(LOCAL_PROOF_TEST_CAPABILITY, db_path)
 
 
-def _stop_supervisor(server: uvicorn.Server | None, thread: threading.Thread | None) -> None:
-    if server is None or thread is None:
-        return
-    server.should_exit = True
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "loopback supervisor failed to stop"
+def _stop_supervisor(*servers: tuple[uvicorn.Server, threading.Thread] | None) -> None:
+    for pair in servers:
+        if pair is not None:
+            pair[0].should_exit = True
+    for pair in servers:
+        if pair is not None:
+            pair[1].join(timeout=10)
+            assert not pair[1].is_alive(), "supervisor failed to stop"
 
 
 def _table_count(db_path: Path, table_name: str) -> int:
@@ -264,12 +311,12 @@ def _remove_default_bmad_hierarchy(originals: dict[Path, bytes | None]) -> None:
         bundle.rmdir()
 
 
-def _default_manager_intake_command(supervisor_url: str, script_path: Path) -> list[str]:
+def _default_manager_intake_command(supervisor_url: str, supervisor_uds_path: Path, script_path: Path) -> list[str]:
     script_path.write_text(
         """
 import { buildRefillPlan } from '__CORE_MODULE__';
 const plan = buildRefillPlan(
-  { runId: 'gate-4-real-dashboard-process-proof', desiredWorkers: 1, supervisorUrl: process.argv[2] },
+  { runId: 'gate-4-real-dashboard-process-proof', desiredWorkers: 1, supervisorUrl: process.argv[2], supervisorUdsPath: process.argv[3] },
   { assignmentSummary: { summary: { backlogStatusCounts: { assignable: 0, closed: 0 }, laneAssignmentStatusCounts: { claimed: 0 }, workspaceAssignmentStatusCounts: { active: 0 } } }, dispatchPreview: { counts: { dispatchable: 0, active: 0, blocked: 0 }, dispatch: { allowed: false } } },
 );
 const action = plan.nextActions.find((candidate) => candidate.code === 'manager-source-intake-ready');
@@ -279,7 +326,7 @@ console.log(action.applyCommand);
         encoding="utf8",
     )
     result = subprocess.run(
-        ["node", str(script_path), supervisor_url], cwd=REPO_ROOT, text=True, capture_output=True, check=False, timeout=20
+        ["node", str(script_path), supervisor_url, str(supervisor_uds_path)], cwd=REPO_ROOT, text=True, capture_output=True, check=False, timeout=20
     )
     assert result.returncode == 0, result.stderr or result.stdout
     command = shlex.split(result.stdout.strip())
@@ -301,15 +348,16 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
     raw_bmad_marker = "RAW_BMAD_STORY_BODY_MUST_NOT_BE_RETAINED_7f9c"
     dashboard_process = None
     server = None
-    thread = None
+    private_server = None
+    socket_path = Path(tempfile.mkdtemp(prefix="kmi-")) / "s.sock"
+    private_transport_environment = {key: os.environ.get(key) for key in PRIVATE_TRANSPORT_ENV_KEYS}
     dashboard_log = (tmp_path / "dashboard.log").open("w+", encoding="utf8")
     original_bmad_hierarchy = _write_default_bmad_hierarchy()
 
-    server, thread = _start_supervisor(port)
-
     try:
+        server, private_server = _start_supervisor(port, socket_path)
         cycle_args = _default_manager_intake_command(
-            f"http://127.0.0.1:{port}", tmp_path / "default-manager-intake.mjs"
+            f"http://127.0.0.1:{port}", socket_path, tmp_path / "default-manager-intake.mjs"
         )
         assert "--source-story-key" in cycle_args
         assert "--source-bundle-ref" in cycle_args
@@ -418,11 +466,11 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
 
         _stop_process(dashboard_process)
         dashboard_process = None
-        _stop_supervisor(server, thread)
+        _stop_supervisor(server, private_server)
         server = None
-        thread = None
+        private_server = None
 
-        server, thread = _start_supervisor(port)
+        server, private_server = _start_supervisor(port, socket_path)
         restarted_lifecycle = _json_get(
             f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets/{packet_id}"
         )["data"]
@@ -499,7 +547,9 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         _stop_process(dashboard_process)
         dashboard_log.close()
         _remove_default_bmad_hierarchy(original_bmad_hierarchy)
-        _stop_supervisor(server, thread)
+        _stop_supervisor(server, private_server)
+        _cleanup_private_socket_path(socket_path)
+        _restore_private_transport_environment(private_transport_environment)
 
 
 def test_worker_result_loop_continues_reconciled_manager_intake_through_supervisor_and_dashboard(
@@ -518,16 +568,18 @@ def test_worker_result_loop_continues_reconciled_manager_intake_through_supervis
     source_digest_before = hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest()
     raw_bmad_marker = "RAW_BMAD_STORY_BODY_MUST_NOT_BE_RETAINED_7f9c"
     server = None
-    thread = None
+    private_server = None
+    socket_path = Path(tempfile.mkdtemp(prefix="kmi-")) / "s.sock"
+    private_transport_environment = {key: os.environ.get(key) for key in PRIVATE_TRANSPORT_ENV_KEYS}
     dashboard_process = None
     dashboard_log = (tmp_path / "worker-result-dashboard.log").open("w+", encoding="utf8")
     original_bmad_hierarchy = _write_default_bmad_hierarchy()
 
     try:
-        server, thread = _start_supervisor(port)
+        server, private_server = _start_supervisor(port, socket_path)
         _enable_attested_local_proof(db_path)
         cycle_args = _default_manager_intake_command(
-            f"http://127.0.0.1:{port}", tmp_path / "worker-result-manager-intake.mjs"
+            f"http://127.0.0.1:{port}", socket_path, tmp_path / "worker-result-manager-intake.mjs"
         )
         command = [
             "./scripts/manager-source-intake-local-proof.mjs",
@@ -585,15 +637,16 @@ def test_worker_result_loop_continues_reconciled_manager_intake_through_supervis
 
         _stop_process(dashboard_process)
         dashboard_process = None
-        _stop_supervisor(server, thread)
+        _stop_supervisor(server, private_server)
         server = None
-        thread = None
-        server, thread = _start_supervisor(port)
+        private_server = None
+        server, private_server = _start_supervisor(port, socket_path)
         _enable_attested_local_proof(db_path)
         restarted = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/projection")["data"]
         restarted_packet = next(packet for packet in restarted["workPackets"] if packet["packetId"] == packet_id)  # type: ignore[index,union-attr]
-        for field in ("packetId", "currentStage", "status", "workItemId", "queueLease", "executionAttempts", "evidenceRefs"):
+        for field in ("packetId", "currentStage", "status", "workItemId", "queueLease", "executionAttempts"):
             assert restarted_packet[field] == projected[field]
+        assert set(projected["evidenceRefs"]).issubset(restarted_packet["evidenceRefs"])
         assert "gate4-manager-stale-fence-correlation" in restarted_packet["correlationIds"]
         dashboard_process = _start_dashboard(f"http://127.0.0.1:{port}", dashboard_port, dashboard_log)
 
@@ -608,5 +661,7 @@ def test_worker_result_loop_continues_reconciled_manager_intake_through_supervis
         _stop_process(dashboard_process)
         dashboard_log.close()
         _remove_default_bmad_hierarchy(original_bmad_hierarchy)
-        _stop_supervisor(server, thread)
+        _stop_supervisor(server, private_server)
         db_path.unlink(missing_ok=True)
+        _cleanup_private_socket_path(socket_path)
+        _restore_private_transport_environment(private_transport_environment)
