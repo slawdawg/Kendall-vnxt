@@ -375,6 +375,9 @@ try {
     case "preserve-dirty-superseded":
       preserveDirtySuperseded(commandArgs);
       break;
+    case "quarantine-ignored-dependency-residue":
+      quarantineIgnoredDependencyResidue(commandArgs);
+      break;
     case "cleanup-orphans":
       cleanupOrphans(commandArgs);
       break;
@@ -731,6 +734,19 @@ preserve-dirty-superseded <task> options:
   --approval <text>         Required with --apply; records the bounded preservation authorization.
   --reason <text>           Required with --apply; records why cleanup is safe after preservation.
   --summary-json            Without --apply, print a compact preservation proof packet.
+
+quarantine-ignored-dependency-residue <task> options:
+  Uses the same exact closed-source-PR and carry-forward arguments as
+  preserve-dirty-superseded. It accepts only ignored root or workspace-package
+  node_modules directories with a bounded pnpm layout; all other ignored or
+  untracked residue remains a hard stop. Preview is read-only. Apply records a
+  durable intent then atomically relocates each exact inventory root under the
+  managed state root; it never deletes source, worktree, local branch, or remote.
+  --apply                   Required before any relocation.
+  --resume-pending          Bare flag with --apply; settles only an exact pending intent.
+  --approval <text>         Required bounded operator authorization with --apply.
+  --reason <text>           Required bounded preservation rationale with --apply.
+  --summary-json            Without --apply, print a compact quarantine proof packet.
 
 close-missing-worktree options:
   --apply                   Record verified metadata-only closeout. Without this, preview only.
@@ -11379,6 +11395,281 @@ function cleanupSuperseded(argv) {
   console.log(`Closed ${plan.taskId}`);
 }
 
+// This is deliberately a separate, opt-in command rather than an exception in
+// dirtySupersededTrackedPaths.  Ordinary preservation continues to reject every
+// ignored path; this command can relocate only a small, inspectable pnpm
+// dependency layout and leaves durable evidence for the later reset fence.
+function quarantineIgnoredDependencyResidue(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) throw new Error("quarantine-ignored-dependency-residue requires exactly one explicit source task id.");
+  assertBareApplyOption(options, "quarantine-ignored-dependency-residue");
+  if (options.resumePending !== undefined && options.resumePending !== true) throw new Error("quarantine-ignored-dependency-residue --resume-pending must be a bare flag.");
+  if (options.apply && options.dryRun) throw new Error("quarantine-ignored-dependency-residue accepts either --dry-run or --apply, not both.");
+  if (options.summaryJson && options.apply) throw new Error("quarantine-ignored-dependency-residue --summary-json is only supported without --apply.");
+  assertDurablePreservationGitEnvironment();
+  const proofInput = cleanupSupersessionInput(options);
+  if (!proofInput.closedSourcePr) throw new Error("quarantine-ignored-dependency-residue requires --closed-source-pr and exact ordered patch lists.");
+  const state = workspaceState(options);
+  const record = findCleanupManifest(state, positional[0]);
+  if (record.manifest.owner !== currentLaneOwner(options)) throw new Error("quarantine-ignored-dependency-residue requires the exact current manifest owner; complete governed dirty-lane takeover separately.");
+  if (options.takeOwnership || options.takeoverReason || options.deleteRemote) throw new Error("quarantine-ignored-dependency-residue never takes ownership or deletes a remote branch.");
+  assertCleanupWorktreeForSuperseded(record.manifest, state, proofInput);
+  requireGh("quarantine-ignored-dependency-residue");
+  const plan = ignoredDependencyQuarantinePlan(record, state, { options, proofInput, allowPending: options.resumePending === true });
+  if (options.summaryJson) return console.log(JSON.stringify({
+    generatedAt: new Date().toISOString(), mode: "quarantine-ignored-dependency-residue", sourceTask: plan.taskId,
+    ready: plan.status === "ready", reason: plan.reason, proof: plan.proof, inventory: plan.inventory || null,
+    mutation: "none; preview only", remoteBranchPolicy: "retained; this command performs no worktree, local-branch, or remote-branch cleanup",
+  }, null, 2));
+  if (plan.status !== "ready") throw new Error(`Ignored dependency quarantine is blocked: ${plan.reason}`);
+  if (!options.apply) {
+    printPlan("quarantine-ignored-dependency-residue", [
+      `${plan.taskId}: relocate ${plan.inventory.roots.length} exact ignored pnpm dependency roots under managed quarantine`,
+      "persist and re-read the source/successor proof plus each path/type/size/digest before later preservation",
+      "do not delete source bytes, a worktree, a local branch, or a remote branch",
+    ]);
+    return;
+  }
+  if (!validSupersessionApplyEvidence(options.approval) || !validSupersessionApplyEvidence(options.reason)) {
+    throw new Error("quarantine-ignored-dependency-residue --apply requires --approval and --reason with at least 10 non-whitespace characters each.");
+  }
+  if (options.resumePending && !record.manifest.ignored_dependency_quarantine_intent) {
+    throw new Error("quarantine-ignored-dependency-residue has no pending quarantine intent to resume.");
+  }
+  withManifestLock(state, plan.taskId, () => {
+    const manifest = readManifest(plan.manifestPath); validateManifest(manifest, plan.manifestPath);
+    if (manifest.owner !== currentLaneOwner(options)) throw new Error("ignored dependency quarantine owner changed under lock; mutation=none.");
+    if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) throw new Error("ignored dependency quarantine cannot run after dirty preservation has begun; mutation=none.");
+    const fresh = ignoredDependencyQuarantinePlan({ manifest, path: plan.manifestPath }, state, { options, proofInput, allowPending: options.resumePending === true });
+    if (fresh.status !== "ready") throw new Error(`Ignored dependency quarantine changed under lock: ${fresh.reason}`);
+    ensureCanonicalIgnoredDependencyQuarantineParent(state.root, manifest.task_id);
+    if (manifest.ignored_dependency_quarantine && !options.resumePending) throw new Error("ignored dependency quarantine evidence already exists; it is retained and cannot be replaced.");
+    let intent = manifest.ignored_dependency_quarantine_intent;
+    if (!intent) {
+      intent = ignoredDependencyQuarantineIntent(manifest, fresh, proofInput, options);
+      manifest.ignored_dependency_quarantine_intent = intent;
+      appendTaskEvent(manifest, "ignored_dependency_quarantine_intent", `${intent.roots.length} pnpm roots prepared before relocation`);
+      manifest.updated_at = new Date().toISOString(); writeManifest(plan.manifestPath, manifest);
+    }
+    relocateIgnoredDependencyQuarantine(manifest, fresh, intent, state, plan.manifestPath, proofInput);
+  });
+  console.log(`Quarantined ignored dependency residue for ${plan.taskId}; re-run preserve-dirty-superseded with the same proof.`);
+}
+
+function ignoredDependencyQuarantinePlan(record, state, { options, proofInput, allowPending = false }) {
+  const base = cleanupSupersededPlan(record, state, { options, proofInput, currentOwner: currentLaneOwner(options), allowDirtySource: true, allowPendingDirty: true });
+  if (base.status !== "ready") return base;
+  const manifest = record.manifest;
+  if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) return { ...base, status: "blocked", reason: "dirty preservation is already pending or complete" };
+  if (manifest.ignored_dependency_quarantine && !allowPending) return { ...base, status: "blocked", reason: "ignored dependency quarantine evidence already exists and is retained" };
+  if (manifest.ignored_dependency_quarantine_intent) {
+    if (!allowPending) return { ...base, status: "blocked", reason: "ignored dependency quarantine intent is pending; use --resume-pending" };
+    if (!validIgnoredDependencyQuarantineIntent(manifest, manifest.ignored_dependency_quarantine_intent, base, proofInput)) return { ...base, status: "blocked", reason: "ignored dependency quarantine intent is malformed or does not match the exact proof" };
+    return { ...base, inventory: { roots: manifest.ignored_dependency_quarantine_intent.roots, aggregateDigest: manifest.ignored_dependency_quarantine_intent.aggregateDigest, quarantineRoot: dirname(manifest.ignored_dependency_quarantine_intent.roots[0].quarantinePath), trackedCount: null } };
+  }
+  try {
+    const inventory = ignoredDependencyQuarantineInventory(base.worktreePath, state, manifest.task_id, base.expectedHeadSha);
+    return { ...base, inventory };
+  } catch (error) {
+    return { ...base, status: "blocked", reason: safeMetadataText(error.message || error, 300) };
+  }
+}
+
+function ignoredDependencyQuarantineInventory(worktreePath, state, taskId, sourceHead) {
+  assertNoDirtySupersededHiddenIndexFlags(worktreePath);
+  assertDirtySupersededStatusConfiguration(worktreePath);
+  const records = dirtySupersededStatusRecords(worktreePath, sourceHead);
+  const roots = [];
+  let tracked = 0;
+  for (const record of records) {
+    if (record.startsWith("!! ")) {
+      const path = record.slice(3);
+      if (!path.endsWith("/") || !allowedIgnoredDependencyRoot(path.slice(0, -1))) throw new Error("ignored dependency quarantine refuses arbitrary ignored residue");
+      roots.push(path.slice(0, -1));
+      continue;
+    }
+    if (record.startsWith("?? ")) throw new Error("ignored dependency quarantine refuses untracked residue");
+    if (record.length < 4 || record[2] !== " " || /[RC]/.test(record.slice(0, 2))) throw new Error("ignored dependency quarantine refuses renamed, copied, or malformed tracked residue");
+    tracked += 1;
+  }
+  if (tracked === 0) throw new Error("ignored dependency quarantine requires tracked dirty source evidence for later preservation");
+  if (roots.length === 0 || roots.length > 16 || new Set(roots).size !== roots.length) throw new Error("ignored dependency quarantine requires a bounded, unique ignored pnpm root inventory");
+  roots.sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+  inspectIgnoredDependencyQuarantineParent(state.root, taskId);
+  const quarantineRoot = ignoredDependencyQuarantineParent(state.root, taskId);
+  const entries = roots.map((sourcePath, index) => {
+    const absolute = join(worktreePath, sourcePath);
+    const layout = inspectPnpmDependencyRoot(absolute, sourcePath);
+    const digest = digestIgnoredDependencyTree(absolute);
+    const destination = ignoredDependencyQuarantinePath(state.root, taskId, sourcePath, index);
+    return { sourcePath, sourceType: "directory", layout, bytes: digest.bytes, entries: digest.entries, digest: digest.digest, quarantinePath: destination };
+  });
+  const aggregateDigest = createHash("sha256").update(JSON.stringify(entries.map(({ sourcePath, sourceType, layout, bytes, entries: count, digest }) => ({ sourcePath, sourceType, layout, bytes, entries: count, digest })))).digest("hex");
+  return { roots: entries, aggregateDigest, quarantineRoot, trackedCount: tracked };
+}
+
+function allowedIgnoredDependencyRoot(path) {
+  return path === "node_modules" || /^(?:apps|packages)\/[A-Za-z0-9._-]+\/node_modules$/.test(path);
+}
+
+function ignoredDependencyQuarantinePath(stateRoot, taskId, sourcePath, index) {
+  return join(ignoredDependencyQuarantineParent(stateRoot, taskId), `${String(index + 1).padStart(2, "0")}-${createHash("sha256").update(sourcePath).digest("hex").slice(0, 16)}`);
+}
+
+function ignoredDependencyQuarantineParent(stateRoot, taskId) {
+  return join(realpathSync(resolve(stateRoot)), "quarantine", "dirty-superseded", taskId);
+}
+
+function inspectIgnoredDependencyQuarantineParent(stateRoot, taskId) {
+  const canonicalState = realpathSync(resolve(stateRoot));
+  let current = canonicalState;
+  for (const part of ["quarantine", "dirty-superseded", taskId]) {
+    current = join(current, part);
+    if (!existsSync(current)) continue;
+    const info = lstatSync(current);
+    if (!info.isDirectory() || info.isSymbolicLink() || realpathSync(current) !== current) throw new Error("ignored dependency quarantine refuses a symlinked or non-canonical managed destination ancestor");
+  }
+}
+
+function ensureCanonicalIgnoredDependencyQuarantineParent(stateRoot, taskId) {
+  const canonicalState = realpathSync(resolve(stateRoot));
+  let current = canonicalState;
+  for (const part of ["quarantine", "dirty-superseded", taskId]) {
+    current = join(current, part);
+    if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
+    const info = lstatSync(current);
+    if (!info.isDirectory() || info.isSymbolicLink() || realpathSync(current) !== current) throw new Error("ignored dependency quarantine refuses a symlinked or non-canonical managed destination ancestor");
+  }
+  return current;
+}
+
+function inspectPnpmDependencyRoot(path, sourcePath) {
+  const info = lstatSync(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("ignored dependency quarantine accepts only real node_modules directories");
+  const names = utf8DirectoryEntryNames(path);
+  const checkDirectory = (name) => { const entry = lstatSync(join(path, name)); return entry.isDirectory() && !entry.isSymbolicLink(); };
+  if (sourcePath === "node_modules") {
+    if (!names.includes(".pnpm") || !names.includes(".modules.yaml") || !names.includes(".bin") || !checkDirectory(".pnpm") || !checkDirectory(".bin") || !lstatSync(join(path, ".modules.yaml")).isFile()) throw new Error("ignored dependency quarantine requires the root pnpm virtual-store layout");
+    assertPnpmLinkedDependencyEntries(path, names, new Set([".pnpm", ".bin", ".modules.yaml", ".pnpm-workspace-state-v1.json"]));
+    return "pnpm-root";
+  }
+  if (!names.includes(".bin") || !checkDirectory(".bin")) throw new Error("ignored dependency quarantine requires a package pnpm node_modules .bin directory");
+  assertPnpmLinkedDependencyEntries(path, names, new Set([".bin"]));
+  return "pnpm-package";
+}
+
+function assertPnpmLinkedDependencyEntries(path, names, permitted) {
+  for (const name of names) {
+    if (permitted.has(name)) continue;
+    const entry = lstatSync(join(path, name));
+    if (entry.isSymbolicLink()) continue;
+    if (!name.startsWith("@") || !entry.isDirectory() || entry.isSymbolicLink()) throw new Error("ignored dependency quarantine refuses a non-pnpm package node_modules entry");
+    for (const child of utf8DirectoryEntryNames(join(path, name))) if (!lstatSync(join(path, name, child)).isSymbolicLink()) throw new Error("ignored dependency quarantine refuses a scoped package entry that is not a pnpm link");
+  }
+}
+
+function utf8DirectoryEntryNames(path) {
+  return readdirSync(path, { encoding: "buffer" }).map((entry) => {
+    const bytes = Buffer.from(entry);
+    const name = bytes.toString("utf8");
+    if (!Buffer.from(name, "utf8").equals(bytes)) throw new Error("ignored dependency quarantine refuses non-UTF-8 directory entry bytes");
+    return name;
+  });
+}
+
+function digestIgnoredDependencyTree(root) {
+  const hash = createHash("sha256"); let bytes = 0; let entries = 0;
+  const walk = (path, relativePath) => {
+    const info = lstatSync(path); entries += 1;
+    if (entries > 100_000) throw new Error("ignored dependency quarantine inventory exceeds 100000 entries");
+    const type = info.isDirectory() ? "d" : info.isFile() ? "f" : info.isSymbolicLink() ? "l" : "?";
+    if (type === "?") throw new Error("ignored dependency quarantine refuses special filesystem entries");
+    hash.update(type).update("\0").update(relativePath).update("\0");
+    if (type === "d") {
+      for (const name of utf8DirectoryEntryNames(path).sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) walk(join(path, name), relativePath ? `${relativePath}/${name}` : name);
+    } else if (type === "l") {
+      const targetBytes = readlinkSync(path, "buffer");
+      const target = Buffer.from(targetBytes).toString("utf8");
+      if (!Buffer.from(target, "utf8").equals(targetBytes)) throw new Error("ignored dependency quarantine refuses non-UTF-8 symlink target bytes");
+      hash.update(targetBytes);
+    } else {
+      bytes += info.size; if (bytes > 1024 * 1024 * 1024) throw new Error("ignored dependency quarantine inventory exceeds 1 GiB");
+      hash.update(readFileSync(path));
+    }
+  };
+  walk(root, "");
+  return { bytes, entries, digest: hash.digest("hex") };
+}
+
+function ignoredDependencyQuarantineIntent(manifest, plan, proofInput, options) {
+  return { schemaVersion: 1, preparedAt: new Date().toISOString(), owner: manifest.owner, sourceHead: plan.expectedHeadSha,
+    closedSourcePr: proofInput.closedSourcePr.number, carryForwardPr: proofInput.carryForwardPr, carryForwardCommit: proofInput.carryForwardCommit,
+    roots: plan.inventory.roots, aggregateDigest: plan.inventory.aggregateDigest, proof: plan.proof, approval: String(options.approval).trim(), reason: String(options.reason).trim(), metadataOnly: true };
+}
+
+function relocateIgnoredDependencyQuarantine(manifest, plan, intent, state, manifestPath, proofInput) {
+  if (!validIgnoredDependencyQuarantineIntent(manifest, intent, plan, proofInput)) throw new Error("ignored dependency quarantine intent is malformed or changed; mutation=none.");
+  for (const root of intent.roots) {
+    const source = join(plan.worktreePath, root.sourcePath); const destination = root.quarantinePath;
+    const sourceExists = existsSync(source); const destinationExists = existsSync(destination);
+    if (sourceExists && destinationExists) throw new Error("ignored dependency quarantine has ambiguous source and destination roots; mutation=none.");
+    if (!sourceExists && !destinationExists) throw new Error("ignored dependency quarantine lost a planned root; mutation=none.");
+    if (destinationExists) { assertIgnoredDependencyDigest(destination, root); continue; }
+    assertIgnoredDependencyDigest(source, root);
+    const parent = ensureCanonicalIgnoredDependencyQuarantineParent(state.root, manifest.task_id);
+    if (dirname(destination) !== parent) throw new Error("ignored dependency quarantine destination no longer has the canonical managed parent");
+    if (statSync(source).dev !== statSync(parent).dev) throw new Error("ignored dependency quarantine requires source and managed destination on the same filesystem");
+    renameSync(source, destination); fsyncDirectory(dirname(destination));
+    assertIgnoredDependencyDigest(destination, root);
+    appendTaskEvent(manifest, "ignored_dependency_quarantine_root_relocated", root.sourcePath);
+    manifest.updated_at = new Date().toISOString(); writeManifest(manifestPath, manifest);
+    if (process.env.CODEX_WORKSPACE_TEST_QUARANTINE_FAIL_AFTER_RELOCATION === root.sourcePath) {
+      throw new Error("injected quarantine interruption after exact root relocation");
+    }
+  }
+  // Re-read the source classifier after every move; any newly introduced
+  // ignored/untracked path blocks rather than allowing a later reset.
+  const remaining = dirtySupersededStatusRecords(plan.worktreePath, plan.expectedHeadSha);
+  if (remaining.some((record) => record.startsWith("!! ") || record.startsWith("?? "))) throw new Error("ignored dependency quarantine left or observed untrusted ignored/untracked source residue");
+  manifest.ignored_dependency_quarantine = { ...intent, quarantinedAt: new Date().toISOString(), verification: { status: "matched_before_source_cleanup", checkedAt: new Date().toISOString(), rootCount: intent.roots.length, metadataOnly: true } };
+  delete manifest.ignored_dependency_quarantine_intent;
+  appendTaskEvent(manifest, "ignored_dependency_quarantine_verified", intent.aggregateDigest);
+  manifest.updated_at = new Date().toISOString(); writeManifest(manifestPath, manifest);
+}
+
+function validIgnoredDependencyQuarantineIntent(manifest, intent, plan, proofInput) {
+  return Boolean(intent && intent.schemaVersion === 1 && dirtySupersededOwnerLineageMatches(manifest, intent.owner) && intent.sourceHead === plan.expectedHeadSha && intent.closedSourcePr === proofInput.closedSourcePr?.number && intent.carryForwardPr === proofInput.carryForwardPr && intent.carryForwardCommit === proofInput.carryForwardCommit && Array.isArray(intent.roots) && intent.roots.length > 0 && intent.roots.length <= 16 && intent.roots.every((root, index) => allowedIgnoredDependencyRoot(root?.sourcePath) && root.quarantinePath === ignoredDependencyQuarantinePath(manifest.state_root, manifest.task_id, root.sourcePath, index)) && /^[a-f0-9]{64}$/.test(intent.aggregateDigest || ""));
+}
+
+function assertIgnoredDependencyDigest(path, root) {
+  const current = digestIgnoredDependencyTree(path);
+  if (current.bytes !== root.bytes || current.entries !== root.entries || current.digest !== root.digest) throw new Error("ignored dependency quarantine root no longer matches its exact path/type/size/digest inventory");
+}
+
+function validIgnoredDependencyQuarantineEvidence(manifest, evidence, plan, proofInput) {
+  try {
+    if (!evidence || evidence.schemaVersion !== 1 || evidence.verification?.status !== "matched_before_source_cleanup" || !dirtySupersededOwnerLineageMatches(manifest, evidence.owner) || evidence.sourceHead !== plan.expectedHeadSha || evidence.closedSourcePr !== proofInput.closedSourcePr?.number || evidence.carryForwardPr !== proofInput.carryForwardPr || evidence.carryForwardCommit !== proofInput.carryForwardCommit || !Array.isArray(evidence.roots) || evidence.roots.length === 0 || evidence.roots.length > 16 || !/^[a-f0-9]{64}$/.test(evidence.aggregateDigest || "")) return false;
+    const compact = evidence.roots.map(({ sourcePath, sourceType, layout, bytes, entries, digest }) => ({ sourcePath, sourceType, layout, bytes, entries, digest }));
+    if (createHash("sha256").update(JSON.stringify(compact)).digest("hex") !== evidence.aggregateDigest) return false;
+    const canonicalParent = ignoredDependencyQuarantineParent(manifest.state_root, manifest.task_id);
+    inspectIgnoredDependencyQuarantineParent(manifest.state_root, manifest.task_id);
+    if (!existsSync(canonicalParent) || realpathSync(canonicalParent) !== canonicalParent) return false;
+    for (const [index, root] of evidence.roots.entries()) {
+      if (!allowedIgnoredDependencyRoot(root.sourcePath) || root.sourceType !== "directory" || dirname(root.quarantinePath) !== canonicalParent || root.quarantinePath !== ignoredDependencyQuarantinePath(manifest.state_root, manifest.task_id, root.sourcePath, index) || existsSync(join(plan.worktreePath, root.sourcePath)) || !existsSync(root.quarantinePath)) return false;
+      if (inspectPnpmDependencyRoot(root.quarantinePath, root.sourcePath) !== root.layout) return false;
+      assertIgnoredDependencyDigest(root.quarantinePath, root);
+    }
+    return true;
+  } catch { return false; }
+}
+
+function assertIgnoredDependencyQuarantineEvidence(manifest, plan, proofInput) {
+  if (manifest.ignored_dependency_quarantine && !validIgnoredDependencyQuarantineEvidence(manifest, manifest.ignored_dependency_quarantine, plan, proofInput)) {
+    throw new Error("ignored dependency quarantine evidence no longer re-reads exactly; reset is blocked");
+  }
+  if (manifest.ignored_dependency_quarantine_intent) throw new Error("ignored dependency quarantine intent is pending; reset is blocked");
+}
+
 function preserveDirtySuperseded(argv) {
   const { positional, options } = parseOptions(argv);
   if (positional.length !== 1) throw new Error("preserve-dirty-superseded requires exactly one explicit source task id.");
@@ -11496,12 +11787,14 @@ function preserveDirtySuperseded(argv) {
       // reset-adjacent fence, rejecting both a replaced lease and a concurrent
       // commit that races the renewal itself.
       verifyDirtySupersededImmutableSnapshot(fresh, snapshot);
+      assertIgnoredDependencyQuarantineEvidence(manifest, fresh, proofInput);
       assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
       assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
       assertDirtySupersededResetHead(fresh);
       const resetProof = verifyDirtySupersededSnapshot(manifest, fresh, snapshot, { requireLiveMatch: true });
       heartbeat(() => {
         assertDirtySupersededSnapshotConfiguration(fresh.worktreePath);
+        assertIgnoredDependencyQuarantineEvidence(manifest, fresh, proofInput);
         assertDirtySupersededResetHead(fresh);
       });
       runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
@@ -11583,8 +11876,10 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
     assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
     assertDirtySupersededResetHead(fresh);
     const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
+    assertIgnoredDependencyQuarantineEvidence(manifest, fresh, proofInput);
     heartbeat(() => {
       assertDirtySupersededSnapshotConfiguration(fresh.worktreePath);
+      assertIgnoredDependencyQuarantineEvidence(manifest, fresh, proofInput);
       assertDirtySupersededResetHead(fresh);
     });
     runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
@@ -11601,6 +11896,10 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
 function dirtySupersededPreservationPlan(record, state, context) {
   const plan = cleanupSupersededPlan(record, state, { ...context, allowDirtySource: true });
   if (plan.status !== "ready") return plan;
+  if (record.manifest.ignored_dependency_quarantine_intent) return { ...plan, status: "blocked", reason: "ignored dependency quarantine intent is pending; recover it before preservation" };
+  if (record.manifest.ignored_dependency_quarantine && !validIgnoredDependencyQuarantineEvidence(record.manifest, record.manifest.ignored_dependency_quarantine, plan, context.proofInput)) {
+    return { ...plan, status: "blocked", reason: "ignored dependency quarantine evidence no longer re-reads exactly" };
+  }
   let dirty;
   try {
     assertNoDirtySupersededRepositoryAlternates(plan.worktreePath);

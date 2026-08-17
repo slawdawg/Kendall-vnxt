@@ -17386,6 +17386,173 @@ try {
     }
   });
 
+  test("quarantine-ignored-dependency-residue previews and relocates only a verified pnpm root before preservation", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "node_modules/\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+      mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+      mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+      writeFileSync(join(fixture.worktree, "node_modules", ".pnpm", "package.txt"), "dependency bytes\n");
+      const preview = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.ready === true && packet.inventory?.roots?.length === 1, preview.stdout);
+      assert(existsSync(join(fixture.worktree, "node_modules")), "preview moved a dependency root");
+      assert(!readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).ignored_dependency_quarantine, "preview wrote quarantine evidence");
+      const applied = runFixtureScript(fixture, [...args, "--apply", "--approval", "operator approved exact pnpm residue quarantine", "--reason", "retain dependency residue before dirty source preservation"], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      const evidence = manifest.ignored_dependency_quarantine;
+      assert(evidence?.verification?.status === "matched_before_source_cleanup", JSON.stringify(manifest, null, 2));
+      assert(!existsSync(join(fixture.worktree, "node_modules")), "apply did not relocate source dependency root");
+      assert(existsSync(evidence.roots[0].quarantinePath), "apply did not retain durable quarantine root");
+      const preserve = runFixtureScript(fixture, ["preserve-dirty-superseded", ...args.slice(1), "--summary-json"], { env: fixture.env });
+      assert(preserve.code === 0 && JSON.parse(preserve.stdout).ready === true, preserve.stderr || preserve.stdout);
+      const preserved = runFixtureScript(fixture, ["preserve-dirty-superseded", ...args.slice(1), "--apply", "--approval", "operator approved preserved tracked source after quarantine", "--reason", "quarantine evidence was re-read before the controlled reset"], { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      assert(!runGit(fixture.worktree, ["status", "--porcelain=v1"]).stdout, "preservation left the source worktree dirty");
+      assert(existsSync(evidence.roots[0].quarantinePath), "preservation removed quarantined dependency residue");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("quarantine-ignored-dependency-residue rejects arbitrary ignored files and quarantined drift", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "ignored.bin\nnode_modules/\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+      writeFileSync(join(fixture.worktree, "ignored.bin"), "must never be quarantined\n");
+      const blocked = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(blocked.code === 0 && JSON.parse(blocked.stdout).ready === false, blocked.stderr || blocked.stdout);
+      assert(existsSync(join(fixture.worktree, "ignored.bin")), "preview touched arbitrary ignored bytes");
+      rmSync(join(fixture.worktree, "ignored.bin"));
+      mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+      mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+      writeFileSync(join(fixture.worktree, "node_modules", "user-proof.txt"), "must not pass as pnpm layout\n");
+      const malformedLayout = runFixtureScript(fixture, [...args, "--summary-json"], { env: fixture.env });
+      assert(malformedLayout.code === 0 && JSON.parse(malformedLayout.stdout).ready === false, malformedLayout.stderr || malformedLayout.stdout);
+      assert(existsSync(join(fixture.worktree, "node_modules", "user-proof.txt")), "malformed layout preview moved ignored bytes");
+      rmSync(join(fixture.worktree, "node_modules", "user-proof.txt"));
+      const applied = runFixtureScript(fixture, [...args, "--apply", "--approval", "operator approved exact pnpm residue quarantine", "--reason", "retain dependency residue before dirty source preservation"], { env: fixture.env });
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const evidence = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).ignored_dependency_quarantine;
+      writeFileSync(join(evidence.roots[0].quarantinePath, ".pnpm", "late.txt"), "drift\n");
+      const preserve = runFixtureScript(fixture, ["preserve-dirty-superseded", ...args.slice(1), "--summary-json"], { env: fixture.env });
+      assert(preserve.code === 0 && JSON.parse(preserve.stdout).ready === false, preserve.stderr || preserve.stdout);
+      assert(existsSync(evidence.roots[0].quarantinePath), "drift check removed quarantine evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("quarantine-ignored-dependency-residue resumes only an exact interrupted relocation", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved resumable pnpm residue quarantine", "--reason", "retain dependency residue before dirty source preservation"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "node_modules/\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+      mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+      mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+      const interrupted = runFixtureScript(fixture, args, { env: { ...fixture.env, CODEX_WORKSPACE_TEST_QUARANTINE_FAIL_AFTER_RELOCATION: "node_modules" } });
+      assert(interrupted.code !== 0, interrupted.stdout || interrupted.stderr);
+      let manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.ignored_dependency_quarantine_intent && !manifest.ignored_dependency_quarantine, JSON.stringify(manifest, null, 2));
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.ignored_dependency_quarantine_intent && manifest.ignored_dependency_quarantine, JSON.stringify(manifest, null, 2));
+      assert(!existsSync(join(fixture.worktree, "node_modules")), "resume recreated or retained source root");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("quarantine-ignored-dependency-residue retains a changed pending relocation as a hard stop", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved resumable pnpm residue quarantine", "--reason", "retain dependency residue before dirty source preservation"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "node_modules/\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+      mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+      mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+      const interrupted = runFixtureScript(fixture, args, { env: { ...fixture.env, CODEX_WORKSPACE_TEST_QUARANTINE_FAIL_AFTER_RELOCATION: "node_modules" } });
+      assert(interrupted.code !== 0, interrupted.stdout || interrupted.stderr);
+      const pending = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json")).ignored_dependency_quarantine_intent;
+      writeFileSync(join(pending.roots[0].quarantinePath, ".pnpm", "changed-after-interrupt.txt"), "drift\n");
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0 && (resumed.stderr || resumed.stdout).includes("digest inventory"), resumed.stderr || resumed.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(manifest.ignored_dependency_quarantine_intent && !manifest.ignored_dependency_quarantine, JSON.stringify(manifest, null, 2));
+      assert(existsSync(pending.roots[0].quarantinePath), "blocked resume removed changed quarantine bytes");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("quarantine-ignored-dependency-residue rejects non-UTF-8 entry and symlink bytes without mutation", () => {
+    for (const kind of ["entry", "link"]) {
+      const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+      const args = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--summary-json"];
+      try {
+        writeFileSync(join(fixture.root, ".git", "info", "exclude"), "node_modules/\n");
+        writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+        mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+        mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+        writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+        if (kind === "entry") {
+          writeFileSync(Buffer.concat([Buffer.from(`${join(fixture.worktree, "node_modules", ".pnpm")}/`), Buffer.from([0xff])]), "non-utf8 entry\n");
+        } else {
+          symlinkSync(Buffer.from([0xff]), join(fixture.worktree, "node_modules", "non-utf8-link"));
+        }
+        const preview = runFixtureScript(fixture, args, { env: fixture.env });
+        assert(preview.code === 0 && JSON.parse(preview.stdout).ready === false, `${kind}: ${preview.stderr || preview.stdout}`);
+        assert(existsSync(join(fixture.worktree, "node_modules")), `${kind}: preview moved source bytes`);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+        assert(!manifest.ignored_dependency_quarantine && !manifest.ignored_dependency_quarantine_intent, `${kind}: preview wrote quarantine evidence`);
+      } finally { cleanupSupersededCleanupFixture(fixture); }
+    }
+  });
+
+  test("quarantine-ignored-dependency-residue rejects a symlinked managed destination ancestor before intent", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved exact pnpm residue quarantine", "--reason", "managed destination must remain canonical under the state root"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "node_modules/\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+      mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+      mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+      const outside = join(fixture.root, "outside"); mkdirSync(outside);
+      symlinkSync(outside, join(fixture.stateRoot, "quarantine"));
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("symlinked or non-canonical"), result.stderr || result.stdout);
+      assert(existsSync(join(fixture.worktree, "node_modules")), "symlinked destination attempt moved source bytes");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.ignored_dependency_quarantine && !manifest.ignored_dependency_quarantine_intent, "symlinked destination attempt wrote manifest evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded blocks a post-quarantine managed ancestor symlink replacement", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const quarantine = ["quarantine-ignored-dependency-residue", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved exact pnpm residue quarantine", "--reason", "retain dependency residue before dirty source preservation"];
+    try {
+      writeFileSync(join(fixture.root, ".git", "info", "exclude"), "node_modules/\n");
+      writeFileSync(join(fixture.worktree, "carried.txt"), "tracked preservation source\n");
+      mkdirSync(join(fixture.worktree, "node_modules", ".pnpm"), { recursive: true });
+      mkdirSync(join(fixture.worktree, "node_modules", ".bin"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "node_modules", ".modules.yaml"), "layoutVersion: 9\n");
+      const quarantined = runFixtureScript(fixture, quarantine, { env: fixture.env });
+      assert(quarantined.code === 0, quarantined.stderr || quarantined.stdout);
+      const original = join(fixture.stateRoot, "quarantine"); const replacementTarget = join(fixture.root, "quarantine-retained-target");
+      renameSync(original, replacementTarget); symlinkSync(replacementTarget, original);
+      const preserve = runFixtureScript(fixture, ["preserve-dirty-superseded", ...quarantine.slice(1, quarantine.indexOf("--apply")), "--apply", "--approval", "operator approved reset after exact quarantine validation", "--reason", "ancestor replacement must block before source reset"], { env: fixture.env });
+      assert(preserve.code !== 0 && (preserve.stderr || preserve.stdout).includes("quarantine evidence"), preserve.stderr || preserve.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain=v1"]).stdout.includes("carried.txt"), "ancestor replacement allowed source reset");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_preservation && manifest.ignored_dependency_quarantine, JSON.stringify(manifest, null, 2));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
   test("preserve-dirty-superseded snapshots, re-reads, and cleans only a proved closed-PR source", () => {
     const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
     const args = [
