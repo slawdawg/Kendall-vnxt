@@ -22,6 +22,48 @@ const ELIGIBLE_ARGS = [
 ];
 
 function responseFor(request, overrides = {}) {
+  const checkedAt = new Date();
+  const expiresAt = new Date(checkedAt.getTime() + 5 * 60 * 1000);
+  const authority = {
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+    rawPayloadRetentionAllowed: false,
+  };
+  const evidenceRef = "evidence:manager-source-cycle";
+  const canonicalContract = {
+    schemaVersion: "pipeline-canonical-contract/v1",
+    productMode: "read_only",
+    canonicalSource: {
+      sourceId: "supervisor-manager-source-intake",
+      role: "canonical",
+      trust: "authoritative",
+      provenance: { sourceRef: request.sourceRef, observedAt: checkedAt.toISOString(), evidenceRefs: [evidenceRef] },
+      authority,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    qualityGates: { kind: "gate", gateId: "manager-source-intake-metadata", requirement: "required", state: "pass", evidenceRefs: [evidenceRef] },
+    readinessComponents: Object.fromEntries([
+      "source_provenance", "trust_boundary", "authority_boundary", "evidence_retention", "quality_gates",
+    ].map((componentId) => [componentId, { componentId, requirement: "required", state: "pass", evidenceRefs: [evidenceRef] }])),
+    deliveryEvidence: [],
+    authority,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  canonicalContract.readinessComponents.delivery_evidence = {
+    componentId: "delivery_evidence", requirement: "not_applicable", state: "not_applicable",
+    notApplicableReason: "Manager source intake records no delivery action.", evidenceRefs: [],
+  };
+  const productModeMapping = {
+    requestedProductMode: "read_only", effectiveProductMode: "read_only", operationalMode: "read_only",
+    readinessState: "ready", freshnessState: "live", capabilityState: "gated",
+    checkedAt: checkedAt.toISOString(), expiresAt: expiresAt.toISOString(), ready: true,
+    blockedReasons: [], metadataOnly: true, rawPayloadRetained: false,
+    sourceMutationAllowed: false, providerCallsAllowed: false, workerLaunchAllowed: false, githubMutationAllowed: false,
+  };
   const event = {
     eventId: "event-manager-source-cycle",
     packetId: request.packetId,
@@ -57,6 +99,8 @@ function responseFor(request, overrides = {}) {
         currentEventId: event.eventId,
         history: [event],
         metadataOnly: true,
+        canonicalContract,
+        productModeMapping,
         ...overrides,
       },
     }),

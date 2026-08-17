@@ -365,6 +365,7 @@ class OperationalActionIneligible(ValueError):
 LOCAL_PROOF_TEST_CAPABILITY = object()
 LOCAL_PROOF_ATTESTATION_ROOT = Path(tempfile.gettempdir()) / "kendall-local-proof-attestations"
 PIPELINE_CANONICAL_CONTRACT_METADATA_KEY = "pipelineCanonicalContract"
+PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY = "pipelineCanonicalContractSupervisorProvenance"
 PIPELINE_EPIC_25_EVIDENCE_CHAIN_METADATA_KEY = "pipelineEpic25EvidenceChain"
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_KEY = "pipelineEpic25SourceRevisionAttestation"
 PIPELINE_EPIC_25_SOURCE_REVISION_ATTESTATION_TYPE = "server-owned-git-source-revision/v0"
@@ -1055,15 +1056,38 @@ class SupervisorService:
         self,
         session: AsyncSession,
         payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        manager_source_intake_authorized: bool = False,
     ) -> AuthoritativeWorkPacketLifecycleView:
-        canonical_contract = await self._canonical_contract_for_authoritative_create(session, payload)
+        # The manager adapter supplies a deterministic packet id in normal
+        # operation.  Keep the exceptional omitted-id form deterministic too:
+        # the id must exist before supervisor-owned provenance is minted, and
+        # matching concurrent creates must converge on the same id.
+        is_manager_source_intake = self._is_manager_source_intake_actor(payload.actor.model_dump())
+        if is_manager_source_intake and not manager_source_intake_authorized:
+            raise ValueError("Manager source intake requires the authenticated private supervisor transport.")
+        if is_manager_source_intake and not payload.packetId:
+            if not payload.idempotencyKey:
+                raise ValueError("Manager source intake requires packetId or idempotencyKey.")
+            payload = payload.model_copy(
+                update={"packetId": f"packet-manager-source-intake-{hashlib.sha256(payload.idempotencyKey.encode('utf8')).hexdigest()[:32]}"}
+            )
+        canonical_contract = await self._canonical_contract_for_authoritative_create(
+            session,
+            payload,
+            manager_source_intake_authorized=manager_source_intake_authorized,
+        )
         if canonical_contract is not payload.canonicalContract:
             payload = payload.model_copy(update={"canonicalContract": canonical_contract})
         _validate_authoritative_metadata_text(payload.title, path="title")
         parallel_work_graph = self._authoritative_parallel_work_graph_evidence(payload)
         review_route = self._authoritative_review_route_evidence(payload)
         manager_source_evidence = self._manager_source_evidence_storage(parallel_work_graph, review_route)
-        source_ref = self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
+        source_ref = self._authoritative_source_ref_payload(
+            payload.sourceRef,
+            payload.canonicalContract,
+            trusted_manager_packet_id=payload.packetId if is_manager_source_intake and manager_source_intake_authorized else None,
+        )
         payload_summary = self._safe_lifecycle_summary(payload.payloadSummary)
         evidence_refs = self._safe_lifecycle_refs(payload.evidenceRefs)
         if payload.idempotencyKey:
@@ -1185,7 +1209,11 @@ class SupervisorService:
                             if replay_contract is None:
                                 raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
                             payload = payload.model_copy(update={"canonicalContract": replay_contract})
-                            source_ref = self._authoritative_source_ref_payload(payload.sourceRef, replay_contract)
+                            source_ref = self._authoritative_source_ref_payload(
+                                payload.sourceRef,
+                                replay_contract,
+                                trusted_manager_packet_id=payload.packetId if manager_source_intake_authorized else None,
+                            )
                         if not self._authoritative_create_event_matches(
                             replay_event,
                             payload,
@@ -4042,7 +4070,7 @@ class SupervisorService:
             if (
                 parallel_work_graph is not None
                 and existing_event is not None
-                and self._authoritative_graph_packet_identity_matches(packet, payload)
+                and self._authoritative_graph_packet_identity_matches(packet, payload, source_ref=source_ref)
                 and existing_event.parallel_work_graph_json != manager_source_evidence
             ):
                 previous_graph, _ = self._manager_source_evidence_parts(
@@ -4159,14 +4187,14 @@ class SupervisorService:
             if (
                 parallel_work_graph is not None
                 and existing_event is not None
-                and self._authoritative_graph_packet_identity_matches(packet, payload)
+                and self._authoritative_graph_packet_identity_matches(packet, payload, source_ref=source_ref)
                 and existing_event.parallel_work_graph_json == manager_source_evidence
             ):
                 if latest_graph_event is not None and latest_graph_event.parallel_work_graph_json != manager_source_evidence:
                     raise ValueError("Parallel work graph refresh must be newer than the authoritative report.")
                 return await self.to_authoritative_work_packet_view(session, packet)
             if (
-                not self._authoritative_create_matches(packet, payload)
+                not self._authoritative_create_matches(packet, payload, source_ref=source_ref)
                 or existing_event is None
                 or existing_event.parallel_work_graph_json != manager_source_evidence
             ):
@@ -4208,6 +4236,8 @@ class SupervisorService:
         self,
         source_ref: AuthoritativePacketSourceRefView,
         canonical_contract: PipelineCanonicalContractV1View | None = None,
+        *,
+        trusted_manager_packet_id: str | None = None,
     ) -> dict:
         source_payload = source_ref.model_dump(exclude_none=True)
         if source_payload.get("title") is not None:
@@ -4220,6 +4250,18 @@ class SupervisorService:
             )
         if canonical_contract is not None:
             source_payload[PIPELINE_CANONICAL_CONTRACT_METADATA_KEY] = canonical_contract.model_dump(mode="json")
+            canonical_source = canonical_contract.canonicalSource
+            if canonical_source.sourceId == "supervisor-manager-source-intake" and trusted_manager_packet_id:
+                # This key is written only after the private manager-intake
+                # transport has admitted the request.  It distinguishes the
+                # new server-minted record from an old caller-supplied contract
+                # that merely validates structurally.
+                source_payload[PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY] = {
+                    "schemaVersion": "supervisor-manager-source-intake-provenance/v1",
+                    "sourceId": "supervisor-manager-source-intake",
+                    "packetId": trusted_manager_packet_id,
+                    "evidenceRef": self._manager_source_intake_evidence_ref(trusted_manager_packet_id),
+                }
         return source_payload
 
     @staticmethod
@@ -4236,6 +4278,8 @@ class SupervisorService:
         self,
         session: AsyncSession,
         payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        manager_source_intake_authorized: bool = False,
     ) -> PipelineCanonicalContractV1View | None:
         """Mint the contract for the one manager intake adapter, never accept it from that adapter.
 
@@ -4247,6 +4291,8 @@ class SupervisorService:
         """
         if not self._is_manager_source_intake_actor(payload.actor.model_dump()):
             return payload.canonicalContract
+        if not manager_source_intake_authorized:
+            raise ValueError("Manager source intake requires the authenticated private supervisor transport.")
         if payload.canonicalContract is not None:
             raise ValueError("Manager source intake must not supply its own canonical contract.")
         if payload.packetId:
@@ -4254,7 +4300,13 @@ class SupervisorService:
             if existing_packet is not None:
                 existing_contract = self._canonical_contract_from_packet_metadata(existing_packet.source_ref_json)
                 if existing_contract is None:
-                    raise ValueError("Manager source intake refresh requires the persisted server-minted canonical contract.")
+                    existing_contract = await self._backfill_manager_source_intake_contract(session, existing_packet)
+                if existing_contract is None or not self._is_server_minted_manager_source_intake_contract(
+                    existing_contract,
+                    existing_packet.source_ref_json,
+                    existing_packet.id,
+                ):
+                    raise ValueError("Manager source intake refresh requires a verified persisted server-minted canonical contract.")
                 return existing_contract
         if payload.idempotencyKey:
             existing_event = await self._authoritative_lifecycle_event_by_idempotency(
@@ -4273,15 +4325,31 @@ class SupervisorService:
                 existing_contract = self._canonical_contract_from_packet_metadata(
                     existing_packet.source_ref_json if existing_packet is not None else None
                 )
-                if existing_contract is None:
-                    raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
+                if existing_contract is None and existing_packet is not None:
+                    existing_contract = await self._backfill_manager_source_intake_contract(session, existing_packet)
+                if (
+                    existing_contract is None
+                    or existing_packet is None
+                    or not self._is_server_minted_manager_source_intake_contract(
+                        existing_contract,
+                        existing_packet.source_ref_json,
+                        existing_packet.id,
+                    )
+                ):
+                    raise ValueError("Manager source intake replay requires a verified persisted server-minted canonical contract.")
                 return existing_contract
+        return self._mint_manager_source_intake_contract(payload)
+
+    def _mint_manager_source_intake_contract(
+        self,
+        payload: AuthoritativeWorkPacketCreateRequest,
+    ) -> PipelineCanonicalContractV1View:
+        """Create the exact supervisor-owned contract for one stable packet id."""
+        packet_id = payload.packetId
+        if not packet_id:
+            raise ValueError("Manager source intake requires a stable packet identity before canonical contract minting.")
         source_ref = payload.sourceRef.model_dump(mode="json", exclude_none=True)
-        packet_id = payload.packetId or "manager-source-intake"
-        evidence_ref = (
-            "opaque-ref:sha256:"
-            f"{hashlib.sha256(f'manager-source-intake:{packet_id}'.encode('utf8')).hexdigest()}"
-        )
+        evidence_ref = self._manager_source_intake_evidence_ref(packet_id)
         authority = {
             "sourceMutationAllowed": False,
             "providerCallsAllowed": False,
@@ -4342,6 +4410,114 @@ class SupervisorService:
                 "rawPayloadRetained": False,
             }
         )
+
+    @staticmethod
+    def _manager_source_intake_evidence_ref(packet_id: str) -> str:
+        return "opaque-ref:sha256:" + hashlib.sha256(
+            f"manager-source-intake:{packet_id}".encode("utf8")
+        ).hexdigest()
+
+    async def _backfill_manager_source_intake_contract(
+        self,
+        session: AsyncSession,
+        packet: AuthoritativeWorkPacket,
+    ) -> PipelineCanonicalContractV1View | None:
+        """Backfill only a legacy manager-create event whose provenance is exact.
+
+        Old records have no canonical-contract metadata.  The persisted creation
+        event is the only acceptable migration source: it must be the exact
+        manager adapter actor and must bind the same bounded source identity as
+        the durable packet.  Anything else remains unavailable rather than being
+        relabelled as supervisor-owned lifecycle truth.
+        """
+        result = await session.execute(
+            select(AuthoritativeWorkPacketLifecycleEvent).where(
+                AuthoritativeWorkPacketLifecycleEvent.packet_id == packet.id,
+                AuthoritativeWorkPacketLifecycleEvent.event_type == "packet.created",
+            ).order_by(AuthoritativeWorkPacketLifecycleEvent.occurred_at.asc(), AuthoritativeWorkPacketLifecycleEvent.id.asc())
+        )
+        creation = result.scalars().first()
+        if (
+            creation is None
+            or not self._is_manager_source_intake_actor(creation.actor_json)
+            or self._packet_source_ref_payload(creation.source_ref_json)
+            != self._packet_source_ref_payload(packet.source_ref_json)
+        ):
+            return None
+        try:
+            source_ref = AuthoritativePacketSourceRefView.model_validate(
+                self._packet_source_ref_payload(packet.source_ref_json)
+            )
+        except ValidationError:
+            return None
+        contract = self._mint_manager_source_intake_contract(
+            AuthoritativeWorkPacketCreateRequest.model_validate(
+                {
+                    "packetId": packet.id,
+                    "title": "Legacy manager source intake contract backfill",
+                    "sourceRef": source_ref.model_dump(mode="json"),
+                    "actor": {
+                        "actorType": "manager",
+                        "actorId": "manager-source-intake",
+                        "actorLabel": "Manager source intake adapter",
+                    },
+                    "idempotencyKey": f"manager-source-intake-backfill:{packet.id}",
+                    "payloadSummary": "Supervisor backfilled a verified legacy manager source contract.",
+                }
+            )
+        )
+        metadata = dict(packet.source_ref_json or {})
+        metadata[PIPELINE_CANONICAL_CONTRACT_METADATA_KEY] = contract.model_dump(mode="json")
+        metadata[PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY] = {
+            "schemaVersion": "supervisor-manager-source-intake-provenance/v1",
+            "sourceId": "supervisor-manager-source-intake",
+            "packetId": packet.id,
+            "evidenceRef": self._manager_source_intake_evidence_ref(packet.id),
+        }
+        creation_metadata = dict(creation.source_ref_json or {})
+        creation_metadata[PIPELINE_CANONICAL_CONTRACT_METADATA_KEY] = contract.model_dump(mode="json")
+        creation_metadata[PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY] = dict(
+            metadata[PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY]
+        )
+        creation.source_ref_json = creation_metadata
+        packet.source_ref_json = metadata
+        # A replay may otherwise return before a later lifecycle write commits
+        # this upgrade.  Make the verified backfill durable before it can be
+        # treated as canonical manager intake evidence.
+        await session.commit()
+        await session.refresh(packet)
+        return contract
+
+    def _is_server_minted_manager_source_intake_contract(
+        self,
+        contract: PipelineCanonicalContractV1View,
+        stored_payload: object,
+        packet_id: str,
+    ) -> bool:
+        """Require the supervisor's exact canonical source/provenance shape."""
+        payload = contract.model_dump(mode="json")
+        source = payload.get("canonicalSource")
+        stored_provenance = (
+            stored_payload.get(PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY)
+            if isinstance(stored_payload, dict)
+            else None
+        )
+        if not isinstance(source, dict):
+            return False
+        provenance = source.get("provenance")
+        if (
+            source.get("sourceId") != "supervisor-manager-source-intake"
+            or source.get("role") != "canonical"
+            or source.get("trust") != "authoritative"
+            or stored_provenance != {
+                "schemaVersion": "supervisor-manager-source-intake-provenance/v1",
+                "sourceId": "supervisor-manager-source-intake",
+                "packetId": packet_id,
+                "evidenceRef": self._manager_source_intake_evidence_ref(packet_id),
+            }
+        ):
+            return False
+        return isinstance(provenance, dict)
 
     @staticmethod
     def _canonical_contract_from_packet_metadata(stored_payload: object) -> PipelineCanonicalContractV1View | None:
@@ -4537,24 +4713,28 @@ class SupervisorService:
         self,
         packet: AuthoritativeWorkPacket,
         payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        source_ref: dict,
     ) -> bool:
         return (
             packet.title == payload.title
             and packet.current_stage == payload.initialStage
             and packet.status == payload.status
             and packet.truth_label == payload.truthLabel
-            and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
+            and packet.source_ref_json == source_ref
         )
 
     def _authoritative_graph_packet_identity_matches(
         self,
         packet: AuthoritativeWorkPacket,
         payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        source_ref: dict,
     ) -> bool:
         return (
             packet.title == payload.title
             and packet.truth_label == payload.truthLabel
-            and packet.source_ref_json == self._authoritative_source_ref_payload(payload.sourceRef, payload.canonicalContract)
+            and packet.source_ref_json == source_ref
         )
 
     def _authoritative_create_event_matches(

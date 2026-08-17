@@ -292,7 +292,7 @@ test("manager source intake refuses graph evidence with credential-like referenc
   assert.doesNotMatch(JSON.stringify(bridged), /api_key|operator-private-value/i);
 });
 
-test("manager source intake routes graph evidence only through an explicit private UDS path", () => {
+test("manager source intake routes every manager actor request only through an explicit private UDS path", () => {
   const packet = attachParallelWorkGraphEvidenceToManagerPacket(sourcePacket(), buildParallelSuitabilityReport({}, {
     candidates: [{
       candidateWorkPacketId: "candidate-gate-4-manager-intake",
@@ -309,13 +309,15 @@ test("manager source intake routes graph evidence only through an explicit priva
     resourceContext: { status: "normal" },
   }), { now: "2026-07-22T12:01:00.000Z" });
   const privatePlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
-  const loopbackPlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", {});
   const ordinaryUdsPlan = planManagerSourcePacketIntake(sourcePacket(), "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
   assert.equal(privatePlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/internal/manager-source-intake/work-packets");
   assert.ok(privatePlan.request.parallelWorkGraphEvidence);
-  assert.equal(ordinaryUdsPlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/pipeline-control-plane/work-packets");
+  assert.equal(ordinaryUdsPlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/internal/manager-source-intake/work-packets");
   assert.equal(ordinaryUdsPlan.request.parallelWorkGraphEvidence, undefined);
-  assert.equal(loopbackPlan.request.parallelWorkGraphEvidence, undefined);
+  assert.throws(
+    () => planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", {}),
+    /same-user private supervisor UDS path/,
+  );
 });
 
 test("manager source intake sends graph evidence over private UDS without using fetch", async () => {
@@ -356,12 +358,12 @@ test("manager source intake sends graph evidence over private UDS without using 
   }
 });
 
-test("manager source intake sends ordinary metadata over UDS through the public route", async () => {
+test("manager source intake sends ordinary metadata over UDS through the private manager route", async () => {
   const directory = await mkdtemp(join(tmpdir(), "kendall-source-intake-"));
   const socketPath = join(directory, "supervisor.sock");
   let receivedRequest;
   const server = createServer((request, response) => {
-    assert.equal(request.url, "/pipeline-control-plane/work-packets");
+    assert.equal(request.url, "/internal/manager-source-intake/work-packets");
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });

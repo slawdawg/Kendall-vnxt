@@ -1294,6 +1294,14 @@ async def create_authoritative_work_packet(
     payload: AuthoritativeWorkPacketCreateRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    if service._is_manager_source_intake_actor(payload.actor.model_dump()):
+        raise HTTPException(
+            status_code=403,
+            detail=error_response(
+                "Manager source intake requires the same-user private supervisor UDS transport.",
+                "manager_source_private_transport_required",
+            ).model_dump(),
+        )
     if payload.parallelWorkGraphEvidence is not None or payload.reviewRouteEvidence is not None:
         raise HTTPException(status_code=403, detail=error_response("Manager evidence intake requires the private manager supervisor transport.", "manager_graph_private_transport_required").model_dump())
     try:
@@ -1313,11 +1321,15 @@ async def create_manager_source_intake_work_packet(
         not settings.lan_auth_enabled
         or settings.supervisor_transport != "private_uds"
         or request.client is not None
-        or payload.parallelWorkGraphEvidence is None
+        or not service._is_manager_source_intake_actor(payload.actor.model_dump())
     ):
         raise HTTPException(status_code=403, detail=error_response("Private manager source intake is unavailable.", "manager_graph_private_transport_required").model_dump())
     try:
-        packet = await service.create_authoritative_work_packet(session, payload)
+        packet = await service.create_authoritative_work_packet(
+            session,
+            payload,
+            manager_source_intake_authorized=True,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_authoritative_work_packet").model_dump()) from exc
     return AuthoritativeWorkPacketApiEnvelope(data=packet)

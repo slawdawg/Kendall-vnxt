@@ -917,8 +917,10 @@ def test_manager_source_intake_receives_server_minted_canonical_contract(tmp_pat
         "evidenceRefs": ["manager-candidate:canonical", "manager-eligibility:eligible"],
     }
 
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        created_response = client.post("/pipeline-control-plane/work-packets", json=payload)
+    with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_main, socket_path):
+        public_reject = _uds_request(socket_path, "/pipeline-control-plane/work-packets", payload=payload)
+        assert public_reject.status_code == 403
+        created_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload)
         assert created_response.status_code == 200
         created = created_response.json()["data"]
         contract = created["canonicalContract"]
@@ -946,12 +948,28 @@ def test_manager_source_intake_receives_server_minted_canonical_contract(tmp_pat
         assert mapping is not None
         assert mapping["requestedProductMode"] == "contract_only"
 
-        replay_response = client.post("/pipeline-control-plane/work-packets", json=payload)
+        replay_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload)
         assert replay_response.status_code == 200
         assert replay_response.json()["data"]["canonicalContract"] == contract
 
+        forged_public = {
+            **payload,
+            "packetId": "packet-manager-forged-public-contract",
+            "idempotencyKey": "manager-forged-public-contract",
+            "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+            "canonicalContract": contract,
+        }
+        assert _uds_request(socket_path, "/pipeline-control-plane/work-packets", payload=forged_public).status_code == 200
+        forged_private_refresh = {
+            **payload,
+            "packetId": forged_public["packetId"],
+            "idempotencyKey": "manager-forged-public-contract-refresh",
+            "correlationId": "manager-forged-public-contract-refresh",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=forged_private_refresh).status_code == 400
+
         manager_supplied_contract = {**payload, "packetId": "packet-manager-supplied-contract", "idempotencyKey": "manager-supplied-contract", "canonicalContract": contract}
-        assert client.post("/pipeline-control-plane/work-packets", json=manager_supplied_contract).status_code == 400
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=manager_supplied_contract).status_code == 400
 
 
 def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_contract(tmp_path, monkeypatch) -> None:
@@ -975,13 +993,80 @@ def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_cont
         "evidenceRefs": ["manager-candidate:canonical-concurrent"],
     }
 
-    with _running_http_supervisor(tmp_path, monkeypatch, db_name) as (_main, base_url):
+    with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_main, socket_path):
         with ThreadPoolExecutor(max_workers=2) as executor:
-            responses = list(executor.map(lambda _index: _http_post(base_url, "/pipeline-control-plane/work-packets", payload), range(2)))
+            responses = list(executor.map(lambda _index: _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload), range(2)))
         assert [response.status_code for response in responses] == [200, 200]
         contracts = [response.json()["data"]["canonicalContract"] for response in responses]
         assert contracts[0] == contracts[1]
         assert contracts[0]["canonicalSource"]["sourceId"] == "supervisor-manager-source-intake"
+
+
+def test_manager_source_intake_backfills_only_exact_legacy_manager_creation_provenance(tmp_path, monkeypatch) -> None:
+    db_name = "manager-source-canonical-contract-upgrade.db"
+    db_path = _db_path(tmp_path, db_name)
+    payload = {
+        "packetId": "packet-manager-source-canonical-upgrade",
+        "title": "Legacy manager source canonical readback",
+        "sourceRef": {
+            "refId": "repo_doc:docs/workflows/current-session-runbook.md",
+            "sourceType": "repo_doc",
+            "pathOrUrl": "docs/workflows/current-session-runbook.md",
+        },
+        "actor": {
+            "actorType": "manager",
+            "actorId": "manager-source-intake",
+            "actorLabel": "Manager source intake adapter",
+        },
+        "idempotencyKey": "manager-source-canonical-upgrade-create",
+        "correlationId": "manager-source-canonical-upgrade",
+        "payloadSummary": "Eligible manager source candidate accepted as metadata-only intake.",
+        "evidenceRefs": ["manager-candidate:canonical-upgrade"],
+    }
+    with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_main, socket_path):
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload).status_code == 200
+        with sqlite3.connect(db_path) as connection:
+            for table in ("authoritative_work_packets", "authoritative_work_packet_lifecycle_events"):
+                row = connection.execute(
+                    f"SELECT source_ref_json FROM {table} WHERE packet_id = ?" if table.endswith("events") else f"SELECT source_ref_json FROM {table} WHERE id = ?",
+                    (payload["packetId"],),
+                ).fetchone()
+                source_ref = json.loads(row[0])
+                source_ref.pop("pipelineCanonicalContract", None)
+                connection.execute(
+                    f"UPDATE {table} SET source_ref_json = ? WHERE packet_id = ?" if table.endswith("events") else f"UPDATE {table} SET source_ref_json = ? WHERE id = ?",
+                    (json.dumps(source_ref), payload["packetId"]),
+                )
+            connection.commit()
+        refreshed = {
+            **payload,
+            "idempotencyKey": "manager-source-canonical-upgrade-refresh",
+            "correlationId": "manager-source-canonical-upgrade-refresh",
+        }
+        response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=refreshed)
+        assert response.status_code == 200
+        assert response.json()["data"]["canonicalContract"]["canonicalSource"]["sourceId"] == "supervisor-manager-source-intake"
+        original_replay = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload)
+        assert original_replay.status_code == 200
+
+        with sqlite3.connect(db_path) as connection:
+            row = connection.execute(
+                "SELECT source_ref_json FROM authoritative_work_packets WHERE id = ?",
+                (payload["packetId"],),
+            ).fetchone()
+            source_ref = json.loads(row[0])
+            source_ref["pipelineCanonicalContract"]["canonicalSource"]["sourceId"] = "caller-forged-source"
+            connection.execute(
+                "UPDATE authoritative_work_packets SET source_ref_json = ? WHERE id = ?",
+                (json.dumps(source_ref), payload["packetId"]),
+            )
+            connection.commit()
+        rejected = {
+            **refreshed,
+            "idempotencyKey": "manager-source-canonical-upgrade-forged-refresh",
+            "correlationId": "manager-source-canonical-upgrade-forged-refresh",
+        }
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=rejected).status_code == 400
 
 
 def test_authoritative_packet_projects_canonical_contract_without_granting_write_authority(tmp_path, monkeypatch) -> None:
@@ -2978,7 +3063,7 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
             "correlationId": "manager-source:parallel-wave-legacy-create",
         }
         legacy_request.pop("parallelWorkGraphEvidence")
-        assert _uds_request(socket_path, "/pipeline-control-plane/work-packets", payload=legacy_request).status_code == 200
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=legacy_request).status_code == 200
         legacy_refresh = {
             **legacy_request,
             "parallelWorkGraphEvidence": {**graph, "packetId": legacy_packet_id, "generatedAt": (datetime.fromisoformat(generated_at) + timedelta(seconds=4)).isoformat()},
@@ -3133,7 +3218,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             "idempotencyKey": "manager-source-intake:review-route-non-manager-like-id",
             "correlationId": "manager-source:review-route-non-manager-like-id",
         }
-        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=non_manager_manager_like).status_code == 400
+        assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=non_manager_manager_like).status_code == 403
         reserved_projection_packet_id = "unavailable:packet:" + "a" * 64
         reserved_projection_identity = {
             **request,

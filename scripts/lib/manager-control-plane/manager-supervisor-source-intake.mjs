@@ -118,11 +118,14 @@ export function buildManagerSourceIntakeRequest(packet, options = {}) {
 export function planManagerSourcePacketIntake(packet, supervisorUrl, context = {}) {
   validateBoundedMetadataOnlyValue(packet, "managerPacket");
   const privateUdsPath = resolvePrivateUdsPath(context.supervisorUdsPath);
+  if (!privateUdsPath && typeof context.fetchImpl !== "function") {
+    throw new TypeError("Manager source intake requires an explicit same-user private supervisor UDS path.");
+  }
   const request = buildManagerSourceIntakeRequest(packet, { allowPrivateGraph: Boolean(privateUdsPath) });
-  // A private UDS transport is not itself an authority grant. Ordinary
-  // metadata-only intake remains on the public route; only the graph-bearing
-  // manager report needs the private route that admits that additional field.
-  const intakePath = request.parallelWorkGraphEvidence ? PRIVATE_SOURCE_INTAKE_PATH : SOURCE_INTAKE_PATH;
+  // Manager actor identity is transport-bound.  The production adapter always
+  // uses the same-user private UDS endpoint; an injected fetch is retained only
+  // for hermetic response-contract fixtures and is rejected by the public API.
+  const intakePath = privateUdsPath ? PRIVATE_SOURCE_INTAKE_PATH : SOURCE_INTAKE_PATH;
   const endpoint = privateUdsPath ? `private-uds:${privateUdsPath}${intakePath}` : resolveLoopbackSourceIntakeEndpoint(supervisorUrl);
   const targetComponents = [
     `candidate:${requiredSafeMetadata(packet.summary.seedPacket.candidateWorkPacketId, "seedPacket.candidateWorkPacketId", 120)}`,
@@ -183,7 +186,7 @@ export async function intakeManagerSourcePacket(packet, supervisorUrl, context =
   }
   try {
     response = privateUdsPath
-      ? await postPrivateUds(privateUdsPath, request.parallelWorkGraphEvidence ? PRIVATE_SOURCE_INTAKE_PATH : SOURCE_INTAKE_PATH, request, timeoutMs)
+      ? await postPrivateUds(privateUdsPath, PRIVATE_SOURCE_INTAKE_PATH, request, timeoutMs)
       : await fetchImpl(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "application/json" },
