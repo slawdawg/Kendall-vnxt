@@ -11716,7 +11716,59 @@ function dirtySupersededStatusRecords(worktreePath, sourceHead) {
     if (!Buffer.from(path, "utf8").equals(pathBytes)) throw new Error("dirty superseded preservation refuses non-UTF-8 path bytes");
     records.push(`${record.subarray(0, 3).toString("ascii")}${path}`);
   }
+  assertNoDirtySupersededRawChangesHiddenFromStatus(worktreePath, sourceHead, records);
   return records;
+}
+
+function assertNoDirtySupersededRawChangesHiddenFromStatus(worktreePath, sourceHead, records) {
+  const reportedPaths = new Set();
+  for (const record of records) {
+    if (record.length < 4 || record[2] !== " ") throw new Error("dirty superseded preservation status record is malformed");
+    reportedPaths.add(record.slice(3));
+  }
+  const listed = spawnSync("git", ["--no-replace-objects", "ls-tree", "-r", "-z", sourceHead], {
+    cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs,
+    maxBuffer: recoveryPatchCaptureMaxBytes, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+  });
+  if (listed.status !== 0) throw new Error("dirty superseded preservation could not inventory tracked source bytes");
+  const raw = Buffer.from(listed.stdout || []);
+  for (let start = 0, end = raw.indexOf(0, start); end >= 0; start = end + 1, end = raw.indexOf(0, start)) {
+    const entry = raw.subarray(start, end); const separator = entry.indexOf(9);
+    if (separator < 0) throw new Error("dirty superseded preservation received malformed tracked source entry");
+    const header = entry.subarray(0, separator).toString("ascii").split(" ");
+    const pathBytes = entry.subarray(separator + 1); const path = pathBytes.toString("utf8");
+    if (header.length !== 3 || !path || !Buffer.from(path, "utf8").equals(pathBytes)) {
+      throw new Error("dirty superseded preservation received unsafe tracked source entry");
+    }
+    // Gitlinks have no worktree bytes to hash. Their state is covered by the
+    // status proof's explicit --ignore-submodules=none boundary above.
+    if (header[1] === "commit" && header[0] === "160000") continue;
+    if (header[1] !== "blob" || !/^(100644|100755|120000)$/.test(header[0])) {
+      throw new Error("dirty superseded preservation received unsafe tracked source entry");
+    }
+    if (reportedPaths.has(path)) continue;
+    const sourcePath = join(worktreePath, path);
+    let info;
+    try { info = lstatSync(sourcePath); } catch { throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`); }
+    let hashed;
+    if (header[0] === "120000") {
+      if (!info.isSymbolicLink()) throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`);
+      hashed = spawnSync("git", ["hash-object", "--no-filters", "--stdin"], {
+        cwd: worktreePath, input: readlinkSync(sourcePath, { encoding: "buffer" }), stdio: "pipe",
+        timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes,
+        env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+      });
+    } else {
+      if (!info.isFile()) throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`);
+      hashed = spawnSync("git", ["hash-object", "--no-filters", "--", path], {
+        cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs,
+        maxBuffer: recoveryPatchCaptureMaxBytes, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+      });
+    }
+    if (hashed.status !== 0 || String(hashed.stdout || "").trim() !== header[2]) {
+      throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`);
+    }
+  }
 }
 
 function dirtySupersededConversionAttributes() {
@@ -11892,6 +11944,10 @@ function recoverDirtySupersededSnapshotIntent(manifest, intent, proofInput, mani
   }
   const cwd = manifest.worktree_path;
   const immutableGitEnvironment = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const symbolic = git(["symbolic-ref", "-q", intent.snapshotRef], { cwd, env: immutableGitEnvironment });
+  if (symbolic.code !== 1) {
+    throw new Error("interrupted dirty preservation snapshot ref must remain direct before resume; mutation=none.");
+  }
   const ref = git(["rev-parse", "--verify", `${intent.snapshotRef}^{commit}`], { cwd, env: immutableGitEnvironment });
   if (ref.code !== 0) {
     // An intent is intentionally journaled before the first durable object or

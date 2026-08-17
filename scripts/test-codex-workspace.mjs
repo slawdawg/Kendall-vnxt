@@ -17506,6 +17506,26 @@ try {
     } finally { cleanupSupersededCleanupFixture(fixture); }
   });
 
+  test("preserve-dirty-superseded rejects raw CRLF bytes hidden by baseline text attributes", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved raw baseline reproof", "--reason", "hidden CRLF bytes must block destructive preservation"];
+    try {
+      const attributes = join(fixture.root, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      writeFileSync(attributes, "base.txt text=auto eol=lf\n");
+      writeFileSync(join(fixture.worktree, "base.txt"), Buffer.from("base\r\n", "utf8"));
+      runGit(fixture.worktree, ["add", "--", "base.txt"]);
+      writeFileSync(join(fixture.worktree, "carried.txt"), "visible dirty snapshot\n");
+      const visible = runGit(fixture.worktree, ["status", "--porcelain"]).stdout;
+      assert(visible.includes("carried.txt") && !visible.includes("base.txt"), visible);
+      const result = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("raw tracked bytes hidden from porcelain: base.txt"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout.includes("carried.txt"), "hidden raw CRLF change permitted reset");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "superseded-task.json"));
+      assert(!manifest.dirty_superseded_snapshot_intent && !manifest.dirty_superseded_preservation, "hidden raw CRLF change wrote preservation evidence");
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
   test("preserve-dirty-superseded raw snapshot stores dirty symlink link text", () => {
     const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
     const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved symlink byte preservation", "--reason", "snapshot must preserve the dirty symlink target text exactly"];
@@ -18031,6 +18051,31 @@ try {
       assert(resumed.code === 0, resumed.stderr || resumed.stdout);
       const recovered = readJson(manifestPath).dirty_superseded_preservation;
       assert(recovered?.verification?.status === "matched_before_reset" && JSON.stringify(recovered.paths.map((entry) => entry.path)) === JSON.stringify(["z.txt", "é.txt"]), JSON.stringify(recovered));
+    } finally { cleanupSupersededCleanupFixture(fixture); }
+  });
+
+  test("preserve-dirty-superseded rejects a symbolic published intent ref before reset", () => {
+    const fixture = createSupersededCleanupFixture({ closedSourcePr: true });
+    const args = ["preserve-dirty-superseded", "superseded-task", "--source-head", fixture.sourceHead, "--closed-source-pr", "789", "--source-patch-commits", fixture.sourceHead, "--carry-forward-pr", "456", "--carry-forward-commit", fixture.mergeCommit, "--carry-forward-patch-commits", fixture.carryForwardCommit, "--owner", "runner-a", "--state-root", fixture.stateRoot, "--apply", "--approval", "operator approved direct ref recovery", "--reason", "published pending snapshot ref must remain direct before reset"];
+    try {
+      writeFileSync(join(fixture.worktree, "carried.txt"), "symbolic pending snapshot bytes\n");
+      const preserved = runFixtureScript(fixture, args, { env: fixture.env });
+      assert(preserved.code === 0, preserved.stderr || preserved.stdout);
+      const manifestPath = join(fixture.stateRoot, "tasks", "superseded-task.json");
+      const manifest = readJson(manifestPath); const evidence = manifest.dirty_superseded_preservation;
+      const contents = spawnSync("git", ["show", `${evidence.snapshotTree}:carried.txt`], { cwd: fixture.worktree, stdio: "pipe" });
+      assert(contents.status === 0, "could not restore pending source bytes");
+      writeFileSync(join(fixture.worktree, "carried.txt"), contents.stdout);
+      const target = "refs/heads/pending-snapshot-target";
+      runGit(fixture.worktree, ["update-ref", target, evidence.snapshotCommit]);
+      runGit(fixture.worktree, ["symbolic-ref", evidence.snapshotRef, target]);
+      manifest.dirty_superseded_snapshot_intent = { schemaVersion: 1, preparedAt: evidence.recordedAt, owner: evidence.owner, sourceHead: evidence.sourceHead, closedSourcePr: evidence.closedSourcePr, carryForwardPr: evidence.carryForwardPr, carryForwardCommit: evidence.carryForwardCommit, snapshotRef: evidence.snapshotRef, paths: evidence.paths.map(({ path, status }) => ({ path, status })), approval: evidence.approval, reason: evidence.reason, metadataOnly: true };
+      delete manifest.dirty_superseded_preservation;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const resumed = runFixtureScript(fixture, [...args, "--resume-pending"], { env: fixture.env });
+      assert(resumed.code !== 0 && (resumed.stderr || resumed.stdout).includes("snapshot ref must remain direct"), resumed.stderr || resumed.stdout);
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout, "symbolic published intent ref permitted reset");
+      assert(readJson(manifestPath).dirty_superseded_snapshot_intent, "symbolic published intent ref erased recovery evidence");
     } finally { cleanupSupersededCleanupFixture(fixture); }
   });
 
