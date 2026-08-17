@@ -1112,6 +1112,14 @@ class SupervisorService:
                     raise ValueError("Create idempotency key already belongs to a different authoritative WorkPacket.")
                 packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
                 if packet:
+                    if is_manager_source_intake:
+                        replay_contract = self._verified_manager_source_intake_contract_from_packet(packet)
+                        payload = payload.model_copy(update={"canonicalContract": replay_contract})
+                        source_ref = self._authoritative_source_ref_payload(
+                            payload.sourceRef,
+                            replay_contract,
+                            trusted_manager_packet_id=packet.id,
+                        )
                     matches = (
                         self._authoritative_graph_refresh_event_matches(
                             existing_event,
@@ -1201,23 +1209,31 @@ class SupervisorService:
         except IntegrityError:
             await session.rollback()
             if payload.idempotencyKey:
-                replay_event = await self._authoritative_lifecycle_event_by_idempotency(
-                    session,
-                    payload.idempotencyKey,
-                    event_type="packet.created",
-                )
+                # A competing initial create can win the unique idempotency
+                # constraint while its lifecycle event is not observable from
+                # this newly rolled-back session yet.  Retry only that read,
+                # then retain the exact replay-metadata fence below.
+                replay_event = None
+                for attempt in range(3):
+                    replay_event = await self._authoritative_lifecycle_event_by_idempotency(
+                        session,
+                        payload.idempotencyKey,
+                        event_type="packet.created",
+                    )
+                    if replay_event is not None:
+                        break
+                    if attempt < 2:
+                        await asyncio.sleep(0.01 * (attempt + 1))
                 if replay_event and (not payload.packetId or replay_event.packet_id == payload.packetId):
                     replay_packet = await session.get(AuthoritativeWorkPacket, replay_event.packet_id)
                     if replay_packet:
-                        if self._is_manager_source_intake_actor(payload.actor.model_dump()):
-                            replay_contract = self._canonical_contract_from_packet_metadata(replay_packet.source_ref_json)
-                            if replay_contract is None:
-                                raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
+                        if is_manager_source_intake:
+                            replay_contract = self._verified_manager_source_intake_contract_from_packet(replay_packet)
                             payload = payload.model_copy(update={"canonicalContract": replay_contract})
                             source_ref = self._authoritative_source_ref_payload(
                                 payload.sourceRef,
                                 replay_contract,
-                                trusted_manager_packet_id=payload.packetId if manager_source_intake_authorized else None,
+                                trusted_manager_packet_id=replay_packet.id,
                             )
                         if not self._authoritative_create_event_matches(
                             replay_event,
@@ -4596,6 +4612,20 @@ class SupervisorService:
         ):
             return False
         return isinstance(provenance, dict)
+
+    def _verified_manager_source_intake_contract_from_packet(
+        self,
+        packet: AuthoritativeWorkPacket,
+    ) -> PipelineCanonicalContractV1View:
+        """Return only the packet-bound contract a manager create may replay."""
+        contract = self._canonical_contract_from_packet_metadata(packet.source_ref_json)
+        if contract is None or not self._is_server_minted_manager_source_intake_contract(
+            contract,
+            packet.source_ref_json,
+            packet.id,
+        ):
+            raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
+        return contract
 
     @staticmethod
     def _canonical_contract_from_packet_metadata(stored_payload: object) -> PipelineCanonicalContractV1View | None:
