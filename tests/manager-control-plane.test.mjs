@@ -7538,6 +7538,7 @@ test("cycle packet projects explicit loopback source intake without performing f
       riskClass: "low",
       authorityClass: "allowed_unattended",
       supervisorUrl: "http://127.0.0.1:8000",
+      supervisorUdsPath: "/tmp/kendall-supervisor.sock",
     },
     {
       assignmentSummary: {
@@ -7556,6 +7557,7 @@ test("cycle packet projects explicit loopback source intake without performing f
   assert.equal(cycle.summary.continuation.sourceIntakeAllowed, true);
   assert.match(action.dryRunCommand, /--dry-run$/);
   assert.match(action.applyCommand, /--apply$/);
+  assert.match(action.dryRunCommand, /--supervisor-uds-path '\/tmp\/kendall-supervisor\.sock'/);
   assert.equal(cycle.summary.runway.sourceBackedPacketSeed.packetState, "eligible");
 });
 

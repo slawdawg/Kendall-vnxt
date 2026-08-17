@@ -183,10 +183,11 @@ test("manager source intake allowlists eligible source metadata and validates ex
   const packet = sourcePacket({ internalPlanningMetadata: { marker: "must never cross the boundary" } });
   const calls = [];
   const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
     fetchImpl: async (url, options) => {
       const request = JSON.parse(options.body);
       calls.push({ url, options, request });
-      return responseFor(request);
+      return responseFor(request, canonicalFields(request));
     },
   });
 
@@ -203,8 +204,8 @@ test("manager source intake allowlists eligible source metadata and validates ex
   assert.equal(result.summary.seedPacket.supervisorIntake.packetId, calls[0].request.packetId);
   assert.equal(result.summary.seedPacket.supervisorIntake.currentEventId, "event-source-intake-test");
   assert.equal(result.summary.seedPacket.supervisorIntake.metadataOnly, true);
-  assert.equal(result.summary.seedPacket.supervisorIntake.truthSource, "legacy_lifecycle_fallback");
-  assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth, null);
+  assert.equal(result.summary.seedPacket.supervisorIntake.truthSource, "supervisor_canonical");
+  assert.equal(result.summary.seedPacket.supervisorIntake.typedCapabilityTruth.capabilityState, "gated");
   assert.equal(result.summary.seedPacket.rawPayloadRetained, false);
 });
 
@@ -291,7 +292,7 @@ test("manager source intake refuses graph evidence with credential-like referenc
   assert.doesNotMatch(JSON.stringify(bridged), /api_key|operator-private-value/i);
 });
 
-test("manager source intake routes graph evidence only through an explicit private UDS path", () => {
+test("manager source intake routes every manager actor request only through an explicit private UDS path", () => {
   const packet = attachParallelWorkGraphEvidenceToManagerPacket(sourcePacket(), buildParallelSuitabilityReport({}, {
     candidates: [{
       candidateWorkPacketId: "candidate-gate-4-manager-intake",
@@ -308,13 +309,15 @@ test("manager source intake routes graph evidence only through an explicit priva
     resourceContext: { status: "normal" },
   }), { now: "2026-07-22T12:01:00.000Z" });
   const privatePlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
-  const loopbackPlan = planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", {});
   const ordinaryUdsPlan = planManagerSourcePacketIntake(sourcePacket(), "http://127.0.0.1:8000", { supervisorUdsPath: "/run/user/1000/kendall/supervisor.sock" });
   assert.equal(privatePlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/internal/manager-source-intake/work-packets");
   assert.ok(privatePlan.request.parallelWorkGraphEvidence);
-  assert.equal(ordinaryUdsPlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/pipeline-control-plane/work-packets");
+  assert.equal(ordinaryUdsPlan.endpoint, "private-uds:/run/user/1000/kendall/supervisor.sock/internal/manager-source-intake/work-packets");
   assert.equal(ordinaryUdsPlan.request.parallelWorkGraphEvidence, undefined);
-  assert.equal(loopbackPlan.request.parallelWorkGraphEvidence, undefined);
+  assert.throws(
+    () => planManagerSourcePacketIntake(packet, "http://127.0.0.1:8000", {}),
+    /same-user private supervisor UDS path/,
+  );
 });
 
 test("manager source intake sends graph evidence over private UDS without using fetch", async () => {
@@ -329,7 +332,7 @@ test("manager source intake sends graph evidence over private UDS without using 
     request.on("end", async () => {
       receivedRequest = JSON.parse(body);
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+      response.end(JSON.stringify(await responseFor(receivedRequest, canonicalFields(receivedRequest)).json()));
     });
   });
   await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
@@ -343,6 +346,7 @@ test("manager source intake sends graph evidence over private UDS without using 
       generatedAt: "2026-07-22T12:00:00.000Z", usageContext: { status: "normal", summary: { weekly: { state: "normal", reliable: true, source: "fixture" } } }, resourceContext: { status: "normal" },
     }), { now: "2026-07-22T12:01:00.000Z" });
     const result = await intakeManagerSourcePacket(packet, "http://127.0.0.1:8000", {
+      now: "2026-07-12T12:01:00.000Z",
       supervisorUdsPath: socketPath,
       fetchImpl: () => { throw new Error("private UDS intake must not use fetch"); },
     });
@@ -354,24 +358,25 @@ test("manager source intake sends graph evidence over private UDS without using 
   }
 });
 
-test("manager source intake sends ordinary metadata over UDS through the public route", async () => {
+test("manager source intake sends ordinary metadata over UDS through the private manager route", async () => {
   const directory = await mkdtemp(join(tmpdir(), "kendall-source-intake-"));
   const socketPath = join(directory, "supervisor.sock");
   let receivedRequest;
   const server = createServer((request, response) => {
-    assert.equal(request.url, "/pipeline-control-plane/work-packets");
+    assert.equal(request.url, "/internal/manager-source-intake/work-packets");
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", async () => {
       receivedRequest = JSON.parse(body);
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(await responseFor(receivedRequest).json()));
+      response.end(JSON.stringify(await responseFor(receivedRequest, canonicalFields(receivedRequest)).json()));
     });
   });
   await new Promise((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
   try {
     const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+      now: "2026-07-12T12:01:00.000Z",
       supervisorUdsPath: socketPath,
       fetchImpl: () => { throw new Error("UDS intake must not use fetch"); },
     });
@@ -414,7 +419,9 @@ test("manager source intake accepts a graph-refresh replay after a later termina
     idempotencyKey: "terminal-transition-after-refresh",
   };
   const result = await intakeManagerSourcePacket(sourcePacket(), "http://127.0.0.1:8000", {
+    now: "2026-07-12T12:01:00.000Z",
     fetchImpl: async () => responseFor(request, {
+      ...canonicalFields(request),
       currentStage: "deliver",
       status: "complete",
       currentEventId: terminalEvent.eventId,
@@ -460,6 +467,7 @@ test("manager source intake consumes canonical supervisor truth without inferrin
 
 test("canonical supervisor consumer rejects missing stale and contradictory fields and never falls back", async (t) => {
   const scenarios = [
+    ["missing canonical truth", "manager_supervisor_canonical_fields_invalid", () => ({})],
     ["missing mapping", "manager_supervisor_canonical_fields_invalid", (request) => ({ canonicalContract: canonicalFields(request).canonicalContract })],
     ["stale mapping", "manager_supervisor_canonical_fields_stale", (request) => canonicalFields(request, { productModeMapping: { ...canonicalFields(request).productModeMapping, expiresAt: "2026-07-12T11:59:00.000Z" } })],
     ["contradictory mode", "manager_supervisor_canonical_fields_invalid", (request) => canonicalFields(request, { productModeMapping: { ...canonicalFields(request).productModeMapping, requestedProductMode: "operator_review" } })],
