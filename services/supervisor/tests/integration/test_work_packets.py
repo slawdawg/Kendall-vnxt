@@ -4180,6 +4180,23 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert created["evidenceRefs"] == ["evidence:read-only-proof"]
         assert "rawContent" not in created
 
+        canonical_review_response = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert canonical_review_response.status_code == 200
+        canonical_review = canonical_review_response.json()["data"]
+        assert canonical_review["schemaVersion"] == "work-item-memory-review/v1"
+        assert canonical_review["workItemId"] == work_item["id"]
+        assert canonical_review["rawPayloadRetained"] is False
+        assert canonical_review["canonicalMutationAllowed"] is False
+        assert canonical_review["sourceMutationAllowed"] is False
+        assert canonical_review["proposals"] == [
+            {
+                **{key: value for key, value in created.items() if key not in {"packetId", "targetRef"}},
+            }
+        ]
+        assert client.get("/pipeline-control-plane/work-items/missing/memory-review").status_code == 404
+
         packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
         assert packet_response.status_code == 200
         packet = packet_response.json()["data"]
@@ -4208,6 +4225,12 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert updated["operatorAction"] == "approve"
         assert updated["writeBackAllowed"] is False
         assert updated["writeBackStatus"] == "approved_for_future"
+
+        review_after_update = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]
+        assert review_after_update["proposals"][0]["status"] == "approved"
+        assert review_after_update["proposals"][0]["operatorAction"] == "approve"
 
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"

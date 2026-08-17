@@ -6,7 +6,7 @@ import {
 import {
   getPipelineDashboardProjection as getRuntimePipelineDashboardProjection,
 } from "./pipeline-supervisor-runtime";
-export { getWorkPacket, getWorkPacketForWorkItem, getWorkPackets } from "./pipeline-supervisor-runtime";
+export { getWorkPacket, getWorkPacketForWorkItem, getWorkItemMemoryReview, getWorkPackets } from "./pipeline-supervisor-runtime";
 import {
   isPipelineDashboardProjection as canonicalIsPipelineDashboardProjection,
   normalizePipelineDashboardProjection as canonicalNormalizePipelineDashboardProjection,

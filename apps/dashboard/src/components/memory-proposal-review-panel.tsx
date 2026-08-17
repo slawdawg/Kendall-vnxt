@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { MemoryProposalV0, WorkPacketV0View } from "@kendall/contracts";
+import type { DashboardCanonicalMemoryProposalV1, DashboardCanonicalWorkItemMemoryReviewV1 } from "../lib/pipeline-supervisor-runtime";
 
 import { useOperatorProfile } from "../lib/operator-profile";
 import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
@@ -26,9 +26,9 @@ type LlmWikiArtifactSearchResult = {
 const reviewActions: Array<{
   action: ReviewAction;
   label: string;
-  status: MemoryProposalV0["status"];
-  operatorAction: MemoryProposalV0["operatorAction"];
-  writeBackStatus: MemoryProposalV0["writeBackStatus"];
+  status: DashboardCanonicalMemoryProposalV1["status"];
+  operatorAction: DashboardCanonicalMemoryProposalV1["operatorAction"];
+  writeBackStatus: DashboardCanonicalMemoryProposalV1["writeBackStatus"];
   decisionNeededContext: string;
 }> = [
   {
@@ -69,7 +69,7 @@ function statusLabel(value: string): string {
   return value.replaceAll("_", " ");
 }
 
-function proposalBoundaryLabel(proposal: MemoryProposalV0): string {
+function proposalBoundaryLabel(proposal: DashboardCanonicalMemoryProposalV1): string {
   if (proposal.contradictionStatus === "confirmed") {
     return "Confirmed contradiction; Obsidian remains human-owned.";
   }
@@ -79,15 +79,15 @@ function proposalBoundaryLabel(proposal: MemoryProposalV0): string {
   return "Proposal-only boundary; no source mutation.";
 }
 
-function canApproveFutureDraft(proposal: MemoryProposalV0): boolean {
+function canApproveFutureDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return proposal.freshness === "fresh" && proposal.contradictionStatus === "none" && !["blocked", "stale", "contradictory", "rejected"].includes(proposal.status);
 }
 
-function aiDraftQueued(proposal: MemoryProposalV0): boolean {
+function aiDraftQueued(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return /AI draft (written|already exists)/.test(proposal.patchSummary ?? "");
 }
 
-function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
+function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return (
     proposal.status === "approved" &&
     proposal.operatorAction === "approve" &&
@@ -99,15 +99,15 @@ function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
   );
 }
 
-function hasLlmWikiArtifact(proposal: MemoryProposalV0): boolean {
+function hasLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return (proposal.targetVaultPath ?? "").includes("01 Dashboard Queue/LLM Wiki Derived/");
 }
 
 export function MemoryProposalReviewPanel({
-  packet,
+  review,
   workItemId,
 }: {
-  packet: WorkPacketV0View;
+  review: DashboardCanonicalWorkItemMemoryReviewV1;
   workItemId: string;
 }) {
   const router = useRouter();
@@ -117,10 +117,10 @@ export function MemoryProposalReviewPanel({
   const [llmWikiQuery, setLlmWikiQuery] = useState("metadata");
   const [llmWikiResults, setLlmWikiResults] = useState<Record<string, LlmWikiArtifactSearchResult>>({});
   const [pending, startTransition] = useTransition();
-  const proposals = packet.memoryProposals;
-  const llmWikiReadiness = packet.alphaMemorySourceStatus?.llmWikiReadiness;
+  const proposals = review.proposals;
+  const llmWikiReadiness = review.llmWikiReadiness;
 
-  function submit(proposal: MemoryProposalV0, action: (typeof reviewActions)[number]) {
+  function submit(proposal: DashboardCanonicalMemoryProposalV1, action: (typeof reviewActions)[number]) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Updating ${proposal.proposalId}...`);
@@ -155,7 +155,7 @@ export function MemoryProposalReviewPanel({
     });
   }
 
-  function searchLlmWikiArtifact(proposal: MemoryProposalV0) {
+  function searchLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Searching derived LLM-Wiki artifact for ${proposal.proposalId}...`);
@@ -182,7 +182,7 @@ export function MemoryProposalReviewPanel({
     });
   }
 
-  function createAiDraft(proposal: MemoryProposalV0) {
+  function createAiDraft(proposal: DashboardCanonicalMemoryProposalV1) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Creating AI draft for ${proposal.proposalId}...`);
@@ -207,7 +207,7 @@ export function MemoryProposalReviewPanel({
         return;
       }
 
-      const payload = (await response.json()) as { data?: MemoryProposalV0 };
+      const payload = (await response.json()) as { data?: { targetVaultPath?: string | null } };
       setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
       setPendingProposalId(null);
       router.refresh();

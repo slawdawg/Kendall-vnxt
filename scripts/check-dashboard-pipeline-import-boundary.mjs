@@ -46,6 +46,7 @@ const readOnlyPipelineRuntimeFunctions = [
   "getPipelineDashboardProjection",
   "getWorkPacket",
   "getWorkPacketForWorkItem",
+  "getWorkItemMemoryReview",
   "getWorkPackets",
 ];
 
@@ -53,6 +54,7 @@ const readOnlyPipelineRuntimeEndpoints = new Map([
   ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
   ["getWorkPacket", "/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}"],
   ["getWorkPacketForWorkItem", "/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet"],
+  ["getWorkItemMemoryReview", "/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review"],
   ["getWorkPackets", "/pipeline-control-plane/work-packets"],
 ]);
 

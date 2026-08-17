@@ -103,6 +103,7 @@ from supervisor.api.schemas import (
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
+    WorkItemMemoryReviewApiEnvelope,
     MemoryInboxShellApiEnvelope,
     MemoryInboxLifecycleCommandApiEnvelope,
     MemoryInboxLifecycleCommandRequest,
@@ -1789,6 +1790,14 @@ async def get_work_item_llm_wiki_artifact(
     if not result:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return LlmWikiArtifactApiEnvelope(data=result)
+
+
+@app.get("/pipeline-control-plane/work-items/{work_item_id}/memory-review", response_model=WorkItemMemoryReviewApiEnvelope)
+async def get_canonical_work_item_memory_review(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    review = await service.get_work_item_memory_review(session, work_item_id)
+    if not review:
+        raise HTTPException(status_code=404, detail=error_response("Work item memory review not found.", "work_item_memory_review_not_found").model_dump())
+    return WorkItemMemoryReviewApiEnvelope(data=review)
 
 
 @app.get("/work-items/{work_item_id}/execution-attempts", response_model=ExecutionAttemptApiEnvelope)

@@ -13,11 +13,14 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(runtimeSource, /\/pipeline-control-plane\/work-packets\/\$\{encodeURIComponent\(packetId\)\}/);
   assert.match(runtimeSource, /export async function getWorkPackets\(\): Promise<DashboardCanonicalWorkPacketV1\[\]>/);
   assert.match(runtimeSource, /canonicalPackets\(await requestJson<unknown>\("\/pipeline-control-plane\/work-packets"\)\)/);
-  assert.match(pageSource, /getWorkPacketForWorkItem\(workItemId, options\)\.then\(\(packet\) => packet \? projectDashboardCanonicalPresentationForWorkItemHold\(packet\.presentation\) : null\)/);
-  assert.match(pageSource, /import \{ projectDashboardCanonicalPresentationForWorkItemHold \} from "\.\.\/lib\/pipeline-supervisor-projector"/);
+  assert.match(runtimeSource, /export async function getWorkItemMemoryReview\(workItemId: string, options\?: SupervisorReadOptions\)/);
+  assert.match(runtimeSource, /\/pipeline-control-plane\/work-items\/\$\{encodeURIComponent\(workItemId\)\}\/memory-review/);
+  assert.match(runtimeSource, /review\.workItemId !== workItemId/);
+  assert.match(pageSource, /getWorkItemMemoryReview\(workItemId, options\)/);
+  assert.doesNotMatch(pageSource, /projectDashboardCanonicalPresentationForWorkItemHold/);
   assert.doesNotMatch(pageSource, /getWorkPacket\(`work_item:/);
-  assert.match(pageSource, /workPacket \? <MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/> : null/);
-  assert.match(pageSource, /<MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/>/);
+  assert.match(pageSource, /memoryReview \? <MemoryProposalReviewPanel review=\{memoryReview\} workItemId=\{item\.id\} \/> : null/);
+  assert.match(pageSource, /<MemoryProposalReviewPanel review=\{memoryReview\} workItemId=\{item\.id\} \/>/);
   assert.match(pageSource, /href="#memory-proposals"/);
 
   assert.match(panelSource, /PATCH/);
@@ -30,6 +33,7 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(panelSource, /Create AI draft/);
   assert.match(panelSource, /LLM-Wiki readiness/);
   assert.match(panelSource, /llmWikiReadiness/);
+  assert.doesNotMatch(panelSource, /WorkPacketV0View/);
   assert.match(panelSource, /durableWriteAllowed/);
   assert.match(panelSource, /rebuildPreview/);
   assert.match(panelSource, /rebuildDryRunPlan/);

@@ -457,6 +457,11 @@ from supervisor.api.schemas import (
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     MemoryProposalV0View,
+    WorkItemMemoryReviewV1View,
+    WorkItemMemoryReviewProposalV1View,
+    WorkItemMemoryReviewLlmWikiReadinessV1View,
+    WorkItemMemoryReviewLlmWikiPreviewV1View,
+    WorkItemMemoryReviewLlmWikiDryRunV1View,
     LocalWorktreePlanView,
     ManagedRecipePolicyReportView,
     MaintenanceActionPlanReportView,
@@ -1266,6 +1271,74 @@ class SupervisorService:
         if not packet:
             return None
         return await self.to_authoritative_work_packet_view(session, packet)
+
+    async def get_work_item_memory_review(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+    ) -> WorkItemMemoryReviewV1View | None:
+        """Return the persisted WorkItem memory-review read model.
+
+        This deliberately does not assemble the legacy WorkPacketV0 aggregate.
+        Proposal state remains keyed by the WorkItem; a linked authoritative
+        packet is recorded only as provenance for the read model.
+        """
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        candidates = await self.list_candidate_work(session)
+        candidate = self._candidate_by_work_item_id(candidates, [item]).get(item.id)
+        item_view = self.to_work_item_view(item)
+        candidate_view = self.to_candidate_work_view(candidate) if candidate else None
+        proposal_views = [
+            self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}")
+            for proposal in await self.list_memory_proposals(session, item.id)
+        ]
+        workflow_events = await self.list_work_item_events(session, item.id)
+        source_refs = self._work_packet_source_refs(candidate_view, item_view)
+        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [], workflow_events)
+        alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
+        readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views) if alpha_source_refs else None
+        return WorkItemMemoryReviewV1View(
+            workItemId=item.id,
+            authoritativePacketId=item.authoritative_packet_id,
+            proposals=[self._work_item_memory_review_proposal_view(proposal) for proposal in proposal_views],
+            llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
+        )
+
+    def _work_item_memory_review_proposal_view(self, proposal: MemoryProposalV0View) -> WorkItemMemoryReviewProposalV1View:
+        return WorkItemMemoryReviewProposalV1View(**proposal.model_dump(exclude={"packetId", "targetRef"}))
+
+    def _work_item_memory_review_readiness_view(self, readiness: LlmWikiDerivedIndexReadinessV0View) -> WorkItemMemoryReviewLlmWikiReadinessV1View:
+        preview = readiness.rebuildPreview
+        dry_run = readiness.rebuildDryRunPlan
+        return WorkItemMemoryReviewLlmWikiReadinessV1View(
+            decisionState=readiness.decisionState,
+            canonicality=readiness.canonicality,
+            allowedInputs=readiness.allowedInputs,
+            blockedReasons=readiness.blockedReasons,
+            nextActions=readiness.nextActions,
+            boundarySummary=readiness.boundarySummary,
+            durableWriteAllowed=False,
+            rebuildPreview=WorkItemMemoryReviewLlmWikiPreviewV1View(
+                previewId=preview.previewId,
+                inputRefs=preview.inputRefs,
+                memoryProposalRefs=preview.memoryProposalRefs,
+                plannedOutputScope=preview.plannedOutputScope,
+                retentionClass=preview.retentionClass,
+                stopLine=preview.stopLine,
+            ) if preview else None,
+            rebuildDryRunPlan=WorkItemMemoryReviewLlmWikiDryRunV1View(
+                planId=dry_run.planId,
+                inputRefs=dry_run.inputRefs,
+                plannedDerivedSections=dry_run.plannedDerivedSections,
+                disposableTargetNamespace=dry_run.disposableTargetNamespace,
+                retentionClass=dry_run.retentionClass,
+                stopLines=dry_run.stopLines,
+                discardRecoveryPath=dry_run.discardRecoveryPath,
+                writePerformed=False,
+            ) if dry_run else None,
+        )
 
     async def ingest_pipeline_epic_25_evidence_chain(
         self,
