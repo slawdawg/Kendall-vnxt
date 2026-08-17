@@ -695,7 +695,7 @@ do not treat an operator authorization as a bypass.
    recorded prior owner is accepted
    only through a valid ownership-takeover lineage. It never removes a
    worktree, local branch, or remote branch. `cleanup-superseded` re-validates
-   any recorded snapshot ref and, while the worktree remains present, rechecks
+   any recorded snapshot as a direct (non-symbolic) ref and, while the worktree remains present, rechecks
    full status including ignored/untracked residue and whole-index hidden flags
    before local cleanup; a missing, changed, or unreadable preservation object,
    live residue, or hidden index entry is a hard stop line. A proven partial
@@ -729,8 +729,10 @@ do not treat an operator authorization as a bypass.
    rerun the same governed command—do not delete resources manually.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface. Use
-   `cleanup-orphans --summary-json` to inspect matched orphan directories before
-   applying removal.
+   `cleanup-orphans --summary-json` to inspect matched orphan directories and
+   retained dirty-preservation holds before applying removal. Invalid manifest
+   inventory blocks any destructive orphan or branch cleanup rather than being
+   treated as evidence absence.
    For local codex branch cleanup, use `cleanup-branches --summary-json` to
    inspect safe and skipped branches before any delete apply.
    For assignment closeout, use `close-assignments --summary-json` to inspect

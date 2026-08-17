@@ -11489,14 +11489,18 @@ function preserveDirtySuperseded(argv) {
       // later worktree state, even when the durable object is still valid.
       // The fresh owned lease is the producer-quiescence boundary for governed
       // writers; a lost or replaced lease aborts before any destructive step.
-      const resetProof = verifyDirtySupersededSnapshot(manifest, fresh, snapshot, { requireLiveMatch: true });
-      // Do not insert a manifest write or another external operation between
-      // the final immutable re-read, producer-lease heartbeat, and reset.
+      // The final fence is deliberately ordered: branch/HEAD, full live-tree
+      // proof, producer lease, then branch/HEAD again immediately before
+      // reset. The first two prove the source being captured. The heartbeat
+      // renews the producer lease and invokes the final HEAD check as its
+      // reset-adjacent fence, rejecting both a replaced lease and a concurrent
+      // commit that races the renewal itself.
       verifyDirtySupersededImmutableSnapshot(fresh, snapshot);
       assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
       assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
-      heartbeat();
       assertDirtySupersededResetHead(fresh);
+      const resetProof = verifyDirtySupersededSnapshot(manifest, fresh, snapshot, { requireLiveMatch: true });
+      heartbeat(() => assertDirtySupersededResetHead(fresh));
       runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
       if (dirtySupersededStatusRecords(fresh.worktreePath, fresh.expectedHeadSha).length) throw new Error("Dirty superseded preservation cleaned source worktree incompletely; cleanup remains blocked.");
       manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset" };
@@ -11571,12 +11575,12 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
     // full exact live tree comparison it cannot prove every remaining path's
     // blob, mode, and deletion state. The durable snapshot remains available
     // for a separately governed recovery rather than authorizing a reset.
-    const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
     verifyDirtySupersededImmutableSnapshot(resumedPlan, snapshot);
     assertNoDirtySupersededReplacementRefs(fresh.worktreePath);
     assertNoDirtySupersededRepositoryAlternates(fresh.worktreePath);
-    heartbeat();
     assertDirtySupersededResetHead(fresh);
+    const resetProof = verifyDirtySupersededSnapshot(manifest, resumedPlan, snapshot, { requireLiveMatch: true });
+    heartbeat(() => assertDirtySupersededResetHead(fresh));
     runChecked("git", ["reset", "--hard", "--no-recurse-submodules", fresh.expectedHeadSha], { cwd: fresh.worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
     if (dirtySupersededStatusRecords(fresh.worktreePath, fresh.expectedHeadSha).length) throw new Error("Dirty superseded preservation resumed reset left source worktree dirty; cleanup remains blocked.");
     manifest.dirty_superseded_preservation.verification = { ...resetProof, status: "matched_before_reset", resumedAfterInterruption: true };
@@ -11785,10 +11789,18 @@ function assertDirtySupersededStatusConfiguration(worktreePath) {
   if (autocrlf.code === 0 && ["true", "input"].includes(autocrlf.stdout.trim().toLowerCase())) {
     throw new Error("dirty superseded preservation refuses core.autocrlf because staged snapshot bytes could be normalized");
   }
+  const configuredWorktree = git(["config", "--get", "core.worktree"], { cwd: worktreePath });
+  if (configuredWorktree.code === 0 && configuredWorktree.stdout.trim()) {
+    throw new Error("dirty superseded preservation refuses configured core.worktree because Git commands must inspect the managed worktree");
+  }
 }
 
 function assertDurablePreservationGitEnvironment() {
-  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE"].filter((name) => process.env[name]);
+  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE"]
+    .filter((name) => process.env[name]);
+  for (const name of Object.keys(process.env)) {
+    if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/.test(name)) unsafe.push(name);
+  }
   if (unsafe.length) {
     throw new Error(`dirty superseded preservation refuses ambient Git repository, index, or object-store overrides: ${unsafe.join(", ")}`);
   }
@@ -12375,6 +12387,8 @@ function validDirtySupersededSnapshotEvidence(manifest, evidence, proofInput, cw
     if (dirtySupersededStatusRecords(manifest.worktree_path, evidence.sourceHead).length > 0) return false;
   }
   const immutableGitEnvironment = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const symbolic = git(["symbolic-ref", "-q", evidence.snapshotRef], { cwd, env: immutableGitEnvironment });
+  if (symbolic.code !== 1) return false;
   const ref = git(["rev-parse", "--verify", `${evidence.snapshotRef}^{commit}`], { cwd, env: immutableGitEnvironment });
   const tree = git(["rev-parse", "--verify", `${evidence.snapshotCommit}^{tree}`], { cwd, env: immutableGitEnvironment });
   if (ref.code !== 0 || tree.code !== 0 || ref.stdout.trim() !== evidence.snapshotCommit || tree.stdout.trim() !== evidence.snapshotTree) return false;
@@ -13634,24 +13648,13 @@ function cleanupOrphans(argv) {
     .filter((worktreePath) => !worktreeListed(worktreePath))
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
   // A malformed manifest is not evidence absence. Its worktree path can be
-  // the sole location of an interrupted raw-byte snapshot, so any unreadable
-  // or invalid inventory record blocks this generic destructive cleanup. A
-  // read-only preview remains safe and useful for recovering that inventory.
-  const retainedDirtyEvidence = new Map();
-  if (apply) {
-    for (const record of readManifestRecords(state)) {
-      if (record.error) throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
-      try {
-        validateManifest(record.manifest, record.path);
-      } catch {
-        throw new Error("cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup");
-      }
-      const manifest = record.manifest;
-      if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent)) {
-        retainedDirtyEvidence.set(resolve(manifest.worktree_path), manifest.task_id);
-      }
-    }
-  }
+  // the sole location of an interrupted raw-byte snapshot, so malformed
+  // inventory blocks deletion. Read-only previews still include every valid
+  // retention hold, while leaving malformed records for governed recovery.
+  const retainedDirtyEvidence = dirtySupersededRetentionMap(state, {
+    failClosed: apply,
+    failureMessage: "cleanup-orphans cannot verify manifest inventory; refusing destructive cleanup",
+  });
   const retainedDirectories = candidateDirectories.filter((worktreePath) => retainedDirtyEvidence.has(resolve(worktreePath)));
   const directories = candidateDirectories.filter((worktreePath) => !retainedDirtyEvidence.has(resolve(worktreePath)));
 
@@ -13730,6 +13733,27 @@ function hiddenWorkspaceMetadataEntry(name) {
   return String(name || "").startsWith(".");
 }
 
+function dirtySupersededRetentionMap(state, { failClosed, failureMessage }) {
+  const retained = new Map();
+  for (const record of readManifestRecords(state)) {
+    if (record.error) {
+      if (failClosed) throw new Error(failureMessage);
+      continue;
+    }
+    try {
+      validateManifest(record.manifest, record.path);
+    } catch {
+      if (failClosed) throw new Error(failureMessage);
+      continue;
+    }
+    const manifest = record.manifest;
+    if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent)) {
+      retained.set(resolve(manifest.worktree_path), manifest.task_id);
+    }
+  }
+  return retained;
+}
+
 function cleanupBranches(argv) {
   const { positional, options } = parseOptions(argv);
   const query = positional.join(" ").trim().toLowerCase();
@@ -13763,12 +13787,23 @@ function cleanupBranches(argv) {
       .filter(Boolean),
   );
   const state = workspaceState(options);
-  const preservedBranches = new Set(
-    readManifests(state)
-      .filter(({ manifest }) => manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent))
-      .map(({ manifest }) => manifest.branch)
-      .filter(Boolean),
-  );
+  const preservedBranches = new Set();
+  for (const record of readManifestRecords(state)) {
+    if (record.error) {
+      if (apply) throw new Error("cleanup-branches cannot verify manifest inventory; refusing destructive cleanup");
+      continue;
+    }
+    try {
+      validateManifest(record.manifest, record.path);
+    } catch {
+      if (apply) throw new Error("cleanup-branches cannot verify manifest inventory; refusing destructive cleanup");
+      continue;
+    }
+    const manifest = record.manifest;
+    if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) && manifest.branch) {
+      preservedBranches.add(manifest.branch);
+    }
+  }
   const eligible = [];
   const skipped = [];
 
@@ -20371,7 +20406,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
     throw new Error("Task lease acquisition could not prove a releasable active generation; refusing callback execution.");
   }
 
-  const heartbeat = () => {
+  const heartbeat = (afterRenewalFence) => {
     const current = inspectTaskLease(state, taskId);
     if (
       current.status !== "active" ||
@@ -20383,6 +20418,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
       throw new Error("Task lease ownership changed before heartbeat; refusing to continue.");
     }
     appendTaskLeaseHeartbeat(state, taskId, metadata);
+    if (afterRenewalFence) afterRenewalFence();
   };
 
   const release = () => {
