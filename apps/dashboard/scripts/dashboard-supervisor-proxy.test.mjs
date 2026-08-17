@@ -33,6 +33,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
       if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
       if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [canonicalPacketWithRawBrowserUnsafeFields()] })); return; }
       if (request.url === "/pipeline-control-plane/work-items/work-item-1/packet") { response.end(JSON.stringify({ data: canonicalPacketWithRawBrowserUnsafeFields() })); return; }
+      if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata") { forwarded.push(request.url); response.end(JSON.stringify({ data: { matched: false } })); return; }
       if (request.url === "/pipeline-control-plane/projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
@@ -77,9 +78,16 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     const savedViews = await request(port, "/api/supervisor/operator-views?scope=queue", { headers: { cookie: "session=ok" } });
     assert.equal(savedViews.status, 200);
     assert.deepEqual(forwarded, ["/operator-views?scope=queue"]);
+    const artifactSearch = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", { headers: { cookie: "session=ok" } });
+    assert.equal(artifactSearch.status, 200);
+    assert.deepEqual(forwarded, ["/operator-views?scope=queue", "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata"]);
+    const artifactMutation = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(artifactMutation.status, 405);
+    const artifactSearchExtra = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata&extra=1", { headers: { cookie: "session=ok" } });
+    assert.equal(artifactSearchExtra.status, 404);
     const savedViewsExtra = await request(port, "/api/supervisor/operator-views?scope=queue&extra=1", { headers: { cookie: "session=ok" } });
     assert.equal(savedViewsExtra.status, 404);
-    assert.deepEqual(forwarded, ["/operator-views?scope=queue"]);
+    assert.deepEqual(forwarded, ["/operator-views?scope=queue", "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata"]);
     const legacyMutation = await request(port, "/api/supervisor/work-packets/legacy-packet-1", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
     assert.equal(legacyMutation.status, 405);
     const denied = await request(port, "/api/supervisor/pipeline-control-plane/work-packets");
@@ -219,6 +227,7 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/memory-review", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/audit-events", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 404);

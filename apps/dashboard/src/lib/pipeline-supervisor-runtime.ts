@@ -574,6 +574,17 @@ function canonicalMemoryStringArray(value: unknown): string[] {
   return [...value];
 }
 
+const MEMORY_PROPOSAL_ENUMS = {
+  status: new Set(["not_applicable", "proposed", "pending_human_approval", "approved", "rejected", "deferred", "edit_needed", "blocked", "stale", "contradictory"]),
+  proposalType: new Set(["new_note", "append_note", "link_notes", "tag_update", "decision_record", "error_book_entry", "user_facing_documentation"]),
+  sensitivity: new Set(["low", "medium", "high"]),
+  freshness: new Set(["fresh", "stale", "conflicting", "unknown"]),
+  contradictionStatus: new Set(["none", "possible", "confirmed"]),
+  confidence: new Set(["low", "medium", "high"]),
+  operatorAction: new Set(["approve", "edit", "reject", "defer", "blocked"]),
+  writeBackStatus: new Set(["not_started", "blocked", "review_gated", "approved_for_future", "deferred"]),
+} as const;
+
 function canonicalMemoryProposal(value: unknown): DashboardCanonicalMemoryProposalV1 {
   const proposal = canonicalMemoryReviewRecord(value, [
     "proposalId", "label", "status", "summary", "sourceRefs", "evidenceRefs", "targetVaultPath",
@@ -589,6 +600,9 @@ function canonicalMemoryProposal(value: unknown): DashboardCanonicalMemoryPropos
   if (!requiredStrings.every((key) => typeof proposal[key] === "string") ||
     !isOptionalString(proposal.targetVaultPath) || !isOptionalString(proposal.patchSummary) ||
     !isOptionalString(proposal.decisionNeededContext) || proposal.writeBackAllowed !== false) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  if (!Object.entries(MEMORY_PROPOSAL_ENUMS).every(([key, values]) => isSetValue(proposal[key], values))) {
     throw new Error("Canonical WorkItem memory review is malformed.");
   }
   return {

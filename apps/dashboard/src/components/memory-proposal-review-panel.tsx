@@ -100,7 +100,9 @@ function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean
 }
 
 function hasLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1): boolean {
-  return (proposal.targetVaultPath ?? "").includes("01 Dashboard Queue/LLM Wiki Derived/");
+  const folder = proposal.targetVaultFolder.trim().replace(/^\/+|\/+$/g, "");
+  const target = (proposal.targetVaultPath ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return (folder === "LLM Wiki Derived" || folder.endsWith("/LLM Wiki Derived")) && target.startsWith(`${folder}/`);
 }
 
 export function MemoryProposalReviewPanel({

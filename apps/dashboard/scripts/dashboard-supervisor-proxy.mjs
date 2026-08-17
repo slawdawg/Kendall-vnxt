@@ -7,12 +7,14 @@ const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const MEMORY_INBOX_PROPOSAL_DECISION_PATH = /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/(?:return|deny|approve)$/;
+const LLM_WIKI_ARTIFACT_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/llm-wiki-artifact$/;
 const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
   /^\/memory-inbox\/projection$/,
   /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/revisions\/[1-9][0-9]*\/reader$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
+  LLM_WIKI_ARTIFACT_PATH,
 ];
 const CANONICAL_PACKET_READ_PATH = /^\/pipeline-control-plane\/(?:work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/;
 const CLIENT_SAFE_PROJECTION_METADATA_KEYS = new Set(`schemaVersion projectionId generatedAt sourceUpdatedAt sourceLabel freshnessState staleAfterSeconds backendReachability fixtureMode truthSummary stageSummaries sourceStates workPackets selectedPacketDetails managerSummary activeManagerLaneClarity coordinationHealth workerSummary reliabilityProblems gatedControls runtimeReadiness actionCapabilities actionCapabilitiesV1 executeAdmission queueSummary evidenceRefs packetId title currentStage status truthLabel sourceRef canonicalContract productModeMapping blocker nextAction unblocker readyToTest workItemId queueLease executionAttempts correlationIds updatedAt metadataOnly sourceRefs latestTransitionEventRef recentTransitionEventRefs latestMovementSummary canSatisfyLiveMovementProof parentPacketId lineageKind operatorTestState operatorTestNote actionResults actionResultsV1 reviewRoute workGraph refId sourceType pathOrUrl contentSha256 readyId userFacingSummary testableSurface verificationRefs rawPayloadRetained leaseId attemptCount heartbeatAt leaseExpiresAt fencingToken active state attemptId routeDecisionId workerId lane eventRefs availability routeState reasonCode reason safeFallback exactIdentity issuanceState findingSummary count highestSeverity dataClass execution deliveryEvidenceEligible retention sourceSchemaVersion executionJobId reportIdentity waveMembership dependencyState reservation capacity posture owner nextSafeAction label emptyReason backendEmpty backendUnavailable fixtureBacked stale summary stage packetCount sourceId sourceKind runId observedAt source freshness activeWorkCount staleOwnerTargetCount staleOwnerProjectedCount dirtyPreserveCount missingWorktreeJournalHold reliabilityState checkedAt enabled allowedForEnvironment visibleLabelRequired canSatisfyLiveProof activeLeaseCount activeWorkerCount warmWorkerCount blockedQueueCount dispatchableQueueCount closedQueueCount healthySourceCount exhaustedSourceCount blockedSourceCount gatedSourceCount staleSourceCount unavailableSourceCount refillingSourceCount unknownSourceCount sourceExhausted inactivityReason warmCount waitingCount stalledCount failedCount drainingCount killedCount completeCount unavailableCount unknownCount workerRefs problemId kind severity likelyIssue controlId operation authorityFamily stopLine blockedCount gatedCount limits observed blockingDimensions policyVersion capacityAvailable actionId targetType targetId capabilityState authorityState riskTier typedReason expectedResultSummary correlationRequired idempotencyRequired actionContext actionContextDigestSha256 sourceMode serverBound expectedRuntimeMode expectedRuntimeRevision expectedActiveWorkCount expectedActiveLeaseCount expectedRunningAttemptCount expectedPacketCurrentEventId expectedCurrentOwnerId newOwnerId expectedWorkItemState expectedWorkItemUpdatedAt expectedActiveLeaseId expectedRunningAttemptId expectedOriginalAttemptId expectedRetryIntentId expectedLinkedWorkItemId expectedLinkedPacketId outcome resultingStage resultingStatus actionRecordId approvalId childPacketId idempotencyKey successEvidence replayed originalAttemptId retryIntentId linkedWorkItemId linkedPacketId resultingPacketCurrentEventId originalAttemptPreserved providerOrWorkerLaunched resultingRuntimeMode resultingRuntimeRevision runningAttemptCount intakeStopped activeWorkPreserved activeWorkAllowedToConverge workersKilled intakeResumed previousOwnerId activeLeaseTransferred workerLaunched`.split(" "));
@@ -60,17 +62,20 @@ export const CONTROLS_MUTATION_PATHS = new Set([
   "/pipeline-control-plane/actions/v1",
 ]);
 const SAVED_VIEW_SCOPES = new Set(["active-work", "attention", "queue", "audit"]);
+const LLM_WIKI_ARTIFACT_QUERY_PATH = new RegExp(`^${PREFIX}work-items/[A-Za-z0-9._:%-]+/memory-proposals/[A-Za-z0-9._:%-]+/llm-wiki-artifact$`);
 
 function allowedReadQuery(url, method) {
   if (!url.search) return true;
   // Saved-view scopes are the only authenticated dashboard reads that need a
   // query. Preserve a one-key, one-value contract instead of allowing a
   // generic query pass-through to the private supervisor.
-  return method === "GET"
-    && url.pathname === `${PREFIX}operator-views`
-    && [...url.searchParams].length === 1
-    && url.searchParams.getAll("scope").length === 1
-    && SAVED_VIEW_SCOPES.has(url.searchParams.get("scope"));
+  if (method !== "GET" || [...url.searchParams].length !== 1) return false;
+  if (url.pathname === `${PREFIX}operator-views`) {
+    return url.searchParams.getAll("scope").length === 1 && SAVED_VIEW_SCOPES.has(url.searchParams.get("scope"));
+  }
+  return LLM_WIKI_ARTIFACT_QUERY_PATH.test(url.pathname)
+    && url.searchParams.getAll("query").length === 1
+    && url.searchParams.get("query").length <= 120;
 }
 
 function sendJson(response, statusCode, payload) {

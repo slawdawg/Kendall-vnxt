@@ -1348,12 +1348,12 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
     workItemId: "work-item-a",
     authoritativePacketId: "packet-a",
     proposals: [{
-      proposalId: "proposal-a", label: "Review proposal", status: "pending", summary: "Metadata only.",
+      proposalId: "proposal-a", label: "Review proposal", status: "proposed", summary: "Metadata only.",
       sourceRefs: ["source:work-item-a"], evidenceRefs: ["event:packet-a"], targetVaultPath: null,
-      targetVaultFolder: "memory/review", proposalType: "memory_note", suggestedContentSummary: "Review summary.",
-      patchSummary: null, sensitivity: "internal", freshness: "fresh", contradictionStatus: "none",
-      confidence: "high", operatorAction: "review", decisionNeededContext: null,
-      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "not_allowed", writeBackAllowed: false,
+      targetVaultFolder: "memory/review", proposalType: "new_note", suggestedContentSummary: "Review summary.",
+      patchSummary: null, sensitivity: "low", freshness: "fresh", contradictionStatus: "none",
+      confidence: "high", operatorAction: "blocked", decisionNeededContext: null,
+      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "review_gated", writeBackAllowed: false,
     }],
     llmWikiReadiness: null,
     metadataOnly: true,
@@ -1385,6 +1385,11 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
               targetVaultFolder: "", suggestedContentSummary: "", backupRecoveryPath: "",
             }],
           };
+          if (path.endsWith("work-item-enum/memory-review")) return {
+            ...review,
+            workItemId: "work-item-enum",
+            proposals: [{ ...review.proposals[0], status: "future_unreviewed_status" }],
+          };
           throw new Error(`Unexpected request ${path}`);
         },
       };
@@ -1406,6 +1411,10 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
   );
   await assert.rejects(
     () => context.module.exports.getWorkItemMemoryReview("work-item-invalid"),
+    /Canonical WorkItem memory review is malformed/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkItemMemoryReview("work-item-enum"),
     /Canonical WorkItem memory review is malformed/,
   );
 });
