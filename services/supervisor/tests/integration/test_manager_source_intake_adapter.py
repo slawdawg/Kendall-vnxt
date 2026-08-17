@@ -101,21 +101,25 @@ def _text_get(url: str) -> str:
         return response.read().decode("utf8")
 
 
-def _text_get_after_dashboard_restart(url: str) -> str:
-    """Bound the Next dev dynamic-route compile race after a dashboard restart."""
+def _text_get_after_dashboard_restart(url: str, *, required_text: str | None = None) -> str:
+    """Bound Next dev restart races until its response contains the required rendered marker."""
     deadline = time.monotonic() + 10
     last_error: HTTPError | None = None
+    last_response = ""
     while time.monotonic() < deadline:
         try:
-            return _text_get(url)
+            response = _text_get(url)
+            if required_text is None or required_text in response:
+                return response
+            last_response = response
         except HTTPError as exc:
             if exc.code != 404:
                 raise
             last_error = exc
-            time.sleep(0.25)
+        time.sleep(0.25)
     if last_error is not None:
         raise last_error
-    return _text_get(url)
+    raise AssertionError(f"dashboard response never rendered {required_text!r}: {last_response[:500]}")
 
 
 def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Popen[str]:
@@ -514,7 +518,10 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
             dashboard_port,
             dashboard_log,
         )
-        restarted_pipeline_html = _text_get(f"{dashboard_base_url}/pipeline")
+        restarted_pipeline_html = _text_get_after_dashboard_restart(
+            f"{dashboard_base_url}/pipeline",
+            required_text="Supervisor runtime",
+        )
         restarted_detail_html = _text_get_after_dashboard_restart(
             f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
         )
