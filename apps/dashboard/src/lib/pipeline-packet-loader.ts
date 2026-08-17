@@ -1,4 +1,5 @@
 import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type { DashboardCanonicalOperationalProjectionTruthV1 } from "./pipeline/canonical-operational-projection";
 
 import {
   getPipelineDashboardProjection,
@@ -24,6 +25,8 @@ export type PipelineCockpitPacketLoad = {
   fixtureMode: PipelineRuntimeSourceState;
   /** Client-safe canonical source state for the dashboard cockpit. */
   canonicalPackets: DashboardCanonicalWorkPacketClientV1[];
+  /** Versioned dashboard-owned truth used to gate operational actions. */
+  operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
   projection: PipelineDashboardProjectionV0 | null;
   projectionError: string | null;
 };
@@ -103,6 +106,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       return {
         fixtureMode: runtimeSourceState("empty", "Supervisor empty", emptyRuntimeSummary(projectionResult.projection)),
         canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
+        operationalTruth: clientSafeOperationalTruth(verifiedProjection),
         projection: clientSafePipelineProjection(verifiedProjection),
         projectionError: projectionResult.error,
       };
@@ -136,6 +140,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
           : "Persisted supervisor canonical packet rows only. No provider, worker, GitHub, or Obsidian calls are made by this route.",
       ),
       canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
+      operationalTruth: clientSafeOperationalTruth(verifiedProjection),
       projection: clientSafePipelineProjection(verifiedProjection),
       projectionError: projectionResult.error,
     };
@@ -150,6 +155,29 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       projectionError: workPacketError,
     };
   }
+}
+
+function clientSafeOperationalTruth(projection: PipelineDashboardProjectionV0): DashboardCanonicalOperationalProjectionTruthV1 {
+  return {
+    schemaVersion: "dashboard-canonical-operational-projection/v1",
+    sourceUpdatedAt: projection.sourceUpdatedAt,
+    staleAfterSeconds: projection.staleAfterSeconds,
+    sourceLabel: projection.sourceLabel,
+    freshnessState: projection.freshnessState,
+    truthSummary: {
+      label: projection.truthSummary.label,
+      backendEmpty: projection.truthSummary.backendEmpty,
+      backendUnavailable: projection.truthSummary.backendUnavailable,
+      fixtureBacked: projection.truthSummary.fixtureBacked,
+      stale: projection.truthSummary.stale,
+    },
+    backendReachability: { state: projection.backendReachability.state },
+    fixtureMode: {
+      enabled: projection.fixtureMode.enabled,
+      canSatisfyLiveProof: projection.fixtureMode.canSatisfyLiveProof,
+    },
+    workPackets: projection.workPackets.map((packet) => ({ packetId: packet.packetId })),
+  };
 }
 
 /**

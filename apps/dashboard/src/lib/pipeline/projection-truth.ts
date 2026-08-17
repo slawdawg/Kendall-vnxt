@@ -1,4 +1,8 @@
-import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type {
+  DashboardCanonicalOperationalFreshnessV1,
+  DashboardCanonicalOperationalProjectionTruthInputV1,
+  DashboardCanonicalOperationalSourceLabelV1,
+} from "./canonical-operational-projection";
 
 export type ProjectionLiveProofFailureReason =
   | "no_projection"
@@ -18,7 +22,7 @@ export type ProjectionLiveProofState = {
   primaryReason: ProjectionLiveProofFailureReason | null;
 };
 
-export function projectionHasRenderableBackendPackets(projection: PipelineDashboardProjectionV0 | null) {
+export function projectionHasRenderableBackendPackets(projection: DashboardCanonicalOperationalProjectionTruthInputV1 | null) {
   return Boolean(projection && projection.workPackets.length > 0);
 }
 
@@ -29,11 +33,11 @@ export function projectionHasRenderableBackendPackets(projection: PipelineDashbo
  * has yet changed ``sourceLabel`` or ``freshnessState``.
  */
 export function projectionEffectiveLabels(
-  projection: PipelineDashboardProjectionV0 | null,
+  projection: DashboardCanonicalOperationalProjectionTruthInputV1 | null,
   now = Date.now()
 ): {
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"];
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"];
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1;
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
 } {
   if (!projection) {
     return { sourceLabel: "unavailable", freshnessState: "unavailable" };
@@ -54,9 +58,9 @@ export function projectionEffectiveLabels(
 }
 
 export function projectionLiveProofState(
-  projection: PipelineDashboardProjectionV0 | null,
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+  projection: DashboardCanonicalOperationalProjectionTruthInputV1 | null,
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1,
+  freshnessState: DashboardCanonicalOperationalFreshnessV1
 ): ProjectionLiveProofState {
   if (!projection) {
     return {
@@ -108,7 +112,7 @@ export function projectionLiveProofState(
  * instead of trusting a render-time live-proof result retained by an open tab.
  */
 export function currentProjectionAllowsOperationalActions(
-  projection: PipelineDashboardProjectionV0 | null,
+  projection: DashboardCanonicalOperationalProjectionTruthInputV1 | null,
   now = Date.now()
 ) {
   const labels = projectionEffectiveLabels(projection, now);
@@ -116,14 +120,14 @@ export function currentProjectionAllowsOperationalActions(
 }
 
 export function projectionDisplayLabels(
-  projection: PipelineDashboardProjectionV0 | null,
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"],
+  projection: DashboardCanonicalOperationalProjectionTruthInputV1 | null,
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1,
+  freshnessState: DashboardCanonicalOperationalFreshnessV1,
   refreshUnavailable: boolean,
   liveProofState = projectionLiveProofState(projection, sourceLabel, freshnessState)
 ): {
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"];
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"];
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1;
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
 } {
   if (refreshUnavailable || !projection) {
     return { sourceLabel: "unavailable", freshnessState: "unavailable" };
@@ -168,9 +172,9 @@ export function projectionDisplayLabels(
 }
 
 export function projectionIsLiveForProof(
-  projection: PipelineDashboardProjectionV0,
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+  projection: DashboardCanonicalOperationalProjectionTruthInputV1,
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1,
+  freshnessState: DashboardCanonicalOperationalFreshnessV1
 ) {
   return projectionLiveProofState(projection, sourceLabel, freshnessState).canSatisfyLiveProof;
 }

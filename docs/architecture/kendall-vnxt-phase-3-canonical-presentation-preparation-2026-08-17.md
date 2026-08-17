@@ -1,7 +1,24 @@
 # Phase 3 Canonical Presentation Preparation
 
 Date: 2026-08-17  
-Status: implementation-ready planning record; no legacy deletion authorized
+Status: in progress; legacy deletion remains gated
+
+## Delivery progress
+
+The canonical packet-presentation slice merged in PR #858 at
+`36b8f8942356b10a3933aacc6a73bd6b5dede529`. Normal cockpit and direct packet
+detail reads now carry the independently shaped
+`DashboardCanonicalPresentationV1`; they do not delegate their validation or
+projection to `WorkPacketV0View`. The WorkItem memory-review panel remains the
+one explicit named V0 hold because it still needs its own work-item-scoped
+memory DTO.
+
+The active operational-truth sub-slice moves the normal and LAN action-gating
+path and projection-truth helpers onto a versioned canonical DTO. The next
+sub-slice expands that DTO through the active-board view model and cockpit
+rendering. The old V0 projection remains a named client-safe board-rendering
+adapter prop in normal and LAN cockpit paths until the later source-zero and
+persisted-readback retirement gate.
 
 ## Starting point
 
