@@ -11450,6 +11450,18 @@ function quarantineIgnoredDependencyResidue(argv) {
       manifest.ignored_dependency_quarantine_intent = intent;
       appendTaskEvent(manifest, "ignored_dependency_quarantine_intent", `${intent.roots.length} pnpm roots prepared before relocation`);
       manifest.updated_at = new Date().toISOString(); writeManifest(plan.manifestPath, manifest);
+    } else if (options.resumePending) {
+      // A resumed relocation has a new, independently supplied authorization.
+      // Retain it before the next rename so the durable intent tells an
+      // operator exactly why the recovery mutation was permitted.
+      const resumeAuthorization = {
+        approval: String(options.approval).trim(), reason: String(options.reason).trim(),
+        recordedAt: new Date().toISOString(), metadataOnly: true,
+      };
+      const history = Array.isArray(intent.resumeAuthorizations) ? intent.resumeAuthorizations : [];
+      intent.resumeAuthorizations = [...history, resumeAuthorization];
+      appendTaskEvent(manifest, "ignored_dependency_quarantine_resume_authorized", "fresh bounded approval and reason recorded before resumed relocation");
+      manifest.updated_at = new Date().toISOString(); writeManifest(plan.manifestPath, manifest);
     }
     relocateIgnoredDependencyQuarantine(manifest, fresh, intent, state, plan.manifestPath, proofInput);
   });
@@ -11457,7 +11469,7 @@ function quarantineIgnoredDependencyResidue(argv) {
 }
 
 function ignoredDependencyQuarantinePlan(record, state, { options, proofInput, allowPending = false }) {
-  const base = cleanupSupersededPlan(record, state, { options, proofInput, currentOwner: currentLaneOwner(options), allowDirtySource: true, allowPendingDirty: true });
+  const base = cleanupSupersededPlan(record, state, { options, proofInput, currentOwner: currentLaneOwner(options), allowDirtySource: true, allowPendingDirty: true, allowPendingQuarantine: allowPending });
   if (base.status !== "ready") return base;
   const manifest = record.manifest;
   if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) return { ...base, status: "blocked", reason: "dirty preservation is already pending or complete" };
@@ -11502,9 +11514,9 @@ function ignoredDependencyQuarantineInventory(worktreePath, state, taskId, sourc
     const layout = inspectPnpmDependencyRoot(absolute, sourcePath);
     const digest = digestIgnoredDependencyTree(absolute);
     const destination = ignoredDependencyQuarantinePath(state.root, taskId, sourcePath, index);
-    return { sourcePath, sourceType: "directory", layout, bytes: digest.bytes, entries: digest.entries, digest: digest.digest, quarantinePath: destination };
+    return { sourcePath, sourceType: "directory", layout, bytes: digest.bytes, entries: digest.entries, digest: digest.digest, modeDigest: digest.modeDigest, quarantinePath: destination };
   });
-  const aggregateDigest = createHash("sha256").update(JSON.stringify(entries.map(({ sourcePath, sourceType, layout, bytes, entries: count, digest }) => ({ sourcePath, sourceType, layout, bytes, entries: count, digest })))).digest("hex");
+  const aggregateDigest = createHash("sha256").update(JSON.stringify(entries.map(({ sourcePath, sourceType, layout, bytes, entries: count, digest, modeDigest }) => ({ sourcePath, sourceType, layout, bytes, entries: count, digest, modeDigest })))).digest("hex");
   return { roots: entries, aggregateDigest, quarantineRoot, trackedCount: tracked };
 }
 
@@ -11578,13 +11590,18 @@ function utf8DirectoryEntryNames(path) {
 }
 
 function digestIgnoredDependencyTree(root) {
-  const hash = createHash("sha256"); let bytes = 0; let entries = 0;
+  const hash = createHash("sha256"); const modeHash = createHash("sha256"); let bytes = 0; let entries = 0;
   const walk = (path, relativePath) => {
     const info = lstatSync(path); entries += 1;
     if (entries > 100_000) throw new Error("ignored dependency quarantine inventory exceeds 100000 entries");
     const type = info.isDirectory() ? "d" : info.isFile() ? "f" : info.isSymbolicLink() ? "l" : "?";
     if (type === "?") throw new Error("ignored dependency quarantine refuses special filesystem entries");
-    hash.update(type).update("\0").update(relativePath).update("\0");
+    // Both the content digest and separately retained mode digest bind the
+    // executable/permission semantics of quarantined dependency shims. A
+    // resumed relocation must not accept identical bytes with changed modes.
+    const permissionMode = String(info.mode & 0o7777).padStart(4, "0");
+    hash.update(type).update("\0").update(relativePath).update("\0").update(permissionMode).update("\0");
+    modeHash.update(type).update("\0").update(relativePath).update("\0").update(permissionMode).update("\0");
     if (type === "d") {
       for (const name of utf8DirectoryEntryNames(path).sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) walk(join(path, name), relativePath ? `${relativePath}/${name}` : name);
     } else if (type === "l") {
@@ -11598,7 +11615,7 @@ function digestIgnoredDependencyTree(root) {
     }
   };
   walk(root, "");
-  return { bytes, entries, digest: hash.digest("hex") };
+  return { bytes, entries, digest: hash.digest("hex"), modeDigest: modeHash.digest("hex") };
 }
 
 function ignoredDependencyQuarantineIntent(manifest, plan, proofInput, options) {
@@ -11619,7 +11636,17 @@ function relocateIgnoredDependencyQuarantine(manifest, plan, intent, state, mani
     const parent = ensureCanonicalIgnoredDependencyQuarantineParent(state.root, manifest.task_id);
     if (dirname(destination) !== parent) throw new Error("ignored dependency quarantine destination no longer has the canonical managed parent");
     if (statSync(source).dev !== statSync(parent).dev) throw new Error("ignored dependency quarantine requires source and managed destination on the same filesystem");
-    renameSync(source, destination); fsyncDirectory(dirname(destination));
+    const sourceParent = dirname(source);
+    const destinationParent = dirname(destination);
+    renameSync(source, destination);
+    // A cross-directory rename is durable only after both directory entries
+    // have been flushed. Do this before the relocated-root event or intent
+    // rewrite so crash recovery never treats a half-persisted move as done.
+    fsyncDirectory(destinationParent);
+    if (resolve(sourceParent) !== resolve(destinationParent)) fsyncDirectory(sourceParent);
+    if (process.env.CODEX_WORKSPACE_TEST_QUARANTINE_FAIL_AFTER_DIRECTORY_FSYNC === root.sourcePath) {
+      throw new Error("injected quarantine interruption after source and destination directory fsync");
+    }
     assertIgnoredDependencyDigest(destination, root);
     appendTaskEvent(manifest, "ignored_dependency_quarantine_root_relocated", root.sourcePath);
     manifest.updated_at = new Date().toISOString(); writeManifest(manifestPath, manifest);
@@ -11638,24 +11665,28 @@ function relocateIgnoredDependencyQuarantine(manifest, plan, intent, state, mani
 }
 
 function validIgnoredDependencyQuarantineIntent(manifest, intent, plan, proofInput) {
-  return Boolean(intent && intent.schemaVersion === 1 && dirtySupersededOwnerLineageMatches(manifest, intent.owner) && intent.sourceHead === plan.expectedHeadSha && intent.closedSourcePr === proofInput.closedSourcePr?.number && intent.carryForwardPr === proofInput.carryForwardPr && intent.carryForwardCommit === proofInput.carryForwardCommit && Array.isArray(intent.roots) && intent.roots.length > 0 && intent.roots.length <= 16 && intent.roots.every((root, index) => allowedIgnoredDependencyRoot(root?.sourcePath) && root.quarantinePath === ignoredDependencyQuarantinePath(manifest.state_root, manifest.task_id, root.sourcePath, index)) && /^[a-f0-9]{64}$/.test(intent.aggregateDigest || ""));
+  return Boolean(intent && intent.schemaVersion === 1 && dirtySupersededOwnerLineageMatches(manifest, intent.owner) && intent.sourceHead === plan.expectedHeadSha && intent.closedSourcePr === proofInput.closedSourcePr?.number && intent.carryForwardPr === proofInput.carryForwardPr && intent.carryForwardCommit === proofInput.carryForwardCommit && Array.isArray(intent.roots) && intent.roots.length > 0 && intent.roots.length <= 16 && intent.roots.every((root, index) => allowedIgnoredDependencyRoot(root?.sourcePath) && root.quarantinePath === ignoredDependencyQuarantinePath(manifest.state_root, manifest.task_id, root.sourcePath, index) && /^[a-f0-9]{64}$/.test(root.modeDigest || "")) && /^[a-f0-9]{64}$/.test(intent.aggregateDigest || "") && (!intent.resumeAuthorizations || (Array.isArray(intent.resumeAuthorizations) && intent.resumeAuthorizations.length <= 16 && intent.resumeAuthorizations.every(validIgnoredDependencyQuarantineResumeAuthorization))));
+}
+
+function validIgnoredDependencyQuarantineResumeAuthorization(value) {
+  return Boolean(value && validSupersessionApplyEvidence(value.approval) && validSupersessionApplyEvidence(value.reason) && Number.isFinite(Date.parse(value.recordedAt || "")) && value.metadataOnly === true);
 }
 
 function assertIgnoredDependencyDigest(path, root) {
   const current = digestIgnoredDependencyTree(path);
-  if (current.bytes !== root.bytes || current.entries !== root.entries || current.digest !== root.digest) throw new Error("ignored dependency quarantine root no longer matches its exact path/type/size/digest inventory");
+  if (current.bytes !== root.bytes || current.entries !== root.entries || current.digest !== root.digest || current.modeDigest !== root.modeDigest) throw new Error("ignored dependency quarantine root no longer matches its exact path/type/size/digest/mode inventory");
 }
 
 function validIgnoredDependencyQuarantineEvidence(manifest, evidence, plan, proofInput) {
   try {
     if (!evidence || evidence.schemaVersion !== 1 || evidence.verification?.status !== "matched_before_source_cleanup" || !dirtySupersededOwnerLineageMatches(manifest, evidence.owner) || evidence.sourceHead !== plan.expectedHeadSha || evidence.closedSourcePr !== proofInput.closedSourcePr?.number || evidence.carryForwardPr !== proofInput.carryForwardPr || evidence.carryForwardCommit !== proofInput.carryForwardCommit || !Array.isArray(evidence.roots) || evidence.roots.length === 0 || evidence.roots.length > 16 || !/^[a-f0-9]{64}$/.test(evidence.aggregateDigest || "")) return false;
-    const compact = evidence.roots.map(({ sourcePath, sourceType, layout, bytes, entries, digest }) => ({ sourcePath, sourceType, layout, bytes, entries, digest }));
+    const compact = evidence.roots.map(({ sourcePath, sourceType, layout, bytes, entries, digest, modeDigest }) => ({ sourcePath, sourceType, layout, bytes, entries, digest, modeDigest }));
     if (createHash("sha256").update(JSON.stringify(compact)).digest("hex") !== evidence.aggregateDigest) return false;
     const canonicalParent = ignoredDependencyQuarantineParent(manifest.state_root, manifest.task_id);
     inspectIgnoredDependencyQuarantineParent(manifest.state_root, manifest.task_id);
     if (!existsSync(canonicalParent) || realpathSync(canonicalParent) !== canonicalParent) return false;
     for (const [index, root] of evidence.roots.entries()) {
-      if (!allowedIgnoredDependencyRoot(root.sourcePath) || root.sourceType !== "directory" || dirname(root.quarantinePath) !== canonicalParent || root.quarantinePath !== ignoredDependencyQuarantinePath(manifest.state_root, manifest.task_id, root.sourcePath, index) || existsSync(join(plan.worktreePath, root.sourcePath)) || !existsSync(root.quarantinePath)) return false;
+      if (!allowedIgnoredDependencyRoot(root.sourcePath) || root.sourceType !== "directory" || !/^[a-f0-9]{64}$/.test(root.modeDigest || "") || dirname(root.quarantinePath) !== canonicalParent || root.quarantinePath !== ignoredDependencyQuarantinePath(manifest.state_root, manifest.task_id, root.sourcePath, index) || existsSync(join(plan.worktreePath, root.sourcePath)) || !existsSync(root.quarantinePath)) return false;
       if (inspectPnpmDependencyRoot(root.quarantinePath, root.sourcePath) !== root.layout) return false;
       assertIgnoredDependencyDigest(root.quarantinePath, root);
     }
@@ -11846,6 +11877,11 @@ function resumePendingDirtySuperseded(state, record, { options, proofInput }) {
       if (!validDirtySupersededSnapshotEvidence(manifest, snapshot, proofInput, fresh.worktreePath)) {
         throw new Error("dirty superseded preservation pending evidence no longer re-reads exactly; mutation=none.");
       }
+      // This settlement has no reset left to perform, but it still completes
+      // the preservation record used by later cleanup. Re-read the retained
+      // quarantine now so a crash after reset cannot silently certify moved
+      // dependency residue that has since disappeared or drifted.
+      assertIgnoredDependencyQuarantineEvidence(manifest, fresh, proofInput);
       // The exact immutable ref/tree/path proof was re-read immediately above;
       // a clean source has no destructive reset left to authorize.
       const settled = { status: "matched", checkedAt: new Date().toISOString(), pathCount: snapshot.paths.length, metadataOnly: true };
@@ -12640,6 +12676,9 @@ function cleanupSupersededPlan(record, state, context) {
   if (manifest.mode === "epic-batch") return { ...base, reason: "epic-batch workspace requires finish-epic closeout" };
   if (manifest.dirty_superseded_snapshot_intent && context.allowPendingDirty !== true) {
     return { ...base, reason: "dirty superseded snapshot-publication intent requires --resume-pending before cleanup-superseded" };
+  }
+  if (manifest.ignored_dependency_quarantine_intent && context.allowPendingQuarantine !== true) {
+    return { ...base, reason: "ignored dependency quarantine intent requires governed resume before cleanup-superseded" };
   }
   if (supersededSourceHasPrEvidence(manifest) && !proofInput.closedSourcePr) {
     return { ...base, reason: "source workspace has PR or prior cleanup evidence; cleanup-superseded accepts only no-PR source lanes" };
@@ -13597,6 +13636,7 @@ function applyCleanupSuperseded(state, plan, context) {
           restore: dirtySupersededRawRestoreProcedure(manifest.dirty_superseded_preservation, manifest.worktree_path, freshPlan.expectedHeadSha),
           metadataOnly: true,
         } : null,
+        quarantinedDependencyResidue: manifest.ignored_dependency_quarantine ? dirtySupersededQuarantineCleanupRecord(manifest.ignored_dependency_quarantine, manifest.worktree_path) : null,
         remoteBranchPolicy: freshPlan.proof.source.expectedRemoteState === "absent" ? "absent" : "retained",
         metadataOnly: true,
         rawPayloadRetained: false,
@@ -13604,9 +13644,12 @@ function applyCleanupSuperseded(state, plan, context) {
       const dirtySnapshotRollback = manifest.dirty_superseded_preservation
         ? ` Then ${dirtySupersededRawRestoreProcedure(manifest.dirty_superseded_preservation, manifest.worktree_path, freshPlan.expectedHeadSha)}`
         : "";
+      const quarantinedResidueRollback = manifest.ignored_dependency_quarantine
+        ? ` Then ${dirtySupersededQuarantineRestoreProcedure(manifest.ignored_dependency_quarantine, manifest.worktree_path)}`
+        : "";
       manifest.cleanup_supersession_rollback = (freshPlan.proof.source.expectedRemoteState === "absent"
         ? `Restore local branch ${manifest.branch} at ${freshPlan.expectedHeadSha} and recreate ${manifest.worktree_path}; origin/${manifest.branch} was verified absent and remains untouched.`
-        : `Restore local branch ${manifest.branch} at ${freshPlan.expectedHeadSha} and recreate ${manifest.worktree_path}; remote origin/${manifest.branch} is retained at the proven source head.`) + dirtySnapshotRollback;
+        : `Restore local branch ${manifest.branch} at ${freshPlan.expectedHeadSha} and recreate ${manifest.worktree_path}; remote origin/${manifest.branch} is retained at the proven source head.`) + dirtySnapshotRollback + quarantinedResidueRollback;
       appendTaskEvent(manifest, "cleanup_supersession_proved", `merged PR #${freshPlan.proof.carryForward.prNumber}; scope:${freshPlan.proof.scope.paths.join(",")}`);
       manifest.status = "cleanup_partial";
       manifest.cleanup_error = "superseded cleanup journal started; inspect recorded targets before resuming after interruption";
@@ -13668,6 +13711,22 @@ function dirtySupersededRawRestoreProcedure(snapshot, worktreePath, sourceHead) 
   // snapshot instead records raw blob IDs and modes, which are sufficient for
   // a byte-exact recovery even when text attributes normalize checkout output.
   return `recreate ${worktreePath} at ${sourceHead}; recover the recorded ${identity.commit} snapshot by writing each regular-file blob with git cat-file blob <recorded-object-id> directly to its literal path, applying its recorded mode, recreating mode 120000 entries from their raw blob bytes as symlinks, and removing recorded deletions; verify every restored raw blob with git hash-object --no-filters. Do not use git checkout, git restore, or git cherry-pick because attributes can normalize preserved bytes.`;
+}
+
+function dirtySupersededQuarantineCleanupRecord(evidence, worktreePath) {
+  return {
+    aggregateDigest: evidence.aggregateDigest,
+    roots: evidence.roots.map(({ sourcePath, quarantinePath, sourceType, layout, bytes, entries, digest, modeDigest }) => ({
+      sourcePath, quarantinePath, sourceType, layout, bytes, entries, digest, modeDigest,
+    })),
+    restore: dirtySupersededQuarantineRestoreProcedure(evidence, worktreePath),
+    metadataOnly: true,
+  };
+}
+
+function dirtySupersededQuarantineRestoreProcedure(evidence, worktreePath) {
+  const mappings = evidence.roots.map((root) => `${root.quarantinePath} -> ${join(worktreePath, root.sourcePath)} [digest=${root.digest}; modeDigest=${root.modeDigest}]`).join("; ");
+  return `After recreating ${worktreePath}, restore only these retained pnpm dependency roots by same-filesystem atomic rename from the recorded quarantine paths to their literal source paths: ${mappings}. Before and after each rename, re-read the recorded path/type/layout/byte-count/entry-count/digest/modeDigest; do not use package-manager install, copy, checkout, or filtered Git operations.`;
 }
 
 function assertSupersededRemoteState(manifest, cleanupCwd, expectedHeadSha, expectedRemoteState) {

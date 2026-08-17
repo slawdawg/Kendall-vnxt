@@ -732,18 +732,23 @@ do not treat an operator authorization as a bypass.
    non-pnpm layouts remain hard stops. It also rejects non-UTF-8 directory or
    symlink-target bytes and any symlinked/non-canonical managed quarantine
    ancestor. Under the source-task lock it records a
-   path/type/size/raw-tree-digest inventory and a pending relocation intent,
+   path/type/size/raw-tree-digest/permission-mode inventory and a pending relocation intent,
    then atomically renames each root on the same filesystem into the managed,
-   lane-qualified quarantine area. It re-reads every moved root and the source
-   absence before completing its evidence. A crash leaves the intent retained;
-   `--resume-pending --apply` may settle only the exact recorded source or
-   destination state and otherwise makes no move. Ordinary preservation still
+   lane-qualified quarantine area. It fsyncs both the source and destination
+   parents before recording a moved root, then re-reads every moved root and
+   the source absence before completing its evidence. A crash leaves the intent
+   retained; `--resume-pending --apply` may settle only the exact recorded
+   source or destination state and otherwise makes no move, while appending its
+   fresh approval/reason to the retained recovery history before any rename.
+   Ordinary preservation still
    rejects all ignored residue. It recognizes a completed quarantine only after
    its source/successor bindings, canonical managed-parent path, and every
-   retained digest re-read exactly at
-   the reset boundary. The quarantine command never deletes bytes, a worktree,
-   a local branch, or a remote branch; later `cleanup-superseded` retains its
-   evidence and quarantine content for recovery.
+   retained content and permission-mode digest re-read exactly at the reset
+   boundary, including a clean-source pending-preservation settlement. The
+   quarantine command never deletes bytes, a worktree, a local branch, or a
+   remote branch; later `cleanup-superseded` retains its root mappings, digests,
+   and raw atomic-rename restore instructions in its cleanup journal and
+   rollback record.
    A clean lane with a retained, non-open PR can instead use the narrowly
    approved closed-PR form only for one exact task:
    `cleanup-integrated <task> --allow-closed-pr-integrated --approval "<recorded operator approval>" --base origin/<base> --summary-json`.
