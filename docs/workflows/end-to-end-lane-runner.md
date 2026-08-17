@@ -649,7 +649,8 @@ do not treat an operator authorization as a bypass.
    `preserve-dirty-superseded <task>` with the same exact closed-source PR and
    ordered carry-forward patch arguments. Its dry run rejects untracked or
    ignored files, renamed, copied, malformed, non-UTF-8, literal-pathspec
-   metacharacters, active replacement refs or repository/ambient graft history,
+   metacharacters, active replacement refs, repository/ambient graft history,
+   or repository/ambient shallow history,
    any whole-index hidden
    assume-unchanged/skip-worktree entry (including the combined lowercase
    `s` `git ls-files -v` representation),
@@ -694,7 +695,14 @@ do not treat an operator authorization as a bypass.
    tree from the still-dirty source, not merely the named dirty entries. A
    recorded prior owner is accepted
    only through a valid ownership-takeover lineage. It never removes a
-   worktree, local branch, or remote branch. `cleanup-superseded` re-validates
+   worktree, local branch, or remote branch. If later local cleanup needs to
+   recover a preserved snapshot, use the retained path/object/mode evidence to
+   write each regular-file blob directly with `git cat-file blob`, recreate
+   mode `120000` entries as symlinks from their raw link-text blobs, and remove
+   recorded deletions; then verify raw object IDs with `git hash-object
+   --no-filters`. Do not use `git checkout`, `git restore`, or `git
+   cherry-pick` for this recovery because working-tree attributes can normalize
+   the preserved bytes. `cleanup-superseded` re-validates
    any recorded snapshot as a direct (non-symbolic) ref and, while the worktree remains present, rechecks
    full status including ignored/untracked residue and whole-index hidden flags
    before local cleanup; a missing, changed, or unreadable preservation object,

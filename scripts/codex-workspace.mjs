@@ -11665,6 +11665,9 @@ function assertNoDirtySupersededReplacementRefs(worktreePath) {
   if (process.env.GIT_GRAFT_FILE) {
     throw new Error("dirty superseded preservation refuses an ambient Git graft file");
   }
+  if (process.env.GIT_SHALLOW_FILE) {
+    throw new Error("dirty superseded preservation refuses an ambient Git shallow-history file");
+  }
   // `info/grafts` belongs to the shared repository, not a linked worktree's
   // private administrative directory. Resolve the common Git directory so a
   // source worktree cannot evade the proof by being linked.
@@ -11684,6 +11687,16 @@ function assertNoDirtySupersededReplacementRefs(worktreePath) {
     return trimmed.length > 0 && !trimmed.startsWith("#");
   })) {
     throw new Error("dirty superseded preservation refuses active repository Git graft state");
+  }
+  // A shallow boundary can make rev-list omit real first-parent commits. The
+  // patch-equivalence proof must see the complete source history, not merely
+  // the locally available suffix.
+  const shallow = git(["rev-parse", "--is-shallow-repository"], { cwd: worktreePath, env: { GIT_NO_REPLACE_OBJECTS: "1" } });
+  if (shallow.code !== 0 || !["true", "false"].includes(shallow.stdout.trim())) {
+    throw new Error("dirty superseded preservation could not inspect repository shallow-history state");
+  }
+  if (shallow.stdout.trim() === "true") {
+    throw new Error("dirty superseded preservation refuses shallow repository history before patch-equivalence proof");
   }
 }
 
@@ -11732,6 +11745,9 @@ function assertNoDirtySupersededRawChangesHiddenFromStatus(worktreePath, sourceH
   });
   if (listed.status !== 0) throw new Error("dirty superseded preservation could not inventory tracked source bytes");
   const raw = Buffer.from(listed.stdout || []);
+  const rawFiles = [];
+  const individuallyHashedFiles = [];
+  const rawSymlinks = [];
   for (let start = 0, end = raw.indexOf(0, start); end >= 0; start = end + 1, end = raw.indexOf(0, start)) {
     const entry = raw.subarray(start, end); const separator = entry.indexOf(9);
     if (separator < 0) throw new Error("dirty superseded preservation received malformed tracked source entry");
@@ -11750,23 +11766,55 @@ function assertNoDirtySupersededRawChangesHiddenFromStatus(worktreePath, sourceH
     const sourcePath = join(worktreePath, path);
     let info;
     try { info = lstatSync(sourcePath); } catch { throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`); }
-    let hashed;
     if (header[0] === "120000") {
       if (!info.isSymbolicLink()) throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`);
-      hashed = spawnSync("git", ["hash-object", "--no-filters", "--stdin"], {
-        cwd: worktreePath, input: readlinkSync(sourcePath, { encoding: "buffer" }), stdio: "pipe",
-        timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes,
-        env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
-      });
+      rawSymlinks.push({ path, sourcePath, objectId: header[2] });
     } else {
       if (!info.isFile()) throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`);
-      hashed = spawnSync("git", ["hash-object", "--no-filters", "--", path], {
-        cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs,
-        maxBuffer: recoveryPatchCaptureMaxBytes, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
-      });
+      // --stdin-paths is line-delimited. Retain the old literal pathspec form
+      // for the rare legal tracked path containing a line break rather than
+      // splitting it into unrelated paths or normalizing its bytes.
+      (/[\r\n]/.test(path) ? individuallyHashedFiles : rawFiles).push({ path, objectId: header[2] });
     }
-    if (hashed.status !== 0 || String(hashed.stdout || "").trim() !== header[2]) {
-      throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${path}`);
+  }
+  // `--stdin-paths` performs one raw Git hash process for all ordinary files.
+  // UTF-8 paths without line breaks are unambiguous in its newline-delimited
+  // input. Symlinks and rare line-break names remain separate because
+  // hash-object would respectively dereference or split them.
+  if (rawFiles.length > 0) {
+    const hashed = spawnSync("git", ["hash-object", "--no-filters", "--stdin-paths"], {
+      cwd: worktreePath,
+      input: Buffer.from(`${rawFiles.map(({ path }) => path).join("\n")}\n`, "utf8"),
+      stdio: "pipe", timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes,
+      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+    });
+    const objectIds = String(hashed.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+    if (hashed.status !== 0 || objectIds.length !== rawFiles.length) {
+      throw new Error("dirty superseded preservation could not batch-hash raw tracked bytes hidden from porcelain");
+    }
+    for (let index = 0; index < rawFiles.length; index += 1) {
+      if (objectIds[index] !== rawFiles[index].objectId) {
+        throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${rawFiles[index].path}`);
+      }
+    }
+  }
+  for (const entry of individuallyHashedFiles) {
+    const hashed = spawnSync("git", ["hash-object", "--no-filters", "--", entry.path], {
+      cwd: worktreePath, stdio: "pipe", timeout: defaultVerificationTimeoutMs,
+      maxBuffer: recoveryPatchCaptureMaxBytes, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+    });
+    if (hashed.status !== 0 || String(hashed.stdout || "").trim() !== entry.objectId) {
+      throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${entry.path}`);
+    }
+  }
+  for (const entry of rawSymlinks) {
+    const hashed = spawnSync("git", ["hash-object", "--no-filters", "--stdin"], {
+      cwd: worktreePath, input: readlinkSync(entry.sourcePath, { encoding: "buffer" }), stdio: "pipe",
+      timeout: defaultVerificationTimeoutMs, maxBuffer: recoveryPatchCaptureMaxBytes,
+      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+    });
+    if (hashed.status !== 0 || String(hashed.stdout || "").trim() !== entry.objectId) {
+      throw new Error(`dirty superseded preservation found raw tracked bytes hidden from porcelain: ${entry.path}`);
     }
   }
 }
@@ -11866,7 +11914,7 @@ function assertDirtySupersededSnapshotConfiguration(worktreePath) {
 }
 
 function assertDurablePreservationGitEnvironment() {
-  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE"]
+  const unsafe = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE"]
     .filter((name) => process.env[name]);
   for (const name of Object.keys(process.env)) {
     if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/.test(name)) unsafe.push(name);
@@ -13247,7 +13295,7 @@ function applyCleanupSuperseded(state, plan, context) {
           commit: manifest.dirty_superseded_preservation.snapshotCommit,
           tree: manifest.dirty_superseded_preservation.snapshotTree,
           paths: manifest.dirty_superseded_preservation.paths.map(({ path, status }) => ({ path, status })),
-          restore: `git cherry-pick ${manifest.dirty_superseded_preservation.snapshotCommit} after recreating ${manifest.worktree_path} at ${freshPlan.expectedHeadSha}`,
+          restore: dirtySupersededRawRestoreProcedure(manifest.dirty_superseded_preservation, manifest.worktree_path, freshPlan.expectedHeadSha),
           metadataOnly: true,
         } : null,
         remoteBranchPolicy: freshPlan.proof.source.expectedRemoteState === "absent" ? "absent" : "retained",
@@ -13255,7 +13303,7 @@ function applyCleanupSuperseded(state, plan, context) {
         rawPayloadRetained: false,
       };
       const dirtySnapshotRollback = manifest.dirty_superseded_preservation
-        ? ` Then restore preserved dirty paths with git cherry-pick ${manifest.dirty_superseded_preservation.snapshotCommit}.`
+        ? ` Then ${dirtySupersededRawRestoreProcedure(manifest.dirty_superseded_preservation, manifest.worktree_path, freshPlan.expectedHeadSha)}`
         : "";
       manifest.cleanup_supersession_rollback = (freshPlan.proof.source.expectedRemoteState === "absent"
         ? `Restore local branch ${manifest.branch} at ${freshPlan.expectedHeadSha} and recreate ${manifest.worktree_path}; origin/${manifest.branch} was verified absent and remains untouched.`
@@ -13313,6 +13361,14 @@ function applyCleanupSuperseded(state, plan, context) {
     writeManifest(plan.manifestPath, manifest);
     });
   });
+}
+
+function dirtySupersededRawRestoreProcedure(snapshot, worktreePath, sourceHead) {
+  const identity = dirtySupersededSnapshotIdentity(snapshot);
+  // Git checkout, restore, and cherry-pick apply working-tree filters. The
+  // snapshot instead records raw blob IDs and modes, which are sufficient for
+  // a byte-exact recovery even when text attributes normalize checkout output.
+  return `recreate ${worktreePath} at ${sourceHead}; recover the recorded ${identity.commit} snapshot by writing each regular-file blob with git cat-file blob <recorded-object-id> directly to its literal path, applying its recorded mode, recreating mode 120000 entries from their raw blob bytes as symlinks, and removing recorded deletions; verify every restored raw blob with git hash-object --no-filters. Do not use git checkout, git restore, or git cherry-pick because attributes can normalize preserved bytes.`;
 }
 
 function assertSupersededRemoteState(manifest, cleanupCwd, expectedHeadSha, expectedRemoteState) {
@@ -13823,7 +13879,7 @@ function dirtySupersededRetentionMap(state, { failClosed, failureMessage }) {
       continue;
     }
     const manifest = record.manifest;
-    if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent)) {
+    if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) {
       retained.set(resolve(manifest.worktree_path), manifest.task_id);
     }
   }
@@ -13876,7 +13932,7 @@ function cleanupBranches(argv) {
       continue;
     }
     const manifest = record.manifest;
-    if (manifest.status !== "closed" && (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) && manifest.branch) {
+    if ((manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) && manifest.branch) {
       preservedBranches.add(manifest.branch);
     }
   }
