@@ -185,8 +185,8 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   const empty = await loader.loadPipelineCockpitPackets();
   assert.equal(empty.fixtureMode.kind, "empty");
   assert.equal(empty.packets.length, 0);
-  assert.notEqual(empty.projection, emptyProjection);
-  assert.doesNotMatch(JSON.stringify(empty.projection), /python-only extension/i);
+  assert.notEqual(empty.operationalProjection, emptyProjection);
+  assert.doesNotMatch(JSON.stringify(empty.operationalProjection), /python-only extension/i);
 
   for (const emptyReason of ["blocked", "refilling", "source_exhausted"]) {
     const reasonProjection = runtimeProjection([], {
@@ -309,7 +309,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   const fixtureShaped = await fixtureShapedLoader.loadPipelineCockpitPackets();
   assert.equal(fixtureShaped.fixtureMode.kind, "invalid");
   assert.equal(fixtureShaped.packets.length, 0);
-  assert.equal(fixtureShaped.projection, null);
+  assert.equal(fixtureShaped.operationalProjection, null);
   assert.match(fixtureShaped.fixtureMode.summary, /fixture-shaped|fixture-only/i);
 
   const fixturePrefixedLoader = await loadPipelinePacketLoader(fixtures, {
@@ -1042,7 +1042,7 @@ test("WorkPacket list failure clears a successful projection and reports the rea
   assert.equal(unavailable.fixtureMode.kind, "unavailable");
   assert.equal(unavailable.fixtureMode.label, "Supervisor unavailable");
   assert.equal(unavailable.packets.length, 0);
-  assert.equal(unavailable.projection, null);
+  assert.equal(unavailable.operationalProjection, null);
   assert.equal(unavailable.projectionError, "Supervisor WorkPacket list unavailable");
 });
 
@@ -1713,6 +1713,20 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
     canonicalContract: { extra: "server-only extension" },
     productModeMapping: { extra: "server-only extension" },
     rawProviderResponse: "python-only extension",
+    actionCapabilities: [{
+      actionId: "mark_tested", targetType: "work_packet", targetId: lifecycle.packetId,
+      capabilityState: "available", authorityState: "allowed", riskTier: "low", typedReason: null,
+      expectedResultSummary: "Record the operator test.", correlationRequired: true, idempotencyRequired: true,
+      evidenceRefs: [], metadataOnly: true, rawPayloadRetained: false, summary: "wrong-shape collision secret",
+    }],
+    actionResults: [{
+      schemaVersion: "pipeline-operational-action/v0", actionId: "mark_tested", targetType: "work_packet", targetId: lifecycle.packetId,
+      outcome: "accepted", resultingStage: "review", resultingStatus: "waiting", capabilityState: "available",
+      authorityState: "allowed", riskTier: "low", typedReason: null, evidenceRefs: [], correlationId: "correlation:test",
+      idempotencyKey: "idempotency:test", actionRecordId: "action:test", metadataOnly: true, rawPayloadRetained: false,
+      summary: "wrong-shape collision secret",
+    }],
+    actionResultsV1: [{ summary: "wrong-shape collision secret" }],
   }];
   const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
     getPipelineDashboardProjection: async () => projection,
@@ -1723,17 +1737,22 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   const clientPacket = JSON.parse(JSON.stringify(result.canonicalPackets[0]));
   assert.deepEqual(Object.keys(clientPacket).sort(), ["presentation"]);
   assert.equal(clientPacket.presentation.schemaVersion, "dashboard-canonical-presentation/v1");
+  assert.equal(result.operationalProjection.schemaVersion, "dashboard-canonical-operational-projection/v1");
   assert.doesNotMatch(JSON.stringify(clientPacket), /provider payload|credential token|server-only/i);
   assert.equal(clientPacket.presentation.packetId, lifecycle.packetId);
-  assert.equal(result.projection.workPackets[0].canonicalContract, null);
-  assert.equal(result.projection.workPackets[0].productModeMapping, null);
-  assert.equal(result.projection.selectedPacketDetails[0].canonicalContract, null);
-  assert.equal(result.projection.selectedPacketDetails[0].productModeMapping, null);
-  assert.equal(result.projection.backendReachability.checkedAt, "2026-08-17T00:00:00.000Z");
-  assert.equal(result.projection.managerSummary.activeLeaseCount, 2);
-  assert.deepEqual(result.projection.workerSummary.workerRefs, ["worker:1"]);
-  assert.equal(result.projection.queueSummary.dispatchableCount, 2);
-  assert.doesNotMatch(JSON.stringify(result.projection), /python-only extension/i);
+  assert.equal(result.operationalProjection.workPackets[0].canonicalContract, null);
+  assert.equal(result.operationalProjection.workPackets[0].productModeMapping, null);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].canonicalContract, null);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].productModeMapping, null);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].actionCapabilities[0].summary, undefined);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].actionResults[0].summary, undefined);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].actionResultsV1, undefined);
+  assert.equal(result.operationalProjection.backendReachability.checkedAt, "2026-08-17T00:00:00.000Z");
+  assert.equal(result.operationalProjection.managerSummary.activeLeaseCount, 2);
+  assert.deepEqual(result.operationalProjection.workerSummary.workerRefs, ["worker:1"]);
+  assert.equal(result.operationalProjection.queueSummary.dispatchableCount, 2);
+  assert.doesNotMatch(JSON.stringify(result.operationalProjection), /python-only extension/i);
+  assert.doesNotMatch(JSON.stringify(result.operationalProjection), /rawProviderResponse/i);
 });
 
 test("canonical dashboard presentation rejects unknown root and nested fields before cockpit rendering", async () => {
@@ -3075,7 +3094,7 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
       return {
         fixtureMode: invalidFixtureMode("Supervisor invalid", fixtureAdapterError),
         canonicalPackets: [],
-        projection: null,
+        operationalProjection: null,
         projectionError: fixtureAdapterError,
         packets: [],
       };

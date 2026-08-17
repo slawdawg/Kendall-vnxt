@@ -14,11 +14,13 @@ one explicit named V0 hold because it still needs its own work-item-scoped
 memory DTO.
 
 The active operational-truth sub-slice moves the normal and LAN action-gating
-path and projection-truth helpers onto a versioned canonical DTO. The next
-sub-slice expands that DTO through the active-board view model and cockpit
-rendering. The old V0 projection remains a named client-safe board-rendering
-adapter prop in normal and LAN cockpit paths until the later source-zero and
-persisted-readback retirement gate.
+path and projection-truth helpers onto a versioned canonical DTO. The active
+board now receives the dashboard-owned
+`DashboardCanonicalOperationalProjectionV1` rather than the supervisor V0
+envelope. Its nested legacy action and board-detail values remain explicit
+compatibility holds while their canonical replacements are delivered; the
+upstream V0 envelope remains server-side and is assembled through a strict
+allowlist. Source-zero and persisted-readback retirement remain later gates.
 
 ## Starting point
 
@@ -56,6 +58,9 @@ field whitelist for stage summaries, source state, manager/worker/queue
 summaries, gated controls, execute admission, and V1 action capabilities. It
 must not spread raw supervisor objects, lifecycle payload summaries, evidence
 references beyond the current safe contract, or Python-only extension records.
+Source references, runtime readiness, and V1 action contexts must each use
+shape-specific reconstruction, so a key that is valid elsewhere cannot cross
+one of those nested boundaries by name collision.
 
 The new types need distinct versioned names and schema literals. They must not
 reuse `PipelineDashboardProjectionV0` or `PipelineDashboardPacket` aliases,

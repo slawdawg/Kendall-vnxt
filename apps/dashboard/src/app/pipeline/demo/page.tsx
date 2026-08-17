@@ -29,7 +29,7 @@ export default function PipelineDemoPage() {
         fixtureMode={demoSourceState}
         managerExecutionLane={selectedManagerExecutionLaneSummary}
         packets={packets}
-        projection={null}
+        operationalProjection={null}
         projectionError={null}
         selectedPacket={packets[0] ?? null}
       />

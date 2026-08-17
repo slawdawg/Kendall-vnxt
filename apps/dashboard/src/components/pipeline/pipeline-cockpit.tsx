@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
 import type {
-  PipelineDashboardProjectionV0,
   PipelineGatedOperationalActionIdV0,
   PipelineOperationalActionApprovalRequestV0,
   PipelineOperationalActionRequestV0,
@@ -51,7 +50,10 @@ import {
   requestPipelineOperationalApprovalV1,
 } from "../../lib/pipeline-supervisor-actions";
 import type { DashboardCanonicalWorkPacketClientV1, PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
-import type { DashboardCanonicalOperationalProjectionTruthV1 } from "../../lib/pipeline/canonical-operational-projection";
+import type {
+  DashboardCanonicalOperationalProjectionTruthV1,
+  DashboardCanonicalOperationalProjectionV1,
+} from "../../lib/pipeline/canonical-operational-projection";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
 
@@ -97,16 +99,16 @@ type ConnectorPath = {
 };
 
 type CockpitStageSummary = {
-  emptyReason: PipelineDashboardProjectionV0["stageSummaries"][number]["emptyReason"];
-  freshnessState: PipelineDashboardProjectionV0["stageSummaries"][number]["freshnessState"] | "demo" | "empty" | "invalid";
+  emptyReason: DashboardCanonicalOperationalProjectionV1["stageSummaries"][number]["emptyReason"];
+  freshnessState: DashboardCanonicalOperationalProjectionV1["stageSummaries"][number]["freshnessState"] | "demo" | "empty" | "invalid";
   label: string;
   packetCount: number;
-  sourceLabel: PipelineDashboardProjectionV0["stageSummaries"][number]["sourceLabel"] | "demo" | "empty" | "invalid";
+  sourceLabel: DashboardCanonicalOperationalProjectionV1["stageSummaries"][number]["sourceLabel"] | "demo" | "empty" | "invalid";
 };
 
-type ProjectionSelectedPacketDetail = PipelineDashboardProjectionV0["selectedPacketDetails"][number];
-type ActiveManagerLaneClarity = NonNullable<PipelineDashboardProjectionV0["activeManagerLaneClarity"]>;
-type PipelineCoordinationHealth = NonNullable<PipelineDashboardProjectionV0["coordinationHealth"]>;
+type ProjectionSelectedPacketDetail = DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number];
+type ActiveManagerLaneClarity = NonNullable<DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"]>;
+type PipelineCoordinationHealth = NonNullable<DashboardCanonicalOperationalProjectionV1["coordinationHealth"]>;
 type ActiveBoardCockpitPacket = PipelineFixturePacket & {
   activeBoardCard?: PipelineCompactPacketCard;
 };
@@ -118,7 +120,7 @@ export function PipelineCockpit({
   canonicalPackets,
   operationalTruth,
   packets,
-  projection,
+  operationalProjection,
   projectionError,
   selectedPacket,
 }: {
@@ -128,11 +130,12 @@ export function PipelineCockpit({
   readOnly?: boolean;
   /** Client-safe canonical runtime rows; this boundary owns the temporary V0 adapter. */
   canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
-  /** Versioned canonical truth for action gating; the board projection migrates next. */
+  /** Versioned canonical truth for action gating. */
   operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
   /** Explicit-demo V0 fixtures only. Normal runtime callers pass canonicalPackets. */
   packets?: PipelineFixturePacket[];
-  projection?: PipelineDashboardProjectionV0 | null;
+  /** Strict canonical board model; no V0 projection envelope crosses this boundary. */
+  operationalProjection?: DashboardCanonicalOperationalProjectionV1 | null;
   projectionError?: string | null;
   selectedPacket?: PipelineFixturePacket | null;
 }) {
@@ -152,7 +155,7 @@ export function PipelineCockpit({
   const [usageVisibility, setUsageVisibility] = useState({ claude: true, codex: true });
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [projectionTruthClock, setProjectionTruthClock] = useState(() => Date.now());
-  const currentProjection = projection ?? null;
+  const currentProjection = operationalProjection ?? null;
   const currentOperationalTruth = operationalTruth ?? null;
   const activeManagerLaneClarity = currentProjection?.activeManagerLaneClarity ?? null;
   const currentProjectionError = projectionError ?? null;
@@ -897,7 +900,7 @@ function ProjectionTruthSummary({
   sourceState,
 }: {
   activeBoardViewModel: PipelineActiveBoardViewModel | null;
-  projection: PipelineDashboardProjectionV0 | null;
+  projection: DashboardCanonicalOperationalProjectionV1 | null;
   projectionError: string | null;
   sourceState: PipelineRuntimeSourceState;
 }) {
@@ -1041,7 +1044,7 @@ function ProjectionTruthMetric({ label, value }: { label: string; value: string 
 }
 
 function buildStageSummaryByStage(
-  projection: PipelineDashboardProjectionV0 | null,
+  projection: DashboardCanonicalOperationalProjectionV1 | null,
   projectionError: string | null,
   sourceState: PipelineRuntimeSourceState
 ) {
@@ -1077,7 +1080,7 @@ function buildStageSummaryByStage(
 }
 
 function projectionToCockpitPackets(
-  projection: PipelineDashboardProjectionV0 | null,
+  projection: DashboardCanonicalOperationalProjectionV1 | null,
   runtimePackets: PipelineFixturePacket[],
   projectionError: string | null,
   activeBoardViewModel: PipelineActiveBoardViewModel | null,
@@ -1278,9 +1281,9 @@ function applyNonRuntimeStageLabels(
 }
 
 function projectionWorkPacketToDetailOnlyCockpitPacket(
-  packet: PipelineDashboardProjectionV0["workPackets"][number],
+  packet: DashboardCanonicalOperationalProjectionV1["workPackets"][number],
   detail: ProjectionSelectedPacketDetail | null,
-  projection: PipelineDashboardProjectionV0 | null,
+  projection: DashboardCanonicalOperationalProjectionV1 | null,
   canonicalDetail: PipelineCanonicalPacketDetail | null
 ): ActiveBoardCockpitPacket {
   const stage = activeBoardStageToCockpitStage(packet.currentStage);
@@ -1399,17 +1402,17 @@ function activeBoardStageToCockpitStage(stage: PipelineCompactPacketCard["stage"
   return stage === "needs_approval" ? "human_gate" : stage;
 }
 
-function projectionSourceForPackets(projection: PipelineDashboardProjectionV0) {
+function projectionSourceForPackets(projection: DashboardCanonicalOperationalProjectionV1) {
   return isProjectionTooOld(projection) && projection.sourceLabel === "live" ? "stale" : projection.sourceLabel;
 }
 
-function projectionFreshnessForPackets(projection: PipelineDashboardProjectionV0) {
+function projectionFreshnessForPackets(projection: DashboardCanonicalOperationalProjectionV1) {
   return isProjectionTooOld(projection) && projection.freshnessState === "live" ? "stale" : projection.freshnessState;
 }
 
 function projectionSourceTrustState(
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+  sourceLabel: DashboardCanonicalOperationalProjectionV1["sourceLabel"],
+  freshnessState: DashboardCanonicalOperationalProjectionV1["freshnessState"]
 ): PipelineFixturePacket["sourceTrustState"] {
   if (freshnessState === "stale" || sourceLabel === "stale") {
     return "stale";
@@ -1425,8 +1428,8 @@ function projectionSourceTrustState(
 
 function canonicalSourceTrustState(
   trust: NonNullable<PipelineCanonicalPacketDetail["source"]>["trust"],
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+  sourceLabel: DashboardCanonicalOperationalProjectionV1["sourceLabel"],
+  freshnessState: DashboardCanonicalOperationalProjectionV1["freshnessState"]
 ): PipelineFixturePacket["sourceTrustState"] {
   const projectionState = projectionSourceTrustState(sourceLabel, freshnessState);
   if (projectionState === "stale" || projectionState === "unavailable") {
@@ -1442,7 +1445,7 @@ function canonicalSourceTrustState(
 }
 
 function projectionSourceRefType(
-  sourceType: NonNullable<PipelineDashboardProjectionV0["workPackets"][number]["sourceRef"]>["sourceType"]
+  sourceType: NonNullable<DashboardCanonicalOperationalProjectionV1["workPackets"][number]["sourceRef"]>["sourceType"]
 ): PipelineFixturePacket["sourceRefs"][number]["sourceType"] {
   if (sourceType === "prd" || sourceType === "bmad_story") {
     return "bmad_artifact";
@@ -1454,9 +1457,9 @@ function projectionSourceRefType(
 }
 
 function projectionSourceRefForPacket(
-  sourceRef: NonNullable<PipelineDashboardProjectionV0["workPackets"][number]["sourceRef"]>,
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+  sourceRef: NonNullable<DashboardCanonicalOperationalProjectionV1["workPackets"][number]["sourceRef"]>,
+  sourceLabel: DashboardCanonicalOperationalProjectionV1["sourceLabel"],
+  freshnessState: DashboardCanonicalOperationalProjectionV1["freshnessState"]
 ): PipelineFixturePacket["sourceRefs"][number] {
   const freshness = projectionSourceFreshness(sourceLabel, freshnessState);
   const refBase = {
@@ -1484,8 +1487,8 @@ function projectionSourceRefForPacket(
 }
 
 function projectionSourceFreshness(
-  sourceLabel: PipelineDashboardProjectionV0["sourceLabel"],
-  freshnessState: PipelineDashboardProjectionV0["freshnessState"]
+  sourceLabel: DashboardCanonicalOperationalProjectionV1["sourceLabel"],
+  freshnessState: DashboardCanonicalOperationalProjectionV1["freshnessState"]
 ): PipelineFixturePacket["sourceRefs"][number]["freshness"] {
   if (sourceLabel === "live" && freshnessState === "live") {
     return "fresh";
@@ -1496,7 +1499,7 @@ function projectionSourceFreshness(
   return "unknown";
 }
 
-function isProjectionTooOld(projection: PipelineDashboardProjectionV0) {
+function isProjectionTooOld(projection: DashboardCanonicalOperationalProjectionV1) {
   const sourceUpdatedAt = Date.parse(projection.sourceUpdatedAt);
   if (!Number.isFinite(sourceUpdatedAt)) {
     return true;
@@ -2654,7 +2657,7 @@ function DiagnosticsPanel({
   items: PipelineDiagnosticsItem[];
   managerExecutionLane: PipelineManagerExecutionLaneState | null;
   onClose: () => void;
-  projection: PipelineDashboardProjectionV0 | null;
+  projection: DashboardCanonicalOperationalProjectionV1 | null;
   projectionError: string | null;
 }) {
   const headingRef = useRef<HTMLHeadingElement | null>(null);
@@ -2682,26 +2685,26 @@ function DiagnosticsPanel({
     projection ? {
       label: "Projection proof",
       value: `${projection.projectionId}; ${projection.sourceLabel}; ${projection.freshnessState}; ${projection.truthSummary.label}; live proof ${projectionLiveProofLabel(diagnosticsLiveProof)}; updated ${projection.sourceUpdatedAt}`,
-      source: "PipelineDashboardProjectionV0",
+      source: "DashboardCanonicalOperationalProjectionV1",
       copyable: true,
       retentionClass: "metadata_only",
     } : {
       label: "Projection proof",
       value: projectionError ? `projection unavailable: ${projectionError}` : "projection unavailable",
-      source: "PipelineDashboardProjectionV0",
+      source: "DashboardCanonicalOperationalProjectionV1",
       copyable: false,
       retentionClass: "metadata_only",
     },
     projection ? {
       label: "Projection evidence refs",
       value: projection.evidenceRefs.length > 0 ? projection.evidenceRefs.join(", ") : "none",
-      source: "PipelineDashboardProjectionV0.evidenceRefs",
+      source: "DashboardCanonicalOperationalProjectionV1.evidenceRefs",
       copyable: projection.evidenceRefs.length > 0,
       retentionClass: "metadata_only",
     } : {
       label: "Projection evidence refs",
       value: "projection unavailable",
-      source: "PipelineDashboardProjectionV0.evidenceRefs",
+      source: "DashboardCanonicalOperationalProjectionV1.evidenceRefs",
       copyable: false,
       retentionClass: "metadata_only",
     },

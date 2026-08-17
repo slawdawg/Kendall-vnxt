@@ -1,10 +1,6 @@
 import type {
   AuthoritativePacketStage,
-  PipelineDashboardProjectionV0,
-  PipelineDashboardWorkPacketV0,
-  PipelineGatedControlV0,
   PipelineCanonicalContractV1,
-  PipelineOperationalActionCapabilityV0,
   PipelineOperationalActionCapabilityV1,
   PipelineManagerSummaryV0,
   PipelineProductModeMappingV0,
@@ -13,6 +9,15 @@ import type {
   PipelineQueueSummaryV0,
   PipelineReviewRouteEvidenceV0,
 } from "@kendall/contracts";
+import type {
+  DashboardCanonicalOperationalProjectionV1,
+  DashboardCanonicalOperationalWorkPacketV1,
+} from "./canonical-operational-projection";
+
+type CanonicalOperationalProjection = DashboardCanonicalOperationalProjectionV1;
+type CanonicalOperationalWorkPacket = DashboardCanonicalOperationalWorkPacketV1;
+type CanonicalGatedControl = CanonicalOperationalProjection["gatedControls"][number];
+type CanonicalLegacyActionCapability = NonNullable<CanonicalOperationalProjection["actionCapabilities"]>[number];
 
 export type PipelinePacketBoardPlacement = "active_board" | "attention" | "stale_history" | "diagnostics" | "hidden";
 export type PipelinePacketActionability =
@@ -70,7 +75,7 @@ export type PipelineActiveStageLane = {
   label: string;
   packetCards: PipelineCompactPacketCard[];
   activePacketCount: number;
-  emptyReason: PipelineDashboardProjectionV0["stageSummaries"][number]["emptyReason"] | null;
+  emptyReason: CanonicalOperationalProjection["stageSummaries"][number]["emptyReason"] | null;
 };
 
 export type PipelineCompactPacketCard = {
@@ -181,7 +186,7 @@ export type PipelinePacketDetailWhyDiagnostics = {
   placement: PipelinePacketBoardPlacement;
   actionability: PipelinePacketActionability;
   backpressure: PipelineBackpressureState | null;
-  detailSource: "PipelineDashboardProjectionV0.selectedPacketDetails" | "PipelineDashboardProjectionV0.workPackets";
+  detailSource: "DashboardCanonicalOperationalProjectionV1.selectedPacketDetails" | "DashboardCanonicalOperationalProjectionV1.workPackets";
   selectedDetailAvailable: boolean;
   why: {
     label: string;
@@ -244,11 +249,11 @@ export type PipelineBackpressureState = {
   affectedStages: AuthoritativePacketStage[];
   backendWip: {
     policyVersion: "supervisor-wip/v0";
-    state: PipelineDashboardProjectionV0["executeAdmission"]["state"];
-    typedReason: PipelineDashboardProjectionV0["executeAdmission"]["typedReason"];
-    limits: PipelineDashboardProjectionV0["executeAdmission"]["limits"];
-    observed: PipelineDashboardProjectionV0["executeAdmission"]["observed"];
-    blockingDimensions: PipelineDashboardProjectionV0["executeAdmission"]["blockingDimensions"];
+    state: CanonicalOperationalProjection["executeAdmission"]["state"];
+    typedReason: CanonicalOperationalProjection["executeAdmission"]["typedReason"];
+    limits: CanonicalOperationalProjection["executeAdmission"]["limits"];
+    observed: CanonicalOperationalProjection["executeAdmission"]["observed"];
+    blockingDimensions: CanonicalOperationalProjection["executeAdmission"]["blockingDimensions"];
     evidenceRefs: string[];
     metadataOnly: true;
     rawPayloadRetained: false;
@@ -294,8 +299,8 @@ const stageLabels: Record<AuthoritativePacketStage, string> = {
   learn: "Learn",
 };
 
-const closedStatuses = new Set<PipelineDashboardWorkPacketV0["status"]>(["complete", "deferred"]);
-const visibleActiveStatuses = new Set<PipelineDashboardWorkPacketV0["status"]>(["active", "waiting", "blocked", "failed"]);
+const closedStatuses = new Set<CanonicalOperationalWorkPacket["status"]>(["complete", "deferred"]);
+const visibleActiveStatuses = new Set<CanonicalOperationalWorkPacket["status"]>(["active", "waiting", "blocked", "failed"]);
 const dispatchAffectingEmptyReasons = new Set([
   "usage_limited",
   "resource_limited",
@@ -304,7 +309,7 @@ const dispatchAffectingEmptyReasons = new Set([
   "cleanup_gated",
 ]);
 
-export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardProjectionV0): PipelineActiveBoardViewModel {
+export function buildPipelineActiveBoardViewModel(projection: CanonicalOperationalProjection): PipelineActiveBoardViewModel {
   const dispatchState = isDispatchAffectingManagerState(projection.managerSummary, projection.queueSummary, projection);
   const backpressure = deriveBackpressureState(projection);
   const cardsByStage = new Map<AuthoritativePacketStage, PipelineCompactPacketCard[]>();
@@ -409,8 +414,8 @@ export function buildPipelineActiveBoardViewModel(projection: PipelineDashboardP
 }
 
 export function buildContextualActionStripForPacket(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelineContextualActionStrip | null {
   if (!projectionCanShowLiveActiveWork(projection) || packet.truthLabel !== "live") {
     return null;
@@ -435,7 +440,7 @@ export function buildContextualActionStripForPacket(
 }
 
 export function buildRuntimeOperationalActionStrip(
-  projection: PipelineDashboardProjectionV0,
+  projection: CanonicalOperationalProjection,
 ): PipelineContextualActionStrip | null {
   if (
     projection.sourceLabel !== "live" ||
@@ -454,7 +459,7 @@ export function buildRuntimeOperationalActionStrip(
     : null;
 }
 
-function buildContextualActionStrips(projection: PipelineDashboardProjectionV0) {
+function buildContextualActionStrips(projection: CanonicalOperationalProjection) {
   const strips: Record<string, PipelineContextualActionStrip> = {};
   for (const packet of projection.workPackets) {
     const strip = buildContextualActionStripForPacket(packet, projection);
@@ -465,7 +470,7 @@ function buildContextualActionStrips(projection: PipelineDashboardProjectionV0) 
   return strips;
 }
 
-function buildPacketDetailWhyDiagnostics(projection: PipelineDashboardProjectionV0) {
+function buildPacketDetailWhyDiagnostics(projection: CanonicalOperationalProjection) {
   const details: Record<string, PipelinePacketDetailWhyDiagnostics> = {};
   for (const packet of projection.workPackets) {
     details[packet.packetId] = buildPacketDetailWhyDiagnosticsForPacket(packet, projection);
@@ -474,8 +479,8 @@ function buildPacketDetailWhyDiagnostics(projection: PipelineDashboardProjection
 }
 
 export function buildPacketDetailWhyDiagnosticsForPacket(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelinePacketDetailWhyDiagnostics {
   const placement = derivePacketPlacement(packet, projection);
   const actionability = derivePacketActionability(packet, projection);
@@ -490,8 +495,8 @@ export function buildPacketDetailWhyDiagnosticsForPacket(
     actionability,
     backpressure: derivePacketBackpressureState(packet, projection),
     detailSource: selectedDetailAvailable
-      ? "PipelineDashboardProjectionV0.selectedPacketDetails"
-      : "PipelineDashboardProjectionV0.workPackets",
+      ? "DashboardCanonicalOperationalProjectionV1.selectedPacketDetails"
+      : "DashboardCanonicalOperationalProjectionV1.workPackets",
     selectedDetailAvailable,
     why: {
       label: `${placement} / ${actionability}`,
@@ -613,7 +618,7 @@ function firstSafeCompactActionLabel(...values: Array<string | null | undefined>
   return null;
 }
 
-function contextualActionFromGatedControl(control: PipelineGatedControlV0): PipelineContextualActionStripItem {
+function contextualActionFromGatedControl(control: CanonicalGatedControl): PipelineContextualActionStripItem {
   const label = gatedControlActionLabel(control.operation);
   return {
     actionInstanceId: control.controlId,
@@ -636,8 +641,8 @@ function contextualActionFromGatedControl(control: PipelineGatedControlV0): Pipe
 }
 
 function contextualActionsFromPacketState(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelineContextualActionStripItem[] {
   const actions: PipelineContextualActionStripItem[] = [];
   const actionability = derivePacketActionability(packet, projection);
@@ -673,8 +678,8 @@ function contextualActionsFromPacketState(
 }
 
 function contextualActionsFromV1Capabilities(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0,
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection,
 ): PipelineContextualActionStripItem[] {
   const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId);
   if (!detail || packet.truthLabel !== "live") {
@@ -688,7 +693,7 @@ function contextualActionsFromV1Capabilities(
     .map((capability) => contextualActionFromV1Capability(capability, "packet"));
 }
 
-function projectionHasAvailableRuntimeCapability(projection: PipelineDashboardProjectionV0): boolean {
+function projectionHasAvailableRuntimeCapability(projection: CanonicalOperationalProjection): boolean {
   const readiness = projection.runtimeReadiness;
   return Boolean(
     readiness &&
@@ -698,7 +703,7 @@ function projectionHasAvailableRuntimeCapability(projection: PipelineDashboardPr
 }
 
 export function isLocalPausedOrDrainingSupervisorRuntime(
-  projection: PipelineDashboardProjectionV0,
+  projection: CanonicalOperationalProjection,
 ): boolean {
   const readiness = projection.runtimeReadiness;
   // The supervisor intentionally projects local paused/draining state as
@@ -719,7 +724,7 @@ export function isLocalPausedOrDrainingSupervisorRuntime(
   );
 }
 
-function projectionCanShowRuntimeOperationalActions(projection: PipelineDashboardProjectionV0): boolean {
+function projectionCanShowRuntimeOperationalActions(projection: CanonicalOperationalProjection): boolean {
   return projectionHasAvailableRuntimeCapability(projection) || isLocalPausedOrDrainingSupervisorRuntime(projection);
 }
 
@@ -761,8 +766,8 @@ function isActionableV1Capability(
 }
 
 function readyToTestResultControls(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelineContextualActionStripItem[] {
   const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId) ?? null;
   const readyToTest = detail?.readyToTest ?? packet.readyToTest ?? null;
@@ -782,7 +787,7 @@ function readyToTestResultControl(
   label: string,
   expectedResult: string,
   correlationLabel: string,
-  capability: PipelineOperationalActionCapabilityV0 | null,
+  capability: CanonicalLegacyActionCapability | null,
   actionSuffix: string,
 ): PipelineContextualActionStripItem {
   const capabilityState = capability?.capabilityState === "available" ? "available" : "gated";
@@ -813,7 +818,7 @@ function readyToTestResultControl(
   };
 }
 
-function gatedControlActionLabel(operation: PipelineGatedControlV0["operation"]) {
+function gatedControlActionLabel(operation: CanonicalGatedControl["operation"]) {
   switch (operation) {
     case "kill_worker":
       return "Kill";
@@ -842,7 +847,7 @@ function gatedControlActionLabel(operation: PipelineGatedControlV0["operation"])
   }
 }
 
-function gatedControlRiskTier(operation: PipelineGatedControlV0["operation"]): PipelineContextualActionStripItem["riskTier"] {
+function gatedControlRiskTier(operation: CanonicalGatedControl["operation"]): PipelineContextualActionStripItem["riskTier"] {
   if (operation === "kill_worker" || operation === "provider_call" || operation === "github_mutation" || operation === "worker_launch" || operation === "source_mutation" || operation === "terminal_access" || operation === "raw_payload_retention") {
     return "high";
   }
@@ -856,7 +861,7 @@ function gatedControlRiskTier(operation: PipelineGatedControlV0["operation"]): P
 }
 
 function buildExecutionLoopHealthSummary(
-  projection: PipelineDashboardProjectionV0,
+  projection: CanonicalOperationalProjection,
   movingCount: number,
   visibleAttentionCount: number,
   visibleAttentionPacketIds: ReadonlySet<string>,
@@ -949,7 +954,7 @@ function buildExecutionLoopHealthSummary(
   return compactHealth("unknown", "Execution-loop state unknown", counts, projection.sourceLabel);
 }
 
-function countSourceStates(projection: PipelineDashboardProjectionV0) {
+function countSourceStates(projection: CanonicalOperationalProjection) {
   return (projection.sourceStates ?? []).reduce((counts, sourceState) => {
     counts[sourceState.state] += 1;
     return counts;
@@ -986,8 +991,8 @@ function compactHealth(
 }
 
 export function derivePacketPlacement(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelinePacketBoardPlacement {
   if (!projectionCanShowLiveActiveWork(projection)) {
     return projectionShouldBeTreatedAsStale(projection) || packet.truthLabel === "stale" ? "stale_history" : "diagnostics";
@@ -1013,8 +1018,8 @@ export function derivePacketPlacement(
 }
 
 export function derivePacketActionability(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelinePacketActionability {
   if (!projectionCanShowLiveActiveWork(projection)) {
     return projectionShouldBeTreatedAsStale(projection) || packet.truthLabel === "stale" ? "history" : "diagnostics_only";
@@ -1062,8 +1067,8 @@ export function derivePacketActionability(
 }
 
 export function buildCompactPacketCard(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelineCompactPacketCard {
   const actionability = derivePacketActionability(packet, projection);
   const truthLabel = packet.truthLabel === "live" ? null : packet.truthLabel;
@@ -1097,8 +1102,8 @@ function canonicalPostureLabel(productMode: PipelineProductModeMappingV0 | null)
 }
 
 function buildActionNeededMetadata(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): Pick<PipelineCompactPacketCard, "attentionKind" | "attentionReasonLabel" | "nextOperatorActionLabel"> {
   const gatedControl = projection.gatedControls.find((control) => control.packetId === packet.packetId);
   if (gatedControl) {
@@ -1157,7 +1162,7 @@ function buildActionNeededMetadata(
   };
 }
 
-function safeOperatorActionLabel(packet: PipelineDashboardWorkPacketV0) {
+function safeOperatorActionLabel(packet: CanonicalOperationalWorkPacket) {
   const rawDisplayAction = packet.nextAction?.trim() || packet.blocker?.trim() || "";
   const rawSafetyText = [packet.nextAction, packet.blocker].filter(Boolean).join(" ");
   if (!rawDisplayAction) {
@@ -1242,14 +1247,14 @@ function normalizeDenseText(value: string) {
     .toLowerCase();
 }
 
-function mentionsStalled(packet: PipelineDashboardWorkPacketV0) {
+function mentionsStalled(packet: CanonicalOperationalWorkPacket) {
   const text = `${packet.blocker ?? ""} ${packet.nextAction ?? ""}`.toLowerCase();
   return text.includes("stalled") || text.includes("stale worker") || text.includes("not progressing");
 }
 
 export function buildStaleHistoryItem(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelineStaleHistoryItem {
   return {
     packetId: packet.packetId,
@@ -1265,7 +1270,7 @@ export function buildStaleHistoryItem(
 export function isDispatchAffectingManagerState(
   managerSummary: PipelineManagerSummaryV0,
   queueSummary: PipelineQueueSummaryV0,
-  projection?: PipelineDashboardProjectionV0
+  projection?: CanonicalOperationalProjection
 ): PipelineDispatchAffectingManagerState | { visible: false } {
   const summaryText = managerSummary.summary.toLowerCase();
   if (projection?.backendReachability.state === "unavailable" || managerSummary.inactivityReason === "backend_unavailable") {
@@ -1324,7 +1329,7 @@ export function isDispatchAffectingManagerState(
   return { visible: false };
 }
 
-export function deriveBackpressureState(projection: PipelineDashboardProjectionV0): PipelineBackpressureState | null {
+export function deriveBackpressureState(projection: CanonicalOperationalProjection): PipelineBackpressureState | null {
   if (projection.backendReachability.state === "unavailable" || projection.truthSummary.backendUnavailable) {
     return backpressureState(
       "readiness_blocked",
@@ -1459,8 +1464,8 @@ export function deriveBackpressureState(projection: PipelineDashboardProjectionV
 }
 
 export function derivePacketBackpressureState(
-  packet: PipelineDashboardWorkPacketV0,
-  projection: PipelineDashboardProjectionV0
+  packet: CanonicalOperationalWorkPacket,
+  projection: CanonicalOperationalProjection
 ): PipelineBackpressureState | null {
   const backpressure = deriveBackpressureState(projection);
   if (!backpressure) {
@@ -1479,7 +1484,7 @@ function backpressureState(
   summary: string,
   nextSafeAction: string,
   affectedStages: AuthoritativePacketStage[],
-  executeAdmission: PipelineDashboardProjectionV0["executeAdmission"] | null = null
+  executeAdmission: CanonicalOperationalProjection["executeAdmission"] | null = null
 ): PipelineBackpressureState {
   return {
     visible: true,
@@ -1506,7 +1511,7 @@ function backpressureState(
 }
 
 function affectedStagesFromProjection(
-  projection: PipelineDashboardProjectionV0,
+  projection: CanonicalOperationalProjection,
   preferredStages: AuthoritativePacketStage[]
 ): AuthoritativePacketStage[] {
   const liveStages = new Set(projection.workPackets.map((packet) => packet.currentStage));
@@ -1520,7 +1525,7 @@ function addStageCard(cardsByStage: Map<AuthoritativePacketStage, PipelineCompac
   cardsByStage.set(card.stage, cards);
 }
 
-function projectionCanShowLiveActiveWork(projection: PipelineDashboardProjectionV0) {
+function projectionCanShowLiveActiveWork(projection: CanonicalOperationalProjection) {
   return projection.backendReachability.state === "reachable"
     && projection.sourceLabel === "live"
     && projection.freshnessState === "live"
@@ -1532,11 +1537,11 @@ function projectionCanShowLiveActiveWork(projection: PipelineDashboardProjection
     && (!projectionAgeExceedsStaleAfter(projection) || projectionHasOpenLivePacket(projection));
 }
 
-function projectionShouldBeTreatedAsStale(projection: PipelineDashboardProjectionV0) {
+function projectionShouldBeTreatedAsStale(projection: CanonicalOperationalProjection) {
   return projection.freshnessState === "stale" || (projectionAgeExceedsStaleAfter(projection) && !projectionHasOpenLivePacket(projection));
 }
 
-function projectionAgeExceedsStaleAfter(projection: PipelineDashboardProjectionV0) {
+function projectionAgeExceedsStaleAfter(projection: CanonicalOperationalProjection) {
   const generatedTime = Date.parse(projection.generatedAt);
   const sourceTime = Date.parse(projection.sourceUpdatedAt);
   if (!Number.isFinite(generatedTime) || !Number.isFinite(sourceTime) || !Number.isFinite(projection.staleAfterSeconds)) {
@@ -1545,13 +1550,13 @@ function projectionAgeExceedsStaleAfter(projection: PipelineDashboardProjectionV
   return generatedTime - sourceTime > projection.staleAfterSeconds * 1000;
 }
 
-function projectionHasOpenLivePacket(projection: PipelineDashboardProjectionV0) {
+function projectionHasOpenLivePacket(projection: CanonicalOperationalProjection) {
   return projection.workPackets.some((packet) => {
     return packet.truthLabel === "live" && visibleActiveStatuses.has(packet.status);
   });
 }
 
-function operatorCanAct(packet: PipelineDashboardWorkPacketV0) {
+function operatorCanAct(packet: CanonicalOperationalWorkPacket) {
   if (packet.currentStage === "needs_approval") {
     return true;
   }
@@ -1574,7 +1579,7 @@ function operatorCanAct(packet: PipelineDashboardWorkPacketV0) {
     || text.includes("you can");
 }
 
-function isReadyToTestPacket(packet: PipelineDashboardWorkPacketV0, projection: PipelineDashboardProjectionV0) {
+function isReadyToTestPacket(packet: CanonicalOperationalWorkPacket, projection: CanonicalOperationalProjection) {
   if (!projectionCanShowLiveActiveWork(projection) || packet.truthLabel !== "live") {
     return false;
   }
@@ -1593,7 +1598,7 @@ function isReadyToTestPacket(packet: PipelineDashboardWorkPacketV0, projection: 
   return hasReadyToTestLanguage(packet, projection) && evidenceRefs.length > 0;
 }
 
-function hasReadyToTestLanguage(packet: PipelineDashboardWorkPacketV0, projection: PipelineDashboardProjectionV0) {
+function hasReadyToTestLanguage(packet: CanonicalOperationalWorkPacket, projection: CanonicalOperationalProjection) {
   if (!projectionCanShowLiveActiveWork(projection) || packet.truthLabel !== "live") {
     return false;
   }
@@ -1605,7 +1610,7 @@ function hasReadyToTestLanguage(packet: PipelineDashboardWorkPacketV0, projectio
   return textHasReadyToTestClaim(text);
 }
 
-function hasReadyToTestClaim(packet: PipelineDashboardWorkPacketV0, projection: PipelineDashboardProjectionV0) {
+function hasReadyToTestClaim(packet: CanonicalOperationalWorkPacket, projection: CanonicalOperationalProjection) {
   const detail = projection.selectedPacketDetails.find((item) => item.packetId === packet.packetId);
   if (detail?.readyToTest ?? packet.readyToTest) {
     return true;
@@ -1625,7 +1630,7 @@ function textHasReadyToTestClaim(text: string) {
     || text.includes("acceptance check");
 }
 
-function hasDeliveryOrLearnHandoff(packet: PipelineDashboardWorkPacketV0) {
+function hasDeliveryOrLearnHandoff(packet: CanonicalOperationalWorkPacket) {
   if (!closedStatuses.has(packet.status)) {
     return false;
   }
@@ -1641,12 +1646,12 @@ function hasDeliveryOrLearnHandoff(packet: PipelineDashboardWorkPacketV0) {
     || text.includes("ready for operator");
 }
 
-function requiresCleanupOrReconciliation(packet: PipelineDashboardWorkPacketV0) {
+function requiresCleanupOrReconciliation(packet: CanonicalOperationalWorkPacket) {
   const text = `${packet.blocker ?? ""} ${packet.nextAction ?? ""}`.toLowerCase();
   return text.includes("cleanup") || text.includes("reconciliation") || text.includes("reconcile");
 }
 
-function hasQueuedRemediation(packet: PipelineDashboardWorkPacketV0) {
+function hasQueuedRemediation(packet: CanonicalOperationalWorkPacket) {
   const text = `${packet.blocker ?? ""} ${packet.nextAction ?? ""}`.toLowerCase();
   return text.includes("remediation queued")
     || text.includes("repair queued")
@@ -1654,7 +1659,7 @@ function hasQueuedRemediation(packet: PipelineDashboardWorkPacketV0) {
     || text.includes("worker remediation queued");
 }
 
-function statusLabel(packet: PipelineDashboardWorkPacketV0, actionability: PipelinePacketActionability) {
+function statusLabel(packet: CanonicalOperationalWorkPacket, actionability: PipelinePacketActionability) {
   if (actionability === "ready_to_test") {
     return "Ready to test";
   }
@@ -1678,7 +1683,7 @@ function shortActionLabel(nextAction: string | null) {
   return `${normalized.slice(0, 93).trimEnd()}...`;
 }
 
-function staleReason(packet: PipelineDashboardWorkPacketV0, projection: PipelineDashboardProjectionV0) {
+function staleReason(packet: CanonicalOperationalWorkPacket, projection: CanonicalOperationalProjection) {
   if (packet.truthLabel === "stale") {
     return safeCompactActionLabel(packet.blocker) || "Packet projection is stale.";
   }
@@ -1706,7 +1711,7 @@ function ageLabel(updatedAt: string, generatedAt: string) {
 }
 
 function buildPacketDiagnosticsItems(
-  packet: PipelineDashboardWorkPacketV0,
+  packet: CanonicalOperationalWorkPacket,
   placement: PipelinePacketBoardPlacement,
   actionability: PipelinePacketActionability
 ): PipelineDiagnosticsItem[] {
@@ -1721,7 +1726,7 @@ function buildPacketDiagnosticsItems(
     {
       label: "Packet metadata",
       value: `${packet.packetId}: metadataOnly=${String(packet.metadataOnly)} evidenceRefs=${packet.evidenceRefs.length > 0 ? packet.evidenceRefs.join(", ") : "none"}`,
-      source: "PipelineDashboardProjectionV0.workPackets",
+      source: "DashboardCanonicalOperationalProjectionV1.workPackets",
       copyable: true,
       retentionClass: "metadata_only",
     },
