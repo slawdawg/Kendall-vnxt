@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -152,6 +153,7 @@ def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Pop
         stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
     deadline = time.monotonic() + 45
     while process.poll() is None and time.monotonic() < deadline:
@@ -167,14 +169,35 @@ def _start_dashboard(supervisor_url: str, port: int, log_file) -> subprocess.Pop
 
 
 def _stop_process(process: subprocess.Popen[str] | None) -> None:
-    if process is None or process.poll() is not None:
+    if process is None:
         return
-    process.terminate()
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+        pass
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    raise AssertionError("dashboard process group failed to stop")
 
 
 def _start_supervisor(port: int, socket_path: Path):
