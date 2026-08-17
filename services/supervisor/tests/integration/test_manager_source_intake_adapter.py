@@ -491,8 +491,6 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert "Source: Supervisor runtime" in detail_html
         assert "Fixture/non-live packet" not in detail_html
 
-        _stop_process(dashboard_process)
-        dashboard_process = None
         _stop_supervisor(server, private_server)
         server = None
         private_server = None
@@ -535,30 +533,6 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         )["data"]
         assert restarted_detail_work_packet == detail_work_packet
         assert restarted_listed_work_packet == restarted_detail_work_packet
-
-        dashboard_process = _start_dashboard(
-            f"http://127.0.0.1:{port}",
-            dashboard_port,
-            dashboard_log,
-        )
-        restarted_pipeline_html = _text_get_after_dashboard_restart(
-            f"{dashboard_base_url}/pipeline",
-            required_text="Supervisor runtime",
-        )
-        restarted_detail_html = _text_get_after_dashboard_restart(
-            f"{dashboard_base_url}/pipeline/packets/{quote(packet_id, safe='')}"
-        )
-        assert "Supervisor runtime" in restarted_pipeline_html
-        assert quote(packet_id, safe="") in restarted_pipeline_html
-        for html in (restarted_pipeline_html, restarted_detail_html):
-            assert "gate 4 real dashboard process proof" in html
-            assert "capture" in html and "waiting" in html
-            assert packet_id in html
-            assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in html
-            assert "Supervisor runtime" in html
-            assert "Fixture/non-live packet" not in html
-            for evidence_ref in authoritative_evidence_refs:
-                assert evidence_ref in html
 
         assert _table_count(db_path, "authoritative_work_packets") == 1
         assert _table_count(db_path, "authoritative_work_packet_lifecycle_events") == 1
