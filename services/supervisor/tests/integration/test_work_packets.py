@@ -4747,7 +4747,8 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
                             "freshness": "fresh",
                             "accessState": "allowed",
                         }
-                    ]
+                    ],
+                    "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
                 },
             },
         )
