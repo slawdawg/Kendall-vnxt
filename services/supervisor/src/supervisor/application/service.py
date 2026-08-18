@@ -1310,17 +1310,7 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
-        candidate = await session.scalar(
-            select(CandidateWork).where(CandidateWork.promoted_work_item_id == item.id)
-        )
-        if candidate is None:
-            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
-            candidate_id = metadata.get("candidateWorkId")
-            if isinstance(candidate_id, str):
-                candidate = await session.get(CandidateWork, candidate_id)
         canonical_packet = await self._authoritative_work_packet_row_for_work_item(session, item)
-        item_view = self.to_work_item_view(item)
-        candidate_view = self.to_candidate_work_view(candidate) if candidate else None
         # This is the only read boundary that tolerates migrated rows with
         # empty provenance arrays.  Keep legacy V0 packet views validated by
         # their required-reference contract instead of constructing one here.
@@ -1349,11 +1339,54 @@ class SupervisorService:
             )
             for proposal in await self.list_memory_proposals(session, item.id)
         ]
+        alpha_source_refs, evidence_refs = await self._work_item_memory_review_provenance(
+            session,
+            item,
+            proposal_views,
+        )
+        readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
+        return WorkItemMemoryReviewV1View(
+            workItemId=item.id,
+            # The nullable database link is not a foreign key. Publish it only
+            # after the canonical lookup has proved the packet and metadata
+            # agree, rather than exposing dangling provenance to the dashboard.
+            authoritativePacketId=canonical_packet.id if canonical_packet else None,
+            proposals=proposal_views,
+            llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
+        )
+
+    async def _work_item_memory_review_provenance(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        proposals: list[WorkItemMemoryReviewProposalV1View],
+    ) -> tuple[list[SourceRefV0View], list[EvidenceRefV0View]]:
+        """Build bounded, proposal-referenced provenance for a WorkItem read/action.
+
+        Do not materialize global attempt/event history for a memory-review
+        request.  The direct read and its selected-proposal action fence need
+        only the canonical records named by proposal evidence references.
+        """
+        candidate = await session.scalar(
+            select(CandidateWork).where(CandidateWork.promoted_work_item_id == item.id)
+        )
+        if candidate is None:
+            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+            candidate_id = metadata.get("candidateWorkId")
+            if isinstance(candidate_id, str):
+                candidate = await session.get(CandidateWork, candidate_id)
+
         proposal_event_ids = {
             ref.removeprefix("event:")
-            for proposal in proposal_views
+            for proposal in proposals
             for ref in proposal.evidenceRefs
             if ref.startswith("event:") and len(ref) > len("event:")
+        }
+        proposal_attempt_ids = {
+            ref.removeprefix("attempt:")
+            for proposal in proposals
+            for ref in proposal.evidenceRefs
+            if ref.startswith("attempt:") and len(ref) > len("attempt:")
         }
         workflow_events: list[WorkflowEvent] = []
         if proposal_event_ids:
@@ -1364,21 +1397,23 @@ class SupervisorService:
                 )
             )
             workflow_events = list(event_result.scalars())
+        attempts: list[ExecutionAttemptView] = []
+        if proposal_attempt_ids:
+            attempt_result = await session.execute(
+                select(ExecutionAttempt).where(
+                    ExecutionAttempt.work_item_id == item.id,
+                    ExecutionAttempt.id.in_(proposal_attempt_ids),
+                )
+            )
+            attempts = [self._to_execution_attempt_view(attempt) for attempt in attempt_result.scalars()]
+
+        item_view = self.to_work_item_view(item)
+        candidate_view = self.to_candidate_work_view(candidate) if candidate else None
         source_refs = self._work_packet_source_refs(candidate_view, item_view)
-        # This read DTO has no event-history surface. Keep its provenance set
-        # bounded to the source-owned metadata it actually returns/readiness
-        # checks, rather than materializing all historical workflow events.
-        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [], workflow_events)
-        alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
-        readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
-        return WorkItemMemoryReviewV1View(
-            workItemId=item.id,
-            # The nullable database link is not a foreign key. Publish it only
-            # after the canonical lookup has proved the packet and metadata
-            # agree, rather than exposing dangling provenance to the dashboard.
-            authoritativePacketId=canonical_packet.id if canonical_packet else None,
-            proposals=proposal_views,
-            llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
+        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, attempts, workflow_events)
+        return (
+            [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}],
+            evidence_refs,
         )
 
     def _work_item_memory_review_readiness_view(self, readiness: LlmWikiDerivedIndexReadinessV0View) -> WorkItemMemoryReviewLlmWikiReadinessV1View:
@@ -5817,12 +5852,40 @@ class SupervisorService:
             blockers.append("missing_source_refs")
         if not proposal.evidence_refs_json:
             blockers.append("missing_evidence_refs")
-        review = await self.get_work_item_memory_review(session, work_item_id)
-        # A ready review is derived only when every listed proposal has
-        # approved, fresh, cross-bound source and evidence metadata.  Keep the
-        # server-side fence here so a direct caller cannot bypass the dashboard
-        # presentation's blocked readiness state.
-        if review is None or review.llmWikiReadiness is None or review.llmWikiReadiness.decisionState != "ready":
+        proposal_view = WorkItemMemoryReviewProposalV1View(
+            proposalId=proposal.proposal_id,
+            label=proposal.label,
+            status=proposal.status,
+            summary=proposal.summary,
+            sourceRefs=list(proposal.source_refs_json or []),
+            evidenceRefs=list(proposal.evidence_refs_json or []),
+            targetVaultPath=proposal.target_vault_path,
+            targetVaultFolder=proposal.target_vault_folder,
+            proposalType=proposal.proposal_type,
+            suggestedContentSummary=proposal.suggested_content_summary,
+            patchSummary=proposal.patch_summary,
+            sensitivity=proposal.sensitivity,
+            freshness=proposal.freshness,
+            contradictionStatus=proposal.contradiction_status,
+            confidence=proposal.confidence,
+            operatorAction=proposal.operator_action,
+            decisionNeededContext=proposal.decision_needed_context,
+            backupRecoveryPath=proposal.backup_recovery_path,
+            writeBackStatus=proposal.write_back_status,
+            writeBackAllowed=False,
+        )
+        source_refs, evidence_refs = await self._work_item_memory_review_provenance(session, item, [proposal_view])
+        selected_source_ref_ids = set(proposal_view.sourceRefs)
+        selected_readiness = self._llm_wiki_readiness(
+            f"work_item:{work_item_id}",
+            [source_ref for source_ref in source_refs if source_ref.refId in selected_source_ref_ids],
+            evidence_refs,
+            [proposal_view],
+        )
+        # AI-draft authorization is per proposal.  Keep the server-side
+        # provenance fence, but do not let an unrelated sibling's pending or
+        # stale state deny a separately approved and fully bound proposal.
+        if selected_readiness.decisionState != "ready":
             blockers.append("unverified_memory_proposal_provenance")
         if blockers:
             raise ValueError(f"AI draft write-back blocked: {', '.join(blockers)}")

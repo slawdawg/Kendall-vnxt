@@ -44,6 +44,7 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(panelSource, /LLM Wiki Derived/);
   assert.match(panelSource, /maxLength=\{120\}/);
   assert.match(panelSource, /llmWikiQuery\.trim\(\)\.slice\(0, 120\)/);
+  assert.match(panelSource, /setLlmWikiResults\(\(\{ \[proposal\.proposalId\]: _previous, \.\.\.remaining \}\) => remaining\)/);
   assert.match(panelSource, /targetsAiDraftQueue/);
   assert.match(panelSource, /The supervisor request was interrupted; no memory proposal change was confirmed\./);
   assert.match(panelSource, /The LLM-Wiki artifact read was interrupted; no result was retained\./);

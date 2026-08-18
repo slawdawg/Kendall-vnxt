@@ -4255,6 +4255,14 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
                     "accessState": "allowed",
                     "canonical": True,
                     "summaryOnly": True,
+                }, {
+                    "refId": "llm_wiki:derived-stale-sibling",
+                    "sourceType": "llm_wiki",
+                    "label": "Unrelated stale derived sibling source",
+                    "freshness": "stale",
+                    "accessState": "allowed",
+                    "canonical": False,
+                    "summaryOnly": True,
                 }],
                 "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
             },
@@ -4295,6 +4303,35 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             },
         )
         assert approve_response.status_code == 200
+
+        # A sibling proposal can remain pending or stale without revoking this
+        # independently approved proposal's bounded provenance eligibility.
+        sibling_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-ai-draft-stale-sibling",
+                "label": "Stale sibling memory proposal",
+                "summary": "Sibling remains visible for later operator review.",
+                "sourceRefs": ["llm_wiki:derived-stale-sibling"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Do not write this stale sibling.",
+                "sensitivity": "medium",
+                "freshness": "stale",
+                "contradictionStatus": "none",
+                "confidence": "low",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "deferred",
+                "writeBackAllowed": False,
+            },
+        )
+        assert sibling_response.status_code == 200
+        aggregate_readiness = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["llmWikiReadiness"]
+        assert aggregate_readiness["decisionState"] == "blocked"
 
         draft_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
@@ -4523,6 +4560,29 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert plan["durableWriteAllowed"] is False
         assert plan["writePerformed"] is False
         assert plan["backupCreated"] is False
+
+        # The direct memory-review read resolves only proposal-referenced
+        # attempts, so canonical attempt evidence remains eligible without
+        # reading unrelated execution history.
+        attempt_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts",
+            json={"taskKind": "path_scope_check", "actorLabel": "Operator"},
+        )
+        assert attempt_response.status_code == 200
+        attempt_id = attempt_response.json()["data"]["attemptId"]
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps([f"attempt:{attempt_id}"]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        attempt_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert attempt_review.status_code == 200
+        attempt_readiness = attempt_review.json()["data"]["llmWikiReadiness"]
+        assert attempt_readiness["decisionState"] == "ready"
+        assert f"attempt:{attempt_id}" in attempt_readiness["rebuildPreview"]["inputRefs"]
 
         # Nonempty references still need to bind to the exact supplied
         # source/evidence inventory before the readiness view can be ready.

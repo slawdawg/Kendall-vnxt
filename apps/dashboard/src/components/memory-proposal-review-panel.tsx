@@ -169,6 +169,9 @@ export function MemoryProposalReviewPanel({
   function searchLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
+      // A new query must never continue to display excerpts from a prior
+      // search if the next read is rejected or interrupted.
+      setLlmWikiResults(({ [proposal.proposalId]: _previous, ...remaining }) => remaining);
       setMessage(`Searching derived LLM-Wiki artifact for ${proposal.proposalId}...`);
       try {
         const query = llmWikiQuery.trim().slice(0, 120);
