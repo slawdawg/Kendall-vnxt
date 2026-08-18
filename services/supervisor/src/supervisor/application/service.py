@@ -1117,7 +1117,8 @@ class SupervisorService:
                 packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
                 if packet:
                     if is_manager_source_intake:
-                        replay_contract, source_ref = self._verified_manager_source_intake_replay_metadata(
+                        replay_contract, source_ref = await self._verified_manager_source_intake_replay_metadata(
+                            session,
                             packet,
                             payload.sourceRef,
                         )
@@ -1230,7 +1231,8 @@ class SupervisorService:
                     replay_packet = await session.get(AuthoritativeWorkPacket, replay_event.packet_id)
                     if replay_packet:
                         if is_manager_source_intake:
-                            replay_contract, source_ref = self._verified_manager_source_intake_replay_metadata(
+                            replay_contract, source_ref = await self._verified_manager_source_intake_replay_metadata(
+                                session,
                                 replay_packet,
                                 payload.sourceRef,
                             )
@@ -4742,8 +4744,9 @@ class SupervisorService:
             raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
         return contract
 
-    def _verified_manager_source_intake_replay_metadata(
+    async def _verified_manager_source_intake_replay_metadata(
         self,
+        session: AsyncSession,
         packet: AuthoritativeWorkPacket,
         requested_source_ref: AuthoritativePacketSourceRefView,
     ) -> tuple[PipelineCanonicalContractV1View, dict]:
@@ -4756,14 +4759,17 @@ class SupervisorService:
         timestamp serialization despite referring to the same contract.
         """
         contract = self._verified_manager_source_intake_contract_from_packet(packet)
-        stored_source_ref = dict(packet.source_ref_json or {})
+        creation_event = await self._authoritative_lifecycle_event_by_packet_created(session, packet.id)
+        if creation_event is None:
+            raise ValueError("Manager source intake replay requires its persisted creation event.")
+        stored_source_ref = dict(creation_event.source_ref_json or {})
         stored_source_ref.pop(PIPELINE_CANONICAL_CONTRACT_METADATA_KEY, None)
         stored_source_ref.pop(PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY, None)
         if requested_source_ref.model_dump(mode="json", exclude_none=True) != stored_source_ref:
             raise ValueError("Manager source intake replay sourceRef does not match the persisted authoritative packet.")
-        if not isinstance(packet.source_ref_json, dict):
+        if not isinstance(creation_event.source_ref_json, dict):
             raise ValueError("Manager source intake replay requires persisted source metadata.")
-        return contract, dict(packet.source_ref_json)
+        return contract, dict(creation_event.source_ref_json)
 
     @staticmethod
     def _canonical_contract_from_packet_metadata(stored_payload: object) -> PipelineCanonicalContractV1View | None:
@@ -6030,7 +6036,12 @@ class SupervisorService:
         )
         if draft_path.exists():
             existing_text = draft_path.read_text(encoding="utf-8", errors="replace")
-            if f"proposal_id: {safe_id}" not in existing_text or "status: ai-draft" not in existing_text:
+            existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
+            if (
+                existing_metadata.get("proposal_id") != safe_id
+                or existing_metadata.get("work_item_id") != work_item_id
+                or existing_metadata.get("status") != "ai-draft"
+            ):
                 raise ValueError("AI draft write-back blocked: target draft path already exists but does not match this proposal.")
             proposal.target_vault_path = relative_draft_path
             proposal.patch_summary = f"AI draft already exists at {relative_draft_path}; no duplicate draft was written."
@@ -6072,6 +6083,7 @@ class SupervisorService:
                 "author: Kendall",
                 "status: ai-draft",
                 f"proposal_id: {safe_id}",
+                f"work_item_id: {work_item_id}",
                 f'approval_ref: "{_yaml_string(approval_ref)}"',
                 f'approved_by: "{_yaml_string(actor_label)}"',
                 "retention_class: metadata_only",
@@ -6220,7 +6232,12 @@ class SupervisorService:
         )
         if target_path.exists():
             existing_text = target_path.read_text(encoding="utf-8", errors="replace")
-            if f"proposal_id: {safe_id}" not in existing_text or "status: llm-wiki-derived" not in existing_text:
+            existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
+            if (
+                existing_metadata.get("proposal_id") != safe_id
+                or existing_metadata.get("work_item_id") != work_item_id
+                or existing_metadata.get("status") != "llm-wiki-derived"
+            ):
                 raise ValueError("LLM-Wiki rebuild blocked: target artifact already exists but does not match this proposal.")
             proposal.target_vault_path = relative_target_path
             proposal.target_vault_folder = llm_wiki_folder
@@ -6266,6 +6283,7 @@ class SupervisorService:
                 "author: Kendall",
                 "status: llm-wiki-derived",
                 f"proposal_id: {safe_id}",
+                f"work_item_id: {work_item_id}",
                 f'approval_ref: "{_yaml_string(approval_ref)}"',
                 f'approved_by: "{_yaml_string(actor_label)}"',
                 "canonicality: derived_disposable_rebuildable",
@@ -6384,7 +6402,10 @@ class SupervisorService:
             if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
             else proposal.id
         )
-        if metadata.get("proposal_id") != expected_artifact_proposal_id:
+        if (
+            metadata.get("proposal_id") != expected_artifact_proposal_id
+            or metadata.get("work_item_id") != work_item_id
+        ):
             raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
         normalized_query = query.strip()[:120]
         excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)

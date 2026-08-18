@@ -4834,6 +4834,7 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         artifact_text = artifact_path.read_text(encoding="utf-8")
         assert "status: llm-wiki-derived" in artifact_text
         assert "proposal_id: mp-llm-wiki-write" in artifact_text
+        assert f"work_item_id: {work_item['id']}" in artifact_text
         assert 'approval_ref: "approval:operator:llm-wiki-rebuild-2026-06-26"' in artifact_text
         assert "canonicality: derived_disposable_rebuildable" in artifact_text
         assert "raw_payload_retained: false" in artifact_text
@@ -4850,6 +4851,33 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
         assert duplicate_response.status_code == 200
         assert "already exists" in duplicate_response.json()["data"]["patchSummary"]
+
+        # Existing artifacts must prove their identity in front matter.  Body
+        # tokens alone cannot turn an unrelated pre-existing file into a
+        # valid idempotent rebuild target.
+        artifact_path.write_text(
+            "# Untrusted body text\n\n"
+            "proposal_id: mp-llm-wiki-write\n"
+            f"work_item_id: {work_item['id']}\n"
+            "status: llm-wiki-derived\n",
+            encoding="utf-8",
+        )
+        canonical_review_response = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert canonical_review_response.status_code == 200
+        current_revision = canonical_review_response.json()["data"]["proposals"][0]["revision"]
+        body_token_forgery_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={
+                "expectedRevision": current_revision,
+                "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26",
+                "actorLabel": "Operator",
+            },
+        )
+        assert body_token_forgery_response.status_code == 400
+        assert "does not match this proposal" in body_token_forgery_response.json()["detail"]["error"]["message"]
+        artifact_path.write_text(artifact_text, encoding="utf-8")
 
         search_response = client.get(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
@@ -4880,6 +4908,17 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
         assert mismatched_artifact_response.status_code == 400
         assert "not bound to this proposal" in mismatched_artifact_response.json()["detail"]["error"]["message"]
+
+        artifact_path.write_text(
+            artifact_text.replace(f"work_item_id: {work_item['id']}", "work_item_id: different-work-item"),
+            encoding="utf-8",
+        )
+        cross_work_item_artifact_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert cross_work_item_artifact_response.status_code == 400
+        assert "not bound to this proposal" in cross_work_item_artifact_response.json()["detail"]["error"]["message"]
 
 
 def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness(tmp_path, monkeypatch) -> None:
