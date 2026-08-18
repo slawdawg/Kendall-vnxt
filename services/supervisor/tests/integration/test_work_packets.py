@@ -123,10 +123,14 @@ def _running_private_uds_supervisor(tmp_path, monkeypatch, db_name: str):
         server = uvicorn.Server(uvicorn.Config(main.app, uds=str(socket_path), log_level="error", access_log=False, lifespan="on"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
-        deadline = time.monotonic() + 10
+        # The suite starts several private UDS lifespans in one process.  A
+        # loaded hosted runner can take longer than the normal 10-second
+        # startup budget while a previous SQLite/UDS teardown settles; this is
+        # still bounded and does not relax any product-side readiness check.
+        deadline = time.monotonic() + 30
         while not server.started and thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert server.started, "private UDS supervisor failed to start within 10 seconds"
+        assert server.started, "private UDS supervisor failed to start within 30 seconds"
         yield main, socket_path
     finally:
         try:
