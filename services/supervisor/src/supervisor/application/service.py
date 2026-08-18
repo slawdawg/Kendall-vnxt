@@ -1487,6 +1487,7 @@ class SupervisorService:
                     alpha_source_refs,
                     evidence_refs,
                     item.id,
+                    write_in_progress=proposal.write_action_token is not None,
                 ),
                 "llmWikiArtifactSearchEligible": await self._memory_proposal_llm_wiki_artifact_search_eligible(
                     session,
@@ -1541,6 +1542,8 @@ class SupervisorService:
         source_refs: list[AuthoritativePacketSourceRefView],
         evidence_refs: list[EvidenceRefV0View],
         work_item_id: str,
+        *,
+        write_in_progress: bool = False,
     ) -> bool:
         try:
             configured_folder = str(self._load_obsidian_memory_draft_config()["draft_folder"])
@@ -1552,7 +1555,7 @@ class SupervisorService:
         readiness = self._llm_wiki_readiness(
             f"work_item:{work_item_id}", selected_sources, evidence_refs, [proposal]
         )
-        return (
+        return not write_in_progress and (
             proposal.status == "approved"
             and proposal.operatorAction == "approve"
             and proposal.writeBackStatus == "approved_for_future"
@@ -6136,7 +6139,11 @@ class SupervisorService:
                 MemoryProposal.id == proposal_id,
                 MemoryProposal.work_item_id == work_item_id,
                 MemoryProposal.write_action_token == action_token,
-            ).values(write_action_token=None, write_action_intent_json=null())
+                # Once an artifact intent is durable, automatic exception
+                # cleanup must not discard its backup/reconciliation evidence.
+                # An operator recovery owns that explicit filesystem outcome.
+                MemoryProposal.write_action_intent_json.is_(None),
+            ).values(write_action_token=None)
         )
         if released.rowcount:
             await session.commit()
@@ -6376,13 +6383,17 @@ class SupervisorService:
         recovery_token = proposal.write_action_token
         recovery_intent = proposal.write_action_intent_json
         intent_paths = _memory_artifact_intent_paths(recovery_intent) if recovery_intent is not None else None
+        # `_memory_proposal_for_route(..., lock=True)` may hold a PostgreSQL
+        # row lock. Release that transaction before waiting for the artifact
+        # flock: a live writer can hold the flock while finalizing against the
+        # same row, which otherwise forms a cross-resource deadlock.
+        await session.rollback()
         async with _async_memory_artifact_lock(intent_paths[1] if intent_paths is not None else None):
             # The writer holds this same lock across its final ownership proof,
             # filesystem mutation, and conditional finalization.  Reopen the
             # session after waiting so recovery never reconciles an intent that
             # a completed writer has already cleared.
             if intent_paths is not None:
-                await session.rollback()
                 await session.refresh(item)
                 proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id, lock=True)
                 if (
@@ -6422,10 +6433,12 @@ class SupervisorService:
                 session,
                 item,
                 "memory_proposal.write_reservation_recovered",
-                "Operator recovered an abandoned memory proposal write reservation without modifying the vault.",
+                "Operator recovered an abandoned memory proposal write reservation and reconciled its vault artifact intent.",
                 {
                     "proposalId": proposal.proposal_id,
                     "recoveryRef": recovery_ref,
+                    "artifactPath": str(intent_paths[1]) if intent_paths is not None else None,
+                    "artifactReconciled": intent_paths is not None,
                     "writeBackAllowed": False,
                     "retentionClass": "metadata_only",
                     "rawPayloadRetained": False,

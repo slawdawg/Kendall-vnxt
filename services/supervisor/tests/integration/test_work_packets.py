@@ -4511,6 +4511,11 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             json={"expectedRevision": 7, "status": "rejected", "operatorAction": "reject"},
         )
         assert active_write_patch.status_code == 409
+        active_write_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert active_write_review.status_code == 200
+        assert active_write_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
         meaningless_recovery = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
             json={"expectedRevision": 7, "recoveryRef": "        "},
@@ -4536,14 +4541,15 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert draft_path.read_bytes() == pre_crash_draft_bytes
         crashed_backup_artifact = crashed_backup_path / proposal["targetVaultPath"]
         crashed_backup_artifact.write_bytes(b"tampered recovery backup\n")
-        with pytest.raises(ValueError, match="backup artifact changed after intent recording"):
-            client.post(
-                f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
-                json={
-                    "expectedRevision": 7,
-                    "recoveryRef": "operator:tampered-backup:pytest",
-                },
-            )
+        blocked_recovery = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={
+                "expectedRevision": 7,
+                "recoveryRef": "operator:tampered-backup:pytest",
+            },
+        )
+        assert blocked_recovery.status_code == 409
+        assert blocked_recovery.json()["detail"]["error"]["code"] == "memory_proposal_recovery_blocked"
         crashed_backup_artifact.write_bytes(pre_crash_draft_bytes)
         recovered_reservation = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",

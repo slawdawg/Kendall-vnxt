@@ -1807,6 +1807,8 @@ async def recover_work_item_memory_proposal_write(
         )
     except MemoryProposalRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_recovery_blocked").model_dump()) from exc
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
