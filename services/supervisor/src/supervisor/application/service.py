@@ -1,4 +1,5 @@
 ﻿import asyncio
+import fcntl
 import hashlib
 import importlib
 import json
@@ -10,12 +11,13 @@ import socket
 import subprocess
 import tempfile
 import uuid
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import JSON, delete, func, null, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -860,6 +862,14 @@ def _read_bounded_utf8_text(path: Path) -> str:
         return artifact.read(MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _restore_memory_artifact_after_lost_reservation(
     path: Path,
     written_bytes: bytes,
@@ -877,6 +887,103 @@ def _restore_memory_artifact_after_lost_reservation(
         # The caller still reports the ownership conflict.  Do not overwrite a
         # concurrently replaced path while attempting best-effort compensation.
         return
+
+
+@contextmanager
+def _memory_artifact_lock(path: Path):
+    """Serialize writer and recovery mutation of one deterministic artifact."""
+    lock_path = path.with_name(f".{path.name}.kendall-write.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@asynccontextmanager
+async def _async_memory_artifact_lock(path: Path | None):
+    """Acquire the per-artifact advisory lock without blocking the event loop."""
+    if path is None:
+        yield
+        return
+    lock_path = path.with_name(f".{path.name}.kendall-write.lock")
+    await asyncio.to_thread(lock_path.parent.mkdir, parents=True, exist_ok=True)
+    lock_file = await asyncio.to_thread(lock_path.open, "a+b")
+    try:
+        await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        await asyncio.to_thread(lock_file.close)
+
+
+def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path]:
+    """Validate and return the immutable filesystem coordinates in an intent."""
+    if not isinstance(intent, dict) or intent.get("schemaVersion") != "memory-proposal-write-intent/v1":
+        raise ValueError("Memory proposal recovery requires a valid durable write intent.")
+    try:
+        vault_root = Path(str(intent["vaultRoot"])).resolve(strict=True)
+        artifact_path = Path(str(intent["artifactPath"])).resolve()
+        backup_path = Path(str(intent["backupPath"])).resolve(strict=True)
+        expected_digest = str(intent["writtenSha256"])
+        expected_backup_digest = intent.get("backupArtifactSha256")
+        relative_path = artifact_path.relative_to(vault_root)
+    except (KeyError, OSError, ValueError) as exc:
+        raise ValueError("Memory proposal recovery intent is not safely reconcilable.") from exc
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+        or not backup_path.is_dir()
+        or (expected_backup_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(expected_backup_digest)))
+    ):
+        raise ValueError("Memory proposal recovery intent is invalid.")
+    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path
+
+
+def _reconcile_memory_artifact_intent_unlocked(
+    vault_root: Path,
+    artifact_path: Path,
+    backup_path: Path,
+    expected_digest: str,
+    expected_backup_digest: str | None,
+    relative_path: Path,
+) -> None:
+    """Restore the snapshot version of an interrupted server-recorded write."""
+    del vault_root  # The containment proof was completed by the caller.
+    backup_artifact = backup_path / relative_path
+    if backup_artifact.exists():
+        if not backup_artifact.is_file() or backup_artifact.is_symlink() or expected_backup_digest is None:
+            raise ValueError("Memory proposal recovery backup artifact is invalid.")
+        backup_bytes = backup_artifact.read_bytes()
+        if hashlib.sha256(backup_bytes).hexdigest() != expected_backup_digest:
+            raise ValueError("Memory proposal recovery backup artifact changed after intent recording.")
+        if artifact_path.exists():
+            artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            if artifact_digest == expected_backup_digest:
+                # A prior recovery restored the exact snapshot but failed before
+                # committing its DB/event outcome.  This retry is safe to finish.
+                return
+            if artifact_digest != expected_digest:
+                raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_bytes(backup_bytes)
+    else:
+        if expected_backup_digest is not None:
+            raise ValueError("Memory proposal recovery backup artifact is missing.")
+        if artifact_path.exists() and hashlib.sha256(artifact_path.read_bytes()).hexdigest() != expected_digest:
+            raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
+        artifact_path.unlink(missing_ok=True)
+
+
+def _reconcile_memory_artifact_intent(intent: object) -> None:
+    """Restore an intent while serializing with every writer for its path."""
+    paths = _memory_artifact_intent_paths(intent)
+    artifact_path = paths[1]
+    with _memory_artifact_lock(artifact_path):
+        _reconcile_memory_artifact_intent_unlocked(*paths)
 
 
 def _safe_memory_proposal_id(value: str) -> str:
@@ -6029,7 +6136,7 @@ class SupervisorService:
                 MemoryProposal.id == proposal_id,
                 MemoryProposal.work_item_id == work_item_id,
                 MemoryProposal.write_action_token == action_token,
-            ).values(write_action_token=None)
+            ).values(write_action_token=None, write_action_intent_json=null())
         )
         if released.rowcount:
             await session.commit()
@@ -6059,7 +6166,7 @@ class SupervisorService:
                 MemoryProposal.revision == expected_revision + 1,
                 MemoryProposal.write_action_token == action_token,
             )
-            .values(**values, write_action_token=None)
+            .values(**values, write_action_token=None, write_action_intent_json=null())
             .execution_options(synchronize_session="fetch")
         )
         if finalized.rowcount != 1:
@@ -6068,6 +6175,59 @@ class SupervisorService:
                 "Memory proposal write reservation was recovered or replaced before finalization; refresh before trying again."
             )
         await session.refresh(proposal)
+
+    async def _record_memory_proposal_write_intent(
+        self,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        *,
+        work_item_id: str,
+        expected_revision: int,
+        action_token: str,
+        vault_root: Path,
+        artifact_path: Path,
+        backup_path: Path,
+        written_bytes: bytes,
+    ) -> None:
+        """Durably bind the exact pending filesystem mutation before writing."""
+        try:
+            canonical_vault_root = vault_root.resolve(strict=True)
+            canonical_artifact_path = artifact_path.resolve()
+            canonical_backup_path = backup_path.resolve(strict=True)
+            relative_path = canonical_artifact_path.relative_to(canonical_vault_root)
+        except (OSError, ValueError) as exc:
+            raise ValueError("Memory proposal write intent paths are not safely bounded by the vault.") from exc
+        backup_artifact = canonical_backup_path / relative_path
+        if backup_artifact.exists():
+            if not backup_artifact.is_file() or backup_artifact.is_symlink():
+                raise ValueError("Memory proposal write intent backup artifact is invalid.")
+            backup_artifact_digest = await asyncio.to_thread(_sha256_file, backup_artifact)
+        else:
+            backup_artifact_digest = None
+        intent = {
+            "schemaVersion": "memory-proposal-write-intent/v1",
+            "vaultRoot": str(canonical_vault_root),
+            "artifactPath": str(canonical_artifact_path),
+            "backupPath": str(canonical_backup_path),
+            "writtenSha256": hashlib.sha256(written_bytes).hexdigest(),
+            "backupArtifactSha256": backup_artifact_digest,
+        }
+        recorded = await session.execute(
+            update(MemoryProposal).where(
+                MemoryProposal.id == proposal.id,
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.revision == expected_revision + 1,
+                MemoryProposal.write_action_token == action_token,
+                or_(
+                    MemoryProposal.write_action_intent_json.is_(None),
+                    MemoryProposal.write_action_intent_json == JSON.NULL,
+                ),
+            ).values(write_action_intent_json=intent)
+        )
+        if recorded.rowcount != 1:
+            await session.rollback()
+            raise MemoryProposalRevisionConflict("Memory proposal write reservation changed before filesystem intent recording.")
+        await session.commit()
 
     async def _finalize_memory_proposal_artifact_write(
         self,
@@ -6132,6 +6292,59 @@ class SupervisorService:
                     await session.commit()
             raise
 
+    async def _write_and_finalize_memory_proposal_artifact(
+        self,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        *,
+        work_item_id: str,
+        expected_revision: int,
+        action_token: str,
+        artifact_path: Path,
+        written_bytes: bytes,
+        previous_bytes: bytes | None,
+        values: dict[str, object],
+    ) -> None:
+        """Hold the artifact lock across the final owner check, write, and fence."""
+        proposal_id = proposal.id
+        async with _async_memory_artifact_lock(artifact_path):
+            owned = await session.execute(
+                select(MemoryProposal.id).where(
+                    MemoryProposal.id == proposal_id,
+                    MemoryProposal.work_item_id == work_item_id,
+                    MemoryProposal.revision == expected_revision + 1,
+                    MemoryProposal.write_action_token == action_token,
+                )
+            )
+            if owned.scalar_one_or_none() is None:
+                raise MemoryProposalRevisionConflict(
+                    "Memory proposal write reservation changed before artifact mutation; refresh before trying again."
+                )
+            artifact_path.write_bytes(written_bytes)
+            # The ownership query above opens a SQLite read snapshot. Reopen it
+            # before the final conditional update so a recovery committed while
+            # this writer was between its proof and finalization is observed.
+            await session.rollback()
+            await session.refresh(proposal)
+            try:
+                await self._finalize_memory_proposal_write(
+                    session,
+                    proposal,
+                    work_item_id=work_item_id,
+                    expected_revision=expected_revision,
+                    action_token=action_token,
+                    values=values,
+                )
+            except MemoryProposalRevisionConflict:
+                # Recovery takes this same lock before it clears the token, so
+                # while it is held no newer writer can own this path.
+                _restore_memory_artifact_after_lost_reservation(
+                    artifact_path,
+                    written_bytes,
+                    previous_bytes,
+                )
+                raise
+
     async def recover_abandoned_memory_proposal_write(
         self,
         session: AsyncSession,
@@ -6160,41 +6373,68 @@ class SupervisorService:
             raise MemoryProposalRevisionConflict(
                 "Memory proposal has no matching abandoned write reservation; refresh before recovery."
             )
-        now = datetime.now(timezone.utc)
-        released = await session.execute(
-            update(MemoryProposal)
-            .where(
-                MemoryProposal.id == proposal.id,
-                MemoryProposal.work_item_id == work_item_id,
-                MemoryProposal.revision == expected_revision,
-                MemoryProposal.write_action_token.is_not(None),
+        recovery_token = proposal.write_action_token
+        recovery_intent = proposal.write_action_intent_json
+        intent_paths = _memory_artifact_intent_paths(recovery_intent) if recovery_intent is not None else None
+        async with _async_memory_artifact_lock(intent_paths[1] if intent_paths is not None else None):
+            # The writer holds this same lock across its final ownership proof,
+            # filesystem mutation, and conditional finalization.  Reopen the
+            # session after waiting so recovery never reconciles an intent that
+            # a completed writer has already cleared.
+            if intent_paths is not None:
+                await session.rollback()
+                await session.refresh(item)
+                proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id, lock=True)
+                if (
+                    proposal is None
+                    or proposal.revision != expected_revision
+                    or proposal.write_action_token != recovery_token
+                    or proposal.write_action_intent_json != recovery_intent
+                ):
+                    raise MemoryProposalRevisionConflict(
+                        "Memory proposal write reservation changed before recovery; refresh before trying again."
+                    )
+                await asyncio.to_thread(_reconcile_memory_artifact_intent_unlocked, *intent_paths)
+            now = datetime.now(timezone.utc)
+            released = await session.execute(
+                update(MemoryProposal)
+                .where(
+                    MemoryProposal.id == proposal.id,
+                    MemoryProposal.work_item_id == work_item_id,
+                    MemoryProposal.revision == expected_revision,
+                    MemoryProposal.write_action_token == recovery_token,
+                )
+                .values(
+                    revision=expected_revision + 1,
+                    write_action_token=None,
+                    write_action_intent_json=null(),
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session="fetch")
             )
-            .values(revision=expected_revision + 1, write_action_token=None, updated_at=now)
-            .execution_options(synchronize_session="fetch")
-        )
-        if released.rowcount != 1:
-            await session.rollback()
-            raise MemoryProposalRevisionConflict(
-                "Memory proposal write reservation changed before recovery; refresh before trying again."
+            if released.rowcount != 1:
+                await session.rollback()
+                raise MemoryProposalRevisionConflict(
+                    "Memory proposal write reservation changed before recovery; refresh before trying again."
+                )
+            await session.refresh(proposal)
+            await self._record_event(
+                session,
+                item,
+                "memory_proposal.write_reservation_recovered",
+                "Operator recovered an abandoned memory proposal write reservation without modifying the vault.",
+                {
+                    "proposalId": proposal.proposal_id,
+                    "recoveryRef": recovery_ref,
+                    "writeBackAllowed": False,
+                    "retentionClass": "metadata_only",
+                    "rawPayloadRetained": False,
+                },
+                actor_type="operator" if actor_id or actor_label else "system",
+                actor_id=actor_id,
+                actor_label=actor_label,
             )
-        await session.refresh(proposal)
-        await self._record_event(
-            session,
-            item,
-            "memory_proposal.write_reservation_recovered",
-            "Operator recovered an abandoned memory proposal write reservation without modifying the vault.",
-            {
-                "proposalId": proposal.proposal_id,
-                "recoveryRef": recovery_ref,
-                "writeBackAllowed": False,
-                "retentionClass": "metadata_only",
-                "rawPayloadRetained": False,
-            },
-            actor_type="operator" if actor_id or actor_label else "system",
-            actor_id=actor_id,
-            actor_label=actor_label,
-        )
-        await session.commit()
+            await session.commit()
         await session.refresh(proposal)
         await self._publish_item(item)
         return proposal
@@ -6416,9 +6656,13 @@ class SupervisorService:
                 shutil.copytree(vault_root, backup_path, symlinks=True)
                 previous_bytes = draft_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
-                draft_path.write_bytes(rebound_bytes)
             if "work_item_id" not in existing_metadata:
-                await self._finalize_memory_proposal_artifact_write(
+                await self._record_memory_proposal_write_intent(
+                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                    action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
+                    backup_path=backup_path, written_bytes=rebound_bytes,
+                )
+                await self._write_and_finalize_memory_proposal_artifact(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, artifact_path=draft_path, written_bytes=rebound_bytes,
                     previous_bytes=previous_bytes,
@@ -6430,6 +6674,7 @@ class SupervisorService:
                         "updated_at": now,
                     },
                 )
+                await session.refresh(item)
             else:
                 await self._finalize_memory_proposal_write(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -6507,9 +6752,12 @@ class SupervisorService:
         )
         draft_dir.mkdir(parents=True, exist_ok=True)
         written_bytes = body.encode("utf-8")
-        draft_path.write_bytes(written_bytes)
-
-        await self._finalize_memory_proposal_artifact_write(
+        await self._record_memory_proposal_write_intent(
+            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+            action_token=action_token, vault_root=vault_root, artifact_path=draft_path, backup_path=backup_path,
+            written_bytes=written_bytes,
+        )
+        await self._write_and_finalize_memory_proposal_artifact(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, artifact_path=draft_path, written_bytes=written_bytes, previous_bytes=None,
             values={
@@ -6521,6 +6769,7 @@ class SupervisorService:
                 "updated_at": now,
             },
         )
+        await session.refresh(item)
         await self._record_event(
             session,
             item,
@@ -6656,9 +6905,13 @@ class SupervisorService:
                 shutil.copytree(vault_root, backup_path, symlinks=True)
                 previous_bytes = target_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
-                target_path.write_bytes(rebound_bytes)
             if "work_item_id" not in existing_metadata:
-                await self._finalize_memory_proposal_artifact_write(
+                await self._record_memory_proposal_write_intent(
+                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                    action_token=action_token, vault_root=vault_root, artifact_path=target_path,
+                    backup_path=backup_path, written_bytes=rebound_bytes,
+                )
+                await self._write_and_finalize_memory_proposal_artifact(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, artifact_path=target_path, written_bytes=rebound_bytes,
                     previous_bytes=previous_bytes,
@@ -6671,6 +6924,7 @@ class SupervisorService:
                         "updated_at": now,
                     },
                 )
+                await session.refresh(item)
             else:
                 await self._finalize_memory_proposal_write(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -6772,9 +7026,12 @@ class SupervisorService:
         )
         target_dir.mkdir(parents=True, exist_ok=True)
         written_bytes = body.encode("utf-8")
-        target_path.write_bytes(written_bytes)
-
-        await self._finalize_memory_proposal_artifact_write(
+        await self._record_memory_proposal_write_intent(
+            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+            action_token=action_token, vault_root=vault_root, artifact_path=target_path, backup_path=backup_path,
+            written_bytes=written_bytes,
+        )
+        await self._write_and_finalize_memory_proposal_artifact(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, artifact_path=target_path, written_bytes=written_bytes, previous_bytes=None,
             values={
@@ -6787,6 +7044,7 @@ class SupervisorService:
                 "updated_at": now,
             },
         )
+        await session.refresh(item)
         await self._record_event(
             session,
             item,

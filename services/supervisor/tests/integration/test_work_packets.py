@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import sys
@@ -4480,12 +4481,27 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         # request-local cleanup. It must fence review updates until an explicit
         # operator recovery records why the abandoned reservation is safe to
         # release.
+        pre_crash_draft_bytes = draft_path.read_bytes()
+        crashed_backup_path = backup_root / "vault-backup-crashed-writer"
+        shutil.copytree(vault_root, crashed_backup_path, symlinks=True)
+        abandoned_draft_bytes = b"unrecorded abandoned writer bytes\n"
+        draft_path.write_bytes(abandoned_draft_bytes)
+        abandoned_intent = {
+            "schemaVersion": "memory-proposal-write-intent/v1",
+            "vaultRoot": str(vault_root),
+            "artifactPath": str(draft_path),
+            "backupPath": str(crashed_backup_path),
+            "writtenSha256": hashlib.sha256(abandoned_draft_bytes).hexdigest(),
+            "backupArtifactSha256": hashlib.sha256(
+                (crashed_backup_path / proposal["targetVaultPath"]).read_bytes()
+            ).hexdigest(),
+        }
         proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
         try:
             proposal_db.execute(
-                "UPDATE memory_proposals SET revision = ?, write_action_token = ? "
+                "UPDATE memory_proposals SET revision = ?, write_action_token = ?, write_action_intent_json = ? "
                 "WHERE work_item_id = ? AND proposal_id = ?",
-                (7, "dead-supervisor-write-token", work_item["id"], "mp-ai-draft"),
+                (7, "dead-supervisor-write-token", json.dumps(abandoned_intent), work_item["id"], "mp-ai-draft"),
             )
             proposal_db.commit()
         finally:
@@ -4500,6 +4516,35 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             json={"expectedRevision": 7, "recoveryRef": "        "},
         )
         assert meaningless_recovery.status_code == 422
+        original_recovery_event = service._record_event
+
+        async def fail_recovery_event(*args, **kwargs):
+            raise RuntimeError("injected recovery-event failure")
+
+        monkeypatch.setattr(service, "_record_event", fail_recovery_event)
+        with pytest.raises(RuntimeError, match="injected recovery-event failure"):
+            client.post(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+                json={
+                    "expectedRevision": 7,
+                    "recoveryRef": "operator:failed-recovery-event:pytest",
+                },
+            )
+        monkeypatch.setattr(service, "_record_event", original_recovery_event)
+        # The retry sees the snapshot state restored by the failed attempt and
+        # finishes the same durable recovery rather than stranding its intent.
+        assert draft_path.read_bytes() == pre_crash_draft_bytes
+        crashed_backup_artifact = crashed_backup_path / proposal["targetVaultPath"]
+        crashed_backup_artifact.write_bytes(b"tampered recovery backup\n")
+        with pytest.raises(ValueError, match="backup artifact changed after intent recording"):
+            client.post(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+                json={
+                    "expectedRevision": 7,
+                    "recoveryRef": "operator:tampered-backup:pytest",
+                },
+            )
+        crashed_backup_artifact.write_bytes(pre_crash_draft_bytes)
         recovered_reservation = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
             json={
@@ -4513,6 +4558,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert recovered_review.status_code == 200
         assert recovered_review.json()["data"]["proposals"][0]["revision"] == 8
+        assert draft_path.read_bytes() == pre_crash_draft_bytes
 
         # A pre-WorkItem legacy draft must be copied to recovery storage before
         # its front matter is rebound to this proposal's immutable identity.
@@ -4541,63 +4587,38 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         draft_path.unlink()
         assert not draft_path.exists()
 
-        # Recovery deliberately invalidates the live writer's token/revision.
-        # A delayed writer may have reached its filesystem step, but it must
-        # never publish an outcome/event after that fence has been recovered.
-        original_finalize_write = service._finalize_memory_proposal_write
+        # Model a crash after its durable intent commits but before the writer
+        # acquires the artifact lock. The governed recovery reconciles that
+        # exact intent, advances the revision, and prevents the stale request
+        # from writing any artifact.
+        original_record_intent = service._record_memory_proposal_write_intent
 
-        async def recover_before_finalization(session, proposal, **kwargs):
-            proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
-            try:
-                proposal_db.execute(
-                    "UPDATE memory_proposals SET revision = ?, write_action_token = NULL "
-                    "WHERE work_item_id = ? AND proposal_id = ?",
-                    (kwargs["expected_revision"] + 2, work_item["id"], "mp-ai-draft"),
-                )
-                proposal_db.commit()
-            finally:
-                proposal_db.close()
-            return await original_finalize_write(session, proposal, **kwargs)
+        async def recover_after_intent(session, proposal, **kwargs):
+            result = await original_record_intent(session, proposal, **kwargs)
+            await session.refresh(proposal)
+            await service.recover_abandoned_memory_proposal_write(
+                session,
+                work_item["id"],
+                "mp-ai-draft",
+                expected_revision=kwargs["expected_revision"] + 1,
+                recovery_ref="operator:recovered-intent:pytest",
+                actor_id=None,
+                actor_label="Operator",
+            )
+            return result
 
-        monkeypatch.setattr(service, "_finalize_memory_proposal_write", recover_before_finalization)
+        monkeypatch.setattr(service, "_record_memory_proposal_write_intent", recover_after_intent)
         superseded_writer = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
             json={"expectedRevision": 9, "actorLabel": "Operator"},
         )
         assert superseded_writer.status_code == 409
-        monkeypatch.setattr(service, "_finalize_memory_proposal_write", original_finalize_write)
+        monkeypatch.setattr(service, "_record_memory_proposal_write_intent", original_record_intent)
         assert not draft_path.exists()
         assert client.get(
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
         ).json()["data"]["proposals"][0]["revision"] == 11
 
-        # Identical bytes are not writer identity.  Model a later completed
-        # writer at the deterministic path: the stale request must retain the
-        # artifact once the durable revision proves newer ownership.
-        async def newer_writer_before_finalization(session, proposal, **kwargs):
-            proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
-            try:
-                proposal_db.execute(
-                    "UPDATE memory_proposals SET revision = ?, write_action_token = NULL "
-                    "WHERE work_item_id = ? AND proposal_id = ?",
-                    (kwargs["expected_revision"] + 3, work_item["id"], "mp-ai-draft"),
-                )
-                proposal_db.commit()
-            finally:
-                proposal_db.close()
-            return await original_finalize_write(session, proposal, **kwargs)
-
-        monkeypatch.setattr(service, "_finalize_memory_proposal_write", newer_writer_before_finalization)
-        later_writer = client.post(
-            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
-            json={"expectedRevision": 11, "actorLabel": "Operator"},
-        )
-        assert later_writer.status_code == 409
-        monkeypatch.setattr(service, "_finalize_memory_proposal_write", original_finalize_write)
-        assert draft_path.exists()
-        assert client.get(
-            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
-        ).json()["data"]["proposals"][0]["revision"] == 14
 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:

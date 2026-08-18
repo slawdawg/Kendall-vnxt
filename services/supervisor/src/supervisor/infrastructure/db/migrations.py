@@ -68,6 +68,12 @@ async def _apply_memory_proposal_write_reservation(connection: AsyncConnection) 
     await ensure_memory_proposal_write_reservation_schema(connection)
 
 
+async def _apply_memory_proposal_write_intent(connection: AsyncConnection) -> None:
+    from supervisor.infrastructure.db.database import ensure_memory_proposal_write_intent_schema
+
+    await ensure_memory_proposal_write_intent_schema(connection)
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -86,6 +92,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0004_memory_proposal_write_reservation",
         _apply_memory_proposal_write_reservation,
         clean_install=_apply_memory_proposal_write_reservation,
+    ),
+    SchemaMigration(
+        "0005_memory_proposal_write_intent",
+        _apply_memory_proposal_write_intent,
+        clean_install=_apply_memory_proposal_write_intent,
     ),
 )
 

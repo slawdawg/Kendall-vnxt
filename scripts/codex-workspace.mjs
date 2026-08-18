@@ -40,7 +40,10 @@ const defaultBaseBranch = "dev";
 const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
-const codexWorkspaceVerificationTimeoutMs = 900_000;
+// The complete governed workspace suite exercises delivery, review, merge,
+// and cleanup fixtures end-to-end.  It has a distinct bounded allowance from
+// ordinary profiles: on a healthy workspace it can exceed fifteen minutes.
+const codexWorkspaceVerificationTimeoutMs = 1_800_000;
 const dashboardVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
 const verificationDiagnosticSchemaVersion = 2;
@@ -64,7 +67,11 @@ const resumableCheckDefaultLeafExecutionReserveMs = 30_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
 const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
-const resumableCheckPacketTtlMs = 30 * 60 * 1000;
+// A packet can legitimately contain the 30-minute workspace leaf plus the
+// independently bounded supervisor leaves. Keep one fixed lifetime large
+// enough for that reviewed aggregate, while every resume still rebinds the
+// immutable head, plan, staged input, and ordered metadata-only evidence.
+const resumableCheckPacketTtlMs = 2 * 60 * 60 * 1000;
 const resumableCheckPacketFutureSkewMs = 30_000;
 // Retry history is audit evidence, not a scheduler. Thirty seconds tolerates
 // ordinary local clock skew while rejecting timestamps projected far enough
@@ -3275,8 +3282,15 @@ function assertExternalCheckStageEvidenceManifest(manifest, runnerIdentity) {
   if (manifest.owner !== runnerIdentity) {
     throw new Error("record-check-stage-evidence requires the exact recorded lane owner.");
   }
-  if (manifest.status !== "active") {
-    throw new Error("record-check-stage-evidence requires an active lane.");
+  const prOpenExactHead = manifest.status === "pr_open"
+    && Number.isInteger(manifest.pr_number)
+    && typeof manifest.pr_url === "string"
+    && manifest.pr_url.length > 0
+    && manifest.pr_delivery_branch === manifest.branch
+    && manifest.pr_delivery_base_branch === manifest.base_branch
+    && manifest.pr_delivery_head_sha === branchSha("HEAD", manifest.worktree_path);
+  if (manifest.status !== "active" && !prOpenExactHead) {
+    throw new Error("record-check-stage-evidence requires an active lane or an exact-head open PR lane.");
   }
   assertSafeBranch(manifest.branch);
   assertWorktreeExists(manifest);
@@ -15189,7 +15203,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     const stage = plan.stages[index];
     const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
     // A long leaf has its own reviewed budget. Subtracting the elapsed packet
-    // time here gave test:codex-workspace less than its 900s allowance merely
+    // time here gave test:codex-workspace less than its dedicated allowance merely
     // because earlier bounded leaves had already produced evidence. Ordinary
     // leaves retain the packet-level 180s pause/resume behavior below.
     const elapsedMs = Date.now() - started;
@@ -15495,7 +15509,12 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
     if (typeof evidence.stage !== "string" || !/^[A-Za-z0-9:_-]{1,120}$/.test(evidence.stage) || seenStages.has(evidence.stage)) invalid("stage evidence stage is malformed");
     seenStages.add(evidence.stage);
     const completedAt = timestamp(evidence.completed_at, "stage completed_at");
-    if (completedAt < previousCompletedAt || completedAt > updatedAt || completedAt > expiresAt) invalid("stage evidence is malformed");
+    // This validator is used only to discard a stale partial packet after its
+    // immutable source binding changed.  A previous runner may have reached
+    // the former packet lifetime while a bounded leaf was still completing;
+    // retain the strict ordering/metadata checks but allow that expired
+    // evidence to be safely discarded rather than stranding the lane.
+    if (completedAt < previousCompletedAt || completedAt > updatedAt) invalid("stage evidence is malformed");
     if (evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null || evidence.output !== "omitted") invalid("stage evidence is not a successful metadata-only result");
     previousCompletedAt = completedAt;
   }

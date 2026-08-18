@@ -258,9 +258,11 @@ the supervisor process is confirmed dead after that reservation, an operator
 may use the local recovery route
 `POST /work-items/:id/memory-proposals/:proposalRouteId/recover-abandoned-write`
 with the refreshed `expectedRevision` and an auditable `recoveryRef`. It records
-the recovery, clears only the matching reservation, and advances the revision
-again; refresh before retrying. Never use this recovery route to interrupt a
-live write. In a LAN deployment it requires the authenticated operator session,
+the recovery, reconciles the server-recorded artifact/backup intent under the
+same per-artifact lock used by the writer, clears only the matching reservation,
+and advances the revision again; a failed recovery can be retried only against
+that exact backup state. Refresh before retrying. Never use this recovery route
+to interrupt a live write. In a LAN deployment it requires the authenticated operator session,
 exact dashboard Origin, and CSRF token; development mode still requires the
 private-UDS or loopback operational boundary. Legacy artifact rebinding snapshots the vault before adding its
 missing WorkItem fence, so the backup path remains the recovery source if that

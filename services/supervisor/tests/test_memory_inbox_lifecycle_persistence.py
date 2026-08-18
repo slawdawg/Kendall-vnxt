@@ -419,10 +419,11 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
             )).scalars())
             assert recorded == {
                 "0001_model_baseline",
-                "0002_legacy_compatibility",
-                "0003_memory_proposal_revision",
-                "0004_memory_proposal_write_reservation",
-            }
+                    "0002_legacy_compatibility",
+                    "0003_memory_proposal_revision",
+                    "0004_memory_proposal_write_reservation",
+                    "0005_memory_proposal_write_intent",
+                }
     finally:
         await engine.dispose()
 

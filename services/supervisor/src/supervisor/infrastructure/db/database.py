@@ -613,6 +613,17 @@ async def ensure_memory_proposal_write_reservation_schema(connection) -> None:
     raise RuntimeError(f"Unsupported database dialect for memory proposal write reservation migration: {connection.dialect.name}")
 
 
+async def ensure_memory_proposal_write_intent_schema(connection) -> None:
+    """Persist the bounded artifact/backup identity before filesystem work."""
+    if connection.dialect.name == "postgresql":
+        await connection.execute(text("ALTER TABLE memory_proposals ADD COLUMN IF NOT EXISTS write_action_intent_json JSON"))
+        return
+    if connection.dialect.name == "sqlite":
+        await _sqlite_add_columns(connection, "memory_proposals", (("write_action_intent_json", "JSON"),))
+        return
+    raise RuntimeError(f"Unsupported database dialect for memory proposal write intent migration: {connection.dialect.name}")
+
+
 async def _apply_legacy_schema_compatibility(connection) -> None:
     """Apply the historical compatibility baseline as migration revision 0002."""
 

@@ -8111,7 +8111,7 @@ try {
       assert(Boolean(manifest.last_verified_at), "finish-pr did not record successful verification time");
       assert(manifest.status === "pr_open", `unexpected manifest status ${manifest.status}`);
       const source = readFileSync(scriptPath, "utf8");
-      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 900_000;"), "codex-workspace profile must retain its reviewed fixed 900s budget");
+      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 1_800_000;"), "codex-workspace profile must retain its reviewed fixed 1800s budget");
       assert(source.includes('if (profile === "codex-workspace") return codexWorkspaceVerificationTimeoutMs;'), "codex-workspace timeout selection must remain fixed in source");
       const boundedRunner = source.match(/function runBoundedVerification[\s\S]*?function verificationOutcome/);
       assert(boundedRunner, "bounded verification runner missing");
@@ -8215,7 +8215,7 @@ try {
       assert(diagnostic.schema_version === 2, JSON.stringify(diagnostic));
       assert(diagnostic.profile === "codex-workspace", JSON.stringify(diagnostic));
       assert(diagnostic.outcome === "nonzero-exit", JSON.stringify(diagnostic));
-      assert(diagnostic.execution?.timeout_ms === 900_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
+      assert(diagnostic.execution?.timeout_ms === 1_800_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
       assert(diagnostic.child?.output === "sanitized-tail-v1", JSON.stringify(diagnostic));
       assert(diagnostic.child?.stdout_tail?.bytes > 2_048 && diagnostic.child.stdout_tail.truncated === true, JSON.stringify(diagnostic));
       assert(diagnostic.child.stdout_tail.retained_bytes <= 2_048, JSON.stringify(diagnostic));
@@ -8358,7 +8358,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === "test:manager-control-plane", "long leaf did not execute");
-      assert(readFileSync(timeoutLog, "utf8").trim() === "test:manager-control-plane:900000", "long leaf did not receive its fixed budget");
+      assert(readFileSync(timeoutLog, "utf8").trim() === "test:manager-control-plane:1800000", "long leaf did not receive its fixed budget");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -8735,6 +8735,10 @@ try {
   });
 
   test("finish-pr resumable check packet fails closed before execution on binding drift, expiry, or malformed state", () => {
+    assert(
+      readFileSync(scriptPath, "utf8").includes("const resumableCheckPacketTtlMs = 2 * 60 * 60 * 1000;"),
+      "resumable check packet must retain its reviewed two-hour aggregate lifetime",
+    );
     for (const scenario of [
       { name: "task", mutate: (packet) => ({ ...packet, task_id: "other-task" }) },
       { name: "owner", mutate: (packet) => ({ ...packet, owner: "other-runner" }) },
@@ -9081,9 +9085,13 @@ try {
       const stageLog = installFixtureResumableCheckPlan(fixture, stages);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
+      const createdAt = new Date(Date.now() - 5 * 60_000).toISOString();
+      const expiresAt = new Date(Date.now() - 1_000).toISOString();
       const completedAt = new Date(Date.now() - 500).toISOString();
       manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
         head: "f".repeat(40),
+        created_at: createdAt,
+        expires_at: expiresAt,
         stages: [{ stage: stages[0], completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }],
         next_stage: stages[1],
         updated_at: completedAt,
@@ -9643,12 +9651,18 @@ try {
     }
   });
 
-  test("external check stage handoff records the fixed leaf in the production-shaped plan and resumes every later stage before delivery", () => {
+  test("external check stage handoff records the fixed leaf for an exact-head open PR and resumes every later stage before delivery", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 456;
+      manifest.pr_url = "https://example.test/pull/456";
+      manifest.pr_delivery_branch = manifest.branch;
+      manifest.pr_delivery_base_branch = manifest.base_branch;
+      manifest.pr_delivery_head_sha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(fixture, stages);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       installFixtureDeliveryProbes(fixture, { allowDelivery: true });
@@ -20135,7 +20149,7 @@ function activeFixtureTaskLock(taskId) {
 
 function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {
   const source = readFileSync(fixture.script, "utf8");
-  const original = "const codexWorkspaceVerificationTimeoutMs = 900_000;";
+  const original = "const codexWorkspaceVerificationTimeoutMs = 1_800_000;";
   assert(source.includes(original), "fixture did not contain the reviewed codex-workspace timeout literal");
   writeFileSync(fixture.script, source.replace(original, `const codexWorkspaceVerificationTimeoutMs = ${timeoutMs};`));
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
