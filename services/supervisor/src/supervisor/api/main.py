@@ -192,7 +192,7 @@ from supervisor.application.operator_auth import (
     record_auth_audit,
     revoke_all_sessions,
 )
-from supervisor.application.service import SupervisorService
+from supervisor.application.service import MemoryProposalRevisionConflict, SupervisorService
 from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
 from supervisor.application.memory_inbox_projection import read_memory_inbox_projection, read_review_ready_count
 from supervisor.application.memory_inbox_capture import capture_acknowledged_text
@@ -1728,6 +1728,8 @@ async def update_work_item_memory_proposal(
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         proposal = await service.update_memory_proposal(session, work_item_id, proposal_id, payload)
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_review_rejected").model_dump()) from exc
     if not proposal:

@@ -1576,6 +1576,7 @@ class MemoryProposalCreateRequest(BaseModel):
 class MemoryProposalUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: PositiveInt
     status: MemoryProposalStatusV0 | None = None
     operatorAction: MemoryProposalOperatorActionV0 | None = None
     actorId: str | None = None
@@ -1652,7 +1653,12 @@ class MemoryProposalV0View(BaseModel):
 # retired WorkPacketV0 aggregate.  The dashboard memory-review UI needs only
 # persisted proposal metadata and its derived, no-write LLM-Wiki readiness.
 class WorkItemMemoryReviewProposalV1View(BaseModel):
+    # `proposalRouteId` is the persisted opaque row identifier. It is the
+    # only proposal value that the dashboard puts in a path segment, so legacy
+    # proposal labels/IDs cannot alter route parsing.
+    proposalRouteId: str
     proposalId: str
+    revision: PositiveInt
     label: str
     status: MemoryProposalStatusV0
     summary: str

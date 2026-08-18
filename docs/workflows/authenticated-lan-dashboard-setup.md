@@ -239,14 +239,18 @@ The normal non-LAN dashboard retains server-side supervisor reads through
 
 An `operator` viewing `/work-items/:id` may see persisted proposal metadata and
 the derived LLM-Wiki readiness from the canonical, read-only
-`/pipeline-control-plane/work-items/:id/memory-review` endpoint. It never
-performs a vault write, provider call, or proposal mutation: `writeBackAllowed`
-and both mutation flags are always false. `test_viewer` cannot request this
-operator-only read. A missing or temporarily version-skewed endpoint simply
-omits the panel; verify that the supervisor and dashboard are on the same
-revision, then use the page retry after restarting the supervisor first. Do
-not paste vault content, bootstrap passwords, cookies, or UDS paths into a
-proposal or troubleshooting record.
+`/pipeline-control-plane/work-items/:id/memory-review` endpoint. The read is
+metadata-only and exposes an opaque `proposalRouteId` plus a persisted
+`revision` for each proposal. Operator review actions send both values; a 409
+means another operator or an approved draft/rebuild changed the proposal, so
+refresh before deciding again. The server admits only WorkItem-scoped canonical
+event/attempt evidence; a metadata string cannot authorize a draft or derived
+artifact. `test_viewer` cannot request this operator-only read or its action
+routes. A missing or temporarily version-skewed endpoint simply omits the
+panel; verify that the supervisor and dashboard are on the same revision, then
+use the page retry after restarting the supervisor first. Do not paste vault
+content, bootstrap passwords, cookies, or UDS paths into a proposal or
+troubleshooting record.
 
 ## Independently revocable dashboard verification credential
 

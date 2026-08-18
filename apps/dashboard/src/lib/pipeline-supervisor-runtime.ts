@@ -55,7 +55,7 @@ export type DashboardCanonicalWorkPacketV1 = {
 };
 
 export type DashboardCanonicalMemoryProposalV1 = {
-  proposalId: string; label: string; status: string; summary: string; sourceRefs: string[]; evidenceRefs: string[];
+  proposalRouteId: string; proposalId: string; revision: number; label: string; status: string; summary: string; sourceRefs: string[]; evidenceRefs: string[];
   targetVaultPath: string | null; targetVaultFolder: string; proposalType: string; suggestedContentSummary: string;
   patchSummary: string | null; sensitivity: string; freshness: string; contradictionStatus: string; confidence: string;
   operatorAction: string; decisionNeededContext: string | null; backupRecoveryPath: string; writeBackStatus: string;
@@ -587,17 +587,17 @@ const MEMORY_PROPOSAL_ENUMS = {
 
 function canonicalMemoryProposal(value: unknown): DashboardCanonicalMemoryProposalV1 {
   const proposal = canonicalMemoryReviewRecord(value, [
-    "proposalId", "label", "status", "summary", "sourceRefs", "evidenceRefs", "targetVaultPath",
+    "proposalRouteId", "proposalId", "revision", "label", "status", "summary", "sourceRefs", "evidenceRefs", "targetVaultPath",
     "targetVaultFolder", "proposalType", "suggestedContentSummary", "patchSummary", "sensitivity",
     "freshness", "contradictionStatus", "confidence", "operatorAction", "decisionNeededContext",
     "backupRecoveryPath", "writeBackStatus", "writeBackAllowed",
   ]);
   const requiredStrings = [
-    "proposalId", "label", "status", "summary", "targetVaultFolder", "proposalType",
+    "proposalRouteId", "proposalId", "label", "status", "summary", "targetVaultFolder", "proposalType",
     "suggestedContentSummary", "sensitivity", "freshness", "contradictionStatus", "confidence",
     "operatorAction", "backupRecoveryPath", "writeBackStatus",
   ];
-  if (!requiredStrings.every((key) => typeof proposal[key] === "string") ||
+  if (!requiredStrings.every((key) => typeof proposal[key] === "string") || !/^[A-Za-z0-9_-]+$/.test(proposal.proposalRouteId as string) || !Number.isSafeInteger(proposal.revision) || (proposal.revision as number) < 1 ||
     !isOptionalString(proposal.targetVaultPath) || !isOptionalString(proposal.patchSummary) ||
     !isOptionalString(proposal.decisionNeededContext) || proposal.writeBackAllowed !== false) {
     throw new Error("Canonical WorkItem memory review is malformed.");
@@ -606,7 +606,7 @@ function canonicalMemoryProposal(value: unknown): DashboardCanonicalMemoryPropos
     throw new Error("Canonical WorkItem memory review is malformed.");
   }
   return {
-    proposalId: proposal.proposalId as string, label: proposal.label as string, status: proposal.status as string,
+    proposalRouteId: proposal.proposalRouteId as string, proposalId: proposal.proposalId as string, revision: proposal.revision as number, label: proposal.label as string, status: proposal.status as string,
     summary: proposal.summary as string, sourceRefs: canonicalMemoryStringArray(proposal.sourceRefs),
     evidenceRefs: canonicalMemoryStringArray(proposal.evidenceRefs), targetVaultPath: proposal.targetVaultPath ?? null,
     targetVaultFolder: proposal.targetVaultFolder as string, proposalType: proposal.proposalType as string,

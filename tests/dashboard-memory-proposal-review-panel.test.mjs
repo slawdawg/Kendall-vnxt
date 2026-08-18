@@ -24,9 +24,10 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(pageSource, /href="#memory-proposals"/);
 
   assert.match(panelSource, /PATCH/);
-  assert.match(panelSource, /\/work-items\/\$\{workItemId\}\/memory-proposals\/\$\{encodeURIComponent\(proposal\.proposalId\)\}/);
+  assert.match(panelSource, /\/work-items\/\$\{workItemId\}\/memory-proposals\/\$\{encodeURIComponent\(proposal\.proposalRouteId\)\}/);
   assert.match(panelSource, /POST/);
-  assert.match(panelSource, /\/work-items\/\$\{workItemId\}\/memory-proposals\/\$\{encodeURIComponent\(proposal\.proposalId\)\}\/ai-draft/);
+  assert.match(panelSource, /\/work-items\/\$\{workItemId\}\/memory-proposals\/\$\{encodeURIComponent\(proposal\.proposalRouteId\)\}\/ai-draft/);
+  assert.match(panelSource, /expectedRevision: proposal\.revision/);
   assert.match(panelSource, /writeBackAllowed: false/);
   assert.match(panelSource, /No action here mutates canonical Obsidian notes/);
   assert.match(panelSource, /Approve future draft/);

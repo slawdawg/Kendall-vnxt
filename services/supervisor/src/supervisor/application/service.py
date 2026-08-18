@@ -720,6 +720,10 @@ from supervisor.infrastructure.db.models import (
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
+class MemoryProposalRevisionConflict(ValueError):
+    """An operator submitted a decision against an obsolete review revision."""
+
+
 ACTIVE_STATES = {
     WorkflowState.IMPLEMENTING.value,
     WorkflowState.VALIDATING.value,
@@ -1315,28 +1319,7 @@ class SupervisorService:
         # empty provenance arrays.  Keep legacy V0 packet views validated by
         # their required-reference contract instead of constructing one here.
         proposal_views = [
-            WorkItemMemoryReviewProposalV1View(
-                proposalId=proposal.proposal_id,
-                label=proposal.label,
-                status=proposal.status,
-                summary=proposal.summary,
-                sourceRefs=list(proposal.source_refs_json or []),
-                evidenceRefs=list(proposal.evidence_refs_json or []),
-                targetVaultPath=proposal.target_vault_path,
-                targetVaultFolder=proposal.target_vault_folder,
-                proposalType=proposal.proposal_type,
-                suggestedContentSummary=proposal.suggested_content_summary,
-                patchSummary=proposal.patch_summary,
-                sensitivity=proposal.sensitivity,
-                freshness=proposal.freshness,
-                contradictionStatus=proposal.contradiction_status,
-                confidence=proposal.confidence,
-                operatorAction=proposal.operator_action,
-                decisionNeededContext=proposal.decision_needed_context,
-                backupRecoveryPath=proposal.backup_recovery_path,
-                writeBackStatus=proposal.write_back_status,
-                writeBackAllowed=False,
-            )
+            self._work_item_memory_review_proposal_view(proposal)
             for proposal in await self.list_memory_proposals(session, item.id)
         ]
         alpha_source_refs, evidence_refs = await self._work_item_memory_review_provenance(
@@ -1353,6 +1336,35 @@ class SupervisorService:
             authoritativePacketId=canonical_packet.id if canonical_packet else None,
             proposals=proposal_views,
             llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
+        )
+
+    def _work_item_memory_review_proposal_view(
+        self,
+        proposal: MemoryProposal,
+    ) -> WorkItemMemoryReviewProposalV1View:
+        return WorkItemMemoryReviewProposalV1View(
+            proposalRouteId=proposal.id,
+            proposalId=proposal.proposal_id,
+            revision=proposal.revision,
+            label=proposal.label,
+            status=proposal.status,
+            summary=proposal.summary,
+            sourceRefs=list(proposal.source_refs_json or []),
+            evidenceRefs=list(proposal.evidence_refs_json or []),
+            targetVaultPath=proposal.target_vault_path,
+            targetVaultFolder=proposal.target_vault_folder,
+            proposalType=proposal.proposal_type,
+            suggestedContentSummary=proposal.suggested_content_summary,
+            patchSummary=proposal.patch_summary,
+            sensitivity=proposal.sensitivity,
+            freshness=proposal.freshness,
+            contradictionStatus=proposal.contradiction_status,
+            confidence=proposal.confidence,
+            operatorAction=proposal.operator_action,
+            decisionNeededContext=proposal.decision_needed_context,
+            backupRecoveryPath=proposal.backup_recovery_path,
+            writeBackStatus=proposal.write_back_status,
+            writeBackAllowed=False,
         )
 
     async def _work_item_memory_review_provenance(
@@ -1411,6 +1423,25 @@ class SupervisorService:
         candidate_view = self.to_candidate_work_view(candidate) if candidate else None
         source_refs = self._work_packet_source_refs(candidate_view, item_view)
         evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, attempts, workflow_events)
+        # Metadata may cite arbitrary evidence IDs, but the reserved event and
+        # attempt namespaces are authoritative only when they were resolved
+        # from the WorkItem-scoped tables above. Otherwise a metadata string
+        # could forge readiness for a nonexistent canonical record.
+        canonical_reserved_refs = {
+            *(f"event:{event.id}" for event in workflow_events),
+            *(f"attempt:{attempt.attemptId}" for attempt in attempts),
+        }
+        canonical_reserved_refs.update(
+            f"event:{event_ref['eventId']}"
+            for attempt in attempts
+            for event_ref in attempt.eventRefs
+            if isinstance(event_ref, dict) and isinstance(event_ref.get("eventId"), str)
+        )
+        evidence_refs = [
+            ref
+            for ref in evidence_refs
+            if not ref.refId.startswith(("event:", "attempt:")) or ref.refId in canonical_reserved_refs
+        ]
         return (
             [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}],
             evidence_refs,
@@ -5677,15 +5708,13 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
-        result = await session.execute(
-            select(MemoryProposal).where(
-                MemoryProposal.work_item_id == work_item_id,
-                MemoryProposal.proposal_id == proposal_id,
-            )
-        )
-        proposal = result.scalar_one_or_none()
+        proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id, lock=True)
         if not proposal:
             return None
+        if proposal.revision != payload.expectedRevision:
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal review was updated by another operator; refresh before trying again."
+            )
 
         next_status = payload.status if payload.status is not None else proposal.status
         next_operator_action = payload.operatorAction if payload.operatorAction is not None else proposal.operator_action
@@ -5698,18 +5727,38 @@ class SupervisorService:
         ):
             raise ValueError("Unsafe memory proposal cannot be approved for future write-back.")
 
+        now = datetime.now(timezone.utc)
+        values: dict[str, object] = {
+            "write_back_allowed": False,
+            "revision": proposal.revision + 1,
+            "updated_at": now,
+        }
         if payload.status is not None:
-            proposal.status = payload.status
+            values["status"] = payload.status
         if payload.operatorAction is not None:
-            proposal.operator_action = payload.operatorAction
+            values["operator_action"] = payload.operatorAction
         if payload.decisionNeededContext is not None:
-            proposal.decision_needed_context = payload.decisionNeededContext
+            values["decision_needed_context"] = payload.decisionNeededContext
         if payload.writeBackStatus is not None:
-            proposal.write_back_status = payload.writeBackStatus
+            values["write_back_status"] = payload.writeBackStatus
         if payload.patchSummary is not None:
-            proposal.patch_summary = payload.patchSummary
-        proposal.write_back_allowed = False
-        proposal.updated_at = datetime.now(timezone.utc)
+            values["patch_summary"] = payload.patchSummary
+        updated = await session.execute(
+            update(MemoryProposal)
+            .where(
+                MemoryProposal.id == proposal.id,
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.revision == payload.expectedRevision,
+            )
+            .values(**values)
+            .execution_options(synchronize_session="fetch")
+        )
+        if updated.rowcount != 1:
+            await session.rollback()
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal review was updated by another operator; refresh before trying again."
+            )
+        await session.refresh(proposal)
         await self._record_event(
             session,
             item,
@@ -5733,6 +5782,37 @@ class SupervisorService:
         await session.refresh(proposal)
         await self._publish_item(item)
         return proposal
+
+    async def _memory_proposal_for_route(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        route_id: str,
+        *,
+        lock: bool = False,
+    ) -> MemoryProposal | None:
+        """Resolve the opaque V1 route key, retaining safe legacy-ID reads briefly."""
+        query = select(MemoryProposal).where(
+            MemoryProposal.work_item_id == work_item_id,
+            MemoryProposal.id == route_id,
+        )
+        if lock:
+            query = query.with_for_update()
+        proposal = (await session.execute(query)).scalar_one_or_none()
+        if proposal is not None:
+            return proposal
+        # Legacy callers can still address an existing route-safe proposal ID.
+        # A value containing a path separator cannot reach this branch through
+        # an HTTP path and new dashboard callers never use the display ID.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", route_id):
+            return None
+        query = select(MemoryProposal).where(
+            MemoryProposal.work_item_id == work_item_id,
+            MemoryProposal.proposal_id == route_id,
+        )
+        if lock:
+            query = query.with_for_update()
+        return (await session.execute(query)).scalar_one_or_none()
 
     def _load_obsidian_memory_draft_config(self) -> dict[str, object]:
         config_path = (self.settings.obsidian_memory_config_path or "").strip()
@@ -5825,13 +5905,7 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
-        result = await session.execute(
-            select(MemoryProposal).where(
-                MemoryProposal.work_item_id == work_item_id,
-                MemoryProposal.proposal_id == proposal_id,
-            )
-        )
-        proposal = result.scalar_one_or_none()
+        proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id)
         if not proposal:
             return None
 
@@ -5852,28 +5926,7 @@ class SupervisorService:
             blockers.append("missing_source_refs")
         if not proposal.evidence_refs_json:
             blockers.append("missing_evidence_refs")
-        proposal_view = WorkItemMemoryReviewProposalV1View(
-            proposalId=proposal.proposal_id,
-            label=proposal.label,
-            status=proposal.status,
-            summary=proposal.summary,
-            sourceRefs=list(proposal.source_refs_json or []),
-            evidenceRefs=list(proposal.evidence_refs_json or []),
-            targetVaultPath=proposal.target_vault_path,
-            targetVaultFolder=proposal.target_vault_folder,
-            proposalType=proposal.proposal_type,
-            suggestedContentSummary=proposal.suggested_content_summary,
-            patchSummary=proposal.patch_summary,
-            sensitivity=proposal.sensitivity,
-            freshness=proposal.freshness,
-            contradictionStatus=proposal.contradiction_status,
-            confidence=proposal.confidence,
-            operatorAction=proposal.operator_action,
-            decisionNeededContext=proposal.decision_needed_context,
-            backupRecoveryPath=proposal.backup_recovery_path,
-            writeBackStatus=proposal.write_back_status,
-            writeBackAllowed=False,
-        )
+        proposal_view = self._work_item_memory_review_proposal_view(proposal)
         source_refs, evidence_refs = await self._work_item_memory_review_provenance(session, item, [proposal_view])
         selected_source_ref_ids = set(proposal_view.sourceRefs)
         selected_readiness = self._llm_wiki_readiness(
@@ -5895,7 +5948,7 @@ class SupervisorService:
         if proposal.target_vault_folder.strip().strip("/") != draft_folder:
             raise ValueError("AI draft write-back blocked: proposal target folder does not match the configured AI Drafts queue.")
 
-        safe_id = _safe_memory_proposal_id(proposal.proposal_id)
+        safe_id = _safe_memory_proposal_id(proposal.proposal_id) if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id) else proposal.id
         vault_root = Path(config["vault_root"]).resolve()
         draft_dir = vault_root / draft_folder
         if draft_dir.parent.exists():
@@ -5923,6 +5976,7 @@ class SupervisorService:
             proposal.patch_summary = f"AI draft already exists at {relative_draft_path}; no duplicate draft was written."
             proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
             proposal.write_back_allowed = False
+            proposal.revision += 1
             proposal.updated_at = datetime.now(timezone.utc)
             await self._record_event(
                 session,
@@ -5994,6 +6048,7 @@ class SupervisorService:
         proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
         proposal.backup_recovery_path = f"Remove {relative_draft_path} and restore from {backup_path} if the operator rejects the draft."
         proposal.write_back_allowed = False
+        proposal.revision += 1
         proposal.updated_at = now
         await self._record_event(
             session,
@@ -6032,13 +6087,7 @@ class SupervisorService:
         item = await session.get(WorkItem, work_item_id)
         if not item:
             return None
-        result = await session.execute(
-            select(MemoryProposal).where(
-                MemoryProposal.work_item_id == work_item_id,
-                MemoryProposal.proposal_id == proposal_id,
-            )
-        )
-        proposal = result.scalar_one_or_none()
+        proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id)
         if not proposal:
             return None
 
@@ -6062,23 +6111,15 @@ class SupervisorService:
         if blockers:
             raise ValueError(f"LLM-Wiki rebuild blocked: {', '.join(blockers)}")
 
-        item_view = self.to_work_item_view(item)
-        source_refs = [
-            ref
-            for ref in self._work_packet_source_refs(None, item_view)
-            if ref.sourceType not in {"candidate_work", "work_item"}
-        ]
-        proposal_view = self.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}")
-        evidence_refs = [
-            EvidenceRefV0View(
-                refId=str(ref),
-                evidenceType="memory",
-                label="Approved memory proposal evidence",
-                retentionClass="metadata_only",
-            )
-            for ref in proposal_view.evidenceRefs
-        ]
-        readiness = self._llm_wiki_readiness(f"work_item:{work_item_id}", source_refs, evidence_refs, [proposal_view])
+        proposal_view = self._work_item_memory_review_proposal_view(proposal)
+        source_refs, evidence_refs = await self._work_item_memory_review_provenance(session, item, [proposal_view])
+        selected_source_ref_ids = set(proposal_view.sourceRefs)
+        readiness = self._llm_wiki_readiness(
+            f"work_item:{work_item_id}",
+            [source_ref for source_ref in source_refs if source_ref.refId in selected_source_ref_ids],
+            evidence_refs,
+            [proposal_view],
+        )
         if readiness.decisionState != "ready" or readiness.rebuildDryRunPlan is None:
             blocked = ", ".join(readiness.blockedReasons or ["llm_wiki.rebuild_plan_not_ready"])
             raise ValueError(f"LLM-Wiki rebuild blocked: {blocked}")
@@ -6091,7 +6132,7 @@ class SupervisorService:
         if not llm_wiki_folder.startswith(f"{queue_folder}/"):
             raise ValueError("LLM-Wiki rebuild blocked: derived target must remain inside the dashboard queue.")
 
-        safe_id = _safe_memory_proposal_id(proposal.proposal_id)
+        safe_id = _safe_memory_proposal_id(proposal.proposal_id) if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id) else proposal.id
         target_dir = vault_root / llm_wiki_folder
         if target_dir.parent.exists():
             try:
@@ -6119,6 +6160,7 @@ class SupervisorService:
             proposal.patch_summary = f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written."
             proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
             proposal.write_back_allowed = False
+            proposal.revision += 1
             proposal.updated_at = datetime.now(timezone.utc)
             await self._record_event(
                 session,
@@ -6214,6 +6256,7 @@ class SupervisorService:
         proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
         proposal.backup_recovery_path = f"Remove {relative_target_path} and restore from {backup_path} if the operator rejects the derived artifact."
         proposal.write_back_allowed = False
+        proposal.revision += 1
         proposal.updated_at = now
         await self._record_event(
             session,
@@ -6247,13 +6290,7 @@ class SupervisorService:
         proposal_id: str,
         query: str,
     ) -> LlmWikiArtifactSearchResultView | None:
-        result = await session.execute(
-            select(MemoryProposal).where(
-                MemoryProposal.work_item_id == work_item_id,
-                MemoryProposal.proposal_id == proposal_id,
-            )
-        )
-        proposal = result.scalar_one_or_none()
+        proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id)
         if not proposal:
             return None
 

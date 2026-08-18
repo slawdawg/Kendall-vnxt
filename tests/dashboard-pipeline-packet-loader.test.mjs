@@ -1348,7 +1348,7 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
     workItemId: "work-item-a",
     authoritativePacketId: "packet-a",
     proposals: [{
-      proposalId: "proposal-a", label: "Review proposal", status: "proposed", summary: "Metadata only.",
+      proposalRouteId: "cbf78f6d-fb76-4913-a80b-da1692dd9bbd", proposalId: "proposal-a", revision: 1, label: "Review proposal", status: "proposed", summary: "Metadata only.",
       sourceRefs: ["source:work-item-a"], evidenceRefs: ["event:packet-a"], targetVaultPath: null,
       targetVaultFolder: "memory/review", proposalType: "new_note", suggestedContentSummary: "Review summary.",
       patchSummary: null, sensitivity: "low", freshness: "fresh", contradictionStatus: "none",
@@ -1390,6 +1390,11 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
             workItemId: "work-item-enum",
             proposals: [{ ...review.proposals[0], status: "future_unreviewed_status" }],
           };
+          if (path.endsWith("work-item-unsafe-route/memory-review")) return {
+            ...review,
+            workItemId: "work-item-unsafe-route",
+            proposals: [{ ...review.proposals[0], proposalRouteId: "proposal/unsafe" }],
+          };
           throw new Error(`Unexpected request ${path}`);
         },
       };
@@ -1415,6 +1420,10 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
   );
   await assert.rejects(
     () => context.module.exports.getWorkItemMemoryReview("work-item-enum"),
+    /Canonical WorkItem memory review is malformed/,
+  );
+  await assert.rejects(
+    () => context.module.exports.getWorkItemMemoryReview("work-item-unsafe-route"),
     /Canonical WorkItem memory review is malformed/,
   );
 });

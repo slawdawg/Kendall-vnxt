@@ -133,11 +133,12 @@ export function MemoryProposalReviewPanel({
       setMessage(`Updating ${proposal.proposalId}...`);
       try {
         const response = await fetch(
-          `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}`,
+          `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              expectedRevision: proposal.revision,
               status: action.status,
               operatorAction: action.operatorAction,
               writeBackStatus: action.writeBackStatus,
@@ -176,7 +177,7 @@ export function MemoryProposalReviewPanel({
       try {
         const query = llmWikiQuery.trim().slice(0, 120);
         const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/llm-wiki-artifact?query=${encodeURIComponent(query)}`,
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}/llm-wiki-artifact?query=${encodeURIComponent(query)}`,
         { method: "GET" },
       );
 
@@ -207,7 +208,7 @@ export function MemoryProposalReviewPanel({
       setMessage(`Creating AI draft for ${proposal.proposalId}...`);
       try {
         const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/ai-draft`,
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}/ai-draft`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

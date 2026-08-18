@@ -462,6 +462,9 @@ class MemoryProposal(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"))
     proposal_id: Mapped[str] = mapped_column(String(120))
+    # This monotonically advancing, persisted fence belongs to the WorkItem
+    # review plane. It is deliberately distinct from Memory Inbox revisions.
+    revision: Mapped[int] = mapped_column(Integer, default=1)
     label: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="pending_human_approval")
     summary: Mapped[str] = mapped_column(Text)

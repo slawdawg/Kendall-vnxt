@@ -4152,7 +4152,7 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
-                "proposalId": "mp-20260625T000000Z",
+                "proposalId": "mp/20260625T000000Z",
                 "label": "Memory proposal pending review",
                 "summary": "Example Co repeatedly asks for a one-page implementation checklist.",
                 "sourceRefs": ["obsidian:00-inbox-new-customer-insight"],
@@ -4175,7 +4175,7 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
 
         assert create_response.status_code == 200
         created = create_response.json()["data"]
-        assert created["proposalId"] == "mp-20260625T000000Z"
+        assert created["proposalId"] == "mp/20260625T000000Z"
         assert created["writeBackAllowed"] is False
         assert created["sourceRefs"] == ["obsidian:00-inbox-new-customer-insight"]
         assert created["evidenceRefs"] == ["evidence:read-only-proof"]
@@ -4191,11 +4191,13 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert canonical_review["rawPayloadRetained"] is False
         assert canonical_review["canonicalMutationAllowed"] is False
         assert canonical_review["sourceMutationAllowed"] is False
-        assert canonical_review["proposals"] == [
-            {
-                **{key: value for key, value in created.items() if key not in {"packetId", "targetRef"}},
-            }
-        ]
+        review_proposal = canonical_review["proposals"][0]
+        assert review_proposal == {
+            **{key: value for key, value in created.items() if key not in {"packetId", "targetRef"}},
+            "proposalRouteId": review_proposal["proposalRouteId"],
+            "revision": 1,
+        }
+        assert "/" not in review_proposal["proposalRouteId"]
         assert client.get("/pipeline-control-plane/work-items/missing/memory-review").status_code == 404
 
         packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
@@ -4206,14 +4208,15 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert packet["status"] == "waiting"
         assert len(packet["memoryProposals"]) == 1
         proposal = packet["memoryProposals"][0]
-        assert proposal["proposalId"] == "mp-20260625T000000Z"
+        assert proposal["proposalId"] == "mp/20260625T000000Z"
         assert proposal["targetVaultFolder"] == "01 Dashboard Queue/AI Drafts"
         assert proposal["writeBackAllowed"] is False
         assert proposal["writeBackStatus"] == "review_gated"
 
         update_response = client.patch(
-            f"/work-items/{work_item['id']}/memory-proposals/mp-20260625T000000Z",
+            f"/work-items/{work_item['id']}/memory-proposals/{review_proposal['proposalRouteId']}",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "decisionNeededContext": "Approved for a future gated draft preview only.",
@@ -4232,6 +4235,14 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         ).json()["data"]
         assert review_after_update["proposals"][0]["status"] == "approved"
         assert review_after_update["proposals"][0]["operatorAction"] == "approve"
+        assert review_after_update["proposals"][0]["revision"] == 2
+
+        stale_update = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/{review_proposal['proposalRouteId']}",
+            json={"expectedRevision": 1, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert stale_update.status_code == 409
+        assert stale_update.json()["detail"]["error"]["code"] == "memory_proposal_revision_conflict"
 
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"
@@ -4295,6 +4306,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "decisionNeededContext": "Approved for a future gated draft preview only.",
@@ -4357,6 +4369,14 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert "Create a Kendall-authored draft for operator review." in draft_text
         assert not (vault_root / "00 Inbox" / "memory-proposal-ai-draft-mp-ai-draft.md").exists()
         assert any(backup_root.iterdir())
+
+        # An action-side mutation also advances the review fence, so an open
+        # tab loaded before the draft write cannot overwrite its current state.
+        stale_review = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
+            json={"expectedRevision": 2, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert stale_review.status_code == 409
 
         packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         packet_proposal = packet["memoryProposals"][0]
@@ -4425,6 +4445,7 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "writeBackStatus": "approved_for_future",
@@ -4463,7 +4484,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
                             "accessState": "allowed",
                         }
                     ],
-                    "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                    "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md", "event:forged-metadata-ref"],
                 },
             },
         )
@@ -4503,6 +4524,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-ready",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "writeBackStatus": "approved_for_future",
@@ -4600,6 +4622,22 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert unbound_readiness["decisionState"] == "blocked"
         assert "memory_proposal.unsafe_or_unknown_source_ref.mp-llm-wiki-ready.source:unknown" in unbound_readiness["blockedReasons"]
         assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-ready.evidence:unknown" in unbound_readiness["blockedReasons"]
+
+        # Metadata may name ordinary evidence, but it cannot manufacture a
+        # reserved canonical event/attempt reference that has no WorkItem row.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set source_refs_json = ?, evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps(["source:obsidian-approved"]), json.dumps(["event:forged-metadata-ref"]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        forged_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert forged_review.status_code == 200
+        forged_readiness = forged_review.json()["data"]["llmWikiReadiness"]
+        assert forged_readiness["decisionState"] == "blocked"
+        assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-ready.event:forged-metadata-ref" in forged_readiness["blockedReasons"]
 
         # A compatibility-migrated proposal may have blank persisted refs.
         # It remains visible as a blocked read model; it must not turn a
@@ -4742,6 +4780,7 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "decisionNeededContext": "Approved for disposable LLM-Wiki rebuild artifact only.",
@@ -4823,7 +4862,11 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
                             "freshness": "fresh",
                             "accessState": "allowed",
                         }
-                    ]
+                    ],
+                    "evidenceRefs": [
+                        "evidence:read-only-proof:00 Inbox/new-customer-insight.md",
+                        "event:forged-memory-review-evidence",
+                    ],
                 },
             },
         )
@@ -4875,7 +4918,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
 
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write",
-            json={"status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future", "writeBackAllowed": False},
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future", "writeBackAllowed": False},
         )
         assert approve_response.status_code == 200
         missing_config_response = client.post(
@@ -4884,6 +4927,40 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
         )
         assert missing_config_response.status_code == 400
         assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
+
+        forged_create = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-forged-evidence",
+                "label": "Forged evidence must not rebuild",
+                "summary": "Metadata-only summary.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["event:forged-memory-review-evidence"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Do not create an artifact.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert forged_create.status_code == 200
+        forged_approve = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-forged-evidence",
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+        )
+        assert forged_approve.status_code == 200
+        forged_rebuild = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-forged-evidence/llm-wiki-rebuild",
+            json={"approvalRef": "approval:operator:forged-evidence", "actorLabel": "Operator"},
+        )
+        assert forged_rebuild.status_code == 400
+        assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-forged-evidence.event:forged-memory-review-evidence" in forged_rebuild.json()["detail"]["error"]["message"]
 
     config_path, _vault_root, _backup_root = _write_obsidian_memory_config(tmp_path)
     monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
@@ -5120,7 +5197,7 @@ def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monk
 
         update_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-duplicate",
-            json={"status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
         )
         assert update_response.status_code == 200
 
@@ -5159,6 +5236,7 @@ def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkey
             update_response = client.patch(
                 f"/work-items/{work_item['id']}/memory-proposals/{proposal_id}",
                 json={
+                    "expectedRevision": 1,
                     "status": "approved",
                     "operatorAction": "approve",
                     "writeBackStatus": "approved_for_future",

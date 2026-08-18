@@ -13,6 +13,7 @@ class Base(DeclarativeBase):
 MEMORY_PROPOSAL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
     ("work_item_id", "VARCHAR(36)"),
     ("proposal_id", "VARCHAR(120)"),
+    ("revision", "INTEGER DEFAULT 1"),
     ("label", "VARCHAR(255)"),
     ("status", "VARCHAR(32) DEFAULT 'pending_human_approval'"),
     ("summary", "TEXT"),
@@ -40,6 +41,7 @@ MEMORY_PROPOSAL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
 MEMORY_PROPOSAL_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("work_item_id", "VARCHAR(36)"),
     ("proposal_id", "VARCHAR(120)"),
+    ("revision", "INTEGER DEFAULT 1"),
     ("label", "VARCHAR(255)"),
     ("status", "VARCHAR(32) DEFAULT 'pending_human_approval'"),
     ("summary", "TEXT"),
@@ -514,6 +516,7 @@ async def _ensure_postgres_memory_proposals_schema(connection) -> None:
             UPDATE memory_proposals
             SET
               status = COALESCE(status, 'pending_human_approval'),
+              revision = CASE WHEN revision IS NULL OR revision < 1 THEN 1 ELSE revision END,
               summary = COALESCE(summary, ''),
               source_refs_json = COALESCE(source_refs_json, '[]'::json),
               evidence_refs_json = COALESCE(evidence_refs_json, '[]'::json),
@@ -549,6 +552,7 @@ async def _ensure_sqlite_memory_proposals_schema(connection) -> None:
             UPDATE memory_proposals
             SET
               status = COALESCE(status, 'pending_human_approval'),
+              revision = CASE WHEN revision IS NULL OR revision < 1 THEN 1 ELSE revision END,
               summary = COALESCE(summary, ''),
               source_refs_json = COALESCE(source_refs_json, '[]'),
               evidence_refs_json = COALESCE(evidence_refs_json, '[]'),
