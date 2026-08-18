@@ -4347,7 +4347,15 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
 
         draft_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 1, "actorLabel": "Operator"},
+        )
+
+        assert draft_response.status_code == 409
+        assert not (vault_root / "01 Dashboard Queue" / "AI Drafts" / "memory-proposal-ai-draft-mp-ai-draft.md").exists()
+
+        draft_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 2, "actorLabel": "Operator"},
         )
 
         assert draft_response.status_code == 200
@@ -4385,7 +4393,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
 
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 3, "actorLabel": "Operator"},
         )
         assert duplicate_response.status_code == 200
         assert "AI draft already exists" in duplicate_response.json()["data"]["patchSummary"]
@@ -4437,7 +4445,7 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
         unapproved_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 1, "actorLabel": "Operator"},
         )
         assert unapproved_response.status_code == 400
         assert "missing_approved_status" in unapproved_response.json()["detail"]["error"]["message"]
@@ -4456,7 +4464,7 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
         missing_config_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 2, "actorLabel": "Operator"},
         )
         assert missing_config_response.status_code == 400
         assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
@@ -4793,7 +4801,15 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
 
         write_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+        )
+
+        assert write_response.status_code == 409
+        assert not (vault_root / "01 Dashboard Queue" / "LLM Wiki Derived" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md").exists()
+
+        write_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={"expectedRevision": 2, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
         )
 
         assert write_response.status_code == 200
@@ -4822,7 +4838,7 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
 
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+            json={"expectedRevision": 3, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
         )
         assert duplicate_response.status_code == 200
         assert "already exists" in duplicate_response.json()["data"]["patchSummary"]
@@ -4898,7 +4914,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
 
         missing_approval_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
-            json={"approvalRef": "", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "", "actorLabel": "Operator"},
         )
         assert missing_approval_response.status_code == 400
         assert "explicit operator approval ref" in missing_approval_response.json()["detail"]["error"]["message"]
@@ -4912,7 +4928,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
 
         unapproved_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "approval:operator:test", "actorLabel": "Operator"},
         )
         assert unapproved_response.status_code == 400
         assert "missing_approved_status" in unapproved_response.json()["detail"]["error"]["message"]
@@ -4924,7 +4940,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
         assert approve_response.status_code == 200
         missing_config_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+            json={"expectedRevision": 2, "approvalRef": "approval:operator:test", "actorLabel": "Operator"},
         )
         assert missing_config_response.status_code == 400
         assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
@@ -4958,7 +4974,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
         assert forged_approve.status_code == 200
         forged_rebuild = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-forged-evidence/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:forged-evidence", "actorLabel": "Operator"},
+            json={"expectedRevision": 2, "approvalRef": "approval:operator:forged-evidence", "actorLabel": "Operator"},
         )
         assert forged_rebuild.status_code == 400
         assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-forged-evidence.event:forged-memory-review-evidence" in forged_rebuild.json()["detail"]["error"]["message"]
@@ -5013,7 +5029,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
         assert create_response.status_code == 200
         blocked_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-derived-blocked/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "approval:operator:test", "actorLabel": "Operator"},
         )
         assert blocked_response.status_code == 400
         assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in blocked_response.json()["detail"]["error"]["message"]
@@ -5172,7 +5188,7 @@ def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monk
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-duplicates.db") as client:
         work_item = _create_work_item(client, title="Duplicate Obsidian memory review")
         payload = {
-            "proposalId": "mp-duplicate",
+            "proposalId": "memory.v1:source",
             "label": "Memory proposal pending review",
             "summary": "Metadata-only summary.",
             "sourceRefs": ["obsidian:source"],
@@ -5197,7 +5213,9 @@ def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monk
         assert duplicate_response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
 
         update_response = client.patch(
-            f"/work-items/{work_item['id']}/memory-proposals/mp-duplicate",
+            # The temporary display-ID compatibility path permits every
+            # proxy-safe non-separator character, including `.` and `:`.
+            f"/work-items/{work_item['id']}/memory-proposals/memory.v1:source",
             json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
         )
         assert update_response.status_code == 200

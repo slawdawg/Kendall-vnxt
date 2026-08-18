@@ -5804,7 +5804,7 @@ class SupervisorService:
         # Legacy callers can still address an existing route-safe proposal ID.
         # A value containing a path separator cannot reach this branch through
         # an HTTP path and new dashboard callers never use the display ID.
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", route_id):
+        if not re.fullmatch(r"[A-Za-z0-9._:%-]+", route_id):
             return None
         query = select(MemoryProposal).where(
             MemoryProposal.work_item_id == work_item_id,
@@ -5813,6 +5813,34 @@ class SupervisorService:
         if lock:
             query = query.with_for_update()
         return (await session.execute(query)).scalar_one_or_none()
+
+    async def _reserve_memory_proposal_write(
+        self,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        *,
+        work_item_id: str,
+        expected_revision: int,
+    ) -> datetime:
+        """Atomically fence a durable proposal action before its filesystem work."""
+        now = datetime.now(timezone.utc)
+        updated = await session.execute(
+            update(MemoryProposal)
+            .where(
+                MemoryProposal.id == proposal.id,
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.revision == expected_revision,
+            )
+            .values(revision=expected_revision + 1, updated_at=now)
+            .execution_options(synchronize_session="fetch")
+        )
+        if updated.rowcount != 1:
+            await session.rollback()
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal review was updated by another operator; refresh before trying again."
+            )
+        await session.refresh(proposal)
+        return now
 
     def _load_obsidian_memory_draft_config(self) -> dict[str, object]:
         config_path = (self.settings.obsidian_memory_config_path or "").strip()
@@ -5908,6 +5936,10 @@ class SupervisorService:
         proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id)
         if not proposal:
             return None
+        if proposal.revision != payload.expectedRevision:
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal review was updated by another operator; refresh before trying again."
+            )
 
         blockers = []
         if proposal.status != "approved":
@@ -5968,6 +6000,12 @@ class SupervisorService:
             raise ValueError("AI draft write-back blocked: draft path must remain inside the AI Drafts queue.") from exc
 
         relative_draft_path = draft_path.relative_to(vault_root).as_posix()
+        now = await self._reserve_memory_proposal_write(
+            session,
+            proposal,
+            work_item_id=work_item_id,
+            expected_revision=payload.expectedRevision,
+        )
         if draft_path.exists():
             existing_text = draft_path.read_text(encoding="utf-8", errors="replace")
             if f"proposal_id: {safe_id}" not in existing_text or "status: ai-draft" not in existing_text:
@@ -5976,8 +6014,7 @@ class SupervisorService:
             proposal.patch_summary = f"AI draft already exists at {relative_draft_path}; no duplicate draft was written."
             proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
             proposal.write_back_allowed = False
-            proposal.revision += 1
-            proposal.updated_at = datetime.now(timezone.utc)
+            proposal.updated_at = now
             await self._record_event(
                 session,
                 item,
@@ -5997,7 +6034,6 @@ class SupervisorService:
             await self._publish_item(item)
             return proposal
 
-        now = datetime.now(timezone.utc)
         backup_id = f"vault-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
         backup_root = Path(config["backup_root"])
         backup_root.mkdir(parents=True, exist_ok=True)
@@ -6048,7 +6084,6 @@ class SupervisorService:
         proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
         proposal.backup_recovery_path = f"Remove {relative_draft_path} and restore from {backup_path} if the operator rejects the draft."
         proposal.write_back_allowed = False
-        proposal.revision += 1
         proposal.updated_at = now
         await self._record_event(
             session,
@@ -6090,6 +6125,10 @@ class SupervisorService:
         proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id)
         if not proposal:
             return None
+        if proposal.revision != payload.expectedRevision:
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal review was updated by another operator; refresh before trying again."
+            )
 
         blockers = []
         if proposal.status != "approved":
@@ -6151,6 +6190,12 @@ class SupervisorService:
             raise ValueError("LLM-Wiki rebuild blocked: target path must remain inside the derived LLM-Wiki queue.") from exc
 
         relative_target_path = target_path.relative_to(vault_root).as_posix()
+        now = await self._reserve_memory_proposal_write(
+            session,
+            proposal,
+            work_item_id=work_item_id,
+            expected_revision=payload.expectedRevision,
+        )
         if target_path.exists():
             existing_text = target_path.read_text(encoding="utf-8", errors="replace")
             if f"proposal_id: {safe_id}" not in existing_text or "status: llm-wiki-derived" not in existing_text:
@@ -6160,8 +6205,7 @@ class SupervisorService:
             proposal.patch_summary = f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written."
             proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
             proposal.write_back_allowed = False
-            proposal.revision += 1
-            proposal.updated_at = datetime.now(timezone.utc)
+            proposal.updated_at = now
             await self._record_event(
                 session,
                 item,
@@ -6184,7 +6228,6 @@ class SupervisorService:
             await self._publish_item(item)
             return proposal
 
-        now = datetime.now(timezone.utc)
         backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
         backup_root.mkdir(parents=True, exist_ok=True)
         backup_path = backup_root / backup_id
@@ -6256,7 +6299,6 @@ class SupervisorService:
         proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
         proposal.backup_recovery_path = f"Remove {relative_target_path} and restore from {backup_path} if the operator rejects the derived artifact."
         proposal.write_back_allowed = False
-        proposal.revision += 1
         proposal.updated_at = now
         await self._record_event(
             session,

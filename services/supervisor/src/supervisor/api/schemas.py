@@ -1590,6 +1590,7 @@ class MemoryProposalUpdateRequest(BaseModel):
 class MemoryProposalAiDraftWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: PositiveInt
     actorId: str | None = None
     actorLabel: str | None = None
 
@@ -1597,6 +1598,7 @@ class MemoryProposalAiDraftWriteRequest(BaseModel):
 class LlmWikiDisposableRebuildWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: PositiveInt
     approvalRef: str
     actorId: str | None = None
     actorLabel: str | None = None

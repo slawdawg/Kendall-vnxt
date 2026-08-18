@@ -1749,6 +1749,8 @@ async def create_work_item_memory_proposal_ai_draft(
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         proposal = await service.create_memory_proposal_ai_draft(session, work_item_id, proposal_id, payload)
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_ai_draft_blocked").model_dump()) from exc
     if not proposal:
@@ -1768,6 +1770,8 @@ async def create_work_item_llm_wiki_rebuild(
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         proposal = await service.create_llm_wiki_disposable_rebuild(session, work_item_id, proposal_id, payload)
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "llm_wiki_rebuild_blocked").model_dump()) from exc
     if not proposal:

@@ -213,6 +213,7 @@ export function MemoryProposalReviewPanel({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            expectedRevision: proposal.revision,
             actorId: profile.actorId,
             actorLabel: profile.actorLabel,
           }),
