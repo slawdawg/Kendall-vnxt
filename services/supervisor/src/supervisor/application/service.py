@@ -1188,6 +1188,18 @@ class SupervisorService:
         packet_id = payload.packetId or f"packet-{uuid.uuid4()}"
         existing_packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if existing_packet:
+            # A competing initial manager create can observe the packet just
+            # before its idempotency-event lookup becomes visible in this
+            # session.  Replay from the winning packet's exact server-minted
+            # metadata before entering the generic refresh/replay path; a
+            # freshly minted contract has a different observedAt timestamp.
+            if is_manager_source_intake:
+                replay_contract, source_ref = await self._verified_manager_source_intake_replay_metadata(
+                    session,
+                    existing_packet,
+                    payload.sourceRef,
+                )
+                payload = payload.model_copy(update={"canonicalContract": replay_contract})
             return await self._refresh_or_replay_authoritative_work_packet(
                 session,
                 packet_id=packet_id,
