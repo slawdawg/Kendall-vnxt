@@ -4205,6 +4205,7 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
             "proposalRouteId": review_proposal["proposalRouteId"],
             "revision": 1,
             "aiDraftEligible": False,
+            "llmWikiArtifactSearchEligible": False,
         }
         assert "/" not in review_proposal["proposalRouteId"]
         assert client.get("/pipeline-control-plane/work-items/missing/memory-review").status_code == 404
