@@ -1321,8 +1321,32 @@ class SupervisorService:
         canonical_packet = await self._authoritative_work_packet_row_for_work_item(session, item)
         item_view = self.to_work_item_view(item)
         candidate_view = self.to_candidate_work_view(candidate) if candidate else None
+        # This is the only read boundary that tolerates migrated rows with
+        # empty provenance arrays.  Keep legacy V0 packet views validated by
+        # their required-reference contract instead of constructing one here.
         proposal_views = [
-            self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}")
+            WorkItemMemoryReviewProposalV1View(
+                proposalId=proposal.proposal_id,
+                label=proposal.label,
+                status=proposal.status,
+                summary=proposal.summary,
+                sourceRefs=list(proposal.source_refs_json or []),
+                evidenceRefs=list(proposal.evidence_refs_json or []),
+                targetVaultPath=proposal.target_vault_path,
+                targetVaultFolder=proposal.target_vault_folder,
+                proposalType=proposal.proposal_type,
+                suggestedContentSummary=proposal.suggested_content_summary,
+                patchSummary=proposal.patch_summary,
+                sensitivity=proposal.sensitivity,
+                freshness=proposal.freshness,
+                contradictionStatus=proposal.contradiction_status,
+                confidence=proposal.confidence,
+                operatorAction=proposal.operator_action,
+                decisionNeededContext=proposal.decision_needed_context,
+                backupRecoveryPath=proposal.backup_recovery_path,
+                writeBackStatus=proposal.write_back_status,
+                writeBackAllowed=False,
+            )
             for proposal in await self.list_memory_proposals(session, item.id)
         ]
         proposal_event_ids = {
@@ -1346,19 +1370,16 @@ class SupervisorService:
         # checks, rather than materializing all historical workflow events.
         evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [], workflow_events)
         alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
-        readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views) if alpha_source_refs else None
+        readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
         return WorkItemMemoryReviewV1View(
             workItemId=item.id,
             # The nullable database link is not a foreign key. Publish it only
             # after the canonical lookup has proved the packet and metadata
             # agree, rather than exposing dangling provenance to the dashboard.
             authoritativePacketId=canonical_packet.id if canonical_packet else None,
-            proposals=[self._work_item_memory_review_proposal_view(proposal) for proposal in proposal_views],
+            proposals=proposal_views,
             llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
         )
-
-    def _work_item_memory_review_proposal_view(self, proposal: MemoryProposalV0View) -> WorkItemMemoryReviewProposalV1View:
-        return WorkItemMemoryReviewProposalV1View(**proposal.model_dump(exclude={"packetId", "targetRef"}))
 
     def _work_item_memory_review_readiness_view(self, readiness: LlmWikiDerivedIndexReadinessV0View) -> WorkItemMemoryReviewLlmWikiReadinessV1View:
         preview = readiness.rebuildPreview
@@ -5796,6 +5817,13 @@ class SupervisorService:
             blockers.append("missing_source_refs")
         if not proposal.evidence_refs_json:
             blockers.append("missing_evidence_refs")
+        review = await self.get_work_item_memory_review(session, work_item_id)
+        # A ready review is derived only when every listed proposal has
+        # approved, fresh, cross-bound source and evidence metadata.  Keep the
+        # server-side fence here so a direct caller cannot bypass the dashboard
+        # presentation's blocked readiness state.
+        if review is None or review.llmWikiReadiness is None or review.llmWikiReadiness.decisionState != "ready":
+            blockers.append("unverified_memory_proposal_provenance")
         if blockers:
             raise ValueError(f"AI draft write-back blocked: {', '.join(blockers)}")
 
@@ -33488,7 +33516,7 @@ class SupervisorService:
         candidate: CandidateWorkView | None,
         item: WorkItemView | None,
         attempts: list[ExecutionAttemptView],
-        memory_proposals: list[MemoryProposalV0View],
+        memory_proposals: list[MemoryProposalV0View | WorkItemMemoryReviewProposalV1View],
         source_refs: list[SourceRefV0View],
         evidence_refs: list[EvidenceRefV0View],
     ) -> WorkPacketLifecycleStateV0View:
@@ -35147,7 +35175,7 @@ class SupervisorService:
     ) -> LlmWikiDerivedIndexReadinessV0View:
         blocked_reasons: list[str] = []
         allowed_inputs: list[str] = []
-        ready_proposals: list[MemoryProposalV0View] = []
+        ready_proposals: list[MemoryProposalV0View | WorkItemMemoryReviewProposalV1View] = []
 
         source_ref_by_id = {source_ref.refId: source_ref for source_ref in source_refs}
         evidence_ref_ids = {evidence_ref.refId for evidence_ref in evidence_refs}

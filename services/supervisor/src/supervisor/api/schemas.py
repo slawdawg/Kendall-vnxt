@@ -1630,8 +1630,8 @@ class MemoryProposalV0View(BaseModel):
     status: MemoryProposalStatusV0
     summary: str
     targetRef: SourceRefV0View | None = None
-    sourceRefs: list[str] = Field(default_factory=list)
-    evidenceRefs: list[str] = Field(default_factory=list)
+    sourceRefs: list[str] = Field(min_length=1)
+    evidenceRefs: list[str] = Field(min_length=1)
     targetVaultPath: str | None = None
     targetVaultFolder: str
     proposalType: MemoryProposalTypeV0

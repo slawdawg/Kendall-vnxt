@@ -409,7 +409,7 @@ def _create_candidate(client: TestClient, *, title: str = "Capture cockpit packe
     return response.json()["data"]
 
 
-def _create_work_item(client: TestClient, *, title: str = "Direct active packet") -> dict:
+def _create_work_item(client: TestClient, *, title: str = "Direct active packet", metadata: dict | None = None) -> dict:
     response = client.post(
         "/work-items",
         json={
@@ -421,6 +421,7 @@ def _create_work_item(client: TestClient, *, title: str = "Direct active packet"
                 "sourceArtifactPath": "docs/direct-work.md",
                 "candidatePriority": "urgent",
                 "verificationSummary": "pytest fixture evidence only",
+                **(metadata or {}),
             },
         },
     )
@@ -4241,7 +4242,23 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
     config_path, vault_root, backup_root = _write_obsidian_memory_config(tmp_path)
     monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft.db") as client:
-        work_item = _create_work_item(client, title="Obsidian AI draft write")
+        work_item = _create_work_item(
+            client,
+            title="Obsidian AI draft write",
+            metadata={
+                "workPacketSourceRefs": [{
+                    "refId": "obsidian:00 Inbox/new-customer-insight.md",
+                    "sourceType": "obsidian",
+                    "label": "Approved customer insight",
+                    "pathOrUrl": "00 Inbox/new-customer-insight.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "canonical": True,
+                    "summaryOnly": True,
+                }],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+            },
+        )
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={

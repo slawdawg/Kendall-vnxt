@@ -131,34 +131,38 @@ export function MemoryProposalReviewPanel({
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Updating ${proposal.proposalId}...`);
-      const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            status: action.status,
-            operatorAction: action.operatorAction,
-            writeBackStatus: action.writeBackStatus,
-            decisionNeededContext: `${action.decisionNeededContext} Reviewed by ${profile.actorLabel}.`,
-            writeBackAllowed: false,
-          }),
-        },
-      );
+      try {
+        const response = await fetch(
+          `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              status: action.status,
+              operatorAction: action.operatorAction,
+              writeBackStatus: action.writeBackStatus,
+              decisionNeededContext: `${action.decisionNeededContext} Reviewed by ${profile.actorLabel}.`,
+              writeBackAllowed: false,
+            }),
+          },
+        );
 
-      if (!response.ok) {
+        if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor rejected that memory proposal update.");
-        setPendingProposalId(null);
-        return;
-      }
+          return;
+        }
 
-      setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
-      setPendingProposalId(null);
-      router.refresh();
-      invalidateAuthenticatedPageData();
+        setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
+        router.refresh();
+        invalidateAuthenticatedPageData();
+      } catch {
+        setMessage("The supervisor request was interrupted; no memory proposal change was confirmed.");
+      } finally {
+        setPendingProposalId(null);
+      }
     });
   }
 
@@ -166,27 +170,31 @@ export function MemoryProposalReviewPanel({
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Searching derived LLM-Wiki artifact for ${proposal.proposalId}...`);
-      const query = llmWikiQuery.trim().slice(0, 120);
-      const response = await fetch(
+      try {
+        const query = llmWikiQuery.trim().slice(0, 120);
+        const response = await fetch(
         `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/llm-wiki-artifact?query=${encodeURIComponent(query)}`,
         { method: "GET" },
       );
 
-      if (!response.ok) {
+        if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the LLM-Wiki artifact read.");
-        setPendingProposalId(null);
-        return;
-      }
+          return;
+        }
 
-      const payload = (await response.json()) as { data?: LlmWikiArtifactSearchResult };
-      if (payload.data) {
-        setLlmWikiResults((current) => ({ ...current, [proposal.proposalId]: payload.data as LlmWikiArtifactSearchResult }));
+        const payload = (await response.json()) as { data?: LlmWikiArtifactSearchResult };
+        if (payload.data) {
+          setLlmWikiResults((current) => ({ ...current, [proposal.proposalId]: payload.data as LlmWikiArtifactSearchResult }));
+        }
+        setMessage(`${proposal.proposalId} LLM-Wiki search returned ${payload.data?.excerpts.length ?? 0} snippet${payload.data?.excerpts.length === 1 ? "" : "s"}.`);
+      } catch {
+        setMessage("The LLM-Wiki artifact read was interrupted; no result was retained.");
+      } finally {
+        setPendingProposalId(null);
       }
-      setMessage(`${proposal.proposalId} LLM-Wiki search returned ${payload.data?.excerpts.length ?? 0} snippet${payload.data?.excerpts.length === 1 ? "" : "s"}.`);
-      setPendingProposalId(null);
     });
   }
 
@@ -194,7 +202,8 @@ export function MemoryProposalReviewPanel({
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Creating AI draft for ${proposal.proposalId}...`);
-      const response = await fetch(
+      try {
+        const response = await fetch(
         `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/ai-draft`,
         {
           method: "POST",
@@ -206,20 +215,23 @@ export function MemoryProposalReviewPanel({
         },
       );
 
-      if (!response.ok) {
+        if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the AI draft write-back.");
-        setPendingProposalId(null);
-        return;
-      }
+          return;
+        }
 
-      const payload = (await response.json()) as { data?: { targetVaultPath?: string | null } };
-      setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
-      setPendingProposalId(null);
-      router.refresh();
-      invalidateAuthenticatedPageData();
+        const payload = (await response.json()) as { data?: { targetVaultPath?: string | null } };
+        setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
+        router.refresh();
+        invalidateAuthenticatedPageData();
+      } catch {
+        setMessage("The AI draft request was interrupted; no draft write was confirmed.");
+      } finally {
+        setPendingProposalId(null);
+      }
     });
   }
 
