@@ -4336,7 +4336,25 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft-blocked.db") as client:
-        work_item = _create_work_item(client, title="Blocked Obsidian AI draft write")
+        # Keep the proposal provenance valid so this test reaches its intended
+        # missing-configuration fence rather than the earlier readiness gate.
+        work_item = _create_work_item(
+            client,
+            title="Blocked Obsidian AI draft write",
+            metadata={
+                "workPacketSourceRefs": [{
+                    "refId": "obsidian:00 Inbox/new-customer-insight.md",
+                    "sourceType": "obsidian",
+                    "label": "Approved customer insight",
+                    "pathOrUrl": "00 Inbox/new-customer-insight.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "canonical": True,
+                    "summaryOnly": True,
+                }],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+            },
+        )
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
