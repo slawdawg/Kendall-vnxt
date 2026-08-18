@@ -865,31 +865,50 @@ def _read_bounded_utf8_text(path: Path) -> str:
 
 def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
     """Atomically replace an artifact while preserving existing safe metadata."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    previous = path.stat(follow_symlinks=False) if path.exists() else None
-    if previous is not None and not stat.S_ISREG(previous.st_mode):
-        raise ValueError("Memory proposal artifact replacement requires a regular file.")
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary_path = Path(temporary_name)
+    # Never create or follow a directory hierarchy here.  The caller must have
+    # established the queue directory before reserving the write; pinning it
+    # immediately before the mutation fails closed if a vault parent was
+    # replaced with a symlink in the meantime.
+    if _existing_non_symlink_directory(path.parent) != path.parent:
+        raise ValueError("Memory proposal artifact parent changed before replacement.")
+    parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary_name = f".{path.name}.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
     try:
+        try:
+            previous = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            previous = None
+        if previous is not None and not stat.S_ISREG(previous.st_mode):
+            raise ValueError("Memory proposal artifact replacement requires a regular file.")
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_fd,
+        )
         with os.fdopen(descriptor, "wb") as artifact:
+            descriptor = None
             artifact.write(payload)
             artifact.flush()
             os.fsync(artifact.fileno())
         if previous is None:
-            os.chmod(temporary_path, 0o600)
+            os.chmod(temporary_name, 0o600, dir_fd=parent_fd, follow_symlinks=False)
         else:
-            # Preserve mode, timestamps, flags, and supported xattrs (including
-            # local ACL metadata) before atomically exchanging the inode.
-            shutil.copystat(path, temporary_path, follow_symlinks=True)
-        os.replace(temporary_path, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+            # Preserve safe POSIX metadata using the same pinned parent FD.
+            os.chmod(temporary_name, stat.S_IMODE(previous.st_mode), dir_fd=parent_fd, follow_symlinks=False)
+            os.utime(temporary_name, ns=(previous.st_atime_ns, previous.st_mtime_ns), dir_fd=parent_fd, follow_symlinks=False)
+        os.replace(temporary_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
     finally:
-        temporary_path.unlink(missing_ok=True)
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(parent_fd)
 
 
 def _revalidate_memory_artifact_bytes(path: Path, expected_bytes: bytes) -> None:
@@ -925,10 +944,16 @@ def _restore_memory_artifact_after_lost_reservation(
         return
 
 
+def _memory_artifact_lock_path(path: Path) -> Path:
+    """Keep advisory lock state out of the human-owned vault hierarchy."""
+    digest = hashlib.sha256(os.fsencode(str(path))).hexdigest()
+    return Path(tempfile.gettempdir()) / "kendall-memory-artifact-locks" / f"{digest}.lock"
+
+
 @contextmanager
 def _memory_artifact_lock(path: Path):
     """Serialize writer and recovery mutation of one deterministic artifact."""
-    lock_path = path.with_name(f".{path.name}.kendall-write.lock")
+    lock_path = _memory_artifact_lock_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -944,7 +969,7 @@ async def _async_memory_artifact_lock(path: Path | None):
     if path is None:
         yield
         return
-    lock_path = path.with_name(f".{path.name}.kendall-write.lock")
+    lock_path = _memory_artifact_lock_path(path)
     await asyncio.to_thread(lock_path.parent.mkdir, parents=True, exist_ok=True)
     lock_file = await asyncio.to_thread(lock_path.open, "a+b")
     try:
@@ -6538,6 +6563,13 @@ class SupervisorService:
                     action_token=action_token,
                     values=values,
                 )
+                # The artifact lock must not be released while the final
+                # ownership fence is merely pending in SQLite/PostgreSQL. A
+                # recovery process otherwise can observe the old reservation
+                # and reconcile bytes that this writer later records as a
+                # successful outcome.
+                await session.commit()
+                await session.refresh(proposal)
             except MemoryProposalRevisionConflict:
                 # Recovery takes this same lock before it clears the token, so
                 # while it is held no newer writer can own this path.
@@ -6881,6 +6913,7 @@ class SupervisorService:
                         "target_vault_path": relative_draft_path,
                         "patch_summary": f"AI draft already exists at {relative_draft_path}; no duplicate draft was written.",
                         "decision_needed_context": "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned.",
+                        "backup_recovery_path": f"Restore {relative_draft_path} from {backup_path} if the operator rejects the legacy rebind.",
                         "write_back_allowed": False,
                         "updated_at": now,
                     },
@@ -7129,6 +7162,7 @@ class SupervisorService:
                         "target_vault_folder": llm_wiki_folder,
                         "patch_summary": f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written.",
                         "decision_needed_context": "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned.",
+                        "backup_recovery_path": f"Restore {relative_target_path} from {backup_path} if the operator rejects the legacy rebind.",
                         "write_back_allowed": False,
                         "updated_at": now,
                     },
