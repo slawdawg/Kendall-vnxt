@@ -1595,6 +1595,15 @@ class MemoryProposalAiDraftWriteRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class MemoryProposalWriteRecoveryRequest(BaseModel):
+    """Explicit operator-only recovery of a reservation left by a dead writer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expectedRevision: PositiveInt
+    recoveryRef: str = Field(min_length=8, max_length=240)
+
+
 class LlmWikiDisposableRebuildWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

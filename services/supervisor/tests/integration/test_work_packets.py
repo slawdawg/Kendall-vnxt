@@ -4325,6 +4325,18 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert approve_response.status_code == 200
 
+        # Memory-review is a read surface: a temporarily unreadable config
+        # must make its action ineligible, not make the whole WorkItem page
+        # unavailable.
+        config_bytes = Path(config_path).read_bytes()
+        Path(config_path).write_bytes(b"\xff")
+        invalid_config_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert invalid_config_review.status_code == 200
+        assert invalid_config_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        Path(config_path).write_bytes(config_bytes)
+
         # A sibling proposal can remain pending or stale without revoking this
         # independently approved proposal's bounded provenance eligibility.
         sibling_response = client.post(
@@ -4430,6 +4442,60 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             json={"expectedRevision": 5, "actorLabel": "Operator"},
         )
         assert recovered_response.status_code == 200
+
+        # A process death after the short reservation commit cannot run the
+        # request-local cleanup. It must fence review updates until an explicit
+        # operator recovery records why the abandoned reservation is safe to
+        # release.
+        proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
+        try:
+            proposal_db.execute(
+                "UPDATE memory_proposals SET revision = ?, write_action_token = ? "
+                "WHERE work_item_id = ? AND proposal_id = ?",
+                (7, "dead-supervisor-write-token", work_item["id"], "mp-ai-draft"),
+            )
+            proposal_db.commit()
+        finally:
+            proposal_db.close()
+        active_write_patch = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
+            json={"expectedRevision": 7, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert active_write_patch.status_code == 409
+        recovered_reservation = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={
+                "expectedRevision": 7,
+                "recoveryRef": "operator:confirmed-dead-supervisor:pytest",
+            },
+        )
+        assert recovered_reservation.status_code == 200
+        recovered_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert recovered_review.status_code == 200
+        assert recovered_review.json()["data"]["proposals"][0]["revision"] == 8
+
+        # A pre-WorkItem legacy draft must be copied to recovery storage before
+        # its front matter is rebound to this proposal's immutable identity.
+        draft_path.write_text(
+            draft_path.read_text(encoding="utf-8").replace(
+                f"work_item_id: {work_item['id']}\n", ""
+            ),
+            encoding="utf-8",
+        )
+        backups_before_legacy_rebind = {path.name for path in backup_root.iterdir()}
+        legacy_rebind_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 8, "actorLabel": "Operator"},
+        )
+        assert legacy_rebind_response.status_code == 200
+        assert f"work_item_id: {work_item['id']}" in draft_path.read_text(encoding="utf-8")
+        legacy_backup_paths = [path for path in backup_root.iterdir() if path.name not in backups_before_legacy_rebind]
+        assert len(legacy_backup_paths) == 1
+        assert f"work_item_id: {work_item['id']}" not in (
+            legacy_backup_paths[0] / proposal["targetVaultPath"]
+        ).read_text(encoding="utf-8")
 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
@@ -4938,6 +5004,7 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         current_revision = client.get(
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
         ).json()["data"]["proposals"][0]["revision"]
+        backups_before_legacy_rebind = {path.name for path in backup_root.iterdir()}
         legacy_rebuild_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
             json={
@@ -4949,6 +5016,9 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert legacy_rebuild_response.status_code == 200
         artifact_text = artifact_path.read_text(encoding="utf-8")
         assert f"work_item_id: {work_item['id']}" in artifact_text
+        legacy_backup_paths = [path for path in backup_root.iterdir() if path.name not in backups_before_legacy_rebind]
+        assert len(legacy_backup_paths) == 1
+        assert "work_item_id" not in (legacy_backup_paths[0] / proposal["targetVaultPath"]).read_text(encoding="utf-8")
 
         # A legacy display ID cannot carry a WorkItem identity when another
         # persisted proposal uses the same ID. Leave it unreadable rather than

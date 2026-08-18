@@ -1385,7 +1385,7 @@ class SupervisorService:
     ) -> bool:
         try:
             configured_folder = str(self._load_obsidian_memory_draft_config()["draft_folder"])
-        except ValueError:
+        except (OSError, UnicodeError, ValueError):
             return False
         if proposal.targetVaultFolder.strip().strip("/") != configured_folder:
             return False
@@ -5814,6 +5814,7 @@ class SupervisorService:
                 MemoryProposal.id == proposal.id,
                 MemoryProposal.work_item_id == work_item_id,
                 MemoryProposal.revision == payload.expectedRevision,
+                MemoryProposal.write_action_token.is_(None),
             )
             .values(**values)
             .execution_options(synchronize_session="fetch")
@@ -5821,7 +5822,7 @@ class SupervisorService:
         if updated.rowcount != 1:
             await session.rollback()
             raise MemoryProposalRevisionConflict(
-                "Memory proposal review was updated by another operator; refresh before trying again."
+                "Memory proposal review was updated by another operator or a durable write is active; refresh before trying again."
             )
         await session.refresh(proposal)
         await self._record_event(
@@ -5936,6 +5937,73 @@ class SupervisorService:
         if released.rowcount:
             await session.commit()
 
+    async def recover_abandoned_memory_proposal_write(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        proposal_id: str,
+        *,
+        expected_revision: int,
+        recovery_ref: str,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> MemoryProposal | None:
+        """Release a dead writer only through an explicit operator recovery event.
+
+        The caller must have observed the post-reservation revision.  Bumping it
+        again invalidates every action request captured before recovery; this is
+        intentionally not automatic because a live vault copy cannot be safely
+        distinguished from an abandoned one across supervisor processes.
+        """
+        item = await session.get(WorkItem, work_item_id)
+        if item is None:
+            return None
+        proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id, lock=True)
+        if proposal is None:
+            return None
+        if proposal.revision != expected_revision or proposal.write_action_token is None:
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal has no matching abandoned write reservation; refresh before recovery."
+            )
+        now = datetime.now(timezone.utc)
+        released = await session.execute(
+            update(MemoryProposal)
+            .where(
+                MemoryProposal.id == proposal.id,
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.revision == expected_revision,
+                MemoryProposal.write_action_token.is_not(None),
+            )
+            .values(revision=expected_revision + 1, write_action_token=None, updated_at=now)
+            .execution_options(synchronize_session="fetch")
+        )
+        if released.rowcount != 1:
+            await session.rollback()
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal write reservation changed before recovery; refresh before trying again."
+            )
+        await session.refresh(proposal)
+        await self._record_event(
+            session,
+            item,
+            "memory_proposal.write_reservation_recovered",
+            "Operator recovered an abandoned memory proposal write reservation without modifying the vault.",
+            {
+                "proposalId": proposal.proposal_id,
+                "recoveryRef": recovery_ref,
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+                "rawPayloadRetained": False,
+            },
+            actor_type="operator" if actor_id or actor_label else "system",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
     def _load_obsidian_memory_draft_config(self) -> dict[str, object]:
         config_path = (self.settings.obsidian_memory_config_path or "").strip()
         if not config_path:
@@ -5947,7 +6015,7 @@ class SupervisorService:
 
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"Obsidian memory config is not valid JSON: {config_path}") from exc
 
         config = raw.get("kom", raw) if isinstance(raw, dict) else {}
@@ -6146,6 +6214,11 @@ class SupervisorService:
             ):
                 raise ValueError("AI draft write-back blocked: target draft path already exists but does not match this proposal.")
             if "work_item_id" not in existing_metadata:
+                backup_id = f"vault-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+                backup_root = Path(config["backup_root"])
+                backup_root.mkdir(parents=True, exist_ok=True)
+                backup_path = backup_root / backup_id
+                shutil.copytree(vault_root, backup_path, symlinks=True)
                 draft_path.write_text(
                     self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id),
                     encoding="utf-8",
@@ -6164,6 +6237,7 @@ class SupervisorService:
                 {
                     "proposalId": proposal.proposal_id,
                     "draftPath": relative_draft_path,
+                    "backupPath": backup_path.as_posix() if "work_item_id" not in existing_metadata else None,
                     "writeBackAllowed": False,
                     "retentionClass": "metadata_only",
                     "rawPayloadRetained": False,
@@ -6357,6 +6431,10 @@ class SupervisorService:
             ):
                 raise ValueError("LLM-Wiki rebuild blocked: target artifact already exists but does not match this proposal.")
             if "work_item_id" not in existing_metadata:
+                backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+                backup_root.mkdir(parents=True, exist_ok=True)
+                backup_path = backup_root / backup_id
+                shutil.copytree(vault_root, backup_path, symlinks=True)
                 target_path.write_text(
                     self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id),
                     encoding="utf-8",
@@ -6376,6 +6454,7 @@ class SupervisorService:
                 {
                     "proposalId": proposal.proposal_id,
                     "targetPath": relative_target_path,
+                    "backupPath": backup_path.as_posix() if "work_item_id" not in existing_metadata else None,
                     "approvalRef": approval_ref,
                     "authorityFamily": "memory-writeback-and-source-mutation",
                     "writeBackAllowed": False,

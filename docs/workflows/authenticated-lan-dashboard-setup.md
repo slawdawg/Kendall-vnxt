@@ -252,6 +252,20 @@ use the page retry after restarting the supervisor first. Do not paste vault
 content, bootstrap passwords, cookies, or UDS paths into a proposal or
 troubleshooting record.
 
+An AI-draft or rebuild reserves the proposal revision before vault I/O, so a
+review PATCH is deliberately rejected while that durable write is active. If
+the supervisor process is confirmed dead after that reservation, an operator
+may use the local recovery route
+`POST /work-items/:id/memory-proposals/:proposalRouteId/recover-abandoned-write`
+with the refreshed `expectedRevision` and an auditable `recoveryRef`. It records
+the recovery, clears only the matching reservation, and advances the revision
+again; refresh before retrying. Never use this recovery route to interrupt a
+live write. In a LAN deployment it requires the authenticated operator session,
+exact dashboard Origin, and CSRF token; development mode still requires the
+private-UDS or loopback operational boundary. Legacy artifact rebinding snapshots the vault before adding its
+missing WorkItem fence, so the backup path remains the recovery source if that
+compatibility write fails.
+
 ## Independently revocable dashboard verification credential
 
 After the reviewed source contract is installed and the existing private-UDS

@@ -103,6 +103,7 @@ from supervisor.api.schemas import (
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
+    MemoryProposalWriteRecoveryRequest,
     WorkItemMemoryReviewApiEnvelope,
     MemoryInboxShellApiEnvelope,
     MemoryInboxLifecycleCommandApiEnvelope,
@@ -385,6 +386,23 @@ async def require_memory_inbox_command_operator(request: Request, session: Async
     if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
         raise HTTPException(status_code=403, detail="CSRF validation failed.")
     return operator
+
+
+async def require_memory_proposal_recovery_operator(
+    request: Request,
+    session: AsyncSession,
+) -> DashboardOperator | None:
+    """Fence abandoned-write recovery to a local authenticated operator.
+
+    Development instances without LAN authentication retain a loopback-only
+    maintenance path. A deployed LAN instance must also satisfy the same
+    session, Origin, and CSRF policy as every other operator mutation.
+    """
+
+    require_local_operational_boundary(request)
+    if not settings.lan_auth_enabled:
+        return None
+    return await require_memory_inbox_command_operator(request, session)
 
 
 def require_local_dogfood_attestation(request: Request) -> None:
@@ -1754,9 +1772,41 @@ async def create_work_item_memory_proposal_ai_draft(
     except ValueError as exc:
         await service.release_failed_memory_proposal_write(session, work_item_id)
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_ai_draft_blocked").model_dump()) from exc
+    except asyncio.CancelledError:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
     except Exception:
         await service.release_failed_memory_proposal_write(session, work_item_id)
         raise
+    if not proposal:
+        raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
+    return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
+
+
+@app.post("/work-items/{work_item_id}/memory-proposals/{proposal_id}/recover-abandoned-write", response_model=ApiEnvelope)
+async def recover_work_item_memory_proposal_write(
+    work_item_id: str,
+    proposal_id: str,
+    payload: MemoryProposalWriteRecoveryRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    operator = await require_memory_proposal_recovery_operator(request, session)
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        proposal = await service.recover_abandoned_memory_proposal_write(
+            session,
+            work_item_id,
+            proposal_id,
+            expected_revision=payload.expectedRevision,
+            recovery_ref=payload.recoveryRef,
+            actor_id=operator.id if operator else None,
+            actor_label="Dashboard operator" if operator else None,
+        )
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
@@ -1779,6 +1829,9 @@ async def create_work_item_llm_wiki_rebuild(
     except ValueError as exc:
         await service.release_failed_memory_proposal_write(session, work_item_id)
         raise HTTPException(status_code=400, detail=error_response(str(exc), "llm_wiki_rebuild_blocked").model_dump()) from exc
+    except asyncio.CancelledError:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
     except Exception:
         await service.release_failed_memory_proposal_write(session, work_item_id)
         raise

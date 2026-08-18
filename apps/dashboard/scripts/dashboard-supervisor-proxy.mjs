@@ -8,6 +8,7 @@ const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const MEMORY_INBOX_PROPOSAL_DECISION_PATH = /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/(?:return|deny|approve)$/;
 const LLM_WIKI_ARTIFACT_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/llm-wiki-artifact$/;
+const MEMORY_PROPOSAL_WRITE_RECOVERY_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/recover-abandoned-write$/;
 const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
   /^\/memory-inbox\/projection$/,
@@ -151,7 +152,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
     const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
-    const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath);
+    const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
     if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
       sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
       return true;
