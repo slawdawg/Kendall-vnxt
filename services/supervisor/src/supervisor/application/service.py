@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 
-from sqlalchemy import JSON, delete, func, null, or_, select, text, update
+from sqlalchemy import delete, func, null, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -884,6 +884,12 @@ def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _revalidate_memory_artifact_bytes(path: Path, expected_bytes: bytes) -> None:
+    """Fail closed if a legacy artifact changed before its final locked rebind."""
+    if not path.is_file() or path.is_symlink() or path.read_bytes() != expected_bytes:
+        raise ValueError("Memory proposal artifact changed before legacy rebinding could write.")
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as artifact:
@@ -1011,17 +1017,28 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
     try:
         vault_root = Path(str(intent["vaultRoot"])).resolve(strict=True)
         artifact_path = Path(str(intent["artifactPath"])).resolve()
-        backup_path = _existing_non_symlink_directory(intent["backupPath"])
         expected_digest = str(intent["writtenSha256"])
         expected_backup_digest = intent.get("backupArtifactSha256")
         backup_prepared = intent.get("backupPrepared", True)
         prior_artifact_digest = intent.get("priorArtifactSha256")
+        raw_backup_path = Path(str(intent["backupPath"]))
+        if not raw_backup_path.is_absolute() or ".." in raw_backup_path.parts:
+            raise ValueError("Memory proposal recovery backup path is not canonical.")
+        if backup_prepared or raw_backup_path.exists():
+            backup_path = _existing_non_symlink_directory(raw_backup_path)
+        else:
+            # A cancelled preliminary backup can already have removed its
+            # own partial directory before its durable recovery/event commit.
+            # The recorded leaf may therefore be absent on retry; its parent
+            # remains the canonical, non-symlinked mutation boundary.
+            backup_parent = _existing_non_symlink_directory(raw_backup_path.parent)
+            backup_path = backup_parent / raw_backup_path.name
         relative_path = artifact_path.relative_to(vault_root)
     except (KeyError, OSError, ValueError) as exc:
         raise ValueError("Memory proposal recovery intent is not safely reconcilable.") from exc
     if (
         not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
-        or not backup_path.is_dir()
+        or (backup_prepared and not backup_path.is_dir())
         or not isinstance(backup_prepared, bool)
         or (expected_backup_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(expected_backup_digest)))
         or (prior_artifact_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(prior_artifact_digest)))
@@ -6184,6 +6201,11 @@ class SupervisorService:
         if lock:
             opaque_query = opaque_query.with_for_update()
         opaque_proposal = (await session.execute(opaque_query)).scalar_one_or_none()
+        # Opaque V1 IDs are authoritative. A legacy display ID that happens to
+        # equal another row's opaque primary key must never make that advertised
+        # route unavailable.
+        if opaque_proposal is not None:
+            return opaque_proposal
         # Legacy callers can still address an existing route-safe proposal ID.
         # A value containing a path separator cannot reach this branch through
         # an HTTP path and new dashboard callers never use the display ID.
@@ -6196,9 +6218,7 @@ class SupervisorService:
         if lock:
             legacy_query = legacy_query.with_for_update()
         legacy_proposal = (await session.execute(legacy_query)).scalar_one_or_none()
-        if opaque_proposal is not None and legacy_proposal is not None and opaque_proposal.id != legacy_proposal.id:
-            return None
-        return opaque_proposal or legacy_proposal
+        return legacy_proposal
 
     async def _reserve_memory_proposal_write(
         self,
@@ -6340,17 +6360,17 @@ class SupervisorService:
             "backupPrepared": backup_prepared,
             "priorArtifactSha256": prior_artifact_digest,
         }
-        intent_is_unrecorded = or_(
-            MemoryProposal.write_action_intent_json.is_(None),
-            MemoryProposal.write_action_intent_json == JSON.NULL,
-        )
         recorded = await session.execute(
             update(MemoryProposal).where(
                 MemoryProposal.id == proposal.id,
                 MemoryProposal.work_item_id == work_item_id,
                 MemoryProposal.revision == expected_revision + 1,
                 MemoryProposal.write_action_token == action_token,
-                intent_is_unrecorded if not backup_prepared else True,
+                # PostgreSQL's JSON type has no equality operator. The first
+                # preliminary record needs only an SQL-NULL fence; the second
+                # record is already serialized by the held artifact lock and
+                # exact reservation token.
+                MemoryProposal.write_action_intent_json.is_(None) if not backup_prepared else True,
             ).values(write_action_intent_json=intent)
         )
         if recorded.rowcount != 1:
@@ -6496,6 +6516,8 @@ class SupervisorService:
                 raise MemoryProposalRevisionConflict(
                     "Memory proposal write reservation changed before artifact mutation; refresh before trying again."
                 )
+            if previous_bytes is not None:
+                await asyncio.to_thread(_revalidate_memory_artifact_bytes, artifact_path, previous_bytes)
             await _complete_threaded_artifact_work(_atomic_write_memory_artifact, artifact_path, written_bytes)
             # The ownership query above opens a SQLite read snapshot. Reopen it
             # before the final conditional update so a recovery committed while

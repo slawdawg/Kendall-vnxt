@@ -90,6 +90,11 @@ def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(t
     _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
     assert artifact_path.read_bytes() == original_bytes
     assert not backup_path.exists()
+    # A cancelled recovery can remove the partial backup before its event/DB
+    # commit. Its retry still owns the same preliminary intent and must finish
+    # once it reproves the untouched artifact and canonical backup parent.
+    _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert artifact_path.read_bytes() == original_bytes
 
     backup_path.mkdir(parents=True)
     artifact_path.write_bytes(b"external concurrent edit\n")
@@ -144,6 +149,27 @@ def test_atomic_memory_artifact_write_preserves_prior_bytes_on_replace_failure(t
         service_module._atomic_write_memory_artifact(artifact_path, b"new artifact bytes\n")
     assert artifact_path.read_bytes() == b"prior complete artifact\n"
     assert not list(artifact_path.parent.glob(f".{artifact_path.name}.*"))
+
+
+def test_legacy_memory_artifact_reproof_rejects_changed_bytes(tmp_path) -> None:
+    """Legacy rebinding must not overwrite a human edit made during backup."""
+    from supervisor.application.service import _revalidate_memory_artifact_bytes
+
+    artifact_path = tmp_path / "legacy-artifact.md"
+    original = b"---\nstatus: ai-draft\n---\noperator draft\n"
+    artifact_path.write_bytes(original)
+    artifact_path.write_bytes(b"---\nstatus: ai-draft\n---\nhuman edit after backup\n")
+    with pytest.raises(ValueError, match="changed before legacy rebinding"):
+        _revalidate_memory_artifact_bytes(artifact_path, original)
+
+
+def test_memory_proposal_write_intent_uses_sql_null_fence_not_json_equality() -> None:
+    """PostgreSQL JSON intent records must not rely on unsupported equality."""
+    service_path = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
+    source = service_path.read_text(encoding="utf-8")
+    intent_section = source[source.index("async def _record_memory_proposal_write_intent"):source.index("async def _prepare_memory_proposal_backup")]
+    assert "write_action_intent_json.is_(None) if not backup_prepared else True" in intent_section
+    assert "write_action_intent_json ==" not in intent_section
 
 
 def test_llm_wiki_artifact_requires_closed_front_matter_within_bound() -> None:
@@ -4831,6 +4857,28 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
         ).json()["data"]["proposals"][0]["revision"] == 11
 
+        # A human edit that lands while the legacy vault backup is copying
+        # must win over the server's pending front-matter rebind. The final
+        # artifact lock re-reads exactly those original bytes before replace.
+        legacy_draft_bytes = pre_crash_draft_bytes.replace(
+            f"work_item_id: {work_item['id']}\n".encode("utf-8"), b""
+        )
+        draft_path.write_bytes(legacy_draft_bytes)
+
+        async def human_edit_after_backup(session, proposal, **kwargs):
+            result = await original_prepare_backup(session, proposal, **kwargs)
+            draft_path.write_bytes(legacy_draft_bytes + b"\noperator edit after backup\n")
+            return result
+
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", human_edit_after_backup)
+        changed_legacy_rebind = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 11, "actorLabel": "Operator"},
+        )
+        assert changed_legacy_rebind.status_code == 400
+        assert draft_path.read_bytes().endswith(b"operator edit after backup\n")
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", original_prepare_backup)
+
 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
@@ -5840,11 +5888,12 @@ def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monk
                 (route_ids["separate-proposal"], "memory.v1:source"),
             )
 
-        ambiguous_route_response = client.patch(
+        opaque_route_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/{route_ids['separate-proposal']}",
             json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
         )
-        assert ambiguous_route_response.status_code == 404
+        assert opaque_route_response.status_code == 200
+        assert opaque_route_response.json()["data"]["proposalId"] == "separate-proposal"
 
 
 def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkeypatch) -> None:
