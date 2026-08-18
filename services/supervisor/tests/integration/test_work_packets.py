@@ -4397,6 +4397,14 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         )
         assert work_item_response.status_code == 200
         work_item = work_item_response.json()["data"]
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="memory-review-evidence",
+            event_type="memory_proposal.provenance_recorded",
+            summary="Bounded proposal evidence fixture.",
+            payload={"metadataOnly": True},
+        )
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
@@ -4404,7 +4412,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
                 "label": "LLM-Wiki ready proposal",
                 "summary": "Metadata-only summary for derived index readiness.",
                 "sourceRefs": ["source:obsidian-approved"],
-                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["event:memory-review-evidence"],
                 "targetVaultPath": "01 Dashboard Queue/AI Drafts/llm-wiki-ready-proposal-mp-llm-wiki-ready.md",
                 "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
                 "proposalType": "new_note",
@@ -4451,7 +4459,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert preview["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
         assert "source:obsidian-approved" in preview["inputRefs"]
-        assert "evidence:read-only-proof:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
+        assert "event:memory-review-evidence" in preview["inputRefs"]
         assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
         assert "do not write LLM-Wiki index" in preview["stopLine"]
         assert preview["canonicalMutationAllowed"] is False

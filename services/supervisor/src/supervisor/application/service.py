@@ -1277,16 +1277,24 @@ class SupervisorService:
         fallback when the link is absent or inconsistent.
         """
         item = await session.get(WorkItem, work_item_id)
+        packet = await self._authoritative_work_packet_row_for_work_item(session, item)
+        if not packet:
+            return None
+        return await self.to_authoritative_work_packet_view(session, packet)
+
+    async def _authoritative_work_packet_row_for_work_item(
+        self,
+        session: AsyncSession,
+        item: WorkItem | None,
+    ) -> AuthoritativeWorkPacket | None:
+        """Validate a WorkItem's nullable packet link without reading history."""
         if not item or not item.authoritative_packet_id:
             return None
         metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
         metadata_packet_id = metadata.get("authoritativePacketId")
         if metadata_packet_id is not None and metadata_packet_id != item.authoritative_packet_id:
             return None
-        packet = await session.get(AuthoritativeWorkPacket, item.authoritative_packet_id)
-        if not packet:
-            return None
-        return await self.to_authoritative_work_packet_view(session, packet)
+        return await session.get(AuthoritativeWorkPacket, item.authoritative_packet_id)
 
     async def get_work_item_memory_review(
         self,
@@ -1305,18 +1313,38 @@ class SupervisorService:
         candidate = await session.scalar(
             select(CandidateWork).where(CandidateWork.promoted_work_item_id == item.id)
         )
-        canonical_packet = await self.get_authoritative_work_packet_for_work_item(session, work_item_id)
+        if candidate is None:
+            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+            candidate_id = metadata.get("candidateWorkId")
+            if isinstance(candidate_id, str):
+                candidate = await session.get(CandidateWork, candidate_id)
+        canonical_packet = await self._authoritative_work_packet_row_for_work_item(session, item)
         item_view = self.to_work_item_view(item)
         candidate_view = self.to_candidate_work_view(candidate) if candidate else None
         proposal_views = [
             self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}")
             for proposal in await self.list_memory_proposals(session, item.id)
         ]
+        proposal_event_ids = {
+            ref.removeprefix("event:")
+            for proposal in proposal_views
+            for ref in proposal.evidenceRefs
+            if ref.startswith("event:") and len(ref) > len("event:")
+        }
+        workflow_events: list[WorkflowEvent] = []
+        if proposal_event_ids:
+            event_result = await session.execute(
+                select(WorkflowEvent).where(
+                    WorkflowEvent.work_item_id == item.id,
+                    WorkflowEvent.id.in_(proposal_event_ids),
+                )
+            )
+            workflow_events = list(event_result.scalars())
         source_refs = self._work_packet_source_refs(candidate_view, item_view)
         # This read DTO has no event-history surface. Keep its provenance set
         # bounded to the source-owned metadata it actually returns/readiness
         # checks, rather than materializing all historical workflow events.
-        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [])
+        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, None, [], workflow_events)
         alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views) if alpha_source_refs else None
         return WorkItemMemoryReviewV1View(
@@ -1324,7 +1352,7 @@ class SupervisorService:
             # The nullable database link is not a foreign key. Publish it only
             # after the canonical lookup has proved the packet and metadata
             # agree, rather than exposing dangling provenance to the dashboard.
-            authoritativePacketId=canonical_packet.packetId if canonical_packet else None,
+            authoritativePacketId=canonical_packet.id if canonical_packet else None,
             proposals=[self._work_item_memory_review_proposal_view(proposal) for proposal in proposal_views],
             llmWikiReadiness=self._work_item_memory_review_readiness_view(readiness) if readiness else None,
         )
