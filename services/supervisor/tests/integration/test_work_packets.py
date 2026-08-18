@@ -4896,6 +4896,72 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert search_result["metadata"]["status"] == "llm-wiki-derived"
         assert any("Derived Index" in excerpt or "derived index" in excerpt.lower() for excerpt in search_result["excerpts"])
 
+        # Pre-upgrade artifacts did not record a WorkItem ID. A globally
+        # unambiguous legacy proposal remains readable, then an approved
+        # rebuild upgrades its front matter to the immutable WorkItem fence.
+        artifact_path.write_text(
+            artifact_text.replace(f"work_item_id: {work_item['id']}\n", ""),
+            encoding="utf-8",
+        )
+        legacy_search_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert legacy_search_response.status_code == 200
+        assert "work_item_id" not in legacy_search_response.json()["data"]["metadata"]
+        current_revision = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"]
+        legacy_rebuild_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={
+                "expectedRevision": current_revision,
+                "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26",
+                "actorLabel": "Operator",
+            },
+        )
+        assert legacy_rebuild_response.status_code == 200
+        artifact_text = artifact_path.read_text(encoding="utf-8")
+        assert f"work_item_id: {work_item['id']}" in artifact_text
+
+        # A legacy display ID cannot carry a WorkItem identity when another
+        # persisted proposal uses the same ID. Leave it unreadable rather than
+        # guessing which WorkItem owns the unbound artifact.
+        competing_work_item = _create_work_item(client, title="Competing legacy LLM-Wiki proposal")
+        competing_proposal_response = client.post(
+            f"/work-items/{competing_work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-write",
+                "label": "Competing legacy LLM-Wiki proposal",
+                "summary": "Metadata-only competing legacy proposal.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Metadata-only legacy compatibility fixture.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert competing_proposal_response.status_code == 200
+        artifact_path.write_text(
+            artifact_text.replace(f"work_item_id: {work_item['id']}\n", ""),
+            encoding="utf-8",
+        )
+        ambiguous_legacy_search_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert ambiguous_legacy_search_response.status_code == 400
+        assert "not bound to this proposal" in ambiguous_legacy_search_response.json()["detail"]["error"]["message"]
+        artifact_path.write_text(artifact_text, encoding="utf-8")
+
         # A stored target path is not enough: the artifact must attest to the
         # same proposal before its content can be shown to an operator.
         artifact_path.write_text(

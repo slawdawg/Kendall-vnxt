@@ -13,7 +13,6 @@ class Base(DeclarativeBase):
 MEMORY_PROPOSAL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
     ("work_item_id", "VARCHAR(36)"),
     ("proposal_id", "VARCHAR(120)"),
-    ("revision", "INTEGER DEFAULT 1"),
     ("label", "VARCHAR(255)"),
     ("status", "VARCHAR(32) DEFAULT 'pending_human_approval'"),
     ("summary", "TEXT"),
@@ -41,7 +40,6 @@ MEMORY_PROPOSAL_POSTGRES_COLUMNS: tuple[tuple[str, str], ...] = (
 MEMORY_PROPOSAL_SQLITE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("work_item_id", "VARCHAR(36)"),
     ("proposal_id", "VARCHAR(120)"),
-    ("revision", "INTEGER DEFAULT 1"),
     ("label", "VARCHAR(255)"),
     ("status", "VARCHAR(32) DEFAULT 'pending_human_approval'"),
     ("summary", "TEXT"),
@@ -516,7 +514,6 @@ async def _ensure_postgres_memory_proposals_schema(connection) -> None:
             UPDATE memory_proposals
             SET
               status = COALESCE(status, 'pending_human_approval'),
-              revision = CASE WHEN revision IS NULL OR revision < 1 THEN 1 ELSE revision END,
               summary = COALESCE(summary, ''),
               source_refs_json = COALESCE(source_refs_json, '[]'::json),
               evidence_refs_json = COALESCE(evidence_refs_json, '[]'::json),
@@ -552,7 +549,6 @@ async def _ensure_sqlite_memory_proposals_schema(connection) -> None:
             UPDATE memory_proposals
             SET
               status = COALESCE(status, 'pending_human_approval'),
-              revision = CASE WHEN revision IS NULL OR revision < 1 THEN 1 ELSE revision END,
               summary = COALESCE(summary, ''),
               source_refs_json = COALESCE(source_refs_json, '[]'),
               evidence_refs_json = COALESCE(evidence_refs_json, '[]'),
@@ -579,6 +575,31 @@ async def _ensure_sqlite_memory_proposals_schema(connection) -> None:
                 "ON memory_proposals (work_item_id, proposal_id)"
             )
         )
+
+
+async def ensure_memory_proposal_revision_schema(connection) -> None:
+    """Add and backfill the review-plane fence in its own ordered revision.
+
+    Revision is deliberately absent from the 0001 snapshot and 0002
+    compatibility contract. Databases which already recorded 0002 must see
+    this upgrade instead of silently retaining the old table shape.
+    """
+
+    if connection.dialect.name == "postgresql":
+        await connection.execute(
+            text("ALTER TABLE memory_proposals ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 1")
+        )
+        await connection.execute(
+            text("UPDATE memory_proposals SET revision = 1 WHERE revision IS NULL OR revision < 1")
+        )
+        return
+    if connection.dialect.name == "sqlite":
+        await _sqlite_add_columns(connection, "memory_proposals", (("revision", "INTEGER DEFAULT 1"),))
+        await connection.execute(
+            text("UPDATE memory_proposals SET revision = 1 WHERE revision IS NULL OR revision < 1")
+        )
+        return
+    raise RuntimeError(f"Unsupported database dialect for memory proposal revision migration: {connection.dialect.name}")
 
 
 async def _apply_legacy_schema_compatibility(connection) -> None:

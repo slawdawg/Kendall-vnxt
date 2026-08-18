@@ -6037,12 +6037,20 @@ class SupervisorService:
         if draft_path.exists():
             existing_text = draft_path.read_text(encoding="utf-8", errors="replace")
             existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
-            if (
-                existing_metadata.get("proposal_id") != safe_id
-                or existing_metadata.get("work_item_id") != work_item_id
-                or existing_metadata.get("status") != "ai-draft"
+            if not await self._llm_wiki_artifact_matches_proposal(
+                session,
+                proposal=proposal,
+                work_item_id=work_item_id,
+                expected_proposal_id=safe_id,
+                expected_status="ai-draft",
+                metadata=existing_metadata,
             ):
                 raise ValueError("AI draft write-back blocked: target draft path already exists but does not match this proposal.")
+            if "work_item_id" not in existing_metadata:
+                draft_path.write_text(
+                    self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id),
+                    encoding="utf-8",
+                )
             proposal.target_vault_path = relative_draft_path
             proposal.patch_summary = f"AI draft already exists at {relative_draft_path}; no duplicate draft was written."
             proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
@@ -6233,12 +6241,20 @@ class SupervisorService:
         if target_path.exists():
             existing_text = target_path.read_text(encoding="utf-8", errors="replace")
             existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
-            if (
-                existing_metadata.get("proposal_id") != safe_id
-                or existing_metadata.get("work_item_id") != work_item_id
-                or existing_metadata.get("status") != "llm-wiki-derived"
+            if not await self._llm_wiki_artifact_matches_proposal(
+                session,
+                proposal=proposal,
+                work_item_id=work_item_id,
+                expected_proposal_id=safe_id,
+                expected_status="llm-wiki-derived",
+                metadata=existing_metadata,
             ):
                 raise ValueError("LLM-Wiki rebuild blocked: target artifact already exists but does not match this proposal.")
+            if "work_item_id" not in existing_metadata:
+                target_path.write_text(
+                    self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id),
+                    encoding="utf-8",
+                )
             proposal.target_vault_path = relative_target_path
             proposal.target_vault_folder = llm_wiki_folder
             proposal.patch_summary = f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written."
@@ -6402,9 +6418,13 @@ class SupervisorService:
             if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
             else proposal.id
         )
-        if (
-            metadata.get("proposal_id") != expected_artifact_proposal_id
-            or metadata.get("work_item_id") != work_item_id
+        if not await self._llm_wiki_artifact_matches_proposal(
+            session,
+            proposal=proposal,
+            work_item_id=work_item_id,
+            expected_proposal_id=expected_artifact_proposal_id,
+            expected_status="llm-wiki-derived",
+            metadata=metadata,
         ):
             raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
         normalized_query = query.strip()[:120]
@@ -6416,6 +6436,55 @@ class SupervisorService:
             excerpts=excerpts,
             metadata=metadata,
         )
+
+    async def _llm_wiki_artifact_matches_proposal(
+        self,
+        session: AsyncSession,
+        *,
+        proposal: MemoryProposal,
+        work_item_id: str,
+        expected_proposal_id: str,
+        expected_status: str,
+        metadata: dict[str, str],
+    ) -> bool:
+        """Prove an artifact belongs to this proposal without trusting display IDs.
+
+        New artifacts bind both the opaque WorkItem and proposal identifiers.
+        A pre-upgrade artifact lacks only ``work_item_id``. It is readable (and
+        can be durably upgraded by an approved rebuild) only while its display
+        proposal ID is globally unambiguous among persisted proposals.
+        """
+
+        if (
+            metadata.get("proposal_id") != expected_proposal_id
+            or metadata.get("status") != expected_status
+        ):
+            return False
+        artifact_work_item_id = metadata.get("work_item_id")
+        if artifact_work_item_id is not None:
+            return artifact_work_item_id == work_item_id
+        competing_proposal = await session.scalar(
+            select(MemoryProposal.id)
+            .where(
+                MemoryProposal.id != proposal.id,
+                MemoryProposal.proposal_id == proposal.proposal_id,
+            )
+            .limit(1)
+        )
+        return competing_proposal is None
+
+    def _bind_legacy_llm_wiki_artifact(self, text: str, work_item_id: str) -> str:
+        """Add the missing immutable WorkItem fence to validated legacy YAML."""
+
+        lines = text.splitlines(keepends=True)
+        if not lines or lines[0].strip() != "---":
+            raise ValueError("LLM-Wiki legacy artifact migration requires YAML front matter.")
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                newline = "\r\n" if line.endswith("\r\n") else "\n"
+                lines.insert(index, f"work_item_id: {work_item_id}{newline}")
+                return "".join(lines)
+        raise ValueError("LLM-Wiki legacy artifact migration requires closed YAML front matter.")
 
     def _parse_llm_wiki_artifact(self, text: str) -> tuple[dict[str, str], list[str]]:
         lines = text.splitlines()

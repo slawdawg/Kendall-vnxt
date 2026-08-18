@@ -54,6 +54,14 @@ async def _apply_legacy_compatibility(connection: AsyncConnection) -> None:
     await _apply_legacy_schema_compatibility(connection)
 
 
+async def _apply_memory_proposal_revision(connection: AsyncConnection) -> None:
+    """Install the persisted WorkItem-review revision fence after 0002."""
+
+    from supervisor.infrastructure.db.database import ensure_memory_proposal_revision_schema
+
+    await ensure_memory_proposal_revision_schema(connection)
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -62,6 +70,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0002_legacy_compatibility",
         _apply_legacy_compatibility,
         clean_install=_apply_legacy_compatibility,
+    ),
+    SchemaMigration(
+        "0003_memory_proposal_revision",
+        _apply_memory_proposal_revision,
+        clean_install=_apply_memory_proposal_revision,
     ),
 )
 
