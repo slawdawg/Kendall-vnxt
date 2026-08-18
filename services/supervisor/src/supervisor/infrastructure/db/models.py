@@ -465,6 +465,7 @@ class MemoryProposal(Base):
     # This monotonically advancing, persisted fence belongs to the WorkItem
     # review plane. It is deliberately distinct from Memory Inbox revisions.
     revision: Mapped[int] = mapped_column(Integer, default=1)
+    write_action_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     label: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="pending_human_approval")
     summary: Mapped[str] = mapped_column(Text)

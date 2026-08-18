@@ -421,6 +421,7 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                 "0001_model_baseline",
                 "0002_legacy_compatibility",
                 "0003_memory_proposal_revision",
+                "0004_memory_proposal_write_reservation",
             }
     finally:
         await engine.dispose()

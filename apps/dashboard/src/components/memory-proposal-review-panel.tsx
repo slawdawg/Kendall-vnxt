@@ -87,10 +87,6 @@ function aiDraftQueued(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return /AI draft (written|already exists)/.test(proposal.patchSummary ?? "");
 }
 
-function targetsAiDraftQueue(proposal: DashboardCanonicalMemoryProposalV1): boolean {
-  return proposal.targetVaultFolder.trim().replace(/^\/+|\/+$/g, "").endsWith("/AI Drafts") || proposal.targetVaultFolder.trim() === "AI Drafts";
-}
-
 function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return (
     proposal.status === "approved" &&
@@ -99,7 +95,7 @@ function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean
     proposal.writeBackAllowed === false &&
     proposal.freshness === "fresh" &&
     proposal.contradictionStatus === "none" &&
-    targetsAiDraftQueue(proposal) &&
+    proposal.aiDraftEligible &&
     !aiDraftQueued(proposal)
   );
 }
@@ -113,7 +109,7 @@ function hasLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1): boole
   return (
     (folder === "LLM Wiki Derived" || folder.endsWith("/LLM Wiki Derived")) &&
     target.startsWith(`${folder}/`) &&
-    target.endsWith(`-${artifactProposalId}.md`)
+    (target.endsWith(`-${artifactProposalId}.md`) || target.endsWith(`-${artifactProposalId}-${proposal.proposalRouteId}.md`))
   );
 }
 

@@ -1353,7 +1353,7 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
       targetVaultFolder: "memory/review", proposalType: "new_note", suggestedContentSummary: "Review summary.",
       patchSummary: null, sensitivity: "low", freshness: "fresh", contradictionStatus: "none",
       confidence: "high", operatorAction: "blocked", decisionNeededContext: null,
-      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "review_gated", writeBackAllowed: false,
+      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "review_gated", writeBackAllowed: false, aiDraftEligible: false,
     }],
     llmWikiReadiness: null,
     metadataOnly: true,

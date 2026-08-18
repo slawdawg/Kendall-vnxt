@@ -1752,7 +1752,11 @@ async def create_work_item_memory_proposal_ai_draft(
     except MemoryProposalRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_ai_draft_blocked").model_dump()) from exc
+    except Exception:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
@@ -1773,7 +1777,11 @@ async def create_work_item_llm_wiki_rebuild(
     except MemoryProposalRevisionConflict as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
         raise HTTPException(status_code=400, detail=error_response(str(exc), "llm_wiki_rebuild_blocked").model_dump()) from exc
+    except Exception:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))

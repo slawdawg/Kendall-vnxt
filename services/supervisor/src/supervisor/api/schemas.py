@@ -1683,6 +1683,7 @@ class WorkItemMemoryReviewProposalV1View(BaseModel):
     backupRecoveryPath: str
     writeBackStatus: MemoryProposalWriteBackStatusV0
     writeBackAllowed: Literal[False] = False
+    aiDraftEligible: bool = False
 
 
 class WorkItemMemoryReviewLlmWikiPreviewV1View(BaseModel):

@@ -1326,6 +1326,17 @@ class SupervisorService:
             proposal_views,
         )
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
+        proposal_views = [
+            proposal_view.model_copy(update={
+                "aiDraftEligible": self._memory_proposal_ai_draft_eligible(
+                    proposal_view,
+                    alpha_source_refs,
+                    evidence_refs,
+                    item.id,
+                ),
+            })
+            for proposal_view in proposal_views
+        ]
         return WorkItemMemoryReviewV1View(
             workItemId=item.id,
             # The nullable database link is not a foreign key. Publish it only
@@ -1363,6 +1374,33 @@ class SupervisorService:
             backupRecoveryPath=proposal.backup_recovery_path,
             writeBackStatus=proposal.write_back_status,
             writeBackAllowed=False,
+        )
+
+    def _memory_proposal_ai_draft_eligible(
+        self,
+        proposal: WorkItemMemoryReviewProposalV1View,
+        source_refs: list[AuthoritativePacketSourceRefView],
+        evidence_refs: list[EvidenceRefV0View],
+        work_item_id: str,
+    ) -> bool:
+        try:
+            configured_folder = str(self._load_obsidian_memory_draft_config()["draft_folder"])
+        except ValueError:
+            return False
+        if proposal.targetVaultFolder.strip().strip("/") != configured_folder:
+            return False
+        selected_sources = [source_ref for source_ref in source_refs if source_ref.refId in set(proposal.sourceRefs)]
+        readiness = self._llm_wiki_readiness(
+            f"work_item:{work_item_id}", selected_sources, evidence_refs, [proposal]
+        )
+        return (
+            proposal.status == "approved"
+            and proposal.operatorAction == "approve"
+            and proposal.writeBackStatus == "approved_for_future"
+            and proposal.writeBackAllowed is False
+            and proposal.freshness == "fresh"
+            and proposal.contradictionStatus == "none"
+            and readiness.decisionState == "ready"
         )
 
     async def _work_item_memory_review_provenance(
@@ -5849,26 +5887,54 @@ class SupervisorService:
         *,
         work_item_id: str,
         expected_revision: int,
-    ) -> datetime:
+    ) -> tuple[datetime, str]:
         """Atomically fence a durable proposal action before its filesystem work."""
         now = datetime.now(timezone.utc)
+        action_token = str(uuid.uuid4())
         updated = await session.execute(
             update(MemoryProposal)
             .where(
                 MemoryProposal.id == proposal.id,
                 MemoryProposal.work_item_id == work_item_id,
                 MemoryProposal.revision == expected_revision,
+                MemoryProposal.write_action_token.is_(None),
             )
-            .values(revision=expected_revision + 1, updated_at=now)
+            .values(revision=expected_revision + 1, write_action_token=action_token, updated_at=now)
             .execution_options(synchronize_session="fetch")
         )
         if updated.rowcount != 1:
             await session.rollback()
             raise MemoryProposalRevisionConflict(
-                "Memory proposal review was updated by another operator; refresh before trying again."
+                "Memory proposal write is already in progress or the review was updated; refresh before trying again."
             )
         await session.refresh(proposal)
-        return now
+        # Do not hold SQLite's single-writer transaction across a vault backup
+        # or derived-artifact write. The persisted revision itself is the
+        # durable action reservation; later event/proposal updates use a new
+        # short transaction.
+        await session.commit()
+        session.info["memory_proposal_write_reservation"] = (proposal.id, action_token)
+        return now, action_token
+
+    async def release_failed_memory_proposal_write(self, session: AsyncSession, work_item_id: str) -> None:
+        reservation = session.info.pop("memory_proposal_write_reservation", None)
+        if not isinstance(reservation, tuple) or len(reservation) != 2:
+            return
+        proposal_id, action_token = reservation
+        # A failure after reservation may have pending ORM mutations (including
+        # clearing the token on a success path) that never committed.  Discard
+        # those first so this independent, token-conditional update can release
+        # the durable reservation instead of being swallowed by an autoflush.
+        await session.rollback()
+        released = await session.execute(
+            update(MemoryProposal).where(
+                MemoryProposal.id == proposal_id,
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.write_action_token == action_token,
+            ).values(write_action_token=None)
+        )
+        if released.rowcount:
+            await session.commit()
 
     def _load_obsidian_memory_draft_config(self) -> dict[str, object]:
         config_path = (self.settings.obsidian_memory_config_path or "").strip()
@@ -5951,6 +6017,34 @@ class SupervisorService:
             return DEFAULT_LLM_WIKI_DERIVED_FOLDER
         return str(config.get("llm_wiki_folder") or DEFAULT_LLM_WIKI_DERIVED_FOLDER)
 
+    def _persisted_or_generated_memory_artifact_path(
+        self,
+        vault_root: Path,
+        target_dir: Path,
+        persisted_path: str | None,
+        generated_filename: str,
+        legacy_filename: str,
+    ) -> Path:
+        """Reuse only an exact historic artifact name; new writes use opaque names.
+
+        ``target_vault_path`` originated in the proposal input before write-back
+        existed, so it is not by itself evidence that a caller may select an
+        output path.  A persisted path is eligible only when it is one of this
+        proposal's deterministic legacy/current names and an existing artifact
+        will subsequently pass its exact front-matter identity check.
+        """
+        generated = (target_dir / generated_filename).resolve()
+        legacy = (target_dir / legacy_filename).resolve()
+        if persisted_path:
+            candidate = (vault_root / persisted_path.strip().strip("/")).resolve()
+            try:
+                candidate.relative_to(target_dir.resolve())
+            except ValueError as exc:
+                raise ValueError("Memory artifact write blocked: persisted target is outside its configured queue.") from exc
+            if candidate in {generated, legacy} and candidate.suffix == ".md" and candidate.exists():
+                return candidate
+        return generated
+
     async def create_memory_proposal_ai_draft(
         self,
         session: AsyncSession,
@@ -6009,6 +6103,7 @@ class SupervisorService:
             raise ValueError("AI draft write-back blocked: proposal target folder does not match the configured AI Drafts queue.")
 
         safe_id = _safe_memory_proposal_id(proposal.proposal_id) if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id) else proposal.id
+        artifact_id = f"{safe_id}-{proposal.id}"
         vault_root = Path(config["vault_root"]).resolve()
         draft_dir = vault_root / draft_folder
         if draft_dir.parent.exists():
@@ -6021,14 +6116,18 @@ class SupervisorService:
                 draft_dir.resolve().relative_to(vault_root)
             except ValueError as exc:
                 raise ValueError("AI draft write-back blocked: draft queue path must remain inside the vault.") from exc
-        draft_path = (draft_dir / f"{_slugify_memory_draft(proposal.label)}-{safe_id}.md").resolve()
+        draft_path = self._persisted_or_generated_memory_artifact_path(
+            vault_root, draft_dir, proposal.target_vault_path,
+            f"{_slugify_memory_draft(proposal.label)}-{artifact_id}.md",
+            f"{_slugify_memory_draft(proposal.label)}-{safe_id}.md",
+        )
         try:
             draft_path.relative_to(draft_dir.resolve())
         except ValueError as exc:
             raise ValueError("AI draft write-back blocked: draft path must remain inside the AI Drafts queue.") from exc
 
         relative_draft_path = draft_path.relative_to(vault_root).as_posix()
-        now = await self._reserve_memory_proposal_write(
+        now, action_token = await self._reserve_memory_proposal_write(
             session,
             proposal,
             work_item_id=work_item_id,
@@ -6056,6 +6155,7 @@ class SupervisorService:
             proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
             proposal.write_back_allowed = False
             proposal.updated_at = now
+            proposal.write_action_token = None
             await self._record_event(
                 session,
                 item,
@@ -6127,6 +6227,7 @@ class SupervisorService:
         proposal.backup_recovery_path = f"Remove {relative_draft_path} and restore from {backup_path} if the operator rejects the draft."
         proposal.write_back_allowed = False
         proposal.updated_at = now
+        proposal.write_action_token = None
         await self._record_event(
             session,
             item,
@@ -6214,6 +6315,7 @@ class SupervisorService:
             raise ValueError("LLM-Wiki rebuild blocked: derived target must remain inside the dashboard queue.")
 
         safe_id = _safe_memory_proposal_id(proposal.proposal_id) if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id) else proposal.id
+        artifact_id = f"{safe_id}-{proposal.id}"
         target_dir = vault_root / llm_wiki_folder
         if target_dir.parent.exists():
             try:
@@ -6225,14 +6327,18 @@ class SupervisorService:
                 target_dir.resolve().relative_to(vault_root)
             except ValueError as exc:
                 raise ValueError("LLM-Wiki rebuild blocked: derived queue path must remain inside the vault.") from exc
-        target_path = (target_dir / f"llm-wiki-derived-{_slugify_memory_draft(proposal.label)}-{safe_id}.md").resolve()
+        target_path = self._persisted_or_generated_memory_artifact_path(
+            vault_root, target_dir, proposal.target_vault_path,
+            f"llm-wiki-derived-{_slugify_memory_draft(proposal.label)}-{artifact_id}.md",
+            f"llm-wiki-derived-{_slugify_memory_draft(proposal.label)}-{safe_id}.md",
+        )
         try:
             target_path.relative_to(target_dir.resolve())
         except ValueError as exc:
             raise ValueError("LLM-Wiki rebuild blocked: target path must remain inside the derived LLM-Wiki queue.") from exc
 
         relative_target_path = target_path.relative_to(vault_root).as_posix()
-        now = await self._reserve_memory_proposal_write(
+        now, action_token = await self._reserve_memory_proposal_write(
             session,
             proposal,
             work_item_id=work_item_id,
@@ -6261,6 +6367,7 @@ class SupervisorService:
             proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
             proposal.write_back_allowed = False
             proposal.updated_at = now
+            proposal.write_action_token = None
             await self._record_event(
                 session,
                 item,
@@ -6356,6 +6463,7 @@ class SupervisorService:
         proposal.backup_recovery_path = f"Remove {relative_target_path} and restore from {backup_path} if the operator rejects the derived artifact."
         proposal.write_back_allowed = False
         proposal.updated_at = now
+        proposal.write_action_token = None
         await self._record_event(
             session,
             item,

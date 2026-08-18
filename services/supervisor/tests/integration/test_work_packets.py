@@ -4359,7 +4359,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
 
         assert draft_response.status_code == 409
-        assert not (vault_root / "01 Dashboard Queue" / "AI Drafts" / "memory-proposal-ai-draft-mp-ai-draft.md").exists()
+        assert not list((vault_root / "01 Dashboard Queue" / "AI Drafts").glob("*.md"))
 
         draft_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
@@ -4369,12 +4369,13 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert draft_response.status_code == 200
         proposal = draft_response.json()["data"]
         assert proposal["writeBackAllowed"] is False
-        assert proposal["targetVaultPath"] == "01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md"
-        assert "AI draft written to 01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md" in proposal["patchSummary"]
+        assert proposal["targetVaultPath"].startswith("01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft-")
+        assert proposal["targetVaultPath"].endswith(".md")
+        assert f"AI draft written to {proposal['targetVaultPath']}" in proposal["patchSummary"]
         assert "canonical notes remain human-owned" in proposal["decisionNeededContext"]
         assert "restore from" in proposal["backupRecoveryPath"]
 
-        draft_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "memory-proposal-ai-draft-mp-ai-draft.md"
+        draft_path = vault_root / proposal["targetVaultPath"]
         assert draft_path.exists()
         draft_text = draft_path.read_text(encoding="utf-8")
         assert "proposal_id: mp-ai-draft" in draft_text
@@ -4405,6 +4406,29 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert duplicate_response.status_code == 200
         assert "AI draft already exists" in duplicate_response.json()["data"]["patchSummary"]
+
+        # The write reservation is committed before filesystem work. A later
+        # event failure must roll back pending proposal state and release only
+        # this request's token, so the exact next revision can retry.
+        from supervisor.api.main import service
+
+        original_record_event = service._record_event
+
+        async def fail_after_reservation(*args, **kwargs):
+            raise RuntimeError("injected post-reservation event failure")
+
+        monkeypatch.setattr(service, "_record_event", fail_after_reservation)
+        with pytest.raises(RuntimeError, match="injected post-reservation event failure"):
+            client.post(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+                json={"expectedRevision": 4, "actorLabel": "Operator"},
+            )
+        monkeypatch.setattr(service, "_record_event", original_record_event)
+        recovered_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 5, "actorLabel": "Operator"},
+        )
+        assert recovered_response.status_code == 200
 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
@@ -4813,7 +4837,7 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
 
         assert write_response.status_code == 409
-        assert not (vault_root / "01 Dashboard Queue" / "LLM Wiki Derived" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md").exists()
+        assert not list((vault_root / "01 Dashboard Queue" / "LLM Wiki Derived").glob("*.md"))
 
         write_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
@@ -4824,12 +4848,13 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         proposal = write_response.json()["data"]
         assert proposal["writeBackAllowed"] is False
         assert proposal["targetVaultFolder"] == "01 Dashboard Queue/LLM Wiki Derived"
-        assert proposal["targetVaultPath"] == "01 Dashboard Queue/LLM Wiki Derived/llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md"
+        assert proposal["targetVaultPath"].startswith("01 Dashboard Queue/LLM Wiki Derived/llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write-")
+        assert proposal["targetVaultPath"].endswith(".md")
         assert "LLM-Wiki derived artifact written" in proposal["patchSummary"]
         assert "Obsidian remains canonical" in proposal["decisionNeededContext"]
         assert "restore from" in proposal["backupRecoveryPath"]
 
-        artifact_path = vault_root / "01 Dashboard Queue" / "LLM Wiki Derived" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md"
+        artifact_path = vault_root / proposal["targetVaultPath"]
         assert artifact_path.exists()
         artifact_text = artifact_path.read_text(encoding="utf-8")
         assert "status: llm-wiki-derived" in artifact_text
