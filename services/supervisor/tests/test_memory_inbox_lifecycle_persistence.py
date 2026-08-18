@@ -282,7 +282,7 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
 
     active_migrations = _active_migrations_module()
     later_migration = active_migrations.SchemaMigration(
-        "0003_non_idempotent_model_table",
+        "0005_non_idempotent_model_table",
         non_idempotent_later_upgrade,
         clean_install=clean_install_future_table,
     )
