@@ -1387,6 +1387,8 @@ class SupervisorService:
             candidate_id = metadata.get("candidateWorkId")
             if isinstance(candidate_id, str):
                 candidate = await session.get(CandidateWork, candidate_id)
+                if candidate is not None and candidate.promoted_work_item_id not in {None, item.id}:
+                    candidate = None
 
         proposal_event_ids = {
             ref.removeprefix("event:")
@@ -5792,27 +5794,28 @@ class SupervisorService:
         lock: bool = False,
     ) -> MemoryProposal | None:
         """Resolve the opaque V1 route key, retaining safe legacy-ID reads briefly."""
-        query = select(MemoryProposal).where(
+        opaque_query = select(MemoryProposal).where(
             MemoryProposal.work_item_id == work_item_id,
             MemoryProposal.id == route_id,
         )
         if lock:
-            query = query.with_for_update()
-        proposal = (await session.execute(query)).scalar_one_or_none()
-        if proposal is not None:
-            return proposal
+            opaque_query = opaque_query.with_for_update()
+        opaque_proposal = (await session.execute(opaque_query)).scalar_one_or_none()
         # Legacy callers can still address an existing route-safe proposal ID.
         # A value containing a path separator cannot reach this branch through
         # an HTTP path and new dashboard callers never use the display ID.
         if not re.fullmatch(r"[A-Za-z0-9._:%-]+", route_id):
-            return None
-        query = select(MemoryProposal).where(
+            return opaque_proposal
+        legacy_query = select(MemoryProposal).where(
             MemoryProposal.work_item_id == work_item_id,
             MemoryProposal.proposal_id == route_id,
         )
         if lock:
-            query = query.with_for_update()
-        return (await session.execute(query)).scalar_one_or_none()
+            legacy_query = legacy_query.with_for_update()
+        legacy_proposal = (await session.execute(legacy_query)).scalar_one_or_none()
+        if opaque_proposal is not None and legacy_proposal is not None and opaque_proposal.id != legacy_proposal.id:
+            return None
+        return opaque_proposal or legacy_proposal
 
     async def _reserve_memory_proposal_write(
         self,
@@ -6357,6 +6360,13 @@ class SupervisorService:
 
         text = artifact_path.read_text(encoding="utf-8", errors="replace")[:200_000]
         metadata, body_lines = self._parse_llm_wiki_artifact(text)
+        expected_artifact_proposal_id = (
+            _safe_memory_proposal_id(proposal.proposal_id)
+            if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
+            else proposal.id
+        )
+        if metadata.get("proposal_id") != expected_artifact_proposal_id:
+            raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
         normalized_query = query.strip()[:120]
         excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)
         return LlmWikiArtifactSearchResultView(

@@ -4860,6 +4860,19 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert search_result["metadata"]["status"] == "llm-wiki-derived"
         assert any("Derived Index" in excerpt or "derived index" in excerpt.lower() for excerpt in search_result["excerpts"])
 
+        # A stored target path is not enough: the artifact must attest to the
+        # same proposal before its content can be shown to an operator.
+        artifact_path.write_text(
+            artifact_text.replace("proposal_id: mp-llm-wiki-write", "proposal_id: different-proposal"),
+            encoding="utf-8",
+        )
+        mismatched_artifact_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert mismatched_artifact_response.status_code == 400
+        assert "not bound to this proposal" in mismatched_artifact_response.json()["detail"]["error"]["message"]
+
 
 def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-rebuild-write-blocked.db") as client:
@@ -5185,7 +5198,8 @@ def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_pat
 
 
 def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-duplicates.db") as client:
+    db_name = "work-packet-memory-proposal-duplicates.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
         work_item = _create_work_item(client, title="Duplicate Obsidian memory review")
         payload = {
             "proposalId": "memory.v1:source",
@@ -5219,6 +5233,29 @@ def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monk
             json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
         )
         assert update_response.status_code == 200
+
+        second_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={**payload, "proposalId": "separate-proposal"},
+        )
+        assert second_response.status_code == 200
+        route_ids = {
+            proposal["proposalId"]: proposal["proposalRouteId"]
+            for proposal in client.get(
+                f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+            ).json()["data"]["proposals"]
+        }
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute(
+                "UPDATE memory_proposals SET proposal_id = ? WHERE proposal_id = ?",
+                (route_ids["separate-proposal"], "memory.v1:source"),
+            )
+
+        ambiguous_route_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/{route_ids['separate-proposal']}",
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+        )
+        assert ambiguous_route_response.status_code == 404
 
 
 def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkeypatch) -> None:

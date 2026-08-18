@@ -107,7 +107,14 @@ function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean
 function hasLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   const folder = proposal.targetVaultFolder.trim().replace(/^\/+|\/+$/g, "");
   const target = (proposal.targetVaultPath ?? "").trim().replace(/^\/+|\/+$/g, "");
-  return (folder === "LLM Wiki Derived" || folder.endsWith("/LLM Wiki Derived")) && target.startsWith(`${folder}/`);
+  const artifactProposalId = /^[A-Za-z0-9_-]+$/.test(proposal.proposalId)
+    ? proposal.proposalId
+    : proposal.proposalRouteId;
+  return (
+    (folder === "LLM Wiki Derived" || folder.endsWith("/LLM Wiki Derived")) &&
+    target.startsWith(`${folder}/`) &&
+    target.endsWith(`-${artifactProposalId}.md`)
+  );
 }
 
 export function MemoryProposalReviewPanel({
