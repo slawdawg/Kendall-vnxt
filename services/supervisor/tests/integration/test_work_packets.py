@@ -982,6 +982,10 @@ def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_cont
             "refId": "repo_doc:docs/workflows/current-session-runbook.md",
             "sourceType": "repo_doc",
             "pathOrUrl": "docs/workflows/current-session-runbook.md",
+            "environment": "local_dogfood",
+            "sourceRevision": "a" * 40,
+            "sourceRefs": ["repo_doc:docs/workflows/current-session-runbook.md"],
+            "evidenceRefs": ["manager-candidate:canonical-concurrent"],
         },
         "actor": {
             "actorType": "manager",

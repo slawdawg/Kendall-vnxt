@@ -1117,13 +1117,11 @@ class SupervisorService:
                 packet = await session.get(AuthoritativeWorkPacket, existing_event.packet_id)
                 if packet:
                     if is_manager_source_intake:
-                        replay_contract = self._verified_manager_source_intake_contract_from_packet(packet)
-                        payload = payload.model_copy(update={"canonicalContract": replay_contract})
-                        source_ref = self._authoritative_source_ref_payload(
+                        replay_contract, source_ref = self._verified_manager_source_intake_replay_metadata(
+                            packet,
                             payload.sourceRef,
-                            replay_contract,
-                            trusted_manager_packet_id=packet.id,
                         )
+                        payload = payload.model_copy(update={"canonicalContract": replay_contract})
                     matches = (
                         self._authoritative_graph_refresh_event_matches(
                             existing_event,
@@ -1232,13 +1230,11 @@ class SupervisorService:
                     replay_packet = await session.get(AuthoritativeWorkPacket, replay_event.packet_id)
                     if replay_packet:
                         if is_manager_source_intake:
-                            replay_contract = self._verified_manager_source_intake_contract_from_packet(replay_packet)
-                            payload = payload.model_copy(update={"canonicalContract": replay_contract})
-                            source_ref = self._authoritative_source_ref_payload(
+                            replay_contract, source_ref = self._verified_manager_source_intake_replay_metadata(
+                                replay_packet,
                                 payload.sourceRef,
-                                replay_contract,
-                                trusted_manager_packet_id=replay_packet.id,
                             )
+                            payload = payload.model_copy(update={"canonicalContract": replay_contract})
                         if not self._authoritative_create_event_matches(
                             replay_event,
                             payload,
@@ -4745,6 +4741,29 @@ class SupervisorService:
         ):
             raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
         return contract
+
+    def _verified_manager_source_intake_replay_metadata(
+        self,
+        packet: AuthoritativeWorkPacket,
+        requested_source_ref: AuthoritativePacketSourceRefView,
+    ) -> tuple[PipelineCanonicalContractV1View, dict]:
+        """Bind manager replays to the winning record without reserializing it.
+
+        The server-minted contract contains an observed timestamp.  A concurrent
+        loser must prove that its caller-supplied source identity agrees with the
+        durable winner, then compare lifecycle metadata using the winner's exact
+        stored representation.  Rebuilding that representation can change a
+        timestamp serialization despite referring to the same contract.
+        """
+        contract = self._verified_manager_source_intake_contract_from_packet(packet)
+        stored_source_ref = dict(packet.source_ref_json or {})
+        stored_source_ref.pop(PIPELINE_CANONICAL_CONTRACT_METADATA_KEY, None)
+        stored_source_ref.pop(PIPELINE_CANONICAL_CONTRACT_SUPERVISOR_PROVENANCE_KEY, None)
+        if requested_source_ref.model_dump(mode="json", exclude_none=True) != stored_source_ref:
+            raise ValueError("Manager source intake replay sourceRef does not match the persisted authoritative packet.")
+        if not isinstance(packet.source_ref_json, dict):
+            raise ValueError("Manager source intake replay requires persisted source metadata.")
+        return contract, dict(packet.source_ref_json)
 
     @staticmethod
     def _canonical_contract_from_packet_metadata(stored_payload: object) -> PipelineCanonicalContractV1View | None:
