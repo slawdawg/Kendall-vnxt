@@ -1603,6 +1603,15 @@ class MemoryProposalWriteRecoveryRequest(BaseModel):
     expectedRevision: PositiveInt
     recoveryRef: str = Field(min_length=8, max_length=240)
 
+    @field_validator("recoveryRef")
+    @classmethod
+    def require_meaningful_recovery_ref(cls, value: str) -> str:
+        """Keep recovery evidence human-meaningful after request normalization."""
+        normalized = value.strip()
+        if len(normalized) < 8:
+            raise ValueError("recoveryRef must contain at least eight non-whitespace characters")
+        return normalized
+
 
 class LlmWikiDisposableRebuildWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")

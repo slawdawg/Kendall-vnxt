@@ -4495,6 +4495,11 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             json={"expectedRevision": 7, "status": "rejected", "operatorAction": "reject"},
         )
         assert active_write_patch.status_code == 409
+        meaningless_recovery = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={"expectedRevision": 7, "recoveryRef": "        "},
+        )
+        assert meaningless_recovery.status_code == 422
         recovered_reservation = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
             json={
@@ -4530,6 +4535,12 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             legacy_backup_paths[0] / proposal["targetVaultPath"]
         ).read_text(encoding="utf-8")
 
+        # Make the delayed writer take the fresh-write branch.  If recovery
+        # wins its final database fence, the exact unrecorded file must be
+        # removed rather than remaining as an orphaned draft.
+        draft_path.unlink()
+        assert not draft_path.exists()
+
         # Recovery deliberately invalidates the live writer's token/revision.
         # A delayed writer may have reached its filesystem step, but it must
         # never publish an outcome/event after that fence has been recovered.
@@ -4555,9 +4566,38 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert superseded_writer.status_code == 409
         monkeypatch.setattr(service, "_finalize_memory_proposal_write", original_finalize_write)
+        assert not draft_path.exists()
         assert client.get(
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
         ).json()["data"]["proposals"][0]["revision"] == 11
+
+        # Identical bytes are not writer identity.  Model a later completed
+        # writer at the deterministic path: the stale request must retain the
+        # artifact once the durable revision proves newer ownership.
+        async def newer_writer_before_finalization(session, proposal, **kwargs):
+            proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
+            try:
+                proposal_db.execute(
+                    "UPDATE memory_proposals SET revision = ?, write_action_token = NULL "
+                    "WHERE work_item_id = ? AND proposal_id = ?",
+                    (kwargs["expected_revision"] + 3, work_item["id"], "mp-ai-draft"),
+                )
+                proposal_db.commit()
+            finally:
+                proposal_db.close()
+            return await original_finalize_write(session, proposal, **kwargs)
+
+        monkeypatch.setattr(service, "_finalize_memory_proposal_write", newer_writer_before_finalization)
+        later_writer = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 11, "actorLabel": "Operator"},
+        )
+        assert later_writer.status_code == 409
+        monkeypatch.setattr(service, "_finalize_memory_proposal_write", original_finalize_write)
+        assert draft_path.exists()
+        assert client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"] == 14
 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
