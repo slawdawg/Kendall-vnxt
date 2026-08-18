@@ -4477,6 +4477,29 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert recovered_response.status_code == 200
 
+        # A process can die immediately after the reservation commit, before
+        # the writer records a durable artifact intent.  Recovery must reload
+        # the expired ORM state after releasing its initial row lock and settle
+        # this reservation-only state without an implicit async lazy load.
+        reservation_only_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
+        try:
+            reservation_only_db.execute(
+                "UPDATE memory_proposals SET revision = ?, write_action_token = ?, write_action_intent_json = NULL "
+                "WHERE work_item_id = ? AND proposal_id = ?",
+                (6, "dead-before-intent-token", work_item["id"], "mp-ai-draft"),
+            )
+            reservation_only_db.commit()
+        finally:
+            reservation_only_db.close()
+        reservation_only_recovery = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={"expectedRevision": 6, "recoveryRef": "operator:reservation-only:pytest"},
+        )
+        assert reservation_only_recovery.status_code == 200
+        assert client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"] == 7
+
         # A process death after the short reservation commit cannot run the
         # request-local cleanup. It must fence review updates until an explicit
         # operator recovery records why the abandoned reservation is safe to

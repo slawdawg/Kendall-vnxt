@@ -8,6 +8,7 @@ const PROXY_TIMEOUT_MS = 2000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const MEMORY_INBOX_PROPOSAL_DECISION_PATH = /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/(?:return|deny|approve)$/;
 const LLM_WIKI_ARTIFACT_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/llm-wiki-artifact$/;
+const MEMORY_PROPOSAL_MUTATION_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+(?:\/(?:ai-draft|llm-wiki-rebuild))?$/;
 const MEMORY_PROPOSAL_WRITE_RECOVERY_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/recover-abandoned-write$/;
 const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
@@ -153,6 +154,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
     const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
+    const memoryProposalMutation = MEMORY_PROPOSAL_MUTATION_PATH.test(targetPath);
     if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
       sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
       return true;
@@ -163,6 +165,11 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     }
     if (memoryInboxMutation && (request.method !== "POST" || url.search)) {
       sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
+      return true;
+    }
+    const expectedMemoryProposalMethod = targetPath.endsWith("/ai-draft") || targetPath.endsWith("/llm-wiki-rebuild") ? "POST" : "PATCH";
+    if (memoryProposalMutation && (request.method !== expectedMemoryProposalMethod || url.search)) {
+      sendJson(response, request.method === expectedMemoryProposalMethod ? 404 : 405, { state: "unavailable" });
       return true;
     }
     if (!request.headers.cookie) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
@@ -180,7 +187,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }
-      if (role === "test_viewer" && (controlsRead || controlsMutation || memoryInboxMutation)) {
+      if (role === "test_viewer" && (controlsRead || controlsMutation || memoryInboxMutation || memoryProposalMutation)) {
         sendJson(response, 404, { state: "unavailable" });
         return true;
       }
@@ -193,6 +200,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         return true;
       }
       if (memoryInboxMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
+        sendJson(response, 403, { state: "unavailable" });
+        return true;
+      }
+      if (memoryProposalMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }

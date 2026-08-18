@@ -6392,19 +6392,22 @@ class SupervisorService:
             # The writer holds this same lock across its final ownership proof,
             # filesystem mutation, and conditional finalization.  Reopen the
             # session after waiting so recovery never reconciles an intent that
-            # a completed writer has already cleared.
+            # a completed writer has already cleared.  This is deliberately
+            # unconditional: a reservation-only crash has no intent, but the
+            # preceding rollback still expires the original ORM objects.
+            item = await session.get(WorkItem, work_item_id)
+            proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id, lock=True)
+            if (
+                item is None
+                or proposal is None
+                or proposal.revision != expected_revision
+                or proposal.write_action_token != recovery_token
+                or proposal.write_action_intent_json != recovery_intent
+            ):
+                raise MemoryProposalRevisionConflict(
+                    "Memory proposal write reservation changed before recovery; refresh before trying again."
+                )
             if intent_paths is not None:
-                await session.refresh(item)
-                proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id, lock=True)
-                if (
-                    proposal is None
-                    or proposal.revision != expected_revision
-                    or proposal.write_action_token != recovery_token
-                    or proposal.write_action_intent_json != recovery_intent
-                ):
-                    raise MemoryProposalRevisionConflict(
-                        "Memory proposal write reservation changed before recovery; refresh before trying again."
-                    )
                 await asyncio.to_thread(_reconcile_memory_artifact_intent_unlocked, *intent_paths)
             now = datetime.now(timezone.utc)
             released = await session.execute(

@@ -6,6 +6,7 @@ import type { DashboardCanonicalMemoryProposalV1, DashboardCanonicalWorkItemMemo
 
 import { useOperatorProfile } from "../lib/operator-profile";
 import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
+import { requestSupervisorMutation } from "../lib/dashboard-supervisor-transport";
 import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 type ReviewAction = "approve_future_draft" | "edit_needed" | "reject" | "defer";
@@ -126,8 +127,8 @@ export function MemoryProposalReviewPanel({
       setPendingProposalId(proposal.proposalId);
       setMessage(`Updating ${proposal.proposalId}...`);
       try {
-        const response = await fetch(
-          `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}`,
+        const response = await requestSupervisorMutation(
+          `/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -201,8 +202,8 @@ export function MemoryProposalReviewPanel({
       setPendingProposalId(proposal.proposalId);
       setMessage(`Creating AI draft for ${proposal.proposalId}...`);
       try {
-        const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}/ai-draft`,
+        const response = await requestSupervisorMutation(
+        `/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}/ai-draft`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -24,6 +24,7 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(pageSource, /href="#memory-proposals"/);
 
   assert.match(panelSource, /PATCH/);
+  assert.match(panelSource, /requestSupervisorMutation\(/);
   assert.match(panelSource, /\/work-items\/\$\{workItemId\}\/memory-proposals\/\$\{encodeURIComponent\(proposal\.proposalRouteId\)\}/);
   assert.match(panelSource, /POST/);
   assert.match(panelSource, /\/work-items\/\$\{workItemId\}\/memory-proposals\/\$\{encodeURIComponent\(proposal\.proposalRouteId\)\}\/ai-draft/);
