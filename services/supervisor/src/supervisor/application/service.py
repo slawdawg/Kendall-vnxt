@@ -838,6 +838,7 @@ AUTHORITATIVE_PACKET_STAGE_LABELS = {
 
 PIPELINE_DASHBOARD_STALE_AFTER_SECONDS = 15
 MAX_LLM_WIKI_ARTIFACT_READ_BYTES = 200_000
+MAX_MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_PROBES = 8
 # Keep generated names comfortably below common 255-byte filesystem component
 # limits while preserving an opaque proposal fence in every new artifact name.
 MAX_MEMORY_ARTIFACT_FILENAME_BYTES = 240
@@ -921,7 +922,25 @@ async def _async_memory_artifact_lock(path: Path | None):
         await asyncio.to_thread(lock_file.close)
 
 
-def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path]:
+async def _complete_threaded_artifact_reconciliation(*args: object) -> None:
+    """Join reconciliation work before cancellation can release its artifact lock."""
+    worker = asyncio.create_task(
+        asyncio.to_thread(_reconcile_memory_artifact_intent_unlocked, *args)
+    )
+    try:
+        await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Cancelling the await does not cancel a running executor thread. Do
+        # not let the surrounding artifact lock unwind until that thread has
+        # finished its exact reconciliation.
+        try:
+            await asyncio.shield(worker)
+        except Exception:
+            pass
+        raise
+
+
+def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path, bool, str | None]:
     """Validate and return the immutable filesystem coordinates in an intent."""
     if not isinstance(intent, dict) or intent.get("schemaVersion") != "memory-proposal-write-intent/v1":
         raise ValueError("Memory proposal recovery requires a valid durable write intent.")
@@ -931,16 +950,20 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
         backup_path = Path(str(intent["backupPath"])).resolve(strict=True)
         expected_digest = str(intent["writtenSha256"])
         expected_backup_digest = intent.get("backupArtifactSha256")
+        backup_prepared = intent.get("backupPrepared", True)
+        prior_artifact_digest = intent.get("priorArtifactSha256")
         relative_path = artifact_path.relative_to(vault_root)
     except (KeyError, OSError, ValueError) as exc:
         raise ValueError("Memory proposal recovery intent is not safely reconcilable.") from exc
     if (
         not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
         or not backup_path.is_dir()
+        or not isinstance(backup_prepared, bool)
         or (expected_backup_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(expected_backup_digest)))
+        or (prior_artifact_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(prior_artifact_digest)))
     ):
         raise ValueError("Memory proposal recovery intent is invalid.")
-    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path
+    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path, backup_prepared, str(prior_artifact_digest) if prior_artifact_digest else None
 
 
 def _reconcile_memory_artifact_intent_unlocked(
@@ -950,9 +973,24 @@ def _reconcile_memory_artifact_intent_unlocked(
     expected_digest: str,
     expected_backup_digest: str | None,
     relative_path: Path,
+    backup_prepared: bool = True,
+    prior_artifact_digest: str | None = None,
 ) -> None:
     """Restore the snapshot version of an interrupted server-recorded write."""
     del vault_root  # The containment proof was completed by the caller.
+    if not backup_prepared:
+        if artifact_path.exists():
+            if not artifact_path.is_file() or artifact_path.is_symlink() or prior_artifact_digest is None:
+                raise ValueError("Memory proposal recovery found an artifact changed before backup completion.")
+            if _sha256_file(artifact_path) != prior_artifact_digest:
+                raise ValueError("Memory proposal recovery found an artifact changed before backup completion.")
+        elif prior_artifact_digest is not None:
+            raise ValueError("Memory proposal recovery found a missing artifact before backup completion.")
+        if backup_path.exists():
+            if not backup_path.is_dir() or backup_path.is_symlink():
+                raise ValueError("Memory proposal recovery backup path is invalid.")
+            shutil.rmtree(backup_path)
+        return
     backup_artifact = backup_path / relative_path
     if backup_artifact.exists():
         if not backup_artifact.is_file() or backup_artifact.is_symlink() or expected_backup_digest is None:
@@ -1480,6 +1518,17 @@ class SupervisorService:
             proposal_views,
         )
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
+        # Artifact inspection may read disk and consult legacy identity rows.
+        # Keep the automatic WorkItem read bounded even when persisted proposal
+        # count is unexpectedly large; omitted probes fail closed.
+        probed = proposals[:MAX_MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_PROBES]
+        # One AsyncSession cannot safely issue concurrent SQL work. Keep the
+        # disk/database probes serial but bounded; any unprobed row is false.
+        eligibility = [
+            await self._memory_proposal_llm_wiki_artifact_search_eligible(session, proposal, item.id)
+            for proposal in probed
+        ]
+        artifact_eligibility = [*eligibility, *([False] * (len(proposals) - len(probed)))]
         proposal_views = [
             proposal_view.model_copy(update={
                 "aiDraftEligible": self._memory_proposal_ai_draft_eligible(
@@ -1489,13 +1538,11 @@ class SupervisorService:
                     item.id,
                     write_in_progress=proposal.write_action_token is not None,
                 ),
-                "llmWikiArtifactSearchEligible": await self._memory_proposal_llm_wiki_artifact_search_eligible(
-                    session,
-                    proposal,
-                    item.id,
-                ),
+                "llmWikiArtifactSearchEligible": artifact_eligible_value,
             })
-            for proposal, proposal_view in zip(proposals, proposal_views, strict=True)
+            for proposal, proposal_view, artifact_eligible_value in zip(
+                proposals, proposal_views, artifact_eligibility, strict=True
+            )
         ]
         return WorkItemMemoryReviewV1View(
             workItemId=item.id,
@@ -6195,6 +6242,7 @@ class SupervisorService:
         artifact_path: Path,
         backup_path: Path,
         written_bytes: bytes,
+        backup_prepared: bool = True,
     ) -> None:
         """Durably bind the exact pending filesystem mutation before writing."""
         try:
@@ -6211,6 +6259,12 @@ class SupervisorService:
             backup_artifact_digest = await asyncio.to_thread(_sha256_file, backup_artifact)
         else:
             backup_artifact_digest = None
+        if canonical_artifact_path.exists():
+            if not canonical_artifact_path.is_file() or canonical_artifact_path.is_symlink():
+                raise ValueError("Memory proposal write intent artifact is invalid.")
+            prior_artifact_digest = await asyncio.to_thread(_sha256_file, canonical_artifact_path)
+        else:
+            prior_artifact_digest = None
         intent = {
             "schemaVersion": "memory-proposal-write-intent/v1",
             "vaultRoot": str(canonical_vault_root),
@@ -6218,17 +6272,20 @@ class SupervisorService:
             "backupPath": str(canonical_backup_path),
             "writtenSha256": hashlib.sha256(written_bytes).hexdigest(),
             "backupArtifactSha256": backup_artifact_digest,
+            "backupPrepared": backup_prepared,
+            "priorArtifactSha256": prior_artifact_digest,
         }
+        intent_is_unrecorded = or_(
+            MemoryProposal.write_action_intent_json.is_(None),
+            MemoryProposal.write_action_intent_json == JSON.NULL,
+        )
         recorded = await session.execute(
             update(MemoryProposal).where(
                 MemoryProposal.id == proposal.id,
                 MemoryProposal.work_item_id == work_item_id,
                 MemoryProposal.revision == expected_revision + 1,
                 MemoryProposal.write_action_token == action_token,
-                or_(
-                    MemoryProposal.write_action_intent_json.is_(None),
-                    MemoryProposal.write_action_intent_json == JSON.NULL,
-                ),
+                intent_is_unrecorded if not backup_prepared else True,
             ).values(write_action_intent_json=intent)
         )
         if recorded.rowcount != 1:
@@ -6408,7 +6465,7 @@ class SupervisorService:
                     "Memory proposal write reservation changed before recovery; refresh before trying again."
                 )
             if intent_paths is not None:
-                await asyncio.to_thread(_reconcile_memory_artifact_intent_unlocked, *intent_paths)
+                await _complete_threaded_artifact_reconciliation(*intent_paths)
             now = datetime.now(timezone.utc)
             released = await session.execute(
                 update(MemoryProposal)
@@ -6669,9 +6726,15 @@ class SupervisorService:
                 backup_root = Path(config["backup_root"])
                 backup_root.mkdir(parents=True, exist_ok=True)
                 backup_path = backup_root / backup_id
-                shutil.copytree(vault_root, backup_path, symlinks=True)
                 previous_bytes = draft_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
+                backup_path.mkdir(parents=True, exist_ok=False)
+                await self._record_memory_proposal_write_intent(
+                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                    action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
+                    backup_path=backup_path, written_bytes=rebound_bytes, backup_prepared=False,
+                )
+                shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
             if "work_item_id" not in existing_metadata:
                 await self._record_memory_proposal_write_intent(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -6727,7 +6790,6 @@ class SupervisorService:
         backup_root = Path(config["backup_root"])
         backup_root.mkdir(parents=True, exist_ok=True)
         backup_path = backup_root / backup_id
-        shutil.copytree(Path(config["vault_root"]), backup_path, symlinks=True)
 
         approval_ref = f"dashboard:{work_item_id}:{proposal.proposal_id}:ai-draft:{now.strftime('%Y%m%dT%H%M%SZ')}"
         source_refs = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in proposal.source_refs_json)
@@ -6768,6 +6830,13 @@ class SupervisorService:
         )
         draft_dir.mkdir(parents=True, exist_ok=True)
         written_bytes = body.encode("utf-8")
+        backup_path.mkdir(parents=True, exist_ok=False)
+        await self._record_memory_proposal_write_intent(
+            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+            action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
+            backup_path=backup_path, written_bytes=written_bytes, backup_prepared=False,
+        )
+        shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
         await self._record_memory_proposal_write_intent(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, vault_root=vault_root, artifact_path=draft_path, backup_path=backup_path,
@@ -6918,9 +6987,15 @@ class SupervisorService:
                 backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
                 backup_root.mkdir(parents=True, exist_ok=True)
                 backup_path = backup_root / backup_id
-                shutil.copytree(vault_root, backup_path, symlinks=True)
                 previous_bytes = target_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
+                backup_path.mkdir(parents=True, exist_ok=False)
+                await self._record_memory_proposal_write_intent(
+                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                    action_token=action_token, vault_root=vault_root, artifact_path=target_path,
+                    backup_path=backup_path, written_bytes=rebound_bytes, backup_prepared=False,
+                )
+                shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
             if "work_item_id" not in existing_metadata:
                 await self._record_memory_proposal_write_intent(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -6980,7 +7055,6 @@ class SupervisorService:
         backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
         backup_root.mkdir(parents=True, exist_ok=True)
         backup_path = backup_root / backup_id
-        shutil.copytree(vault_root, backup_path, symlinks=True)
 
         actor_label = payload.actorLabel or payload.actorId or "Operator"
         source_refs_text = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in proposal_view.sourceRefs)
@@ -7042,6 +7116,13 @@ class SupervisorService:
         )
         target_dir.mkdir(parents=True, exist_ok=True)
         written_bytes = body.encode("utf-8")
+        backup_path.mkdir(parents=True, exist_ok=False)
+        await self._record_memory_proposal_write_intent(
+            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+            action_token=action_token, vault_root=vault_root, artifact_path=target_path,
+            backup_path=backup_path, written_bytes=written_bytes, backup_prepared=False,
+        )
+        shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
         await self._record_memory_proposal_write_intent(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, vault_root=vault_root, artifact_path=target_path, backup_path=backup_path,

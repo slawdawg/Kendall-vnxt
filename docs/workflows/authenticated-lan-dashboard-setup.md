@@ -266,7 +266,10 @@ to interrupt a live write. In a LAN deployment it requires the authenticated ope
 exact dashboard Origin, and CSRF token; development mode still requires the
 private-UDS or loopback operational boundary. Legacy artifact rebinding snapshots the vault before adding its
 missing WorkItem fence, so the backup path remains the recovery source if that
-compatibility write fails.
+compatibility write fails. The writer records a pending backup intent before it
+starts that snapshot copy: if it is interrupted during preparation, recovery
+first proves the target artifact is unchanged and removes only the recorded
+partial backup rather than treating it as a completed snapshot.
 
 ## Independently revocable dashboard verification credential
 

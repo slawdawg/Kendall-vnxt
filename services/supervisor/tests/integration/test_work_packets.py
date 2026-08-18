@@ -61,6 +61,75 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> Non
     assert len(filename.encode("utf-8")) <= MAX_MEMORY_ARTIFACT_FILENAME_BYTES
 
 
+def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(tmp_path) -> None:
+    """A pre-copy durable intent may remove only its own partial backup."""
+    from supervisor.application.service import (
+        _memory_artifact_intent_paths,
+        _reconcile_memory_artifact_intent_unlocked,
+    )
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    original_bytes = b"existing operator draft\n"
+    artifact_path.write_bytes(original_bytes)
+    backup_path = tmp_path / "backups" / "partial-copy"
+    backup_path.mkdir(parents=True)
+    (backup_path / "partial-entry").write_bytes(b"partial vault copy")
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1",
+        "vaultRoot": str(vault_root),
+        "artifactPath": str(artifact_path),
+        "backupPath": str(backup_path),
+        "writtenSha256": hashlib.sha256(b"new writer bytes\n").hexdigest(),
+        "backupArtifactSha256": None,
+        "backupPrepared": False,
+        "priorArtifactSha256": hashlib.sha256(original_bytes).hexdigest(),
+    }
+
+    _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert artifact_path.read_bytes() == original_bytes
+    assert not backup_path.exists()
+
+    backup_path.mkdir(parents=True)
+    artifact_path.write_bytes(b"external concurrent edit\n")
+    with pytest.raises(ValueError, match="changed before backup completion"):
+        _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert backup_path.exists()
+
+
+def test_threaded_artifact_reconciliation_joins_before_cancellation(monkeypatch) -> None:
+    """Cancellation must not unlock an artifact while its executor work runs."""
+    import supervisor.application.service as service_module
+
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    def slow_reconcile(*_args) -> None:
+        started.set()
+        assert release.wait(timeout=2), "test failed to release reconciliation worker"
+        completed.set()
+
+    monkeypatch.setattr(service_module, "_reconcile_memory_artifact_intent_unlocked", slow_reconcile)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(service_module._complete_threaded_artifact_reconciliation("intent"))
+        assert await asyncio.to_thread(started.wait, 2), "reconciliation worker did not start"
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation released the artifact lock before reconciliation joined"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    try:
+        asyncio_run(scenario())
+    finally:
+        release.set()
+    assert completed.is_set()
+
+
 def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
     return {
         "attemptId": attempt["attemptId"],
@@ -4171,6 +4240,58 @@ def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(
 
         assert client.get("/candidate-work").json()["data"] == before_candidates
         assert client.get("/work-items").json()["data"] == before_work_items
+
+
+def test_memory_review_bounds_artifact_eligibility_probes(tmp_path, monkeypatch) -> None:
+    """An oversized review list does not turn a read into unbounded vault I/O."""
+    with _client(tmp_path, monkeypatch, "bounded-memory-review-probes.db") as client:
+        work_item = _create_work_item(client, title="Bounded memory-review artifact probes")
+        proposal_ids = [f"mp-bounded-probe-{index}" for index in range(10)]
+        for proposal_id in proposal_ids:
+            created = client.post(
+                f"/work-items/{work_item['id']}/memory-proposals",
+                json={
+                    "proposalId": proposal_id,
+                    "label": f"Bounded artifact probe {proposal_id}",
+                    "summary": "Metadata-only fixture proposal.",
+                    "sourceRefs": ["obsidian:00 Inbox/bounded-probe.md"],
+                    "evidenceRefs": ["evidence:bounded-probe"],
+                    "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                    "proposalType": "new_note",
+                    "suggestedContentSummary": "Do not write during this read fixture.",
+                    "sensitivity": "low",
+                    "freshness": "fresh",
+                    "contradictionStatus": "none",
+                    "confidence": "low",
+                    "operatorAction": "defer",
+                    "backupRecoveryPath": "No mutation performed.",
+                    "writeBackStatus": "review_gated",
+                    "writeBackAllowed": False,
+                },
+            )
+            assert created.status_code == 200, created.text
+
+        from supervisor.api.main import service
+
+        probed: list[str] = []
+
+        async def eligible(_session, proposal, _work_item_id: str) -> bool:
+            probed.append(proposal.proposal_id)
+            return True
+
+        monkeypatch.setattr(service, "_memory_proposal_llm_wiki_artifact_search_eligible", eligible)
+        review_response = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+
+        assert review_response.status_code == 200, review_response.text
+        assert probed == proposal_ids[:8]
+        eligibility = {
+            proposal["proposalId"]: proposal["llmWikiArtifactSearchEligible"]
+            for proposal in review_response.json()["data"]["proposals"]
+        }
+        assert all(eligibility[proposal_id] is True for proposal_id in proposal_ids[:8])
+        assert all(eligibility[proposal_id] is False for proposal_id in proposal_ids[8:])
 
 
 def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(tmp_path, monkeypatch) -> None:
