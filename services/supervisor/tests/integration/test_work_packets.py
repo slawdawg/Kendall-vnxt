@@ -98,6 +98,68 @@ def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(t
     assert backup_path.exists()
 
 
+def test_memory_artifact_intent_rejects_symlinked_backup_hierarchy(tmp_path) -> None:
+    """Recovery never resolves a recorded backup through an attacker-controlled link."""
+    from supervisor.application.service import _memory_artifact_intent_paths
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("existing draft\n", encoding="utf-8")
+    protected = tmp_path / "unrelated-protected-backup"
+    protected.mkdir()
+    marker = protected / "marker"
+    marker.write_text("must survive\n", encoding="utf-8")
+    linked_parent = tmp_path / "linked-backups"
+    linked_parent.symlink_to(protected, target_is_directory=True)
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1",
+        "vaultRoot": str(vault_root),
+        "artifactPath": str(artifact_path),
+        "backupPath": str(linked_parent / "pending-copy"),
+        "writtenSha256": hashlib.sha256(b"new bytes\n").hexdigest(),
+        "backupArtifactSha256": None,
+        "backupPrepared": False,
+        "priorArtifactSha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+    }
+
+    with pytest.raises(ValueError, match="not safely reconcilable"):
+        _memory_artifact_intent_paths(intent)
+    assert marker.read_text(encoding="utf-8") == "must survive\n"
+
+
+def test_atomic_memory_artifact_write_preserves_prior_bytes_on_replace_failure(tmp_path, monkeypatch) -> None:
+    """A failed writer leaves the durable artifact untouched, never truncated."""
+    import supervisor.application.service as service_module
+
+    artifact_path = tmp_path / "vault" / "artifact.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_bytes(b"prior complete artifact\n")
+
+    def fail_replace(*_args, **_kwargs) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(service_module.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        service_module._atomic_write_memory_artifact(artifact_path, b"new artifact bytes\n")
+    assert artifact_path.read_bytes() == b"prior complete artifact\n"
+    assert not list(artifact_path.parent.glob(f".{artifact_path.name}.*"))
+
+
+def test_llm_wiki_artifact_requires_closed_front_matter_within_bound() -> None:
+    """A bounded prefix cannot mistake unfinished YAML for artifact body text."""
+    from supervisor.application.service import MAX_LLM_WIKI_ARTIFACT_READ_BYTES, SupervisorService
+
+    unterminated = "---\nstatus: llm-wiki-derived\n" + "x" * MAX_LLM_WIKI_ARTIFACT_READ_BYTES
+    with pytest.raises(ValueError, match="closed YAML front matter"):
+        SupervisorService._parse_llm_wiki_artifact(object(), unterminated)
+    metadata, body = SupervisorService._parse_llm_wiki_artifact(
+        object(), "---\nstatus: llm-wiki-derived\n---\n# Verified body"
+    )
+    assert metadata == {"status": "llm-wiki-derived"}
+    assert body == ["# Verified body"]
+
+
 def test_threaded_artifact_reconciliation_joins_before_cancellation(monkeypatch) -> None:
     """Cancellation must not unlock an artifact while its executor work runs."""
     import supervisor.application.service as service_module
@@ -4737,14 +4799,14 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         draft_path.unlink()
         assert not draft_path.exists()
 
-        # Model a crash after its durable intent commits but before the writer
-        # acquires the artifact lock. The governed recovery reconciles that
-        # exact intent, advances the revision, and prevents the stale request
-        # from writing any artifact.
-        original_record_intent = service._record_memory_proposal_write_intent
+        # Model a crash after the lock-protected backup intent/copy completes
+        # but before the writer acquires its final artifact-write lock. The
+        # governed recovery reconciles that exact intent, advances the revision,
+        # and prevents the stale request from writing any artifact.
+        original_prepare_backup = service._prepare_memory_proposal_backup
 
-        async def recover_after_intent(session, proposal, **kwargs):
-            result = await original_record_intent(session, proposal, **kwargs)
+        async def recover_after_backup(session, proposal, **kwargs):
+            result = await original_prepare_backup(session, proposal, **kwargs)
             await session.refresh(proposal)
             await service.recover_abandoned_memory_proposal_write(
                 session,
@@ -4757,13 +4819,13 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             )
             return result
 
-        monkeypatch.setattr(service, "_record_memory_proposal_write_intent", recover_after_intent)
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", recover_after_backup)
         superseded_writer = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
             json={"expectedRevision": 9, "actorLabel": "Operator"},
         )
         assert superseded_writer.status_code == 409
-        monkeypatch.setattr(service, "_record_memory_proposal_write_intent", original_record_intent)
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", original_prepare_backup)
         assert not draft_path.exists()
         assert client.get(
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
@@ -5221,6 +5283,39 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
         assert after_artifact_review.status_code == 200
         assert after_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is True
+
+        # An unfinished writer may have produced or rebound this path but has
+        # not finalized its durable proposal state. Neither the review read nor
+        # the artifact reader may expose those provisional bytes.
+        review_db = sqlite3.connect(tmp_path / "work-packet-llm-wiki-rebuild-write.db")
+        try:
+            review_db.execute(
+                "UPDATE memory_proposals SET write_action_token = ? WHERE work_item_id = ? AND proposal_id = ?",
+                ("active-artifact-writer", work_item["id"], "mp-llm-wiki-write"),
+            )
+            review_db.commit()
+        finally:
+            review_db.close()
+        active_write_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert active_write_review.status_code == 200
+        assert active_write_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+        active_write_search = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert active_write_search.status_code == 400
+        assert "write is still active" in active_write_search.json()["detail"]["error"]["message"]
+        review_db = sqlite3.connect(tmp_path / "work-packet-llm-wiki-rebuild-write.db")
+        try:
+            review_db.execute(
+                "UPDATE memory_proposals SET write_action_token = NULL WHERE work_item_id = ? AND proposal_id = ?",
+                (work_item["id"], "mp-llm-wiki-write"),
+            )
+            review_db.commit()
+        finally:
+            review_db.close()
 
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",

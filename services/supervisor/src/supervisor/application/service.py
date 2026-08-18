@@ -8,6 +8,7 @@ import re
 import shutil
 import sqlite3
 import socket
+import stat
 import subprocess
 import tempfile
 import uuid
@@ -863,6 +864,26 @@ def _read_bounded_utf8_text(path: Path) -> str:
         return artifact.read(MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
 
 
+def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
+    """Replace an artifact atomically so a failed write never truncates it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as artifact:
+            artifact.write(payload)
+            artifact.flush()
+            os.fsync(artifact.fileno())
+        os.replace(temporary_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as artifact:
@@ -883,7 +904,7 @@ def _restore_memory_artifact_after_lost_reservation(
         if previous_bytes is None:
             path.unlink(missing_ok=True)
         else:
-            path.write_bytes(previous_bytes)
+            _atomic_write_memory_artifact(path, previous_bytes)
     except OSError:
         # The caller still reports the ownership conflict.  Do not overwrite a
         # concurrently replaced path while attempting best-effort compensation.
@@ -922,22 +943,65 @@ async def _async_memory_artifact_lock(path: Path | None):
         await asyncio.to_thread(lock_file.close)
 
 
-async def _complete_threaded_artifact_reconciliation(*args: object) -> None:
-    """Join reconciliation work before cancellation can release its artifact lock."""
+async def _complete_threaded_artifact_work(operation, /, *args, **kwargs):
+    """Join filesystem work before cancellation can release its artifact lock."""
     worker = asyncio.create_task(
-        asyncio.to_thread(_reconcile_memory_artifact_intent_unlocked, *args)
+        asyncio.to_thread(operation, *args, **kwargs)
     )
     try:
-        await asyncio.shield(worker)
+        return await asyncio.shield(worker)
     except asyncio.CancelledError:
         # Cancelling the await does not cancel a running executor thread. Do
         # not let the surrounding artifact lock unwind until that thread has
-        # finished its exact reconciliation.
+        # finished its exact filesystem operation.
         try:
             await asyncio.shield(worker)
         except Exception:
             pass
         raise
+
+
+async def _complete_threaded_artifact_reconciliation(*args: object) -> None:
+    """Join reconciliation work before cancellation can release its artifact lock."""
+    await _complete_threaded_artifact_work(_reconcile_memory_artifact_intent_unlocked, *args)
+
+
+def _existing_non_symlink_directory(raw_path: object) -> Path:
+    """Resolve an existing absolute directory only after rejecting symlink hops."""
+    path = Path(str(raw_path))
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("Memory proposal recovery path is not canonical.")
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            current.lstat()
+        except OSError as exc:
+            raise ValueError("Memory proposal recovery path is unavailable.") from exc
+        if current.is_symlink():
+            raise ValueError("Memory proposal recovery path must not contain a symlink.")
+    if not current.is_dir():
+        raise ValueError("Memory proposal recovery path is not a directory.")
+    return current.resolve(strict=True)
+
+
+def _revalidate_non_symlink_backup_directory(backup_path: Path) -> None:
+    """Recheck the recorded backup hierarchy immediately before mutation."""
+    if _existing_non_symlink_directory(backup_path) != backup_path:
+        raise ValueError("Memory proposal recovery backup path changed after intent recording.")
+
+
+def _remove_verified_backup_directory(backup_path: Path) -> None:
+    """Delete a recorded partial backup through a verified open parent FD."""
+    _revalidate_non_symlink_backup_directory(backup_path.parent)
+    parent_fd = os.open(backup_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        entry = os.stat(backup_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(entry.st_mode):
+            raise ValueError("Memory proposal recovery backup path is invalid.")
+        shutil.rmtree(backup_path.name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
 
 
 def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path, bool, str | None]:
@@ -947,7 +1011,7 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
     try:
         vault_root = Path(str(intent["vaultRoot"])).resolve(strict=True)
         artifact_path = Path(str(intent["artifactPath"])).resolve()
-        backup_path = Path(str(intent["backupPath"])).resolve(strict=True)
+        backup_path = _existing_non_symlink_directory(intent["backupPath"])
         expected_digest = str(intent["writtenSha256"])
         expected_backup_digest = intent.get("backupArtifactSha256")
         backup_prepared = intent.get("backupPrepared", True)
@@ -989,7 +1053,7 @@ def _reconcile_memory_artifact_intent_unlocked(
         if backup_path.exists():
             if not backup_path.is_dir() or backup_path.is_symlink():
                 raise ValueError("Memory proposal recovery backup path is invalid.")
-            shutil.rmtree(backup_path)
+            _remove_verified_backup_directory(backup_path)
         return
     backup_artifact = backup_path / relative_path
     if backup_artifact.exists():
@@ -1006,8 +1070,7 @@ def _reconcile_memory_artifact_intent_unlocked(
                 return
             if artifact_digest != expected_digest:
                 raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
-        artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_bytes(backup_bytes)
+        _atomic_write_memory_artifact(artifact_path, backup_bytes)
     else:
         if expected_backup_digest is not None:
             raise ValueError("Memory proposal recovery backup artifact is missing.")
@@ -1619,6 +1682,8 @@ class SupervisorService:
         work_item_id: str,
     ) -> bool:
         """Project only a verified, bound derived artifact as searchable."""
+        if proposal.write_action_token is not None:
+            return False
         try:
             config = self._load_obsidian_memory_draft_config()
         except (OSError, UnicodeError, ValueError):
@@ -1641,7 +1706,7 @@ class SupervisorService:
                 return False
             artifact_text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
             metadata, _ = self._parse_llm_wiki_artifact(artifact_text)
-        except OSError:
+        except (OSError, ValueError):
             return False
         expected_proposal_id = (
             _safe_memory_proposal_id(proposal.proposal_id)
@@ -6293,6 +6358,53 @@ class SupervisorService:
             raise MemoryProposalRevisionConflict("Memory proposal write reservation changed before filesystem intent recording.")
         await session.commit()
 
+    async def _prepare_memory_proposal_backup(
+        self,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        *,
+        work_item_id: str,
+        expected_revision: int,
+        action_token: str,
+        vault_root: Path,
+        artifact_path: Path,
+        backup_path: Path,
+        written_bytes: bytes,
+    ) -> None:
+        """Record and copy a backup while holding the artifact recovery fence."""
+        async with _async_memory_artifact_lock(artifact_path):
+            await asyncio.to_thread(backup_path.mkdir, parents=True, exist_ok=False)
+            await self._record_memory_proposal_write_intent(
+                session,
+                proposal,
+                work_item_id=work_item_id,
+                expected_revision=expected_revision,
+                action_token=action_token,
+                vault_root=vault_root,
+                artifact_path=artifact_path,
+                backup_path=backup_path,
+                written_bytes=written_bytes,
+                backup_prepared=False,
+            )
+            await _complete_threaded_artifact_work(
+                shutil.copytree,
+                vault_root,
+                backup_path,
+                symlinks=True,
+                dirs_exist_ok=True,
+            )
+            await self._record_memory_proposal_write_intent(
+                session,
+                proposal,
+                work_item_id=work_item_id,
+                expected_revision=expected_revision,
+                action_token=action_token,
+                vault_root=vault_root,
+                artifact_path=artifact_path,
+                backup_path=backup_path,
+                written_bytes=written_bytes,
+            )
+
     async def _finalize_memory_proposal_artifact_write(
         self,
         session: AsyncSession,
@@ -6384,7 +6496,7 @@ class SupervisorService:
                 raise MemoryProposalRevisionConflict(
                     "Memory proposal write reservation changed before artifact mutation; refresh before trying again."
                 )
-            artifact_path.write_bytes(written_bytes)
+            await _complete_threaded_artifact_work(_atomic_write_memory_artifact, artifact_path, written_bytes)
             # The ownership query above opens a SQLite read snapshot. Reopen it
             # before the final conditional update so a recovery committed while
             # this writer was between its proof and finalization is observed.
@@ -6728,19 +6840,12 @@ class SupervisorService:
                 backup_path = backup_root / backup_id
                 previous_bytes = draft_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
-                backup_path.mkdir(parents=True, exist_ok=False)
-                await self._record_memory_proposal_write_intent(
-                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
-                    action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
-                    backup_path=backup_path, written_bytes=rebound_bytes, backup_prepared=False,
-                )
-                shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
-            if "work_item_id" not in existing_metadata:
-                await self._record_memory_proposal_write_intent(
+                await self._prepare_memory_proposal_backup(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
                     backup_path=backup_path, written_bytes=rebound_bytes,
                 )
+            if "work_item_id" not in existing_metadata:
                 await self._write_and_finalize_memory_proposal_artifact(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, artifact_path=draft_path, written_bytes=rebound_bytes,
@@ -6830,17 +6935,10 @@ class SupervisorService:
         )
         draft_dir.mkdir(parents=True, exist_ok=True)
         written_bytes = body.encode("utf-8")
-        backup_path.mkdir(parents=True, exist_ok=False)
-        await self._record_memory_proposal_write_intent(
+        await self._prepare_memory_proposal_backup(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
-            backup_path=backup_path, written_bytes=written_bytes, backup_prepared=False,
-        )
-        shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
-        await self._record_memory_proposal_write_intent(
-            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
-            action_token=action_token, vault_root=vault_root, artifact_path=draft_path, backup_path=backup_path,
-            written_bytes=written_bytes,
+            backup_path=backup_path, written_bytes=written_bytes,
         )
         await self._write_and_finalize_memory_proposal_artifact(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -6989,19 +7087,12 @@ class SupervisorService:
                 backup_path = backup_root / backup_id
                 previous_bytes = target_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
-                backup_path.mkdir(parents=True, exist_ok=False)
-                await self._record_memory_proposal_write_intent(
-                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
-                    action_token=action_token, vault_root=vault_root, artifact_path=target_path,
-                    backup_path=backup_path, written_bytes=rebound_bytes, backup_prepared=False,
-                )
-                shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
-            if "work_item_id" not in existing_metadata:
-                await self._record_memory_proposal_write_intent(
+                await self._prepare_memory_proposal_backup(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, vault_root=vault_root, artifact_path=target_path,
                     backup_path=backup_path, written_bytes=rebound_bytes,
                 )
+            if "work_item_id" not in existing_metadata:
                 await self._write_and_finalize_memory_proposal_artifact(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, artifact_path=target_path, written_bytes=rebound_bytes,
@@ -7116,17 +7207,10 @@ class SupervisorService:
         )
         target_dir.mkdir(parents=True, exist_ok=True)
         written_bytes = body.encode("utf-8")
-        backup_path.mkdir(parents=True, exist_ok=False)
-        await self._record_memory_proposal_write_intent(
+        await self._prepare_memory_proposal_backup(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, vault_root=vault_root, artifact_path=target_path,
-            backup_path=backup_path, written_bytes=written_bytes, backup_prepared=False,
-        )
-        shutil.copytree(vault_root, backup_path, symlinks=True, dirs_exist_ok=True)
-        await self._record_memory_proposal_write_intent(
-            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
-            action_token=action_token, vault_root=vault_root, artifact_path=target_path, backup_path=backup_path,
-            written_bytes=written_bytes,
+            backup_path=backup_path, written_bytes=written_bytes,
         )
         await self._write_and_finalize_memory_proposal_artifact(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -7177,6 +7261,8 @@ class SupervisorService:
         proposal = await self._memory_proposal_for_route(session, work_item_id, proposal_id)
         if not proposal:
             return None
+        if proposal.write_action_token is not None:
+            raise ValueError("LLM-Wiki artifact read blocked: proposal write is still active or requires recovery.")
 
         config = self._load_obsidian_memory_draft_config()
         vault_root = Path(config["vault_root"]).resolve()
@@ -7277,13 +7363,17 @@ class SupervisorService:
         metadata: dict[str, str] = {}
         body_start = 0
         if lines[:1] == ["---"]:
+            closed = False
             for index, line in enumerate(lines[1:], start=1):
                 if line == "---":
                     body_start = index + 1
+                    closed = True
                     break
                 if ":" in line and not line.startswith("  - "):
                     key, value = line.split(":", 1)
                     metadata[key.strip()] = value.strip().strip('"')
+            if not closed:
+                raise ValueError("LLM-Wiki artifact requires closed YAML front matter within the bounded read.")
         return metadata, lines[body_start:]
 
     def _llm_wiki_artifact_excerpts(self, lines: list[str], query: str) -> list[str]:

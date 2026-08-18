@@ -267,9 +267,11 @@ exact dashboard Origin, and CSRF token; development mode still requires the
 private-UDS or loopback operational boundary. Legacy artifact rebinding snapshots the vault before adding its
 missing WorkItem fence, so the backup path remains the recovery source if that
 compatibility write fails. The writer records a pending backup intent before it
-starts that snapshot copy: if it is interrupted during preparation, recovery
-first proves the target artifact is unchanged and removes only the recorded
-partial backup rather than treating it as a completed snapshot.
+starts that snapshot copy and holds the same per-artifact lock through the
+copy: if it is interrupted during preparation, recovery first proves the target
+artifact is unchanged and removes only the recorded partial backup rather than
+treating it as a completed snapshot. Artifact replacement itself is atomic, so
+a failed write does not leave a truncated draft or derived artifact visible.
 
 ## Independently revocable dashboard verification credential
 
