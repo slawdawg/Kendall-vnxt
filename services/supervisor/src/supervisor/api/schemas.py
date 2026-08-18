@@ -1693,6 +1693,7 @@ class WorkItemMemoryReviewProposalV1View(BaseModel):
     writeBackStatus: MemoryProposalWriteBackStatusV0
     writeBackAllowed: Literal[False] = False
     aiDraftEligible: bool = False
+    llmWikiArtifactSearchEligible: bool = False
 
 
 class WorkItemMemoryReviewLlmWikiPreviewV1View(BaseModel):

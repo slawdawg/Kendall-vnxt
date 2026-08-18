@@ -41,9 +41,7 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(panelSource, /Metadata-only rebuild preview/);
   assert.match(panelSource, /No-write rebuild dry-run plan/);
   assert.match(panelSource, /llm-wiki-artifact/);
-  assert.match(panelSource, /targetVaultFolder/);
-  assert.match(panelSource, /LLM Wiki Derived/);
-  assert.match(panelSource, /target\.endsWith\(`-\$\{artifactProposalId\}\.md`\)/);
+  assert.match(panelSource, /function hasLlmWikiArtifact\(proposal: DashboardCanonicalMemoryProposalV1\): boolean \{\s+return proposal\.llmWikiArtifactSearchEligible;\s+\}/);
   assert.match(panelSource, /maxLength=\{120\}/);
   assert.match(panelSource, /llmWikiQuery\.trim\(\)\.slice\(0, 120\)/);
   assert.match(panelSource, /setLlmWikiResults\(\(\{ \[proposal\.proposalId\]: _previous, \.\.\.remaining \}\) => remaining\)/);

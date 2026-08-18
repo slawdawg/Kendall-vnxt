@@ -4325,6 +4325,12 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert approve_response.status_code == 200
 
+        before_artifact_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert before_artifact_review.status_code == 200
+        assert before_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+
         # Memory-review is a read surface: a temporarily unreadable config
         # must make its action ineligible, not make the whole WorkItem page
         # unavailable.
@@ -4335,6 +4341,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert invalid_config_review.status_code == 200
         assert invalid_config_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        assert invalid_config_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
         Path(config_path).write_bytes(config_bytes)
 
         # A sibling proposal can remain pending or stale without revoking this
@@ -4347,7 +4354,8 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
                 "summary": "Sibling remains visible for later operator review.",
                 "sourceRefs": ["llm_wiki:derived-stale-sibling"],
                 "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
-                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "targetVaultPath": "Other Queue/LLM Wiki Derived/stale-sibling.md",
+                "targetVaultFolder": "Other Queue/LLM Wiki Derived",
                 "proposalType": "new_note",
                 "suggestedContentSummary": "Do not write this stale sibling.",
                 "sensitivity": "medium",
@@ -4363,7 +4371,12 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert sibling_response.status_code == 200
         aggregate_readiness = client.get(
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
-        ).json()["data"]["llmWikiReadiness"]
+        ).json()["data"]
+        assert next(
+            proposal for proposal in aggregate_readiness["proposals"]
+            if proposal["proposalId"] == "mp-ai-draft-stale-sibling"
+        )["llmWikiArtifactSearchEligible"] is False
+        aggregate_readiness = aggregate_readiness["llmWikiReadiness"]
         assert aggregate_readiness["decisionState"] == "blocked"
 
         draft_response = client.post(
@@ -4496,6 +4509,35 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert f"work_item_id: {work_item['id']}" not in (
             legacy_backup_paths[0] / proposal["targetVaultPath"]
         ).read_text(encoding="utf-8")
+
+        # Recovery deliberately invalidates the live writer's token/revision.
+        # A delayed writer may have reached its filesystem step, but it must
+        # never publish an outcome/event after that fence has been recovered.
+        original_finalize_write = service._finalize_memory_proposal_write
+
+        async def recover_before_finalization(session, proposal, **kwargs):
+            proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
+            try:
+                proposal_db.execute(
+                    "UPDATE memory_proposals SET revision = ?, write_action_token = NULL "
+                    "WHERE work_item_id = ? AND proposal_id = ?",
+                    (kwargs["expected_revision"] + 2, work_item["id"], "mp-ai-draft"),
+                )
+                proposal_db.commit()
+            finally:
+                proposal_db.close()
+            return await original_finalize_write(session, proposal, **kwargs)
+
+        monkeypatch.setattr(service, "_finalize_memory_proposal_write", recover_before_finalization)
+        superseded_writer = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 9, "actorLabel": "Operator"},
+        )
+        assert superseded_writer.status_code == 409
+        monkeypatch.setattr(service, "_finalize_memory_proposal_write", original_finalize_write)
+        assert client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"] == 11
 
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
@@ -4898,6 +4940,12 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
         assert approve_response.status_code == 200
 
+        before_artifact_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert before_artifact_review.status_code == 200
+        assert before_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+
         write_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
             json={"expectedRevision": 1, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
@@ -4936,6 +4984,12 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert "Create a derived index entry from approved metadata only." in artifact_text
         assert not (vault_root / "00 Inbox" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md").exists()
         assert any(backup_root.iterdir())
+
+        after_artifact_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert after_artifact_review.status_code == 200
+        assert after_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is True
 
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",

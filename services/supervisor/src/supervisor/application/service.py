@@ -1316,10 +1316,8 @@ class SupervisorService:
         # This is the only read boundary that tolerates migrated rows with
         # empty provenance arrays.  Keep legacy V0 packet views validated by
         # their required-reference contract instead of constructing one here.
-        proposal_views = [
-            self._work_item_memory_review_proposal_view(proposal)
-            for proposal in await self.list_memory_proposals(session, item.id)
-        ]
+        proposals = await self.list_memory_proposals(session, item.id)
+        proposal_views = [self._work_item_memory_review_proposal_view(proposal) for proposal in proposals]
         alpha_source_refs, evidence_refs = await self._work_item_memory_review_provenance(
             session,
             item,
@@ -1334,8 +1332,13 @@ class SupervisorService:
                     evidence_refs,
                     item.id,
                 ),
+                "llmWikiArtifactSearchEligible": await self._memory_proposal_llm_wiki_artifact_search_eligible(
+                    session,
+                    proposal,
+                    item.id,
+                ),
             })
-            for proposal_view in proposal_views
+            for proposal, proposal_view in zip(proposals, proposal_views, strict=True)
         ]
         return WorkItemMemoryReviewV1View(
             workItemId=item.id,
@@ -1401,6 +1404,52 @@ class SupervisorService:
             and proposal.freshness == "fresh"
             and proposal.contradictionStatus == "none"
             and readiness.decisionState == "ready"
+        )
+
+    async def _memory_proposal_llm_wiki_artifact_search_eligible(
+        self,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        work_item_id: str,
+    ) -> bool:
+        """Project only a verified, bound derived artifact as searchable."""
+        try:
+            config = self._load_obsidian_memory_draft_config()
+        except (OSError, UnicodeError, ValueError):
+            return False
+        folder = str(config["llm_wiki_folder"]).strip().strip("/")
+        target = (proposal.target_vault_path or "").strip().strip("/")
+        if not folder or proposal.target_vault_folder.strip().strip("/") != folder:
+            return False
+        if not target or Path(target).is_absolute() or ".." in Path(target).parts:
+            return False
+        if not target.startswith(f"{folder}/"):
+            return False
+        try:
+            artifact_path = (Path(config["vault_root"]).resolve() / target).resolve()
+            artifact_path.relative_to((Path(config["vault_root"]).resolve() / folder).resolve())
+        except ValueError:
+            return False
+        try:
+            if not artifact_path.is_file():
+                return False
+            metadata, _ = self._parse_llm_wiki_artifact(
+                artifact_path.read_text(encoding="utf-8", errors="replace")[:200_000]
+            )
+        except OSError:
+            return False
+        expected_proposal_id = (
+            _safe_memory_proposal_id(proposal.proposal_id)
+            if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
+            else proposal.id
+        )
+        return await self._llm_wiki_artifact_matches_proposal(
+            session,
+            proposal=proposal,
+            work_item_id=work_item_id,
+            expected_proposal_id=expected_proposal_id,
+            expected_status="llm-wiki-derived",
+            metadata=metadata,
         )
 
     async def _work_item_memory_review_provenance(
@@ -5937,6 +5986,41 @@ class SupervisorService:
         if released.rowcount:
             await session.commit()
 
+    async def _finalize_memory_proposal_write(
+        self,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        *,
+        work_item_id: str,
+        expected_revision: int,
+        action_token: str,
+        values: dict[str, object],
+    ) -> None:
+        """Commit an artifact outcome only while this request owns its reservation.
+
+        Filesystem work cannot share the database transaction that holds the
+        short reservation.  Recovery deliberately advances the revision and
+        clears the token, so this conditional update is the final ownership
+        fence before an artifact outcome or event can become durable.
+        """
+        finalized = await session.execute(
+            update(MemoryProposal)
+            .where(
+                MemoryProposal.id == proposal.id,
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.revision == expected_revision + 1,
+                MemoryProposal.write_action_token == action_token,
+            )
+            .values(**values, write_action_token=None)
+            .execution_options(synchronize_session="fetch")
+        )
+        if finalized.rowcount != 1:
+            await session.rollback()
+            raise MemoryProposalRevisionConflict(
+                "Memory proposal write reservation was recovered or replaced before finalization; refresh before trying again."
+            )
+        await session.refresh(proposal)
+
     async def recover_abandoned_memory_proposal_write(
         self,
         session: AsyncSession,
@@ -6223,12 +6307,17 @@ class SupervisorService:
                     self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id),
                     encoding="utf-8",
                 )
-            proposal.target_vault_path = relative_draft_path
-            proposal.patch_summary = f"AI draft already exists at {relative_draft_path}; no duplicate draft was written."
-            proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
-            proposal.write_back_allowed = False
-            proposal.updated_at = now
-            proposal.write_action_token = None
+            await self._finalize_memory_proposal_write(
+                session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                action_token=action_token,
+                values={
+                    "target_vault_path": relative_draft_path,
+                    "patch_summary": f"AI draft already exists at {relative_draft_path}; no duplicate draft was written.",
+                    "decision_needed_context": "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned.",
+                    "write_back_allowed": False,
+                    "updated_at": now,
+                },
+            )
             await self._record_event(
                 session,
                 item,
@@ -6295,13 +6384,18 @@ class SupervisorService:
         draft_dir.mkdir(parents=True, exist_ok=True)
         draft_path.write_text(body, encoding="utf-8")
 
-        proposal.target_vault_path = relative_draft_path
-        proposal.patch_summary = f"AI draft written to {relative_draft_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied."
-        proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
-        proposal.backup_recovery_path = f"Remove {relative_draft_path} and restore from {backup_path} if the operator rejects the draft."
-        proposal.write_back_allowed = False
-        proposal.updated_at = now
-        proposal.write_action_token = None
+        await self._finalize_memory_proposal_write(
+            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+            action_token=action_token,
+            values={
+                "target_vault_path": relative_draft_path,
+                "patch_summary": f"AI draft written to {relative_draft_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied.",
+                "decision_needed_context": "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned.",
+                "backup_recovery_path": f"Remove {relative_draft_path} and restore from {backup_path} if the operator rejects the draft.",
+                "write_back_allowed": False,
+                "updated_at": now,
+            },
+        )
         await self._record_event(
             session,
             item,
@@ -6439,13 +6533,18 @@ class SupervisorService:
                     self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id),
                     encoding="utf-8",
                 )
-            proposal.target_vault_path = relative_target_path
-            proposal.target_vault_folder = llm_wiki_folder
-            proposal.patch_summary = f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written."
-            proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
-            proposal.write_back_allowed = False
-            proposal.updated_at = now
-            proposal.write_action_token = None
+            await self._finalize_memory_proposal_write(
+                session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                action_token=action_token,
+                values={
+                    "target_vault_path": relative_target_path,
+                    "target_vault_folder": llm_wiki_folder,
+                    "patch_summary": f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written.",
+                    "decision_needed_context": "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned.",
+                    "write_back_allowed": False,
+                    "updated_at": now,
+                },
+            )
             await self._record_event(
                 session,
                 item,
@@ -6535,14 +6634,19 @@ class SupervisorService:
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path.write_text(body, encoding="utf-8")
 
-        proposal.target_vault_path = relative_target_path
-        proposal.target_vault_folder = llm_wiki_folder
-        proposal.patch_summary = f"LLM-Wiki derived artifact written to {relative_target_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied."
-        proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
-        proposal.backup_recovery_path = f"Remove {relative_target_path} and restore from {backup_path} if the operator rejects the derived artifact."
-        proposal.write_back_allowed = False
-        proposal.updated_at = now
-        proposal.write_action_token = None
+        await self._finalize_memory_proposal_write(
+            session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+            action_token=action_token,
+            values={
+                "target_vault_path": relative_target_path,
+                "target_vault_folder": llm_wiki_folder,
+                "patch_summary": f"LLM-Wiki derived artifact written to {relative_target_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied.",
+                "decision_needed_context": "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned.",
+                "backup_recovery_path": f"Remove {relative_target_path} and restore from {backup_path} if the operator rejects the derived artifact.",
+                "write_back_allowed": False,
+                "updated_at": now,
+            },
+        )
         await self._record_event(
             session,
             item,

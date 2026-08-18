@@ -1353,7 +1353,7 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
       targetVaultFolder: "memory/review", proposalType: "new_note", suggestedContentSummary: "Review summary.",
       patchSummary: null, sensitivity: "low", freshness: "fresh", contradictionStatus: "none",
       confidence: "high", operatorAction: "blocked", decisionNeededContext: null,
-      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "review_gated", writeBackAllowed: false, aiDraftEligible: false,
+      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "review_gated", writeBackAllowed: false, aiDraftEligible: false, llmWikiArtifactSearchEligible: false,
     }],
     llmWikiReadiness: null,
     metadataOnly: true,
@@ -1408,24 +1408,15 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
   assert.equal(valid.workItemId, "work-item-a");
   assert.equal(valid.proposals[0].targetVaultPath, null);
   assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-missing"), null);
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-invalid"), null);
   const persistedBlank = JSON.parse(JSON.stringify(await context.module.exports.getWorkItemMemoryReview("work-item-blank")));
   assert.equal(persistedBlank.proposals[0].sourceRefs[0], "");
   await assert.rejects(
     () => context.module.exports.getWorkItemMemoryReview("work-item-b"),
-    /does not bind its requested WorkItem identity/,
+    /identity does not bind its requested WorkItem/,
   );
-  await assert.rejects(
-    () => context.module.exports.getWorkItemMemoryReview("work-item-invalid"),
-    /Canonical WorkItem memory review is malformed/,
-  );
-  await assert.rejects(
-    () => context.module.exports.getWorkItemMemoryReview("work-item-enum"),
-    /Canonical WorkItem memory review is malformed/,
-  );
-  await assert.rejects(
-    () => context.module.exports.getWorkItemMemoryReview("work-item-unsafe-route"),
-    /Canonical WorkItem memory review is malformed/,
-  );
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-enum"), null);
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-unsafe-route"), null);
 });
 
 test("dedicated runtime projects consistent authoritative list and detail without legacy requests", async () => {
