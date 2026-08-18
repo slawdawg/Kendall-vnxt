@@ -4330,8 +4330,8 @@ def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(
         assert client.get("/work-items").json()["data"] == before_work_items
 
 
-def test_memory_review_bounds_artifact_eligibility_probes(tmp_path, monkeypatch) -> None:
-    """An oversized review list does not turn a read into unbounded vault I/O."""
+def test_memory_review_keeps_later_artifact_eligibility_visible(tmp_path, monkeypatch) -> None:
+    """Every persisted proposal remains eligible for its own safe artifact read."""
     with _client(tmp_path, monkeypatch, "bounded-memory-review-probes.db") as client:
         work_item = _create_work_item(client, title="Bounded memory-review artifact probes")
         proposal_ids = [f"mp-bounded-probe-{index}" for index in range(10)]
@@ -4373,13 +4373,12 @@ def test_memory_review_bounds_artifact_eligibility_probes(tmp_path, monkeypatch)
         )
 
         assert review_response.status_code == 200, review_response.text
-        assert probed == proposal_ids[:8]
+        assert probed == proposal_ids
         eligibility = {
             proposal["proposalId"]: proposal["llmWikiArtifactSearchEligible"]
             for proposal in review_response.json()["data"]["proposals"]
         }
-        assert all(eligibility[proposal_id] is True for proposal_id in proposal_ids[:8])
-        assert all(eligibility[proposal_id] is False for proposal_id in proposal_ids[8:])
+        assert all(eligibility[proposal_id] is True for proposal_id in proposal_ids)
 
 
 def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(tmp_path, monkeypatch) -> None:

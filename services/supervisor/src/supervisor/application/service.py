@@ -839,7 +839,6 @@ AUTHORITATIVE_PACKET_STAGE_LABELS = {
 
 PIPELINE_DASHBOARD_STALE_AFTER_SECONDS = 15
 MAX_LLM_WIKI_ARTIFACT_READ_BYTES = 200_000
-MAX_MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_PROBES = 8
 # Keep generated names comfortably below common 255-byte filesystem component
 # limits while preserving an opaque proposal fence in every new artifact name.
 MAX_MEMORY_ARTIFACT_FILENAME_BYTES = 240
@@ -865,8 +864,11 @@ def _read_bounded_utf8_text(path: Path) -> str:
 
 
 def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
-    """Replace an artifact atomically so a failed write never truncates it."""
+    """Atomically replace an artifact while preserving existing safe metadata."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    previous = path.stat(follow_symlinks=False) if path.exists() else None
+    if previous is not None and not stat.S_ISREG(previous.st_mode):
+        raise ValueError("Memory proposal artifact replacement requires a regular file.")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
@@ -874,6 +876,12 @@ def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
             artifact.write(payload)
             artifact.flush()
             os.fsync(artifact.fileno())
+        if previous is None:
+            os.chmod(temporary_path, 0o600)
+        else:
+            # Preserve mode, timestamps, flags, and supported xattrs (including
+            # local ACL metadata) before atomically exchanging the inode.
+            shutil.copystat(path, temporary_path, follow_symlinks=True)
         os.replace(temporary_path, path)
         directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -1598,17 +1606,12 @@ class SupervisorService:
             proposal_views,
         )
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
-        # Artifact inspection may read disk and consult legacy identity rows.
-        # Keep the automatic WorkItem read bounded even when persisted proposal
-        # count is unexpectedly large; omitted probes fail closed.
-        probed = proposals[:MAX_MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_PROBES]
-        # One AsyncSession cannot safely issue concurrent SQL work. Keep the
-        # disk/database probes serial but bounded; any unprobed row is false.
+        # One AsyncSession cannot safely issue concurrent SQL work. Inspect
+        # every persisted proposal serially rather than hiding later artifacts.
         eligibility = [
             await self._memory_proposal_llm_wiki_artifact_search_eligible(session, proposal, item.id)
-            for proposal in probed
+            for proposal in proposals
         ]
-        artifact_eligibility = [*eligibility, *([False] * (len(proposals) - len(probed)))]
         proposal_views = [
             proposal_view.model_copy(update={
                 "aiDraftEligible": self._memory_proposal_ai_draft_eligible(
@@ -1621,7 +1624,7 @@ class SupervisorService:
                 "llmWikiArtifactSearchEligible": artifact_eligible_value,
             })
             for proposal, proposal_view, artifact_eligible_value in zip(
-                proposals, proposal_views, artifact_eligibility, strict=True
+                proposals, proposal_views, eligibility, strict=True
             )
         ]
         return WorkItemMemoryReviewV1View(
@@ -6518,6 +6521,8 @@ class SupervisorService:
                 )
             if previous_bytes is not None:
                 await asyncio.to_thread(_revalidate_memory_artifact_bytes, artifact_path, previous_bytes)
+            elif artifact_path.exists():
+                raise ValueError("Memory proposal artifact appeared during backup; refusing to overwrite it.")
             await _complete_threaded_artifact_work(_atomic_write_memory_artifact, artifact_path, written_bytes)
             # The ownership query above opens a SQLite read snapshot. Reopen it
             # before the final conditional update so a recovery committed while
@@ -7302,27 +7307,32 @@ class SupervisorService:
             artifact_path.relative_to((vault_root / llm_wiki_folder).resolve())
         except ValueError as exc:
             raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.") from exc
-        if not artifact_path.exists() or not artifact_path.is_file():
-            raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.")
-
-        text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
-        metadata, body_lines = self._parse_llm_wiki_artifact(text)
-        expected_artifact_proposal_id = (
-            _safe_memory_proposal_id(proposal.proposal_id)
-            if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
-            else proposal.id
-        )
-        if not await self._llm_wiki_artifact_matches_proposal(
-            session,
-            proposal=proposal,
-            work_item_id=work_item_id,
-            expected_proposal_id=expected_artifact_proposal_id,
-            expected_status="llm-wiki-derived",
-            metadata=metadata,
-        ):
-            raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
-        normalized_query = query.strip()[:120]
-        excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)
+        async with _async_memory_artifact_lock(artifact_path):
+            # A writer/recovery owns this same lock. Re-read its durable token
+            # inside the lock so a search cannot expose provisional bytes.
+            await session.refresh(proposal)
+            if proposal.write_action_token is not None:
+                raise ValueError("LLM-Wiki artifact read blocked: proposal write is still active or requires recovery.")
+            if not artifact_path.exists() or not artifact_path.is_file():
+                raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.")
+            text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
+            metadata, body_lines = self._parse_llm_wiki_artifact(text)
+            expected_artifact_proposal_id = (
+                _safe_memory_proposal_id(proposal.proposal_id)
+                if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
+                else proposal.id
+            )
+            if not await self._llm_wiki_artifact_matches_proposal(
+                session,
+                proposal=proposal,
+                work_item_id=work_item_id,
+                expected_proposal_id=expected_artifact_proposal_id,
+                expected_status="llm-wiki-derived",
+                metadata=metadata,
+            ):
+                raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
+            normalized_query = query.strip()[:120]
+            excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)
         return LlmWikiArtifactSearchResultView(
             targetVaultPath=target_path_value,
             query=normalized_query,
