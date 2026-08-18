@@ -41,6 +41,25 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     return TestClient(app, client=("127.0.0.1", 50000))
 
 
+def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> None:
+    from supervisor.application.service import (
+        MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
+        MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
+        _memory_artifact_filename,
+        _read_bounded_utf8_text,
+    )
+
+    artifact_path = tmp_path / "derived.md"
+    artifact_path.write_bytes(b"---\nstatus: llm-wiki-derived\n---\n" + b"x" * (MAX_LLM_WIKI_ARTIFACT_READ_BYTES + 4096))
+    assert len(_read_bounded_utf8_text(artifact_path).encode("utf-8")) == MAX_LLM_WIKI_ARTIFACT_READ_BYTES
+
+    artifact_id = f"{'p' * 120}-{'a' * 36}"
+    filename = _memory_artifact_filename("llm-wiki-derived-", "L" * 80, artifact_id)
+    assert filename.startswith("llm-wiki-derived-")
+    assert filename.endswith(f"-{artifact_id}.md")
+    assert len(filename.encode("utf-8")) <= MAX_MEMORY_ARTIFACT_FILENAME_BYTES
+
+
 def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
     return {
         "attemptId": attempt["attemptId"],

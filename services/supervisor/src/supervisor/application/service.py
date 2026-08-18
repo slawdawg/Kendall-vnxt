@@ -835,11 +835,29 @@ AUTHORITATIVE_PACKET_STAGE_LABELS = {
 }
 
 PIPELINE_DASHBOARD_STALE_AFTER_SECONDS = 15
+MAX_LLM_WIKI_ARTIFACT_READ_BYTES = 200_000
+# Keep generated names comfortably below common 255-byte filesystem component
+# limits while preserving an opaque proposal fence in every new artifact name.
+MAX_MEMORY_ARTIFACT_FILENAME_BYTES = 240
 
 
 def _slugify_memory_draft(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:80]
     return slug or "memory-proposal"
+
+
+def _memory_artifact_filename(prefix: str, label: str, artifact_id: str) -> str:
+    suffix = f"-{artifact_id}.md"
+    remaining = MAX_MEMORY_ARTIFACT_FILENAME_BYTES - len(prefix.encode("utf-8")) - len(suffix.encode("utf-8"))
+    if remaining < 1:
+        raise ValueError("Memory artifact identifier exceeds the filesystem-safe filename budget.")
+    return f"{prefix}{_slugify_memory_draft(label)[:remaining]}{suffix}"
+
+
+def _read_bounded_utf8_text(path: Path) -> str:
+    """Read only the artifact prefix used by metadata parsing/search excerpts."""
+    with path.open("rb") as artifact:
+        return artifact.read(MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
 
 
 def _safe_memory_proposal_id(value: str) -> str:
@@ -1433,9 +1451,8 @@ class SupervisorService:
         try:
             if not artifact_path.is_file():
                 return False
-            metadata, _ = self._parse_llm_wiki_artifact(
-                artifact_path.read_text(encoding="utf-8", errors="replace")[:200_000]
-            )
+            artifact_text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
+            metadata, _ = self._parse_llm_wiki_artifact(artifact_text)
         except OSError:
             return False
         expected_proposal_id = (
@@ -6270,8 +6287,8 @@ class SupervisorService:
                 raise ValueError("AI draft write-back blocked: draft queue path must remain inside the vault.") from exc
         draft_path = self._persisted_or_generated_memory_artifact_path(
             vault_root, draft_dir, proposal.target_vault_path,
-            f"{_slugify_memory_draft(proposal.label)}-{artifact_id}.md",
-            f"{_slugify_memory_draft(proposal.label)}-{safe_id}.md",
+            _memory_artifact_filename("", proposal.label, artifact_id),
+            _memory_artifact_filename("", proposal.label, safe_id),
         )
         try:
             draft_path.relative_to(draft_dir.resolve())
@@ -6497,8 +6514,8 @@ class SupervisorService:
                 raise ValueError("LLM-Wiki rebuild blocked: derived queue path must remain inside the vault.") from exc
         target_path = self._persisted_or_generated_memory_artifact_path(
             vault_root, target_dir, proposal.target_vault_path,
-            f"llm-wiki-derived-{_slugify_memory_draft(proposal.label)}-{artifact_id}.md",
-            f"llm-wiki-derived-{_slugify_memory_draft(proposal.label)}-{safe_id}.md",
+            _memory_artifact_filename("llm-wiki-derived-", proposal.label, artifact_id),
+            _memory_artifact_filename("llm-wiki-derived-", proposal.label, safe_id),
         )
         try:
             target_path.relative_to(target_dir.resolve())
@@ -6702,7 +6719,7 @@ class SupervisorService:
         if not artifact_path.exists() or not artifact_path.is_file():
             raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.")
 
-        text = artifact_path.read_text(encoding="utf-8", errors="replace")[:200_000]
+        text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
         metadata, body_lines = self._parse_llm_wiki_artifact(text)
         expected_artifact_proposal_id = (
             _safe_memory_proposal_id(proposal.proposal_id)
