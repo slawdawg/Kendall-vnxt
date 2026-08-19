@@ -47,6 +47,8 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
         MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
         _atomic_write_memory_artifact,
+        _assert_directory_identity,
+        _directory_identity,
         _fsync_memory_backup_tree,
         _memory_artifact_lock,
         _memory_artifact_filename,
@@ -151,6 +153,15 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     queue_vault.mkdir()
     _mkdir_memory_vault_directory(queue_vault, Path("01 Dashboard Queue") / "AI Drafts")
     assert (queue_vault / "01 Dashboard Queue" / "AI Drafts").is_dir()
+
+    identity_root = tmp_path / "identity-vault"
+    identity_root.mkdir()
+    identity = _directory_identity(identity_root)
+    parked_identity_root = tmp_path / "parked-identity-vault"
+    identity_root.rename(parked_identity_root)
+    identity_root.mkdir()
+    with pytest.raises(ValueError, match="changed after intent recording"):
+        _assert_directory_identity(identity_root, identity, label="vault")
 
 
 def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(tmp_path) -> None:

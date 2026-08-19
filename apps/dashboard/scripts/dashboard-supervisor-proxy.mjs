@@ -149,7 +149,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     if (!url.pathname.startsWith(PREFIX) || !allowedReadQuery(url, request.method)) return false;
     let targetPath;
     try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
-    if (!targetPath.startsWith("/") || targetPath.includes("?") || targetPath.includes("#") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+    if (!targetPath.startsWith("/") || targetPath.includes("%") || targetPath.includes("?") || targetPath.includes("#") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
     if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
     const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);

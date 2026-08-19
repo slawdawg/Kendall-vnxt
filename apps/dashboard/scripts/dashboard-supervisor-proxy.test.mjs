@@ -249,8 +249,9 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write", { method: "POST", headers: { ...headers, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" }, body: JSON.stringify({ expectedRevision: 2, recoveryRef: "operator:dead-supervisor" }) })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1", { method: "PATCH", headers: { ...headers, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 404);
     assert.equal((await request(port, "/api/supervisor/audit-events", { headers })).status, 404);
-    assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 404);
-    assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 400);
+    assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 400);
+    assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/%2561i-draft", { method: "POST", headers: { cookie: "session=ok", origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 400);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", headers: { ...headers, origin: "https://dashboard.test" } })).status, 405);
     assert.deepEqual(forwarded, [
       { method: "GET", url: "/pipeline-control-plane/projection" },

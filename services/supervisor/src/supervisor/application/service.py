@@ -911,6 +911,21 @@ def _pinned_existing_memory_vault_root(vault_root: Path):
         os.close(root_fd)
 
 
+def _directory_identity(path: Path) -> dict[str, int]:
+    metadata = os.stat(_existing_non_symlink_directory(path), follow_symlinks=False)
+    return {"device": metadata.st_dev, "inode": metadata.st_ino}
+
+
+def _assert_directory_identity(path: Path, identity: object, *, label: str) -> Path:
+    if not isinstance(identity, dict) or not all(isinstance(identity.get(key), int) for key in ("device", "inode")):
+        raise ValueError(f"Memory proposal {label} identity is invalid.")
+    current = _existing_non_symlink_directory(path)
+    metadata = os.stat(current, follow_symlinks=False)
+    if (metadata.st_dev, metadata.st_ino) != (identity["device"], identity["inode"]):
+        raise ValueError(f"Memory proposal {label} changed after intent recording.")
+    return current
+
+
 def _mkdir_memory_vault_directory(vault_root: Path, relative_path: Path) -> None:
     """Create a queue hierarchy only through an opened verified vault root."""
     if relative_path.is_absolute() or ".." in relative_path.parts:
@@ -1236,6 +1251,9 @@ def _remove_verified_backup_directory(backup_path: Path) -> None:
         if not stat.S_ISDIR(entry.st_mode):
             raise ValueError("Memory proposal recovery backup path is invalid.")
         shutil.rmtree(backup_path.name, dir_fd=parent_fd)
+        # A preliminary intent remains recovery authority until this namespace
+        # deletion is durable; otherwise reboot can resurrect unowned raw data.
+        os.fsync(parent_fd)
     finally:
         os.close(parent_fd)
 
@@ -1245,7 +1263,7 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
     if not isinstance(intent, dict) or intent.get("schemaVersion") != "memory-proposal-write-intent/v1":
         raise ValueError("Memory proposal recovery requires a valid durable write intent.")
     try:
-        vault_root = Path(str(intent["vaultRoot"])).resolve(strict=True)
+        vault_root = _assert_directory_identity(Path(str(intent["vaultRoot"])), intent.get("vaultIdentity"), label="vault") if intent.get("vaultIdentity") else Path(str(intent["vaultRoot"])).resolve(strict=True)
         artifact_path = Path(str(intent["artifactPath"])).resolve()
         expected_digest = str(intent["writtenSha256"])
         expected_backup_digest = intent.get("backupArtifactSha256")
@@ -1255,7 +1273,7 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
         if not raw_backup_path.is_absolute() or ".." in raw_backup_path.parts:
             raise ValueError("Memory proposal recovery backup path is not canonical.")
         if backup_prepared or raw_backup_path.exists():
-            backup_path = _existing_non_symlink_directory(raw_backup_path)
+            backup_path = _assert_directory_identity(raw_backup_path, intent.get("backupIdentity"), label="backup") if intent.get("backupIdentity") else _existing_non_symlink_directory(raw_backup_path)
         else:
             # A cancelled preliminary backup can already have removed its
             # own partial directory before its durable recovery/event commit.
@@ -6568,16 +6586,19 @@ class SupervisorService:
         backup_path: Path,
         written_bytes: bytes,
         backup_prepared: bool = True,
+        vault_identity: dict[str, int] | None = None,
+        backup_identity: dict[str, int] | None = None,
+        pinned_backup_path: Path | None = None,
     ) -> None:
         """Durably bind the exact pending filesystem mutation before writing."""
         try:
-            canonical_vault_root = _existing_non_symlink_directory(vault_root)
+            canonical_vault_root = _assert_directory_identity(vault_root, vault_identity, label="vault") if vault_identity else _existing_non_symlink_directory(vault_root)
             canonical_artifact_path = artifact_path.resolve()
-            canonical_backup_path = backup_path.resolve(strict=True)
+            canonical_backup_path = _assert_directory_identity(backup_path, backup_identity, label="backup") if backup_identity else backup_path.resolve(strict=True)
             relative_path = canonical_artifact_path.relative_to(canonical_vault_root)
         except (OSError, ValueError) as exc:
             raise ValueError("Memory proposal write intent paths are not safely bounded by the vault.") from exc
-        backup_artifact = canonical_backup_path / relative_path
+        backup_artifact = (pinned_backup_path or canonical_backup_path) / relative_path
         if backup_artifact.exists():
             if not backup_artifact.is_file() or backup_artifact.is_symlink():
                 raise ValueError("Memory proposal write intent backup artifact is invalid.")
@@ -6599,6 +6620,8 @@ class SupervisorService:
             "backupArtifactSha256": backup_artifact_digest,
             "backupPrepared": backup_prepared,
             "priorArtifactSha256": prior_artifact_digest,
+            "vaultIdentity": vault_identity,
+            "backupIdentity": backup_identity,
         }
         recorded = await session.execute(
             update(MemoryProposal).where(
@@ -6637,7 +6660,9 @@ class SupervisorService:
             # copy operation.  A later pathname swap can make the recorded
             # recovery evidence fail closed, but it cannot redirect the vault
             # copy through a replacement symlink.
-            with _pinned_existing_memory_vault_root(vault_root) as (pinned_vault_root, _), _pinned_new_memory_backup_directory(backup_path.parent, backup_path.name) as (pinned_backup_path, _):
+            with _pinned_existing_memory_vault_root(vault_root) as (pinned_vault_root, vault_inode), _pinned_new_memory_backup_directory(backup_path.parent, backup_path.name) as (pinned_backup_path, _):
+                vault_identity = {"device": vault_inode[0], "inode": vault_inode[1]}
+                backup_identity = {"device": os.stat(pinned_backup_path).st_dev, "inode": os.stat(pinned_backup_path).st_ino}
                 await self._record_memory_proposal_write_intent(
                     session,
                     proposal,
@@ -6649,6 +6674,9 @@ class SupervisorService:
                     backup_path=backup_path,
                     written_bytes=written_bytes,
                     backup_prepared=False,
+                    vault_identity=vault_identity,
+                    backup_identity=backup_identity,
+                    pinned_backup_path=pinned_backup_path,
                 )
                 await _complete_threaded_artifact_work(
                     shutil.copytree,
@@ -6672,6 +6700,9 @@ class SupervisorService:
                     artifact_path=artifact_path,
                     backup_path=backup_path,
                     written_bytes=written_bytes,
+                    vault_identity=vault_identity,
+                    backup_identity=backup_identity,
+                    pinned_backup_path=pinned_backup_path,
                 )
 
     async def _finalize_memory_proposal_artifact_write(
@@ -6769,6 +6800,9 @@ class SupervisorService:
                 raise MemoryProposalRevisionConflict(
                     "Memory proposal write reservation changed before artifact mutation; refresh before trying again."
                 )
+            intent = await session.scalar(select(MemoryProposal.write_action_intent_json).where(MemoryProposal.id == proposal_id))
+            if isinstance(intent, dict) and intent.get("vaultIdentity"):
+                _assert_directory_identity(Path(str(intent.get("vaultRoot", ""))), intent["vaultIdentity"], label="vault")
             if previous_bytes is not None:
                 await asyncio.to_thread(_revalidate_memory_artifact_bytes, artifact_path, previous_bytes)
             elif artifact_path.exists():
