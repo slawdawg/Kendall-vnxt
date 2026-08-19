@@ -910,7 +910,7 @@ def _read_bounded_utf8_text(path: Path) -> str:
 
 
 def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
-    """Atomically replace an artifact while preserving existing safe metadata."""
+    """Atomically replace an artifact while preserving safe permissions only."""
     # Never create or follow a directory hierarchy here.  The caller must have
     # established the queue directory before reserving the write; pinning it
     # immediately before the mutation fails closed if a vault parent was
@@ -941,9 +941,10 @@ def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
         if previous is None:
             os.chmod(temporary_name, 0o600, dir_fd=parent_fd, follow_symlinks=False)
         else:
-            # Preserve safe POSIX metadata using the same pinned parent FD.
+            # Preserve only the file permissions.  A content replacement must
+            # receive a fresh mtime so headless sync/reindex consumers do not
+            # mistake an equal-size rewrite for an unchanged artifact.
             os.chmod(temporary_name, stat.S_IMODE(previous.st_mode), dir_fd=parent_fd, follow_symlinks=False)
-            os.utime(temporary_name, ns=(previous.st_atime_ns, previous.st_mtime_ns), dir_fd=parent_fd, follow_symlinks=False)
         os.replace(temporary_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         os.fsync(parent_fd)
     finally:
@@ -990,23 +991,81 @@ def _restore_memory_artifact_after_lost_reservation(
         return
 
 
-def _memory_artifact_lock_path(path: Path) -> Path:
-    """Keep advisory lock state out of the human-owned vault hierarchy."""
+def _memory_artifact_lock_name(path: Path) -> str:
+    """Name an artifact lock without exposing lock state in the vault."""
     digest = hashlib.sha256(os.fsencode(str(path))).hexdigest()
-    return Path(tempfile.gettempdir()) / "kendall-memory-artifact-locks" / f"{digest}.lock"
+    return f"{digest}.lock"
+
+
+def _open_private_memory_artifact_lock_directory() -> int:
+    """Open a stable supervisor-owned lock namespace without symlink hops."""
+    temporary_root = Path(tempfile.gettempdir())
+    root_fd = _open_or_create_non_symlink_directory(temporary_root)
+    directory_fd: int | None = None
+    name = f"kendall-memory-artifact-locks-{os.geteuid()}"
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        try:
+            os.mkdir(name, 0o700, dir_fd=root_fd)
+            os.fsync(root_fd)
+        except FileExistsError:
+            pass
+        directory_fd = os.open(name, flags, dir_fd=root_fd)
+        metadata = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise ValueError("Memory proposal artifact lock directory is not private to this supervisor account.")
+        return directory_fd
+    except Exception:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise
+    finally:
+        os.close(root_fd)
+
+
+def _open_memory_artifact_lock(path: Path) -> tuple[int, int]:
+    """Open one regular no-follow lock file in the pinned private namespace."""
+    directory_fd = _open_private_memory_artifact_lock_directory()
+    lock_fd: int | None = None
+    try:
+        lock_fd = os.open(
+            _memory_artifact_lock_name(path),
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        metadata = os.fstat(lock_fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise ValueError("Memory proposal artifact lock is not a private regular file.")
+        return directory_fd, lock_fd
+    except Exception:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        os.close(directory_fd)
+        raise
 
 
 @contextmanager
 def _memory_artifact_lock(path: Path):
     """Serialize writer and recovery mutation of one deterministic artifact."""
-    lock_path = _memory_artifact_lock_path(path)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    directory_fd, lock_fd = _open_memory_artifact_lock(path)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
         try:
-            yield
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            os.close(lock_fd)
+            os.close(directory_fd)
 
 
 @asynccontextmanager
@@ -1015,17 +1074,58 @@ async def _async_memory_artifact_lock(path: Path | None):
     if path is None:
         yield
         return
-    lock_path = _memory_artifact_lock_path(path)
-    await asyncio.to_thread(lock_path.parent.mkdir, parents=True, exist_ok=True)
-    lock_file = await asyncio.to_thread(lock_path.open, "a+b")
+    directory_fd, lock_fd = await asyncio.to_thread(_open_memory_artifact_lock, path)
     try:
-        await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_EX)
+        await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_EX)
         try:
             yield
         finally:
-            await asyncio.to_thread(fcntl.flock, lock_file.fileno(), fcntl.LOCK_UN)
+            await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_UN)
     finally:
-        await asyncio.to_thread(lock_file.close)
+        await asyncio.to_thread(os.close, lock_fd)
+        await asyncio.to_thread(os.close, directory_fd)
+
+
+def _fsync_memory_backup_tree(root: Path) -> None:
+    """Durably persist every copied backup inode before intent completion."""
+    # A just-created backup is deliberately pinned through `/proc/self/fd/N`
+    # while `copytree` runs.  Keep that descriptor path intact: it continues
+    # to resolve to the opened original directory even if the configured
+    # backup root pathname is later renamed or replaced.  O_NOFOLLOW applies
+    # to every child; only this root proc entry is intentionally dereferenced.
+    pinned_proc_root = root.parts[:3] == ("/", "proc", "self")
+    if not pinned_proc_root:
+        root = _existing_non_symlink_directory(root)
+    directories: list[Path] = []
+    for raw_current, raw_directories, raw_files in os.walk(root, topdown=True, followlinks=False):
+        current = Path(raw_current)
+        directories.append(current)
+        raw_directories[:] = [
+            entry
+            for entry in raw_directories
+            if stat.S_ISDIR(os.lstat(current / entry).st_mode)
+        ]
+        for entry in raw_files:
+            candidate = current / entry
+            metadata = os.lstat(candidate)
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Memory proposal backup contains an unsupported non-regular entry.")
+            descriptor = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    for directory in reversed(directories):
+        flags = os.O_RDONLY | os.O_DIRECTORY
+        if directory != root or not pinned_proc_root:
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(directory, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 async def _complete_threaded_artifact_work(operation, /, *args, **kwargs):
@@ -6491,6 +6591,11 @@ class SupervisorService:
                     symlinks=True,
                     dirs_exist_ok=True,
                 )
+                # `copytree` returning only proves the data reached the page
+                # cache.  The completed intent is recovery authority after a
+                # restart, so every copied regular inode and parent directory
+                # must be durable before that intent can say backupPrepared.
+                await _complete_threaded_artifact_work(_fsync_memory_backup_tree, pinned_backup_path)
                 await self._record_memory_proposal_write_intent(
                     session,
                     proposal,

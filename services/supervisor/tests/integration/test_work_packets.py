@@ -42,15 +42,18 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     return TestClient(app, client=("127.0.0.1", 50000))
 
 
-def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> None:
+def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkeypatch) -> None:
     from supervisor.application.service import (
         MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
         MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
         _atomic_write_memory_artifact,
+        _fsync_memory_backup_tree,
+        _memory_artifact_lock,
         _memory_artifact_filename,
         _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
     )
+    import supervisor.application.service as service_module
 
     artifact_path = tmp_path / "derived.md"
     artifact_path.write_bytes(b"---\nstatus: llm-wiki-derived\n---\n" + b"x" * (MAX_LLM_WIKI_ARTIFACT_READ_BYTES + 4096))
@@ -67,6 +70,52 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> Non
     _atomic_write_memory_artifact(tmp_path / filename, b"durable metadata-only artifact\n")
     assert (tmp_path / filename).read_bytes() == b"durable metadata-only artifact\n"
 
+    replacement_path = tmp_path / "replacement.md"
+    replacement_path.write_bytes(b"old-bytes\n")
+    old_mtime_ns = time.time_ns() - 2_000_000_000
+    os.utime(replacement_path, ns=(old_mtime_ns, old_mtime_ns))
+    _atomic_write_memory_artifact(replacement_path, b"new-bytes\n")
+    assert replacement_path.stat().st_mtime_ns > old_mtime_ns
+
+    backup_tree = tmp_path / "backup-tree"
+    nested_tree = backup_tree / "nested"
+    nested_tree.mkdir(parents=True)
+    root_file = backup_tree / "root.txt"
+    nested_file = nested_tree / "nested.txt"
+    root_file.write_bytes(b"root")
+    nested_file.write_bytes(b"nested")
+    (backup_tree / "preserved-link").symlink_to("nested/nested.txt")
+    original_fsync = service_module.os.fsync
+    fsynced_inodes: set[int] = set()
+
+    def record_fsync(descriptor: int) -> None:
+        fsynced_inodes.add(os.fstat(descriptor).st_ino)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(service_module.os, "fsync", record_fsync)
+    _fsync_memory_backup_tree(backup_tree)
+    assert {
+        backup_tree.stat().st_ino,
+        nested_tree.stat().st_ino,
+        root_file.stat().st_ino,
+        nested_file.stat().st_ino,
+    } <= fsynced_inodes
+
+    shared_temp = tmp_path / "shared-temp"
+    shared_temp.mkdir()
+    monkeypatch.setattr(service_module.tempfile, "gettempdir", lambda: str(shared_temp))
+    private_lock_root = shared_temp / f"kendall-memory-artifact-locks-{os.geteuid()}"
+    redirected_locks = tmp_path / "redirected-locks"
+    redirected_locks.mkdir()
+    private_lock_root.symlink_to(redirected_locks, target_is_directory=True)
+    with pytest.raises(OSError):
+        with _memory_artifact_lock(tmp_path / "derived.md"):
+            pass
+    private_lock_root.unlink()
+    with _memory_artifact_lock(tmp_path / "derived.md"):
+        assert private_lock_root.is_dir()
+    assert not list(redirected_locks.iterdir())
+
     approved_root = tmp_path / "approved-backups"
     redirected_root = tmp_path / "redirected-backups"
     approved_root.mkdir()
@@ -76,6 +125,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> Non
         approved_root.rename(parked_root)
         approved_root.symlink_to(redirected_root, target_is_directory=True)
         (pinned_backup / "snapshot-proof").write_text("pinned", encoding="utf-8")
+        _fsync_memory_backup_tree(pinned_backup)
         assert recorded_backup == approved_root / "vault-backup-20260818T230000000000Z"
     assert (parked_root / "vault-backup-20260818T230000000000Z" / "snapshot-proof").read_text(encoding="utf-8") == "pinned"
     assert not (redirected_root / "vault-backup-20260818T230000000000Z").exists()
