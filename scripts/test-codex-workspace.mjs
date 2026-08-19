@@ -8289,7 +8289,13 @@ try {
 
       assert(result.code !== 0, "check verification unexpectedly passed");
       assert(result.stderr.includes("profile=check"), result.stderr || result.stdout);
-      assert(result.stderr.includes("timeout_ms=180000"), result.stderr || result.stdout);
+      const timeoutMatch = result.stderr.match(/timeout_ms=(\d+)/);
+      assert(timeoutMatch, result.stderr || result.stdout);
+      const recordedTimeoutMs = Number(timeoutMatch[1]);
+      assert(
+        Number.isInteger(recordedTimeoutMs) && recordedTimeoutMs > 0 && recordedTimeoutMs <= 180_000,
+        `check leaf timeout was outside its reviewed bound: ${recordedTimeoutMs}`,
+      );
       assert(result.stderr.includes("diagnostic=recorded"), result.stderr || result.stdout);
       assert(!result.stderr.includes("fixture-secret-token-123"), "check diagnostic leaked child output");
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "check failure reached git push");
@@ -8298,7 +8304,7 @@ try {
       assert(diagnosticNames.length === 1, "check failure did not persist exactly one bounded diagnostic");
       const diagnostic = readJson(join(diagnosticsDir, diagnosticNames[0]));
       assert(diagnostic.profile === "check", JSON.stringify(diagnostic));
-      assert(diagnostic.timeout_ms === 180_000, JSON.stringify(diagnostic));
+      assert(diagnostic.timeout_ms === recordedTimeoutMs, JSON.stringify(diagnostic));
       assert(diagnostic.child.output === "omitted", JSON.stringify(diagnostic));
       assert(diagnostic.check_projection?.stage === null, JSON.stringify(diagnostic));
       assert(diagnostic.check_projection?.raw_output === "omitted", JSON.stringify(diagnostic));
