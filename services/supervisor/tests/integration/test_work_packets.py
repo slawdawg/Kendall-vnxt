@@ -50,6 +50,8 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         _fsync_memory_backup_tree,
         _memory_artifact_lock,
         _memory_artifact_filename,
+        _mkdir_memory_vault_directory,
+        _pinned_existing_memory_vault_root,
         _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
     )
@@ -130,6 +132,26 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     assert (parked_root / "vault-backup-20260818T230000000000Z" / "snapshot-proof").read_text(encoding="utf-8") == "pinned"
     assert not (redirected_root / "vault-backup-20260818T230000000000Z").exists()
 
+    vault_source = tmp_path / "vault-source"
+    (vault_source / "nested").mkdir(parents=True)
+    (vault_source / "nested" / "original.txt").write_text("original", encoding="utf-8")
+    redirected_source = tmp_path / "redirected-source"
+    redirected_source.mkdir()
+    (redirected_source / "other.txt").write_text("untrusted", encoding="utf-8")
+    with _pinned_existing_memory_vault_root(vault_source) as (pinned_source, _):
+        parked_source = tmp_path / "parked-vault-source"
+        vault_source.rename(parked_source)
+        vault_source.symlink_to(redirected_source, target_is_directory=True)
+        copied = tmp_path / "copied-pinned-source"
+        shutil.copytree(pinned_source, copied, symlinks=True)
+    assert (copied / "nested" / "original.txt").read_text(encoding="utf-8") == "original"
+    assert not (copied / "other.txt").exists()
+
+    queue_vault = tmp_path / "queue-vault"
+    queue_vault.mkdir()
+    _mkdir_memory_vault_directory(queue_vault, Path("01 Dashboard Queue") / "AI Drafts")
+    assert (queue_vault / "01 Dashboard Queue" / "AI Drafts").is_dir()
+
 
 def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(tmp_path) -> None:
     """A pre-copy durable intent may remove only its own partial backup."""
@@ -171,6 +193,37 @@ def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(t
     with pytest.raises(ValueError, match="changed before backup completion"):
         _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
     assert backup_path.exists()
+
+
+def test_memory_artifact_empty_snapshot_deletion_fsyncs_parent(tmp_path, monkeypatch) -> None:
+    """A durable recovery keeps its intent until an unlinked artifact is persisted."""
+    from supervisor.application.service import _memory_artifact_intent_paths, _reconcile_memory_artifact_intent_unlocked
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "queue" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    written = b"provisional durable artifact\n"
+    artifact_path.write_bytes(written)
+    backup_path = tmp_path / "backups" / "empty-snapshot"
+    backup_path.mkdir(parents=True)
+    fsynced: set[int] = set()
+    original_fsync = service_module.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        fsynced.add(os.fstat(descriptor).st_ino)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(service_module.os, "fsync", record_fsync)
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1", "vaultRoot": str(vault_root),
+        "artifactPath": str(artifact_path), "backupPath": str(backup_path),
+        "writtenSha256": hashlib.sha256(written).hexdigest(), "backupArtifactSha256": None,
+        "backupPrepared": True, "priorArtifactSha256": None,
+    }
+    _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert not artifact_path.exists()
+    assert artifact_path.parent.stat().st_ino in fsynced
 
 
 def test_memory_artifact_intent_rejects_symlinked_backup_hierarchy(tmp_path) -> None:

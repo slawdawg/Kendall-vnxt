@@ -883,6 +883,57 @@ def _open_or_create_non_symlink_directory(path: Path) -> int:
         raise
 
 
+def _open_existing_non_symlink_directory(path: Path) -> int:
+    """Open an existing absolute directory component-by-component, no-follow."""
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("Memory proposal vault path is not canonical.")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(path.anchor, flags)
+    try:
+        for part in path.parts[1:]:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+@contextmanager
+def _pinned_existing_memory_vault_root(vault_root: Path):
+    """Keep the verified vault source stable while a backup copy is made."""
+    root_fd = _open_existing_non_symlink_directory(vault_root)
+    try:
+        metadata = os.fstat(root_fd)
+        yield Path(f"/proc/self/fd/{root_fd}"), (metadata.st_dev, metadata.st_ino)
+    finally:
+        os.close(root_fd)
+
+
+def _mkdir_memory_vault_directory(vault_root: Path, relative_path: Path) -> None:
+    """Create a queue hierarchy only through an opened verified vault root."""
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise ValueError("Memory proposal queue path is not safely relative to the vault.")
+    root_fd = _open_existing_non_symlink_directory(vault_root)
+    descriptor = root_fd
+    try:
+        for part in relative_path.parts:
+            try:
+                os.mkdir(part, 0o700, dir_fd=descriptor)
+                os.fsync(descriptor)
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            if descriptor != root_fd:
+                os.close(descriptor)
+            descriptor = child
+    finally:
+        if descriptor != root_fd:
+            os.close(descriptor)
+        os.close(root_fd)
+
+
 @contextmanager
 def _pinned_new_memory_backup_directory(backup_root: Path, backup_id: str):
     """Create one backup destination through a pinned, non-symlink root FD."""
@@ -1272,7 +1323,22 @@ def _reconcile_memory_artifact_intent_unlocked(
             raise ValueError("Memory proposal recovery backup artifact is missing.")
         if artifact_path.exists() and hashlib.sha256(artifact_path.read_bytes()).hexdigest() != expected_digest:
             raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
-        artifact_path.unlink(missing_ok=True)
+        parent = _existing_non_symlink_directory(artifact_path.parent)
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            try:
+                metadata = os.stat(artifact_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                metadata = None
+            if metadata is not None:
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError("Memory proposal recovery artifact is not a regular file.")
+                os.unlink(artifact_path.name, dir_fd=parent_fd)
+                # The recovery intent is durable authority.  Do not clear it
+                # until the removal itself has survived the parent directory.
+                os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
 
 
 def _reconcile_memory_artifact_intent(intent: object) -> None:
@@ -6505,7 +6571,7 @@ class SupervisorService:
     ) -> None:
         """Durably bind the exact pending filesystem mutation before writing."""
         try:
-            canonical_vault_root = vault_root.resolve(strict=True)
+            canonical_vault_root = _existing_non_symlink_directory(vault_root)
             canonical_artifact_path = artifact_path.resolve()
             canonical_backup_path = backup_path.resolve(strict=True)
             relative_path = canonical_artifact_path.relative_to(canonical_vault_root)
@@ -6571,7 +6637,7 @@ class SupervisorService:
             # copy operation.  A later pathname swap can make the recorded
             # recovery evidence fail closed, but it cannot redirect the vault
             # copy through a replacement symlink.
-            with _pinned_new_memory_backup_directory(backup_path.parent, backup_path.name) as (pinned_backup_path, _):
+            with _pinned_existing_memory_vault_root(vault_root) as (pinned_vault_root, _), _pinned_new_memory_backup_directory(backup_path.parent, backup_path.name) as (pinned_backup_path, _):
                 await self._record_memory_proposal_write_intent(
                     session,
                     proposal,
@@ -6586,7 +6652,7 @@ class SupervisorService:
                 )
                 await _complete_threaded_artifact_work(
                     shutil.copytree,
-                    vault_root,
+                    pinned_vault_root,
                     pinned_backup_path,
                     symlinks=True,
                     dirs_exist_ok=True,
@@ -7180,7 +7246,7 @@ class SupervisorService:
                 ),
             ]
         )
-        draft_dir.mkdir(parents=True, exist_ok=True)
+        _mkdir_memory_vault_directory(vault_root, draft_dir.relative_to(vault_root))
         written_bytes = body.encode("utf-8")
         await self._prepare_memory_proposal_backup(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
@@ -7464,7 +7530,7 @@ class SupervisorService:
                 readiness.rebuildDryRunPlan.discardRecoveryPath,
             ]
         )
-        target_dir.mkdir(parents=True, exist_ok=True)
+        _mkdir_memory_vault_directory(vault_root, target_dir.relative_to(vault_root))
         written_bytes = body.encode("utf-8")
         await self._prepare_memory_proposal_backup(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
