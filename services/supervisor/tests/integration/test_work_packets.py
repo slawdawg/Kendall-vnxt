@@ -46,7 +46,9 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> Non
     from supervisor.application.service import (
         MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
         MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
+        _atomic_write_memory_artifact,
         _memory_artifact_filename,
+        _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
     )
 
@@ -59,6 +61,24 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path) -> Non
     assert filename.startswith("llm-wiki-derived-")
     assert filename.endswith(f"-{artifact_id}.md")
     assert len(filename.encode("utf-8")) <= MAX_MEMORY_ARTIFACT_FILENAME_BYTES
+    # The final component budget reserves the in-place `.<uuid>.tmp` sibling
+    # used by the atomic writer, so this maximum-shaped artifact still writes
+    # on filesystems with a 255-byte component boundary.
+    _atomic_write_memory_artifact(tmp_path / filename, b"durable metadata-only artifact\n")
+    assert (tmp_path / filename).read_bytes() == b"durable metadata-only artifact\n"
+
+    approved_root = tmp_path / "approved-backups"
+    redirected_root = tmp_path / "redirected-backups"
+    approved_root.mkdir()
+    redirected_root.mkdir()
+    with _pinned_new_memory_backup_directory(approved_root, "vault-backup-20260818T230000000000Z") as (pinned_backup, recorded_backup):
+        parked_root = tmp_path / "parked-approved-backups"
+        approved_root.rename(parked_root)
+        approved_root.symlink_to(redirected_root, target_is_directory=True)
+        (pinned_backup / "snapshot-proof").write_text("pinned", encoding="utf-8")
+        assert recorded_backup == approved_root / "vault-backup-20260818T230000000000Z"
+    assert (parked_root / "vault-backup-20260818T230000000000Z" / "snapshot-proof").read_text(encoding="utf-8") == "pinned"
+    assert not (redirected_root / "vault-backup-20260818T230000000000Z").exists()
 
 
 def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(tmp_path) -> None:

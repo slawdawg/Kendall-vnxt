@@ -8276,7 +8276,7 @@ try {
     }
   });
 
-  test("finish-pr check profile uses its fixed fifteen-minute budget and persists redacted failure diagnostics", () => {
+  test("finish-pr check profile records the actual bounded leaf budget and persists redacted failure diagnostics", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       installFixtureVerificationProfileCommand(fixture, "check", "secret-nonzero");
@@ -8289,7 +8289,7 @@ try {
 
       assert(result.code !== 0, "check verification unexpectedly passed");
       assert(result.stderr.includes("profile=check"), result.stderr || result.stdout);
-      assert(result.stderr.includes("timeout_ms=900000"), result.stderr || result.stdout);
+      assert(result.stderr.includes("timeout_ms=180000"), result.stderr || result.stdout);
       assert(result.stderr.includes("diagnostic=recorded"), result.stderr || result.stdout);
       assert(!result.stderr.includes("fixture-secret-token-123"), "check diagnostic leaked child output");
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "check failure reached git push");
@@ -8298,7 +8298,7 @@ try {
       assert(diagnosticNames.length === 1, "check failure did not persist exactly one bounded diagnostic");
       const diagnostic = readJson(join(diagnosticsDir, diagnosticNames[0]));
       assert(diagnostic.profile === "check", JSON.stringify(diagnostic));
-      assert(diagnostic.timeout_ms === 900_000, JSON.stringify(diagnostic));
+      assert(diagnostic.timeout_ms === 180_000, JSON.stringify(diagnostic));
       assert(diagnostic.child.output === "omitted", JSON.stringify(diagnostic));
       assert(diagnostic.check_projection?.stage === null, JSON.stringify(diagnostic));
       assert(diagnostic.check_projection?.raw_output === "omitted", JSON.stringify(diagnostic));
@@ -9035,6 +9035,7 @@ try {
 
       assert(result.code !== 0, "timed-out supervisor leaf unexpectedly passed");
       assert(result.stderr.includes(`check stage=${timeoutStage}`), result.stderr || result.stdout);
+      assert(result.stderr.includes("timeout_ms=170000"), result.stderr || result.stdout);
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       const evidence = manifest.check_verification_packet?.stages?.at(-1);
       assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));

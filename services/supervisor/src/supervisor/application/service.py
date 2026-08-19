@@ -841,7 +841,11 @@ PIPELINE_DASHBOARD_STALE_AFTER_SECONDS = 15
 MAX_LLM_WIKI_ARTIFACT_READ_BYTES = 200_000
 # Keep generated names comfortably below common 255-byte filesystem component
 # limits while preserving an opaque proposal fence in every new artifact name.
-MAX_MEMORY_ARTIFACT_FILENAME_BYTES = 240
+# `_atomic_write_memory_artifact` appends `.<uuid>.tmp` in the same directory;
+# reserve that component space up front so a valid final name can never strand
+# a durable write reservation merely because its temporary sibling is too long.
+MEMORY_ARTIFACT_TEMPORARY_SUFFIX_BYTES = 2 + 32 + len(".tmp")
+MAX_MEMORY_ARTIFACT_FILENAME_BYTES = 255 - MEMORY_ARTIFACT_TEMPORARY_SUFFIX_BYTES
 
 
 def _slugify_memory_draft(value: str) -> str:
@@ -855,6 +859,48 @@ def _memory_artifact_filename(prefix: str, label: str, artifact_id: str) -> str:
     if remaining < 1:
         raise ValueError("Memory artifact identifier exceeds the filesystem-safe filename budget.")
     return f"{prefix}{_slugify_memory_draft(label)[:remaining]}{suffix}"
+
+
+def _open_or_create_non_symlink_directory(path: Path) -> int:
+    """Open an absolute directory one component at a time without symlink hops."""
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("Memory proposal backup path is not canonical.")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(path.anchor, flags)
+    try:
+        for part in path.parts[1:]:
+            try:
+                child = os.open(part, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.mkdir(part, 0o700, dir_fd=descriptor)
+                os.fsync(descriptor)
+                child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+@contextmanager
+def _pinned_new_memory_backup_directory(backup_root: Path, backup_id: str):
+    """Create one backup destination through a pinned, non-symlink root FD."""
+    if not re.fullmatch(r"(?:vault|llm-wiki)-backup-[0-9TZ]+", backup_id):
+        raise ValueError("Memory proposal backup identifier is invalid.")
+    root_fd = _open_or_create_non_symlink_directory(backup_root)
+    backup_fd: int | None = None
+    try:
+        os.mkdir(backup_id, 0o700, dir_fd=root_fd)
+        os.fsync(root_fd)
+        backup_fd = os.open(backup_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+        # The descriptor remains open while the copy runs.  This procfd path
+        # cannot be redirected by a later rename/symlink swap of `backup_root`.
+        yield Path(f"/proc/self/fd/{backup_fd}"), backup_root / backup_id
+    finally:
+        if backup_fd is not None:
+            os.close(backup_fd)
+        os.close(root_fd)
 
 
 def _read_bounded_utf8_text(path: Path) -> str:
@@ -6421,37 +6467,41 @@ class SupervisorService:
     ) -> None:
         """Record and copy a backup while holding the artifact recovery fence."""
         async with _async_memory_artifact_lock(artifact_path):
-            await asyncio.to_thread(backup_path.mkdir, parents=True, exist_ok=False)
-            await self._record_memory_proposal_write_intent(
-                session,
-                proposal,
-                work_item_id=work_item_id,
-                expected_revision=expected_revision,
-                action_token=action_token,
-                vault_root=vault_root,
-                artifact_path=artifact_path,
-                backup_path=backup_path,
-                written_bytes=written_bytes,
-                backup_prepared=False,
-            )
-            await _complete_threaded_artifact_work(
-                shutil.copytree,
-                vault_root,
-                backup_path,
-                symlinks=True,
-                dirs_exist_ok=True,
-            )
-            await self._record_memory_proposal_write_intent(
-                session,
-                proposal,
-                work_item_id=work_item_id,
-                expected_revision=expected_revision,
-                action_token=action_token,
-                vault_root=vault_root,
-                artifact_path=artifact_path,
-                backup_path=backup_path,
-                written_bytes=written_bytes,
-            )
+            # Pin the configured backup hierarchy before the first intent or
+            # copy operation.  A later pathname swap can make the recorded
+            # recovery evidence fail closed, but it cannot redirect the vault
+            # copy through a replacement symlink.
+            with _pinned_new_memory_backup_directory(backup_path.parent, backup_path.name) as (pinned_backup_path, _):
+                await self._record_memory_proposal_write_intent(
+                    session,
+                    proposal,
+                    work_item_id=work_item_id,
+                    expected_revision=expected_revision,
+                    action_token=action_token,
+                    vault_root=vault_root,
+                    artifact_path=artifact_path,
+                    backup_path=backup_path,
+                    written_bytes=written_bytes,
+                    backup_prepared=False,
+                )
+                await _complete_threaded_artifact_work(
+                    shutil.copytree,
+                    vault_root,
+                    pinned_backup_path,
+                    symlinks=True,
+                    dirs_exist_ok=True,
+                )
+                await self._record_memory_proposal_write_intent(
+                    session,
+                    proposal,
+                    work_item_id=work_item_id,
+                    expected_revision=expected_revision,
+                    action_token=action_token,
+                    vault_root=vault_root,
+                    artifact_path=artifact_path,
+                    backup_path=backup_path,
+                    written_bytes=written_bytes,
+                )
 
     async def _finalize_memory_proposal_artifact_write(
         self,
@@ -6528,6 +6578,10 @@ class SupervisorService:
         written_bytes: bytes,
         previous_bytes: bytes | None,
         values: dict[str, object],
+        audit_work_item_id: str,
+        audit_event_type: str,
+        audit_event_summary: str,
+        audit_event_payload: dict[str, object],
     ) -> None:
         """Hold the artifact lock across the final owner check, write, and fence."""
         proposal_id = proposal.id
@@ -6562,6 +6616,22 @@ class SupervisorService:
                     expected_revision=expected_revision,
                     action_token=action_token,
                     values=values,
+                )
+                # The durable proposal outcome, recovery-intent clearance, and
+                # audit event form one transaction while this artifact lock is
+                # still held.  A failed request can therefore never expose a
+                # finalized vault write with missing workflow evidence.
+                audit_item = await session.get(WorkItem, audit_work_item_id)
+                if audit_item is None:
+                    raise MemoryProposalRevisionConflict(
+                        "Memory proposal WorkItem disappeared before artifact finalization; refresh before trying again."
+                    )
+                await self._record_event(
+                    session,
+                    audit_item,
+                    audit_event_type,
+                    audit_event_summary,
+                    audit_event_payload,
                 )
                 # The artifact lock must not be released while the final
                 # ownership fence is merely pending in SQLite/PostgreSQL. A
@@ -6892,10 +6962,10 @@ class SupervisorService:
                 metadata=existing_metadata,
             ):
                 raise ValueError("AI draft write-back blocked: target draft path already exists but does not match this proposal.")
-            if "work_item_id" not in existing_metadata:
+            legacy_rebind = "work_item_id" not in existing_metadata
+            if legacy_rebind:
                 backup_id = f"vault-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
                 backup_root = Path(config["backup_root"])
-                backup_root.mkdir(parents=True, exist_ok=True)
                 backup_path = backup_root / backup_id
                 previous_bytes = draft_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
@@ -6904,7 +6974,7 @@ class SupervisorService:
                     action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
                     backup_path=backup_path, written_bytes=rebound_bytes,
                 )
-            if "work_item_id" not in existing_metadata:
+            if legacy_rebind:
                 await self._write_and_finalize_memory_proposal_artifact(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, artifact_path=draft_path, written_bytes=rebound_bytes,
@@ -6916,6 +6986,18 @@ class SupervisorService:
                         "backup_recovery_path": f"Restore {relative_draft_path} from {backup_path} if the operator rejects the legacy rebind.",
                         "write_back_allowed": False,
                         "updated_at": now,
+                    },
+                    audit_work_item_id=work_item_id,
+                    audit_event_type="memory_proposal.ai_draft_exists",
+                    audit_event_summary="Memory proposal AI draft already existed in the dashboard queue.",
+                    audit_event_payload={
+                        "proposalId": proposal.proposal_id,
+                        "draftPath": relative_draft_path,
+                        "backupPath": backup_path.as_posix(),
+                        "writeBackAllowed": False,
+                        "retentionClass": "metadata_only",
+                        "rawPayloadRetained": False,
+                        "sourceContentCopied": False,
                     },
                 )
                 await session.refresh(item)
@@ -6931,29 +7013,29 @@ class SupervisorService:
                         "updated_at": now,
                     },
                 )
-            await self._record_event(
-                session,
-                item,
-                "memory_proposal.ai_draft_exists",
-                "Memory proposal AI draft already existed in the dashboard queue.",
-                {
-                    "proposalId": proposal.proposal_id,
-                    "draftPath": relative_draft_path,
-                    "backupPath": backup_path.as_posix() if "work_item_id" not in existing_metadata else None,
-                    "writeBackAllowed": False,
-                    "retentionClass": "metadata_only",
-                    "rawPayloadRetained": False,
-                    "sourceContentCopied": False,
-                },
-            )
-            await session.commit()
+            if not legacy_rebind:
+                await self._record_event(
+                    session,
+                    item,
+                    "memory_proposal.ai_draft_exists",
+                    "Memory proposal AI draft already existed in the dashboard queue.",
+                    {
+                        "proposalId": proposal.proposal_id,
+                        "draftPath": relative_draft_path,
+                        "backupPath": None,
+                        "writeBackAllowed": False,
+                        "retentionClass": "metadata_only",
+                        "rawPayloadRetained": False,
+                        "sourceContentCopied": False,
+                    },
+                )
+                await session.commit()
             await session.refresh(proposal)
             await self._publish_item(item)
             return proposal
 
         backup_id = f"vault-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
         backup_root = Path(config["backup_root"])
-        backup_root.mkdir(parents=True, exist_ok=True)
         backup_path = backup_root / backup_id
 
         approval_ref = f"dashboard:{work_item_id}:{proposal.proposal_id}:ai-draft:{now.strftime('%Y%m%dT%H%M%SZ')}"
@@ -7011,14 +7093,10 @@ class SupervisorService:
                 "write_back_allowed": False,
                 "updated_at": now,
             },
-        )
-        await session.refresh(item)
-        await self._record_event(
-            session,
-            item,
-            "memory_proposal.ai_draft_written",
-            "Memory proposal AI draft was written to the Obsidian dashboard queue.",
-            {
+            audit_work_item_id=work_item_id,
+            audit_event_type="memory_proposal.ai_draft_written",
+            audit_event_summary="Memory proposal AI draft was written to the Obsidian dashboard queue.",
+            audit_event_payload={
                 "proposalId": proposal.proposal_id,
                 "draftPath": relative_draft_path,
                 "backupPath": backup_path.as_posix(),
@@ -7030,7 +7108,7 @@ class SupervisorService:
                 "canonicalMutationAllowed": False,
             },
         )
-        await session.commit()
+        await session.refresh(item)
         await session.refresh(proposal)
         await self._publish_item(item)
         return proposal
@@ -7141,9 +7219,9 @@ class SupervisorService:
                 metadata=existing_metadata,
             ):
                 raise ValueError("LLM-Wiki rebuild blocked: target artifact already exists but does not match this proposal.")
-            if "work_item_id" not in existing_metadata:
+            legacy_rebind = "work_item_id" not in existing_metadata
+            if legacy_rebind:
                 backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
-                backup_root.mkdir(parents=True, exist_ok=True)
                 backup_path = backup_root / backup_id
                 previous_bytes = target_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
@@ -7152,7 +7230,7 @@ class SupervisorService:
                     action_token=action_token, vault_root=vault_root, artifact_path=target_path,
                     backup_path=backup_path, written_bytes=rebound_bytes,
                 )
-            if "work_item_id" not in existing_metadata:
+            if legacy_rebind:
                 await self._write_and_finalize_memory_proposal_artifact(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, artifact_path=target_path, written_bytes=rebound_bytes,
@@ -7165,6 +7243,21 @@ class SupervisorService:
                         "backup_recovery_path": f"Restore {relative_target_path} from {backup_path} if the operator rejects the legacy rebind.",
                         "write_back_allowed": False,
                         "updated_at": now,
+                    },
+                    audit_work_item_id=work_item_id,
+                    audit_event_type="llm_wiki.rebuild_artifact_exists",
+                    audit_event_summary="Disposable LLM-Wiki rebuild artifact already existed in the dashboard queue.",
+                    audit_event_payload={
+                        "proposalId": proposal.proposal_id,
+                        "targetPath": relative_target_path,
+                        "backupPath": backup_path.as_posix(),
+                        "approvalRef": approval_ref,
+                        "authorityFamily": "memory-writeback-and-source-mutation",
+                        "writeBackAllowed": False,
+                        "retentionClass": "metadata_only",
+                        "rawPayloadRetained": False,
+                        "sourceContentCopied": False,
+                        "canonicalMutationAllowed": False,
                     },
                 )
                 await session.refresh(item)
@@ -7181,31 +7274,31 @@ class SupervisorService:
                         "updated_at": now,
                     },
                 )
-            await self._record_event(
-                session,
-                item,
-                "llm_wiki.rebuild_artifact_exists",
-                "Disposable LLM-Wiki rebuild artifact already existed in the dashboard queue.",
-                {
-                    "proposalId": proposal.proposal_id,
-                    "targetPath": relative_target_path,
-                    "backupPath": backup_path.as_posix() if "work_item_id" not in existing_metadata else None,
-                    "approvalRef": approval_ref,
-                    "authorityFamily": "memory-writeback-and-source-mutation",
-                    "writeBackAllowed": False,
-                    "retentionClass": "metadata_only",
-                    "rawPayloadRetained": False,
-                    "sourceContentCopied": False,
-                    "canonicalMutationAllowed": False,
-                },
-            )
-            await session.commit()
+            if not legacy_rebind:
+                await self._record_event(
+                    session,
+                    item,
+                    "llm_wiki.rebuild_artifact_exists",
+                    "Disposable LLM-Wiki rebuild artifact already existed in the dashboard queue.",
+                    {
+                        "proposalId": proposal.proposal_id,
+                        "targetPath": relative_target_path,
+                        "backupPath": None,
+                        "approvalRef": approval_ref,
+                        "authorityFamily": "memory-writeback-and-source-mutation",
+                        "writeBackAllowed": False,
+                        "retentionClass": "metadata_only",
+                        "rawPayloadRetained": False,
+                        "sourceContentCopied": False,
+                        "canonicalMutationAllowed": False,
+                    },
+                )
+                await session.commit()
             await session.refresh(proposal)
             await self._publish_item(item)
             return proposal
 
         backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
-        backup_root.mkdir(parents=True, exist_ok=True)
         backup_path = backup_root / backup_id
 
         actor_label = payload.actorLabel or payload.actorId or "Operator"
@@ -7285,14 +7378,10 @@ class SupervisorService:
                 "write_back_allowed": False,
                 "updated_at": now,
             },
-        )
-        await session.refresh(item)
-        await self._record_event(
-            session,
-            item,
-            "llm_wiki.rebuild_artifact_written",
-            "Disposable LLM-Wiki rebuild artifact was written to the dashboard queue.",
-            {
+            audit_work_item_id=work_item_id,
+            audit_event_type="llm_wiki.rebuild_artifact_written",
+            audit_event_summary="Disposable LLM-Wiki rebuild artifact was written to the dashboard queue.",
+            audit_event_payload={
                 "proposalId": proposal.proposal_id,
                 "targetPath": relative_target_path,
                 "backupPath": backup_path.as_posix(),
@@ -7306,7 +7395,7 @@ class SupervisorService:
                 "sourceMutationAllowed": False,
             },
         )
-        await session.commit()
+        await session.refresh(item)
         await session.refresh(proposal)
         await self._publish_item(item)
         return proposal
