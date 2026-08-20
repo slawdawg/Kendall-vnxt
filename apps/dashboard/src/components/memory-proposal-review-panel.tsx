@@ -220,6 +220,11 @@ export function MemoryProposalReviewPanel({
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the AI draft write-back.");
+        // A rejected server write may have released a durable reservation
+        // after advancing its revision. Refresh before a retry so this panel
+        // never resubmits the stale optimistic-concurrency token.
+        router.refresh();
+        invalidateAuthenticatedPageData();
           return;
         }
 

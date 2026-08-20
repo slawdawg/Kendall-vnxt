@@ -120,6 +120,20 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     _atomic_write_memory_artifact(replacement_path, b"new-bytes\n")
     assert replacement_path.stat().st_mtime_ns > old_mtime_ns
 
+    # Recovery supplies the durable interrupted-write digest to the atomic
+    # replacement fence. A later human edit must remain untouched rather than
+    # becoming the implicit source for a restore.
+    recovery_path = tmp_path / "recovery-reproof.md"
+    recovery_path.write_bytes(b"interrupted writer bytes\n")
+    recovery_path.write_bytes(b"human edit after recovery proof\n")
+    with pytest.raises(ValueError, match="changed after the abandoned write"):
+        _atomic_write_memory_artifact(
+            recovery_path,
+            b"backup bytes\n",
+            expected_existing_digest=hashlib.sha256(b"interrupted writer bytes\n").hexdigest(),
+        )
+    assert recovery_path.read_bytes() == b"human edit after recovery proof\n"
+
     backup_tree = tmp_path / "backup-tree"
     nested_tree = backup_tree / "nested"
     nested_tree.mkdir(parents=True)

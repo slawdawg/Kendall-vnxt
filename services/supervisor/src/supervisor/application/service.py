@@ -872,8 +872,14 @@ def _open_or_create_non_symlink_directory(path: Path) -> int:
             try:
                 child = os.open(part, flags, dir_fd=descriptor)
             except FileNotFoundError:
-                os.mkdir(part, 0o700, dir_fd=descriptor)
-                os.fsync(descriptor)
+                try:
+                    os.mkdir(part, 0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                except FileExistsError:
+                    # Another supervisor can create this shared component
+                    # after our open missed it. Reopen it below and retain
+                    # the same no-follow/type checks as every other segment.
+                    pass
                 child = os.open(part, flags, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
@@ -1029,6 +1035,7 @@ def _atomic_write_memory_artifact(
     *,
     vault_root: Path | None = None,
     vault_identity: dict[str, int] | None = None,
+    expected_existing_digest: str | None = None,
 ) -> None:
     """Atomically replace an artifact while preserving safe permissions only."""
     # Never create or follow a directory hierarchy here.  The caller must have
@@ -1065,6 +1072,25 @@ def _atomic_write_memory_artifact(
             previous = None
         if previous is not None and not stat.S_ISREG(previous.st_mode):
             raise ValueError("Memory proposal artifact replacement requires a regular file.")
+        if expected_existing_digest is not None:
+            if previous is None:
+                raise ValueError("Memory proposal artifact changed before recovery replacement.")
+            existing_descriptor: int | None = None
+            try:
+                existing_descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                existing_metadata = os.fstat(existing_descriptor)
+                if not stat.S_ISREG(existing_metadata.st_mode):
+                    raise ValueError("Memory proposal artifact replacement requires a regular file.")
+                digest = hashlib.sha256()
+                with os.fdopen(existing_descriptor, "rb") as existing:
+                    existing_descriptor = None
+                    for chunk in iter(lambda: existing.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != expected_existing_digest:
+                    raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
+            finally:
+                if existing_descriptor is not None:
+                    os.close(existing_descriptor)
         descriptor = os.open(
             temporary_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -1453,14 +1479,16 @@ def _reconcile_memory_artifact_intent_unlocked(
                 return
             if artifact_digest != expected_digest:
                 raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
-        _atomic_write_memory_artifact(artifact_path, backup_bytes)
+        _atomic_write_memory_artifact(
+            artifact_path,
+            backup_bytes,
+            expected_existing_digest=expected_digest,
+        )
     else:
         if expected_backup_digest is not None:
             raise ValueError("Memory proposal recovery backup artifact is missing.")
         if artifact_path.is_symlink() or (artifact_path.exists() and not artifact_path.is_file()):
             raise ValueError("Memory proposal recovery artifact is not a regular file.")
-        if artifact_path.exists() and hashlib.sha256(artifact_path.read_bytes()).hexdigest() != expected_digest:
-            raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
         parent = _existing_non_symlink_directory(artifact_path.parent)
         parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -1471,6 +1499,18 @@ def _reconcile_memory_artifact_intent_unlocked(
             if metadata is not None:
                 if not stat.S_ISREG(metadata.st_mode):
                     raise ValueError("Memory proposal recovery artifact is not a regular file.")
+                descriptor = os.open(artifact_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                try:
+                    digest = hashlib.sha256()
+                    with os.fdopen(descriptor, "rb") as artifact:
+                        descriptor = -1
+                        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    if digest.hexdigest() != expected_digest:
+                        raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
                 os.unlink(artifact_path.name, dir_fd=parent_fd)
                 # The recovery intent is durable authority.  Do not clear it
                 # until the removal itself has survived the parent directory.
