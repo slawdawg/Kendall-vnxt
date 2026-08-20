@@ -137,12 +137,14 @@ export function buildStaticBundleReport({
   startedAt = null,
   completedAt = null,
   headSha = null,
+  baseSha = null,
 }) {
   const failedCommand = commandResults.find((command) => command.status !== "passed") ?? null;
   return {
     schemaVersion: 1,
     bundle: bundleName,
     headSha,
+    baseSha,
     status: failedCommand ? "failed" : "passed",
     commandCount: commands.length,
     completedCommandCount: commandResults.length,
@@ -189,6 +191,7 @@ export function parseStaticBundleArgs(argv) {
   const [bundleName, ...rest] = argv;
   let reportPath = null;
   let headSha = null;
+  let baseSha = null;
 
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -210,7 +213,16 @@ export function parseStaticBundleArgs(argv) {
       headSha = arg.slice("--head-sha=".length);
       continue;
     }
-    throw new Error(`Unknown option "${arg}". Expected --report <path> or --head-sha <sha>`);
+    if (arg === "--base-sha") {
+      baseSha = rest[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--base-sha=")) {
+      baseSha = arg.slice("--base-sha=".length);
+      continue;
+    }
+    throw new Error(`Unknown option "${arg}". Expected --report <path>, --head-sha <sha>, or --base-sha <sha>`);
   }
 
   if (reportPath === "") {
@@ -219,11 +231,14 @@ export function parseStaticBundleArgs(argv) {
   if (headSha === "") {
     headSha = null;
   }
+  if (baseSha === "") {
+    baseSha = null;
+  }
 
-  return { bundleName, reportPath, headSha };
+  return { bundleName, reportPath, headSha, baseSha };
 }
 
-export function runStaticBundle(name, { reportPath = null, headSha = null } = {}) {
+export function runStaticBundle(name, { reportPath = null, headSha = null, baseSha = null } = {}) {
   const commands = commandsForBundle(name);
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
@@ -247,6 +262,7 @@ export function runStaticBundle(name, { reportPath = null, headSha = null } = {}
     startedAt,
     completedAt: new Date().toISOString(),
     headSha,
+    baseSha,
   });
 
   if (reportPath) {
@@ -263,7 +279,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     parsedArgs = parseStaticBundleArgs(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
-    console.error(`Usage: node ./scripts/run-static-bundle.mjs <${staticBundleNames().join("|")}|all> [--report <path>] [--head-sha <sha>]`);
+    console.error(`Usage: node ./scripts/run-static-bundle.mjs <${staticBundleNames().join("|")}|all> [--report <path>] [--head-sha <sha>] [--base-sha <sha>]`);
     process.exit(2);
   }
 
@@ -276,6 +292,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const report = runStaticBundle(parsedArgs.bundleName, {
       reportPath: parsedArgs.reportPath,
       headSha: parsedArgs.headSha,
+      baseSha: parsedArgs.baseSha,
     });
     if (report.status !== "passed") {
       process.exit(1);

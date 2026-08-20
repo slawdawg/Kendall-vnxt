@@ -6,6 +6,8 @@ const suites = {
   ci: [
     "check:github-workflow-policy",
     "check:workspace-coordination",
+    "test:ci-promotion-evidence",
+    "test:ci-evidence-command",
   ],
   workspace: [
     "test:codex-workspace-state",

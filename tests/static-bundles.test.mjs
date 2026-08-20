@@ -83,16 +83,19 @@ test("static bundle CLI accepts report output path", () => {
     bundleName: "core",
     reportPath: "reports/core.json",
     headSha: null,
+    baseSha: null,
   });
   assert.deepEqual(parseStaticBundleArgs(["core", "--report=reports/core.json"]), {
     bundleName: "core",
     reportPath: "reports/core.json",
     headSha: null,
+    baseSha: null,
   });
   assert.deepEqual(parseStaticBundleArgs(["core", "--head-sha", "abc123"]), {
     bundleName: "core",
     reportPath: null,
     headSha: "abc123",
+    baseSha: null,
   });
   assert.throws(() => parseStaticBundleArgs(["core", "--unexpected"]), /Unknown option "--unexpected"/);
 });
@@ -425,5 +428,6 @@ test("static bundle CLI parser leaves missing bundle name for entry guard", () =
     bundleName: undefined,
     reportPath: null,
     headSha: null,
+    baseSha: null,
   });
 });

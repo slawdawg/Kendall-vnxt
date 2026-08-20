@@ -110,7 +110,28 @@ jobs:
         run: git fetch origin main:refs/remotes/origin/main
 
       - name: Run workspace behavior profile
-        run: pnpm run test:codex-workspace:${{ matrix.profile.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/ci-command-evidence"
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$evidence_dir/workspace-${{ matrix.profile.id }}.json" \
+            --route proposed \
+            --selection-vector '{"id":"workspace-elevated","profile":"${{ matrix.profile.id }}"}' \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-key "github-actions-run-${{ github.run_id }}" \
+            -- pnpm run test:codex-workspace:${{ matrix.profile.id }}
+
+      - name: Upload workspace behavior evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-workspace-${{ matrix.profile.id }}
+          path: ${{ runner.temp }}/ci-command-evidence/workspace-${{ matrix.profile.id }}.json
+          if-no-files-found: warn
 
   supervisor_behavior_shadow:
     if: github.event_name == 'pull_request' && needs.changes.outputs.selected_supervisor_shards != '[]'
@@ -146,7 +167,28 @@ jobs:
         run: uv sync --directory services/supervisor --locked
 
       - name: Run supervisor behavior shard
-        run: pnpm run ${{ matrix.shard.script }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/ci-command-evidence"
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$evidence_dir/supervisor-${{ matrix.shard.id }}.json" \
+            --route proposed \
+            --selection-vector '{"id":"supervisor-elevated","shard":"${{ matrix.shard.id }}"}' \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-key "github-actions-run-${{ github.run_id }}" \
+            -- pnpm run ${{ matrix.shard.script }}
+
+      - name: Upload supervisor behavior evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-supervisor-${{ matrix.shard.id }}
+          path: ${{ runner.temp }}/ci-command-evidence/supervisor-${{ matrix.shard.id }}.json
+          if-no-files-found: warn
 
   static:
     if: always() && github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
@@ -224,7 +266,8 @@ jobs:
           mkdir -p "$report_dir"
           node ./scripts/run-static-bundle.mjs "${{ matrix.bundle }}" \
             --report "$report_dir/${{ matrix.bundle }}.json" \
-            --head-sha "${{ github.event.pull_request.head.sha }}"
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}"
 
       - name: Upload static bundle timing report
         if: always()
@@ -340,7 +383,28 @@ jobs:
         # bounded 15-minute budget. Recent CI needed 12 minutes (including
         # asynchronous SQLite cleanup) after pytest reported success; the
         # 20-minute parent job preserves five minutes for setup and teardown.
-        run: pnpm run test:supervisor:profile -- --timeout-ms=900000
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/ci-command-evidence"
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$evidence_dir/supervisor-aggregate.json" \
+            --route baseline \
+            --selection-vector '{"id":"supervisor-elevated","shape":"aggregate"}' \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-key "github-actions-run-${{ github.run_id }}" \
+            -- pnpm run test:supervisor:profile -- --timeout-ms=900000
+
+      - name: Upload supervisor aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-supervisor-aggregate
+          path: ${{ runner.temp }}/ci-command-evidence/supervisor-aggregate.json
+          if-no-files-found: warn
 
   full:
     if: github.event_name == 'push'

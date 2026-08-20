@@ -138,6 +138,8 @@ assertCondition(
 for (const ciFastCommand of [
   '"check:github-workflow-policy"',
   '"check:workspace-coordination"',
+  '"test:ci-promotion-evidence"',
+  '"test:ci-evidence-command"',
 ]) {
   assertCondition(
     fastWorkflowRunner.includes(ciFastCommand),
@@ -157,6 +159,11 @@ for (const ciText of [
   "fromJSON(needs.changes.outputs.selected_supervisor_shards)",
   "pnpm run test:codex-workspace:${{ matrix.profile.id }}",
   "pnpm run ${{ matrix.shard.script }}",
+  "node ./scripts/run-ci-evidence-command.mjs",
+  "ci-command-evidence-workspace-${{ matrix.profile.id }}",
+  "ci-command-evidence-supervisor-${{ matrix.shard.id }}",
+  "ci-command-evidence-supervisor-aggregate",
+  '--base-sha "${{ github.event.pull_request.base.sha }}"',
   "node ./scripts/run-static-bundle.mjs \"${{ matrix.bundle }}\"",
   "--report \"$report_dir/${{ matrix.bundle }}.json\"",
   "--head-sha \"${{ github.event.pull_request.head.sha }}\"",
@@ -223,6 +230,7 @@ for (const requiredText of [
   'node ./scripts/run-static-bundle.mjs "${{ matrix.bundle }}"',
   '--report "$report_dir/${{ matrix.bundle }}.json"',
   '--head-sha "${{ github.event.pull_request.head.sha }}"',
+  '--base-sha "${{ github.event.pull_request.base.sha }}"',
   "actions/upload-artifact@v4",
   "static-bundle-report-${{ matrix.bundle }}",
   "${{ runner.temp }}/static-bundle-reports/${{ matrix.bundle }}.json",
