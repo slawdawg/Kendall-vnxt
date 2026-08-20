@@ -417,6 +417,20 @@ def test_legacy_memory_artifact_reproof_rejects_changed_bytes(tmp_path) -> None:
         _revalidate_memory_artifact_bytes(artifact_path, original)
 
 
+def test_legacy_snapshot_change_is_rejected_before_backup_copy(tmp_path) -> None:
+    """The bytes parsed for a legacy rebind are the bytes backup must pin."""
+    from supervisor.application.service import _revalidate_memory_artifact_bytes
+
+    artifact_path = tmp_path / "legacy-artifact.md"
+    parsed_snapshot = b"---\nstatus: ai-draft\n---\nA\n"
+    artifact_path.write_bytes(parsed_snapshot)
+    # Model A→B before `_prepare_memory_proposal_backup` records/copies its
+    # durable intent; the prep lock must reject B rather than snapshot it.
+    artifact_path.write_bytes(b"---\nstatus: ai-draft\n---\nB\n")
+    with pytest.raises(ValueError, match="changed before legacy rebinding"):
+        _revalidate_memory_artifact_bytes(artifact_path, parsed_snapshot)
+
+
 def test_memory_proposal_write_intent_uses_sql_null_fence_not_json_equality() -> None:
     """PostgreSQL JSON intent records must not rely on unsupported equality."""
     service_path = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
@@ -432,7 +446,10 @@ def test_new_memory_artifact_backup_rechecks_absence_under_the_first_held_lock()
     source = service_path.read_text(encoding="utf-8")
     preparation = source[source.index("async def _prepare_memory_proposal_backup"):source.index("async def _finalize_memory_proposal_artifact_write")]
     assert "expected_absent: bool = False" in preparation
-    assert "async with _async_memory_artifact_lock(artifact_path):\n            if expected_absent:" in preparation
+    assert "async with _async_memory_artifact_lock(artifact_path):" in preparation
+    assert "prior_artifact_bytes: bytes | None = None" in preparation
+    assert "_revalidate_memory_artifact_bytes, artifact_path, prior_artifact_bytes" in preparation
+    assert preparation.index("pinned_prior_artifact_digest") < preparation.index("if expected_absent:")
     assert "Memory proposal artifact appeared before backup preparation." in preparation
     finalization = source[source.index("async def _write_and_finalize_memory_proposal_artifact"):source.index("async def recover_abandoned_memory_proposal_write")]
     assert "expected_absent: bool = False" in finalization

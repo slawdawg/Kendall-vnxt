@@ -969,30 +969,39 @@ def _pinned_new_memory_backup_directory(backup_root: Path, backup_id: str):
         os.close(root_fd)
 
 
+def _read_memory_artifact_bytes(path: Path, *, limit: int | None = None) -> bytes:
+    """Read one regular artifact through its pinned parent, never following links."""
+    parent_fd = _open_existing_non_symlink_directory(path.parent)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Memory proposal artifact is not a regular file.")
+        with os.fdopen(descriptor, "rb") as artifact:
+            descriptor = None
+            return artifact.read() if limit is None else artifact.read(limit)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise ValueError("Memory proposal artifact must be a regular non-symlink file.") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_fd)
+
+
 def _read_bounded_utf8_text(path: Path) -> str:
-    """Read only the artifact prefix used by metadata parsing/search excerpts."""
-    with path.open("rb") as artifact:
-        return artifact.read(MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
+    """Read only a no-follow artifact prefix used by metadata/search excerpts."""
+    return _read_memory_artifact_bytes(path, limit=MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
 
 
 def _read_strict_utf8_memory_artifact(path: Path) -> str:
     """Read a regular, non-symlink legacy artifact without normalizing bytes."""
-    descriptor: int | None = None
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("Memory proposal legacy artifact is not a regular file.")
-        with os.fdopen(descriptor, "rb") as artifact:
-            descriptor = None
-            return artifact.read().decode("utf-8")
+        return _read_memory_artifact_bytes(path).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("Memory proposal legacy artifact is not valid UTF-8; refusing to rewrite it.") from exc
-    except OSError as exc:
-        raise ValueError("Memory proposal legacy artifact must be a regular non-symlink file.") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
 
 
 def _assert_memory_backup_matches_preliminary_artifact(
@@ -1014,15 +1023,39 @@ def _assert_memory_backup_matches_preliminary_artifact(
         raise ValueError("Memory proposal backup changed while the source artifact was copied.")
 
 
-def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
+def _atomic_write_memory_artifact(
+    path: Path,
+    payload: bytes,
+    *,
+    vault_root: Path | None = None,
+    vault_identity: dict[str, int] | None = None,
+) -> None:
     """Atomically replace an artifact while preserving safe permissions only."""
     # Never create or follow a directory hierarchy here.  The caller must have
     # established the queue directory before reserving the write; pinning it
     # immediately before the mutation fails closed if a vault parent was
     # replaced with a symlink in the meantime.
-    if _existing_non_symlink_directory(path.parent) != path.parent:
-        raise ValueError("Memory proposal artifact parent changed before replacement.")
-    parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    if vault_root is not None:
+        root_fd = _open_existing_non_symlink_directory(vault_root)
+        try:
+            metadata = os.fstat(root_fd)
+            if vault_identity and (metadata.st_dev, metadata.st_ino) != (vault_identity["device"], vault_identity["inode"]):
+                raise ValueError("Memory proposal vault changed before artifact replacement.")
+            relative_parent = path.parent.relative_to(vault_root)
+            parent_fd = root_fd
+            for part in relative_parent.parts:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                if parent_fd != root_fd:
+                    os.close(parent_fd)
+                parent_fd = child
+        except Exception:
+            os.close(root_fd)
+            raise
+        if parent_fd == root_fd:
+            root_fd = None
+    else:
+        parent_fd = _open_existing_non_symlink_directory(path.parent)
+        root_fd = None
     temporary_name = f".{path.name}.{uuid.uuid4().hex}.tmp"
     descriptor: int | None = None
     try:
@@ -1061,6 +1094,8 @@ def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
             pass
         finally:
             os.close(parent_fd)
+            if root_fd is not None:
+                os.close(root_fd)
 
 
 def _revalidate_memory_artifact_bytes(path: Path, expected_bytes: bytes) -> None:
@@ -6674,6 +6709,7 @@ class SupervisorService:
         vault_identity: dict[str, int] | None = None,
         backup_identity: dict[str, int] | None = None,
         pinned_backup_path: Path | None = None,
+        pinned_prior_artifact_digest: str | None = None,
     ) -> dict[str, object]:
         """Durably bind the exact pending filesystem mutation before writing."""
         try:
@@ -6690,7 +6726,9 @@ class SupervisorService:
             backup_artifact_digest = await asyncio.to_thread(_sha256_file, backup_artifact)
         else:
             backup_artifact_digest = None
-        if canonical_artifact_path.exists():
+        if pinned_prior_artifact_digest is not None:
+            prior_artifact_digest = pinned_prior_artifact_digest
+        elif canonical_artifact_path.exists():
             if not canonical_artifact_path.is_file() or canonical_artifact_path.is_symlink():
                 raise ValueError("Memory proposal write intent artifact is invalid.")
             prior_artifact_digest = await asyncio.to_thread(_sha256_file, canonical_artifact_path)
@@ -6740,9 +6778,14 @@ class SupervisorService:
         backup_path: Path,
         written_bytes: bytes,
         expected_absent: bool = False,
+        prior_artifact_bytes: bytes | None = None,
     ) -> None:
         """Record and copy a backup while holding the artifact recovery fence."""
         async with _async_memory_artifact_lock(artifact_path):
+            pinned_prior_artifact_digest: str | None = None
+            if prior_artifact_bytes is not None:
+                await asyncio.to_thread(_revalidate_memory_artifact_bytes, artifact_path, prior_artifact_bytes)
+                pinned_prior_artifact_digest = hashlib.sha256(prior_artifact_bytes).hexdigest()
             if expected_absent:
                 # New-artifact callers selected their branch before acquiring
                 # this lock.  Reprove absence here, before recording/copying a
@@ -6771,6 +6814,7 @@ class SupervisorService:
                     vault_identity=vault_identity,
                     backup_identity=backup_identity,
                     pinned_backup_path=pinned_backup_path,
+                    pinned_prior_artifact_digest=pinned_prior_artifact_digest,
                 )
                 await _complete_threaded_artifact_work(
                     shutil.copytree,
@@ -6803,6 +6847,7 @@ class SupervisorService:
                     vault_identity=vault_identity,
                     backup_identity=backup_identity,
                     pinned_backup_path=pinned_backup_path,
+                    pinned_prior_artifact_digest=pinned_prior_artifact_digest,
                 )
 
     async def _finalize_memory_proposal_artifact_write(
@@ -6914,7 +6959,15 @@ class SupervisorService:
                 await asyncio.to_thread(_revalidate_memory_artifact_bytes, artifact_path, previous_bytes)
             elif artifact_path.exists():
                 raise ValueError("Memory proposal artifact appeared during backup; refusing to overwrite it.")
-            await _complete_threaded_artifact_work(_atomic_write_memory_artifact, artifact_path, written_bytes)
+            intent_vault_root = Path(str(intent["vaultRoot"])) if isinstance(intent, dict) and intent.get("vaultRoot") else None
+            intent_vault_identity = intent.get("vaultIdentity") if isinstance(intent, dict) else None
+            await _complete_threaded_artifact_work(
+                _atomic_write_memory_artifact,
+                artifact_path,
+                written_bytes,
+                vault_root=intent_vault_root,
+                vault_identity=intent_vault_identity,
+            )
             # The ownership query above opens a SQLite read snapshot. Reopen it
             # before the final conditional update so a recovery committed while
             # this writer was between its proof and finalization is observed.
@@ -7267,7 +7320,11 @@ class SupervisorService:
             expected_revision=payload.expectedRevision,
         )
         if draft_path.exists():
-            existing_text = _read_strict_utf8_memory_artifact(draft_path)
+            previous_bytes = _read_memory_artifact_bytes(draft_path)
+            try:
+                existing_text = previous_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("Memory proposal legacy artifact is not valid UTF-8; refusing to rewrite it.") from exc
             existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
             if not await self._llm_wiki_artifact_matches_proposal(
                 session,
@@ -7283,12 +7340,11 @@ class SupervisorService:
                 backup_id = f"vault-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
                 backup_root = Path(config["backup_root"])
                 backup_path = backup_root / backup_id
-                previous_bytes = draft_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
                 await self._prepare_memory_proposal_backup(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
-                    backup_path=backup_path, written_bytes=rebound_bytes,
+                    backup_path=backup_path, written_bytes=rebound_bytes, prior_artifact_bytes=previous_bytes,
                 )
             if legacy_rebind:
                 await self._write_and_finalize_memory_proposal_artifact(
@@ -7543,7 +7599,11 @@ class SupervisorService:
             expected_revision=payload.expectedRevision,
         )
         if target_path.exists():
-            existing_text = _read_strict_utf8_memory_artifact(target_path)
+            previous_bytes = _read_memory_artifact_bytes(target_path)
+            try:
+                existing_text = previous_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("Memory proposal legacy artifact is not valid UTF-8; refusing to rewrite it.") from exc
             existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
             if not await self._llm_wiki_artifact_matches_proposal(
                 session,
@@ -7558,12 +7618,11 @@ class SupervisorService:
             if legacy_rebind:
                 backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
                 backup_path = backup_root / backup_id
-                previous_bytes = target_path.read_bytes()
                 rebound_bytes = self._bind_legacy_llm_wiki_artifact(existing_text, work_item_id).encode("utf-8")
                 await self._prepare_memory_proposal_backup(
                     session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
                     action_token=action_token, vault_root=vault_root, artifact_path=target_path,
-                    backup_path=backup_path, written_bytes=rebound_bytes,
+                    backup_path=backup_path, written_bytes=rebound_bytes, prior_artifact_bytes=previous_bytes,
                 )
             if legacy_rebind:
                 await self._write_and_finalize_memory_proposal_artifact(
@@ -7775,20 +7834,19 @@ class SupervisorService:
         if not target_path_value.startswith(f"{llm_wiki_folder}/"):
             raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.")
 
-        artifact_path = (vault_root / target_path_value).resolve()
-        try:
-            artifact_path.relative_to((vault_root / llm_wiki_folder).resolve())
-        except ValueError as exc:
-            raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.") from exc
+        artifact_path = _canonical_memory_artifact_leaf(vault_root, vault_root / target_path_value)
+        if artifact_path.parent != _existing_non_symlink_directory(vault_root / llm_wiki_folder):
+            raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.")
         async with _async_memory_artifact_lock(artifact_path):
             # A writer/recovery owns this same lock. Re-read its durable token
             # inside the lock so a search cannot expose provisional bytes.
             await session.refresh(proposal)
             if proposal.write_action_token is not None:
                 raise ValueError("LLM-Wiki artifact read blocked: proposal write is still active or requires recovery.")
-            if not artifact_path.exists() or not artifact_path.is_file():
-                raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.")
-            text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
+            try:
+                text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
+            except FileNotFoundError as exc:
+                raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.") from exc
             metadata, body_lines = self._parse_llm_wiki_artifact(text)
             expected_artifact_proposal_id = (
                 _safe_memory_proposal_id(proposal.proposal_id)
