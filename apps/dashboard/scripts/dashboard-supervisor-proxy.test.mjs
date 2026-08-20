@@ -263,6 +263,43 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
   }
 });
 
+test("operator canonical packet reads preserve a literal percent ID without double-decoding", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-percent-packet-proxy-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") {
+        response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" }));
+        return;
+      }
+      forwarded.push(request.url);
+      if (request.url === "/pipeline-control-plane/work-packets/release%25candidate") {
+        response.end(JSON.stringify({ data: canonicalPacketWithRawBrowserUnsafeFields() }));
+        return;
+      }
+      response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+
+    const response = await request(port, "/api/supervisor/pipeline-control-plane/work-packets/release%25candidate", { headers: { cookie: "session=ok" } });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.packetId, "packet-1");
+    assert.deepEqual(forwarded, ["/pipeline-control-plane/work-packets/release%25candidate"]);
+    assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-packets/%252e%252e", { headers: { cookie: "session=ok" } })).status, 400);
+    assert.deepEqual(forwarded, ["/pipeline-control-plane/work-packets/release%25candidate"]);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
 test("Controls has a finite operator-only no-query proxy contract with a capped read response", async () => {
   assert.equal(CONTROLS_READ_PATHS.size, 33);
   assert.equal(CONTROLS_READ_PATHS.has("/supervisor/epic-6-completion-audit-report"), false);

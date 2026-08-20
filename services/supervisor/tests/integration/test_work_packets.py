@@ -206,6 +206,39 @@ def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(t
     assert backup_path.exists()
 
 
+def test_memory_artifact_recovery_rejects_symlinked_restored_digest(tmp_path) -> None:
+    """A link to snapshot bytes is never accepted as an idempotent recovery."""
+    from supervisor.application.service import (
+        _reconcile_memory_artifact_intent_unlocked,
+    )
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    snapshot_bytes = b"operator snapshot bytes\n"
+    written_bytes = b"interrupted writer bytes\n"
+    backup_path = tmp_path / "backups" / "snapshot"
+    backup_artifact = backup_path / artifact_path.relative_to(vault_root)
+    backup_artifact.parent.mkdir(parents=True)
+    backup_artifact.write_bytes(snapshot_bytes)
+    outside_target = tmp_path / "outside-snapshot.md"
+    outside_target.write_bytes(snapshot_bytes)
+    artifact_path.symlink_to(outside_target)
+    with pytest.raises(ValueError, match="artifact is not a regular file"):
+        _reconcile_memory_artifact_intent_unlocked(
+            vault_root,
+            artifact_path,
+            backup_path,
+            hashlib.sha256(written_bytes).hexdigest(),
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+            artifact_path.relative_to(vault_root),
+            True,
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+        )
+    assert artifact_path.is_symlink()
+    assert outside_target.read_bytes() == snapshot_bytes
+
+
 def test_memory_artifact_empty_snapshot_deletion_fsyncs_parent(tmp_path, monkeypatch) -> None:
     """A durable recovery keeps its intent until an unlinked artifact is persisted."""
     from supervisor.application.service import _memory_artifact_intent_paths, _reconcile_memory_artifact_intent_unlocked

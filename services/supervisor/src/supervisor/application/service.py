@@ -1327,6 +1327,12 @@ def _reconcile_memory_artifact_intent_unlocked(
         backup_bytes = backup_artifact.read_bytes()
         if hashlib.sha256(backup_bytes).hexdigest() != expected_backup_digest:
             raise ValueError("Memory proposal recovery backup artifact changed after intent recording.")
+        # The idempotent branch below is allowed to accept only the exact
+        # regular file that a prior recovery restored.  ``read_bytes`` follows
+        # links, so reject a substituted link before its target can be treated
+        # as that durable restored artifact.
+        if artifact_path.is_symlink() or (artifact_path.exists() and not artifact_path.is_file()):
+            raise ValueError("Memory proposal recovery artifact is not a regular file.")
         if artifact_path.exists():
             artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
             if artifact_digest == expected_backup_digest:
@@ -1339,6 +1345,8 @@ def _reconcile_memory_artifact_intent_unlocked(
     else:
         if expected_backup_digest is not None:
             raise ValueError("Memory proposal recovery backup artifact is missing.")
+        if artifact_path.is_symlink() or (artifact_path.exists() and not artifact_path.is_file()):
+            raise ValueError("Memory proposal recovery artifact is not a regular file.")
         if artifact_path.exists() and hashlib.sha256(artifact_path.read_bytes()).hexdigest() != expected_digest:
             raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
         parent = _existing_non_symlink_directory(artifact_path.parent)

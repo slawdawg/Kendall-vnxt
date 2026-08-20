@@ -137,6 +137,14 @@ function cookieValue(cookie, name) {
   return (cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
 }
 
+function encodedSupervisorPath(targetPath) {
+  // Validate decoded path segments, then encode each segment exactly once for
+  // the UDS request.  This preserves a canonical opaque ID containing a
+  // literal percent without permitting the proxy to pass a second-decoded
+  // separator or dot segment upstream.
+  return targetPath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
 export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS }) {
   if (typeof supervisorUdsPath !== "string" || !supervisorUdsPath.startsWith("/")) throw new Error("Supervisor proxy requires a fixed absolute UDS path.");
   return async function proxy(request, response) {
@@ -149,7 +157,11 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     if (!url.pathname.startsWith(PREFIX) || !allowedReadQuery(url, request.method)) return false;
     let targetPath;
     try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
-    if (!targetPath.startsWith("/") || targetPath.includes("%") || targetPath.includes("?") || targetPath.includes("#") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+    if (!targetPath.startsWith("/") || targetPath.includes("?") || targetPath.includes("#") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+    // A once-decoded traversal escape must never reach a second parser. Other
+    // literal percent signs are valid in opaque canonical packet identifiers
+    // and are normalized by encodedSupervisorPath before forwarding.
+    if (/%(?:2f|5c|2e)/i.test(targetPath) || (MUTATING_METHODS.has(request.method) && targetPath.includes("%"))) { sendJson(response, 400, { state: "unavailable" }); return true; }
     if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
     const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
@@ -217,7 +229,8 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         await streamSupervisor(supervisorUdsPath, targetPath, request.headers, response, timeoutMs);
         return true;
       }
-      const upstreamPath = url.search ? `${targetPath}?${url.searchParams.toString()}` : targetPath;
+      const encodedTargetPath = encodedSupervisorPath(targetPath);
+      const upstreamPath = url.search ? `${encodedTargetPath}?${url.searchParams.toString()}` : encodedTargetPath;
       const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, timeoutMs, controlsRead ? MAX_CONTROLS_RESPONSE_BYTES : Infinity);
       // A viewer revocation concurrent with an in-flight read must win before
       // the browser receives data. Operator requests retain existing behavior.
