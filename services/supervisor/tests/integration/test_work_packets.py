@@ -48,6 +48,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
         _atomic_write_memory_artifact,
         _assert_memory_backup_matches_preliminary_artifact,
+        _canonical_memory_artifact_leaf,
         _assert_directory_identity,
         _directory_identity,
         _fsync_memory_backup_tree,
@@ -85,6 +86,21 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         Path("legacy.md"),
         hashlib.sha256(b"intermediate human bytes\n").hexdigest(),
     )
+
+    vault_root = tmp_path / "vault"
+    queue = vault_root / "01 Dashboard Queue" / "AI Drafts"
+    queue.mkdir(parents=True)
+    external_artifact = tmp_path / "external-artifact.md"
+    external_artifact.write_text("human-owned artifact\n", encoding="utf-8")
+    substituted_leaf = queue / "proposal.md"
+    substituted_leaf.symlink_to(external_artifact)
+    # The immutable intent must retain the observed leaf.  Resolving it here
+    # would turn the later no-follow recovery fence into an operation on the
+    # external target instead of rejecting the substitution.
+    assert _canonical_memory_artifact_leaf(vault_root, substituted_leaf) == substituted_leaf
+    assert _canonical_memory_artifact_leaf(vault_root, substituted_leaf).is_symlink()
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        _read_strict_utf8_memory_artifact(substituted_leaf)
 
     artifact_id = f"{'p' * 120}-{'a' * 36}"
     filename = _memory_artifact_filename("llm-wiki-derived-", "L" * 80, artifact_id)

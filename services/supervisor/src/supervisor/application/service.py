@@ -976,11 +976,23 @@ def _read_bounded_utf8_text(path: Path) -> str:
 
 
 def _read_strict_utf8_memory_artifact(path: Path) -> str:
-    """Read a mutable legacy artifact without silently normalizing its bytes."""
+    """Read a regular, non-symlink legacy artifact without normalizing bytes."""
+    descriptor: int | None = None
     try:
-        return path.read_bytes().decode("utf-8")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Memory proposal legacy artifact is not a regular file.")
+        with os.fdopen(descriptor, "rb") as artifact:
+            descriptor = None
+            return artifact.read().decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("Memory proposal legacy artifact is not valid UTF-8; refusing to rewrite it.") from exc
+    except OSError as exc:
+        raise ValueError("Memory proposal legacy artifact must be a regular non-symlink file.") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _assert_memory_backup_matches_preliminary_artifact(
@@ -1279,6 +1291,21 @@ def _revalidate_non_symlink_backup_directory(backup_path: Path) -> None:
         raise ValueError("Memory proposal recovery backup path changed after intent recording.")
 
 
+def _canonical_memory_artifact_leaf(vault_root: Path, raw_artifact_path: Path) -> Path:
+    """Canonicalize the parent hierarchy while preserving the recorded leaf."""
+    if not raw_artifact_path.is_absolute() or ".." in raw_artifact_path.parts or raw_artifact_path.name in {"", ".", ".."}:
+        raise ValueError("Memory proposal artifact path is not canonical.")
+    canonical_vault_root = _existing_non_symlink_directory(vault_root)
+    canonical_parent = _existing_non_symlink_directory(raw_artifact_path.parent)
+    try:
+        canonical_parent.relative_to(canonical_vault_root)
+    except ValueError as exc:
+        raise ValueError("Memory proposal artifact path is outside the vault.") from exc
+    # Do not resolve or stat-follow this leaf: recovery/writers must see a
+    # substituted symlink as a failure, not silently act on its target.
+    return canonical_parent / raw_artifact_path.name
+
+
 def _remove_verified_backup_directory(backup_path: Path, expected_identity: dict[str, int] | None = None) -> None:
     """Delete a partial backup only through its pinned, verified parent FD."""
     # Opening one component at a time both rejects symlink hops and pins the
@@ -1306,8 +1333,8 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
     if not isinstance(intent, dict) or intent.get("schemaVersion") != "memory-proposal-write-intent/v1":
         raise ValueError("Memory proposal recovery requires a valid durable write intent.")
     try:
-        vault_root = _assert_directory_identity(Path(str(intent["vaultRoot"])), intent.get("vaultIdentity"), label="vault") if intent.get("vaultIdentity") else Path(str(intent["vaultRoot"])).resolve(strict=True)
-        artifact_path = Path(str(intent["artifactPath"])).resolve()
+        vault_root = _assert_directory_identity(Path(str(intent["vaultRoot"])), intent.get("vaultIdentity"), label="vault") if intent.get("vaultIdentity") else _existing_non_symlink_directory(Path(str(intent["vaultRoot"])))
+        artifact_path = _canonical_memory_artifact_leaf(vault_root, Path(str(intent["artifactPath"])))
         expected_digest = str(intent["writtenSha256"])
         expected_backup_digest = intent.get("backupArtifactSha256")
         backup_prepared = intent.get("backupPrepared", True)
@@ -6651,7 +6678,7 @@ class SupervisorService:
         """Durably bind the exact pending filesystem mutation before writing."""
         try:
             canonical_vault_root = _assert_directory_identity(vault_root, vault_identity, label="vault") if vault_identity else _existing_non_symlink_directory(vault_root)
-            canonical_artifact_path = artifact_path.resolve()
+            canonical_artifact_path = _canonical_memory_artifact_leaf(canonical_vault_root, artifact_path)
             canonical_backup_path = _assert_directory_identity(backup_path, backup_identity, label="backup") if backup_identity else backup_path.resolve(strict=True)
             relative_path = canonical_artifact_path.relative_to(canonical_vault_root)
         except (OSError, ValueError) as exc:
@@ -7135,16 +7162,20 @@ class SupervisorService:
         proposal's deterministic legacy/current names and an existing artifact
         will subsequently pass its exact front-matter identity check.
         """
-        generated = (target_dir / generated_filename).resolve()
-        legacy = (target_dir / legacy_filename).resolve()
+        generated = target_dir / generated_filename
+        legacy = target_dir / legacy_filename
         if persisted_path:
-            candidate = (vault_root / persisted_path.strip().strip("/")).resolve()
+            candidate = vault_root / persisted_path.strip().strip("/")
             try:
-                candidate.relative_to(target_dir.resolve())
+                candidate.relative_to(target_dir)
             except ValueError as exc:
                 raise ValueError("Memory artifact write blocked: persisted target is outside its configured queue.") from exc
+            if candidate in {generated, legacy} and candidate.suffix == ".md" and candidate.is_symlink():
+                raise ValueError("Memory artifact write blocked: deterministic artifact leaf must not be a symlink.")
             if candidate in {generated, legacy} and candidate.suffix == ".md" and candidate.exists():
                 return candidate
+        if generated.is_symlink():
+            raise ValueError("Memory artifact write blocked: deterministic artifact leaf must not be a symlink.")
         return generated
 
     async def create_memory_proposal_ai_draft(
