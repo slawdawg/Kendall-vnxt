@@ -181,6 +181,7 @@ test("CI outputs route static only when the planner requires full static", () =>
   assert.equal(supervisor.selectedSupervisorShards.length, 22);
   assert.equal(supervisor.selectedSupervisorShards[0].id, "preflight");
   assert.equal(supervisor.selectedSupervisorShards[0].script, "test:supervisor:check:preflight");
+  assert.equal(supervisor.selectedSupervisorShards[2].script, "test:supervisor:check:integration:orchestrator-fake-workers");
   assert.equal(supervisor.selectedSupervisorShards[7].script, "test:supervisor:check-routing-preview-01");
 
   const workspace = buildCiOutputs(buildCheckPlan(["scripts/codex-workspace.mjs"]));

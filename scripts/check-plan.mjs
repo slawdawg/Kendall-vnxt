@@ -72,7 +72,9 @@ const SUPERVISOR_SHARDS = Object.freeze([
   "integration-supervisor-flow",
 ].map((id) => ({
   id,
-  script: id.startsWith("routing-preview-") ? `test:supervisor:check-${id}` : `test:supervisor:check:${id}`,
+  script: id.startsWith("routing-preview-")
+    ? `test:supervisor:check-${id}`
+    : `test:supervisor:check:${id.replace(/^integration-/, "integration:")}`,
 })));
 
 function commandToString(command) {
