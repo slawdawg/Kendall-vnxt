@@ -975,6 +975,33 @@ def _read_bounded_utf8_text(path: Path) -> str:
         return artifact.read(MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
 
 
+def _read_strict_utf8_memory_artifact(path: Path) -> str:
+    """Read a mutable legacy artifact without silently normalizing its bytes."""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Memory proposal legacy artifact is not valid UTF-8; refusing to rewrite it.") from exc
+
+
+def _assert_memory_backup_matches_preliminary_artifact(
+    backup_root: Path,
+    relative_artifact_path: Path,
+    expected_prior_digest: object,
+) -> None:
+    """Prove the copied backup is the exact artifact seen before copying."""
+    if expected_prior_digest is not None and not isinstance(expected_prior_digest, str):
+        raise ValueError("Memory proposal preliminary artifact digest is invalid.")
+    copied_artifact = backup_root / relative_artifact_path
+    if copied_artifact.exists():
+        if not copied_artifact.is_file() or copied_artifact.is_symlink():
+            raise ValueError("Memory proposal copied backup artifact is invalid.")
+        copied_digest = _sha256_file(copied_artifact)
+    else:
+        copied_digest = None
+    if copied_digest != expected_prior_digest:
+        raise ValueError("Memory proposal backup changed while the source artifact was copied.")
+
+
 def _atomic_write_memory_artifact(path: Path, payload: bytes) -> None:
     """Atomically replace an artifact while preserving safe permissions only."""
     # Never create or follow a directory hierarchy here.  The caller must have
@@ -6620,7 +6647,7 @@ class SupervisorService:
         vault_identity: dict[str, int] | None = None,
         backup_identity: dict[str, int] | None = None,
         pinned_backup_path: Path | None = None,
-    ) -> None:
+    ) -> dict[str, object]:
         """Durably bind the exact pending filesystem mutation before writing."""
         try:
             canonical_vault_root = _assert_directory_identity(vault_root, vault_identity, label="vault") if vault_identity else _existing_non_symlink_directory(vault_root)
@@ -6671,6 +6698,7 @@ class SupervisorService:
             await session.rollback()
             raise MemoryProposalRevisionConflict("Memory proposal write reservation changed before filesystem intent recording.")
         await session.commit()
+        return intent
 
     async def _prepare_memory_proposal_backup(
         self,
@@ -6702,7 +6730,7 @@ class SupervisorService:
             with _pinned_existing_memory_vault_root(vault_root) as (pinned_vault_root, vault_inode), _pinned_new_memory_backup_directory(backup_path.parent, backup_path.name) as (pinned_backup_path, _):
                 vault_identity = {"device": vault_inode[0], "inode": vault_inode[1]}
                 backup_identity = {"device": os.stat(pinned_backup_path).st_dev, "inode": os.stat(pinned_backup_path).st_ino}
-                await self._record_memory_proposal_write_intent(
+                preliminary_intent = await self._record_memory_proposal_write_intent(
                     session,
                     proposal,
                     work_item_id=work_item_id,
@@ -6729,6 +6757,12 @@ class SupervisorService:
                 # restart, so every copied regular inode and parent directory
                 # must be durable before that intent can say backupPrepared.
                 await _complete_threaded_artifact_work(_fsync_memory_backup_tree, pinned_backup_path)
+                await asyncio.to_thread(
+                    _assert_memory_backup_matches_preliminary_artifact,
+                    pinned_backup_path,
+                    artifact_path.relative_to(vault_root),
+                    preliminary_intent.get("priorArtifactSha256"),
+                )
                 await self._record_memory_proposal_write_intent(
                     session,
                     proposal,
@@ -7202,7 +7236,7 @@ class SupervisorService:
             expected_revision=payload.expectedRevision,
         )
         if draft_path.exists():
-            existing_text = draft_path.read_text(encoding="utf-8", errors="replace")
+            existing_text = _read_strict_utf8_memory_artifact(draft_path)
             existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
             if not await self._llm_wiki_artifact_matches_proposal(
                 session,
@@ -7261,7 +7295,7 @@ class SupervisorService:
                     if not draft_path.exists() or not draft_path.is_file() or draft_path.is_symlink():
                         raise ValueError("AI draft write-back blocked: target draft changed before existing-artifact finalization.")
                     locked_metadata, _ = self._parse_llm_wiki_artifact(
-                        draft_path.read_text(encoding="utf-8", errors="replace")
+                        _read_strict_utf8_memory_artifact(draft_path)
                     )
                     if not await self._llm_wiki_artifact_matches_proposal(
                         session,
@@ -7478,7 +7512,7 @@ class SupervisorService:
             expected_revision=payload.expectedRevision,
         )
         if target_path.exists():
-            existing_text = target_path.read_text(encoding="utf-8", errors="replace")
+            existing_text = _read_strict_utf8_memory_artifact(target_path)
             existing_metadata, _ = self._parse_llm_wiki_artifact(existing_text)
             if not await self._llm_wiki_artifact_matches_proposal(
                 session,
@@ -7536,7 +7570,7 @@ class SupervisorService:
                     if not target_path.exists() or not target_path.is_file() or target_path.is_symlink():
                         raise ValueError("LLM-Wiki rebuild blocked: target artifact changed before existing-artifact finalization.")
                     locked_metadata, _ = self._parse_llm_wiki_artifact(
-                        target_path.read_text(encoding="utf-8", errors="replace")
+                        _read_strict_utf8_memory_artifact(target_path)
                     )
                     if not await self._llm_wiki_artifact_matches_proposal(
                         session,

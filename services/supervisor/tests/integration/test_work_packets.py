@@ -47,6 +47,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
         MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
         _atomic_write_memory_artifact,
+        _assert_memory_backup_matches_preliminary_artifact,
         _assert_directory_identity,
         _directory_identity,
         _fsync_memory_backup_tree,
@@ -56,12 +57,34 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         _pinned_existing_memory_vault_root,
         _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
+        _read_strict_utf8_memory_artifact,
     )
     import supervisor.application.service as service_module
 
     artifact_path = tmp_path / "derived.md"
     artifact_path.write_bytes(b"---\nstatus: llm-wiki-derived\n---\n" + b"x" * (MAX_LLM_WIKI_ARTIFACT_READ_BYTES + 4096))
     assert len(_read_bounded_utf8_text(artifact_path).encode("utf-8")) == MAX_LLM_WIKI_ARTIFACT_READ_BYTES
+
+    legacy_artifact = tmp_path / "legacy-non-utf8.md"
+    legacy_artifact.write_bytes(b"---\nstatus: approved\n---\n\xff")
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        _read_strict_utf8_memory_artifact(legacy_artifact)
+
+    preliminary_backup = tmp_path / "preliminary-backup"
+    preliminary_backup.mkdir()
+    copied_legacy_artifact = preliminary_backup / "legacy.md"
+    copied_legacy_artifact.write_bytes(b"intermediate human bytes\n")
+    with pytest.raises(ValueError, match="backup changed while the source artifact was copied"):
+        _assert_memory_backup_matches_preliminary_artifact(
+            preliminary_backup,
+            Path("legacy.md"),
+            hashlib.sha256(b"original bytes\n").hexdigest(),
+        )
+    _assert_memory_backup_matches_preliminary_artifact(
+        preliminary_backup,
+        Path("legacy.md"),
+        hashlib.sha256(b"intermediate human bytes\n").hexdigest(),
+    )
 
     artifact_id = f"{'p' * 120}-{'a' * 36}"
     filename = _memory_artifact_filename("llm-wiki-derived-", "L" * 80, artifact_id)
