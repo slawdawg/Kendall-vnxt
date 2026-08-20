@@ -184,6 +184,10 @@ test("CI outputs route static only when the planner requires full static", () =>
   assert.equal(supervisor.selectedSupervisorShards[2].script, "test:supervisor:check:integration:orchestrator-fake-workers");
   assert.equal(supervisor.selectedSupervisorShards[7].script, "test:supervisor:check-routing-preview-01");
 
+  const focusedSupervisor = buildCiOutputs(buildCheckPlan(["services/supervisor/tests/integration/test_work_packets.py"]));
+  assert.deepEqual(focusedSupervisor.selectedSupervisorShards.map((shard) => shard.id), ["preflight", "non-integration", "integration-work-packets"]);
+  assert.match(focusedSupervisor.selectedSupervisorShards[2].reason, /test_work_packets\.py/);
+
   const workspace = buildCiOutputs(buildCheckPlan(["scripts/codex-workspace.mjs"]));
   assert.deepEqual(workspace.selectedWorkspaceProfiles.map((profile) => profile.id), [
     "discovery-readonly",
@@ -193,6 +197,10 @@ test("CI outputs route static only when the planner requires full static", () =>
     "cleanup-recovery",
     "shared-core",
   ]);
+
+  const focusedWorkspace = buildCiOutputs(buildCheckPlan(["scripts/lib/base-checkout-recovery.mjs"]));
+  assert.deepEqual(focusedWorkspace.selectedWorkspaceProfiles.map((profile) => profile.id), ["discovery-readonly", "shared-core"]);
+  assert.match(focusedWorkspace.selectedWorkspaceProfiles[0].reason, /base-checkout-recovery/);
 
   const e2eScript = buildCiOutputs(buildCheckPlan(["scripts/run-controls-e2e.mjs"]));
   assert.equal(e2eScript.static, false);

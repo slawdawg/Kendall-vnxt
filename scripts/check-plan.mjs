@@ -202,7 +202,7 @@ function classifyFile(path) {
     surfaces.add("ciAcceleration");
     reasons.push(`${file}: static bundle topology changes require full static confidence`);
   }
-  if (/^(scripts\/check-plan\.mjs|tests\/check-plan\.test\.mjs|docs\/workflows\/ci-acceleration-plan\.md)$/.test(file)) {
+  if (/^(scripts\/(?:check-plan|evaluate-ci-promotion-evidence|run-ci-evidence-command)\.mjs|tests\/(?:check-plan|ci-promotion-evidence|ci-evidence-command)\.test\.mjs|docs\/workflows\/ci-(?:acceleration-plan|targeted-cutover-plan)\.md)$/.test(file)) {
     surfaces.add("ciAcceleration");
     reasons.push(`${file}: CI acceleration planner surface`);
   }
@@ -304,16 +304,76 @@ function buildRequiredGateSelection({ static: staticRequired, javascript, superv
   return { selected, skipped };
 }
 
-function buildBehaviorShardSelection({ surfaces, requiresFullStatic, supervisor }) {
+const WORKSPACE_PROFILE_PATHS = Object.freeze([
+  [/^scripts\/lib\/base-checkout-recovery\.mjs$/, "discovery-readonly"],
+  [/^scripts\/lib\/mutation-admission(?:-prewrite-guard|-workspace-handoff)?\.mjs$/, "assignment-lease"],
+  [/^(scripts\/lib\/workspace-command-resolution\.mjs|tests\/(?:workspace-command-resolution|workspace-fast-profile)\.test\.mjs)$/, "shared-core"],
+]);
+
+const SUPERVISOR_SHARD_PATHS = Object.freeze([
+  [/^services\/supervisor\/tests\/integration\/test_orchestrator_fake_workers\.py$/, ["integration-orchestrator-fake-workers"]],
+  [/^services\/supervisor\/tests\/integration\/test_operational_action_v1_pause_drain\.py$/, ["integration-operational-action-v1-pause-drain"]],
+  [/^services\/supervisor\/tests\/integration\/test_work_packets\.py$/, ["integration-work-packets"]],
+  [/^services\/supervisor\/tests\/integration\/test_bmad_import_parser\.py$/, ["integration-bmad-import-parser"]],
+  [/^services\/supervisor\/tests\/integration\/test_epic25_evidence_chain\.py$/, ["integration-epic25-evidence-chain"]],
+  [/^services\/supervisor\/tests\/integration\/test_routing_preview\.py$/, SUPERVISOR_SHARDS.filter((shard) => shard.id.startsWith("routing-preview-")).map((shard) => shard.id)],
+  [/^services\/supervisor\/tests\/integration\/test_review_route_packet\.py$/, ["integration-review-route-packet"]],
+  [/^services\/supervisor\/tests\/integration\/test_manager_source_intake_adapter\.py$/, ["integration-manager-source-intake-adapter"]],
+  [/^services\/supervisor\/tests\/integration\/test_operational_action_v1_retry_reassign\.py$/, ["integration-operational-action-v1-retry-reassign"]],
+  [/^services\/supervisor\/tests\/integration\/test_candidate_work_api\.py$/, ["integration-candidate-work-api"]],
+  [/^services\/supervisor\/tests\/integration\/test_local_dogfood_attestation\.py$/, ["integration-local-dogfood-attestation"]],
+  [/^services\/supervisor\/tests\/integration\/test_manager_terminal_events\.py$/, ["integration-manager-terminal-events"]],
+  [/^services\/supervisor\/tests\/integration\/test_supervisor_flow\.py$/, ["integration-supervisor-flow"]],
+]);
+
+function buildBehaviorShardSelection({ changedFiles, surfaces, requiresFullStatic, supervisor }) {
   const workspaceSelected = requiresFullStatic || surfaces.has("workspace");
   const supervisorSelected = supervisor;
+  const workspaceProfiles = new Map();
+  const supervisorShardIds = new Map();
+  const files = changedFiles || [];
+
+  if (workspaceSelected) {
+    if (requiresFullStatic) {
+      for (const id of WORKSPACE_TEST_PROFILE_NAMES) workspaceProfiles.set(id, "elevated static confidence includes all workspace behaviors");
+    } else {
+      for (const file of files) {
+        for (const [pattern, profile] of WORKSPACE_PROFILE_PATHS) {
+          if (pattern.test(file)) workspaceProfiles.set(profile, `affected workspace implementation: ${file}`);
+        }
+      }
+      if (workspaceProfiles.size === 0) {
+        for (const id of WORKSPACE_TEST_PROFILE_NAMES) workspaceProfiles.set(id, "workspace surface lacks a precise behavior mapping; retaining all behaviors");
+      } else {
+        workspaceProfiles.set("shared-core", workspaceProfiles.get("shared-core") || "shared workspace safety baseline for a focused behavior profile");
+      }
+    }
+  }
+
+  if (supervisorSelected) {
+    if (requiresFullStatic) {
+      for (const shard of SUPERVISOR_SHARDS) supervisorShardIds.set(shard.id, "elevated confidence includes all supervisor behaviors");
+    } else {
+      for (const file of files) {
+        for (const [pattern, shardIds] of SUPERVISOR_SHARD_PATHS) {
+          if (pattern.test(file)) {
+            for (const id of shardIds) supervisorShardIds.set(id, `affected supervisor integration test: ${file}`);
+          }
+        }
+        if (/^services\/supervisor\/tests\/test_.*\.py$/.test(file)) supervisorShardIds.set("non-integration", `affected supervisor non-integration test: ${file}`);
+      }
+      if (supervisorShardIds.size === 0) {
+        for (const shard of SUPERVISOR_SHARDS) supervisorShardIds.set(shard.id, "supervisor surface lacks a precise behavior mapping; retaining all behaviors");
+      } else {
+        supervisorShardIds.set("preflight", supervisorShardIds.get("preflight") || "shared supervisor preflight baseline for a focused behavior shard");
+        supervisorShardIds.set("non-integration", supervisorShardIds.get("non-integration") || "shared supervisor non-integration safety baseline for a focused behavior shard");
+      }
+    }
+  }
+
   return {
-    workspaceProfiles: workspaceSelected
-      ? WORKSPACE_TEST_PROFILE_NAMES.map((id) => ({ id, reason: requiresFullStatic ? "elevated static confidence includes all workspace behaviors" : "affected workspace surface" }))
-      : [],
-    supervisorShards: supervisorSelected
-      ? SUPERVISOR_SHARDS.map((shard) => ({ ...shard, reason: requiresFullStatic ? "elevated confidence includes all supervisor behaviors" : "affected supervisor surface" }))
-      : [],
+    workspaceProfiles: WORKSPACE_TEST_PROFILE_NAMES.filter((id) => workspaceProfiles.has(id)).map((id) => ({ id, reason: workspaceProfiles.get(id) })),
+    supervisorShards: SUPERVISOR_SHARDS.filter((shard) => supervisorShardIds.has(shard.id)).map((shard) => ({ ...shard, reason: supervisorShardIds.get(shard.id) })),
   };
 }
 
@@ -330,7 +390,7 @@ function buildCiOutputs(plan) {
   const javascript = packageOrWorkflowChanged || surfaces.has("dashboard");
   const supervisor = packageOrWorkflowChanged || surfaces.has("supervisor");
   const requiredGateSelection = buildRequiredGateSelection({ static: staticRequired, javascript, supervisor });
-  const behaviorShards = buildBehaviorShardSelection({ surfaces, requiresFullStatic: staticRequired, supervisor });
+  const behaviorShards = buildBehaviorShardSelection({ changedFiles: plan.changedFiles, surfaces, requiresFullStatic: staticRequired, supervisor });
   return {
     static: staticRequired,
     javascript,
