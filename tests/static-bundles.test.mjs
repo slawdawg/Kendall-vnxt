@@ -52,6 +52,7 @@ test("static bundles have package script entry points", () => {
 test("static bundle coverage matches the monolithic static aggregate", () => {
   const aggregateCommands = aggregateStaticCommands();
   const bundleCommands = staticBundleNames().flatMap((bundleName) => STATIC_BUNDLES[bundleName]);
+  const integrityBaseline = ["check:fast"];
 
   assert.deepEqual(
     new Set(bundleCommands).size,
@@ -60,9 +61,10 @@ test("static bundle coverage matches the monolithic static aggregate", () => {
   );
 
   assert.deepEqual(
-    bundleCommands.sort(),
+    [...integrityBaseline, ...bundleCommands].sort(),
     [...aggregateCommands].sort(),
   );
+  assert.ok(!STATIC_BUNDLES.core.includes("check:fast"));
 });
 
 test("all static bundle expands bundles in declared order", () => {

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { buildCheckPlan, buildCiOutputs, classifyFile, collectChangedFiles } from "../scripts/check-plan.mjs";
+import { staticBundleNames } from "../scripts/run-static-bundle.mjs";
 
 test("check plan maps manager changes to focused manager checks", () => {
   const plan = buildCheckPlan([
@@ -71,6 +72,14 @@ test("check plan maps CI policy drift scripts without full static escalation", (
   assert.deepEqual(plan.surfaces, ["workflow"]);
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:github-workflow-policy"));
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run check:workspace-coordination"));
+});
+
+test("check plan maps the automatic pre-push hook to workflow checks", () => {
+  const plan = buildCheckPlan([".githooks/pre-push"]);
+
+  assert.equal(plan.requiresFullStatic, false);
+  assert.deepEqual(plan.surfaces, ["workflow"]);
+  assert.ok(plan.reasons.some((reason) => reason.includes("local CI quick-fail hook surface")));
 });
 
 test("check plan maps workspace changes to the bounded workspace delivery profile", () => {
@@ -150,6 +159,14 @@ test("CI outputs route static only when the planner requires full static", () =>
   assert.equal(plannerOnly.javascript, false);
   assert.equal(plannerOnly.supervisor, false);
   assert.deepEqual(plannerOnly.surfaces, ["ciAcceleration"]);
+  assert.equal(plannerOnly.routingMode, "affected");
+  assert.deepEqual(plannerOnly.selectedStaticBundles.map((bundle) => bundle.id), ["core"]);
+  assert.ok(plannerOnly.selectedStaticBundles[0].reasons.includes("affected ciAcceleration surface"));
+  assert.ok(plannerOnly.skippedStaticBundles.every((bundle) => bundle.reasons.includes("not selected by affected-domain routing")));
+  assert.deepEqual(plannerOnly.requiredGates.map((gate) => gate.id), ["fast"]);
+  assert.deepEqual(plannerOnly.skippedRequiredGates.map((gate) => gate.id), ["static", "javascript", "supervisor"]);
+  assert.deepEqual(plannerOnly.selectedWorkspaceProfiles, []);
+  assert.deepEqual(plannerOnly.selectedSupervisorShards, []);
 
   const dashboard = buildCiOutputs(buildCheckPlan(["apps/dashboard/src/app/page.tsx"]));
   assert.equal(dashboard.static, false);
@@ -161,6 +178,20 @@ test("CI outputs route static only when the planner requires full static", () =>
   assert.equal(supervisor.javascript, false);
   assert.equal(supervisor.supervisor, true);
   assert.deepEqual(supervisor.commands, ["pnpm run test:supervisor-runner", "pnpm run test:supervisor:preflight", "pnpm run test:supervisor:profile"]);
+  assert.equal(supervisor.selectedSupervisorShards.length, 22);
+  assert.equal(supervisor.selectedSupervisorShards[0].id, "preflight");
+  assert.equal(supervisor.selectedSupervisorShards[0].script, "test:supervisor:check:preflight");
+  assert.equal(supervisor.selectedSupervisorShards[7].script, "test:supervisor:check-routing-preview-01");
+
+  const workspace = buildCiOutputs(buildCheckPlan(["scripts/codex-workspace.mjs"]));
+  assert.deepEqual(workspace.selectedWorkspaceProfiles.map((profile) => profile.id), [
+    "discovery-readonly",
+    "start-resume",
+    "assignment-lease",
+    "delivery-review",
+    "cleanup-recovery",
+    "shared-core",
+  ]);
 
   const e2eScript = buildCiOutputs(buildCheckPlan(["scripts/run-controls-e2e.mjs"]));
   assert.equal(e2eScript.static, false);
@@ -188,6 +219,10 @@ test("CI outputs preserve broad gates for package and workflow changes", () => {
   assert.equal(outputs.javascript, true);
   assert.equal(outputs.supervisor, true);
   assert.equal(outputs.requiresFullStatic, true);
+  assert.equal(outputs.routingMode, "elevated");
+  assert.deepEqual(outputs.selectedStaticBundles.map((bundle) => bundle.id), staticBundleNames());
+  assert.equal(outputs.skippedStaticBundles.length, 0);
+  assert.deepEqual(outputs.requiredGates.map((gate) => gate.id), ["fast", "static", "javascript", "supervisor"]);
 
   const sharedPackage = buildCiOutputs(buildCheckPlan(["packages/contracts/src/workflow.ts"]));
   assert.equal(sharedPackage.static, true);
@@ -200,6 +235,14 @@ test("CI outputs preserve broad gates for package and workflow changes", () => {
   assert.equal(otherWorkflow.javascript, true);
   assert.equal(otherWorkflow.supervisor, true);
   assert.equal(otherWorkflow.requiresFullStatic, true);
+});
+
+test("CI outputs fail closed and explain bundle routing for unmapped paths", () => {
+  const outputs = buildCiOutputs(buildCheckPlan(["new-area/example.txt"]));
+
+  assert.equal(outputs.routingMode, "fail-closed-unknown");
+  assert.deepEqual(outputs.selectedStaticBundles.map((bundle) => bundle.id), staticBundleNames());
+  assert.ok(outputs.selectedStaticBundles.every((bundle) => bundle.reasons.some((reason) => reason.startsWith("fail-closed:"))));
 });
 
 test("check plan escalates unknown paths", () => {
@@ -219,4 +262,9 @@ test("aggregate checks include the check-plan regression tests", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
   assert.match(packageJson.scripts["check:static"], /pnpm run test:check-plan/);
   assert.match(packageJson.scripts.check, /pnpm run test:check-plan/);
+});
+
+test("pre-push hook runs the automatic quick-fail diagnostic", () => {
+  const hook = readFileSync(".githooks/pre-push", "utf8");
+  assert.match(hook, /pnpm run check:quick-fail/);
 });
