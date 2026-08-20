@@ -206,6 +206,54 @@ def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(t
     assert backup_path.exists()
 
 
+def test_memory_artifact_partial_backup_deletion_binds_the_recorded_directory(tmp_path) -> None:
+    """A replaced partial-backup leaf is never deleted through its old pathname."""
+    from supervisor.application.service import _directory_identity, _remove_verified_backup_directory
+
+    backup_root = tmp_path / "backups"
+    backup_path = backup_root / "partial-copy"
+    backup_path.mkdir(parents=True)
+    (backup_path / "recorded").write_text("recorded", encoding="utf-8")
+    identity = _directory_identity(backup_path)
+    parked = backup_root / "parked-partial-copy"
+    backup_path.rename(parked)
+    backup_path.mkdir()
+    (backup_path / "replacement").write_text("untrusted", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed after intent recording"):
+        _remove_verified_backup_directory(backup_path, identity)
+    assert (parked / "recorded").read_text(encoding="utf-8") == "recorded"
+    assert (backup_path / "replacement").read_text(encoding="utf-8") == "untrusted"
+
+
+def test_async_memory_artifact_lock_retries_nonblocking_flock_without_executor_wait(tmp_path, monkeypatch) -> None:
+    """Contention yields the loop instead of occupying a shared executor thread."""
+    from supervisor.application.service import _async_memory_artifact_lock
+    import supervisor.application.service as service_module
+
+    original_flock = service_module.fcntl.flock
+    attempts = 0
+
+    def busy_once(descriptor: int, operation: int) -> None:
+        nonlocal attempts
+        if operation & service_module.fcntl.LOCK_NB and attempts == 0:
+            attempts += 1
+            raise BlockingIOError()
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(service_module.fcntl, "flock", busy_once)
+
+    async def acquire() -> None:
+        async with _async_memory_artifact_lock(tmp_path / "artifact.md"):
+            assert attempts == 1
+
+    asyncio.run(acquire())
+    source = Path(service_module.__file__).read_text(encoding="utf-8")
+    lock_section = source[source.index("async def _async_memory_artifact_lock"):source.index("def _fsync_memory_backup_tree")]
+    assert "fcntl.LOCK_EX | fcntl.LOCK_NB" in lock_section
+    assert "asyncio.to_thread(fcntl.flock" not in lock_section
+
+
 def test_memory_artifact_recovery_rejects_symlinked_restored_digest(tmp_path) -> None:
     """A link to snapshot bytes is never accepted as an idempotent recovery."""
     from supervisor.application.service import (
@@ -337,6 +385,25 @@ def test_memory_proposal_write_intent_uses_sql_null_fence_not_json_equality() ->
     intent_section = source[source.index("async def _record_memory_proposal_write_intent"):source.index("async def _prepare_memory_proposal_backup")]
     assert "write_action_intent_json.is_(None) if not backup_prepared else True" in intent_section
     assert "write_action_intent_json ==" not in intent_section
+
+
+def test_new_memory_artifact_backup_rechecks_absence_under_the_first_held_lock() -> None:
+    """A late foreign file is fenced before backup evidence or writes begin."""
+    service_path = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
+    source = service_path.read_text(encoding="utf-8")
+    preparation = source[source.index("async def _prepare_memory_proposal_backup"):source.index("async def _finalize_memory_proposal_artifact_write")]
+    assert "expected_absent: bool = False" in preparation
+    assert "async with _async_memory_artifact_lock(artifact_path):\n            if expected_absent:" in preparation
+    assert "Memory proposal artifact appeared before backup preparation." in preparation
+    finalization = source[source.index("async def _write_and_finalize_memory_proposal_artifact"):source.index("async def recover_abandoned_memory_proposal_write")]
+    assert "expected_absent: bool = False" in finalization
+    assert "Memory proposal artifact appeared before finalization." in finalization
+    ai_section = source[source.index("async def create_memory_proposal_ai_draft"):source.index("async def create_llm_wiki_disposable_rebuild")]
+    llm_section = source[source.index("async def create_llm_wiki_disposable_rebuild"):source.index("async def search_llm_wiki_artifact")]
+    assert "backup_path=backup_path, written_bytes=written_bytes, expected_absent=True" in ai_section
+    assert "expected_absent=True," in ai_section
+    assert "backup_path=backup_path, written_bytes=written_bytes, expected_absent=True" in llm_section
+    assert "expected_absent=True," in llm_section
 
 
 def test_llm_wiki_artifact_requires_closed_front_matter_within_bound() -> None:

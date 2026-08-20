@@ -1142,11 +1142,21 @@ async def _async_memory_artifact_lock(path: Path | None):
         return
     directory_fd, lock_fd = await asyncio.to_thread(_open_memory_artifact_lock, path)
     try:
-        await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_EX)
+        # Do not park an executor worker in a blocking flock call.  The lock
+        # holder needs that same executor for backup fsync/copy work before it
+        # can release the lock; enough queued readers would otherwise deadlock
+        # the writer.  LOCK_NB is a constant-time syscall, and yielding between
+        # attempts keeps waiters off both the event loop and the shared pool.
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                await asyncio.sleep(0.01)
         try:
             yield
         finally:
-            await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_UN)
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
     finally:
         await asyncio.to_thread(os.close, lock_fd)
         await asyncio.to_thread(os.close, directory_fd)
@@ -1242,14 +1252,20 @@ def _revalidate_non_symlink_backup_directory(backup_path: Path) -> None:
         raise ValueError("Memory proposal recovery backup path changed after intent recording.")
 
 
-def _remove_verified_backup_directory(backup_path: Path) -> None:
-    """Delete a recorded partial backup through a verified open parent FD."""
-    _revalidate_non_symlink_backup_directory(backup_path.parent)
-    parent_fd = os.open(backup_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def _remove_verified_backup_directory(backup_path: Path, expected_identity: dict[str, int] | None = None) -> None:
+    """Delete a partial backup only through its pinned, verified parent FD."""
+    # Opening one component at a time both rejects symlink hops and pins the
+    # actual parent that is verified below.  Never validate a pathname and
+    # reopen it: a rename/replacement in that gap could redirect rmtree.
+    parent_fd = _open_existing_non_symlink_directory(backup_path.parent)
     try:
         entry = os.stat(backup_path.name, dir_fd=parent_fd, follow_symlinks=False)
         if not stat.S_ISDIR(entry.st_mode):
             raise ValueError("Memory proposal recovery backup path is invalid.")
+        if expected_identity is not None and (
+            entry.st_dev != expected_identity["device"] or entry.st_ino != expected_identity["inode"]
+        ):
+            raise ValueError("Memory proposal recovery backup path changed after intent recording.")
         shutil.rmtree(backup_path.name, dir_fd=parent_fd)
         # A preliminary intent remains recovery authority until this namespace
         # deletion is durable; otherwise reboot can resurrect unowned raw data.
@@ -1258,7 +1274,7 @@ def _remove_verified_backup_directory(backup_path: Path) -> None:
         os.close(parent_fd)
 
 
-def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path, bool, str | None]:
+def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path, bool, str | None, dict[str, int] | None]:
     """Validate and return the immutable filesystem coordinates in an intent."""
     if not isinstance(intent, dict) or intent.get("schemaVersion") != "memory-proposal-write-intent/v1":
         raise ValueError("Memory proposal recovery requires a valid durable write intent.")
@@ -1292,7 +1308,13 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
         or (prior_artifact_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(prior_artifact_digest)))
     ):
         raise ValueError("Memory proposal recovery intent is invalid.")
-    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path, backup_prepared, str(prior_artifact_digest) if prior_artifact_digest else None
+    backup_identity = intent.get("backupIdentity")
+    if backup_identity is not None and (
+        not isinstance(backup_identity, dict)
+        or not all(isinstance(backup_identity.get(key), int) for key in ("device", "inode"))
+    ):
+        raise ValueError("Memory proposal recovery intent is invalid.")
+    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path, backup_prepared, str(prior_artifact_digest) if prior_artifact_digest else None, backup_identity
 
 
 def _reconcile_memory_artifact_intent_unlocked(
@@ -1304,6 +1326,7 @@ def _reconcile_memory_artifact_intent_unlocked(
     relative_path: Path,
     backup_prepared: bool = True,
     prior_artifact_digest: str | None = None,
+    backup_identity: dict[str, int] | None = None,
 ) -> None:
     """Restore the snapshot version of an interrupted server-recorded write."""
     del vault_root  # The containment proof was completed by the caller.
@@ -1318,7 +1341,7 @@ def _reconcile_memory_artifact_intent_unlocked(
         if backup_path.exists():
             if not backup_path.is_dir() or backup_path.is_symlink():
                 raise ValueError("Memory proposal recovery backup path is invalid.")
-            _remove_verified_backup_directory(backup_path)
+            _remove_verified_backup_directory(backup_path, backup_identity)
         return
     backup_artifact = backup_path / relative_path
     if backup_artifact.exists():
@@ -6661,9 +6684,17 @@ class SupervisorService:
         artifact_path: Path,
         backup_path: Path,
         written_bytes: bytes,
+        expected_absent: bool = False,
     ) -> None:
         """Record and copy a backup while holding the artifact recovery fence."""
         async with _async_memory_artifact_lock(artifact_path):
+            if expected_absent:
+                # New-artifact callers selected their branch before acquiring
+                # this lock.  Reprove absence here, before recording/copying a
+                # backup: a concurrent foreign file is never a valid snapshot
+                # or overwrite target for this proposal.
+                if artifact_path.exists() or artifact_path.is_symlink():
+                    raise ValueError("Memory proposal artifact appeared before backup preparation.")
             # Pin the configured backup hierarchy before the first intent or
             # copy operation.  A later pathname swap can make the recorded
             # recovery evidence fail closed, but it cannot redirect the vault
@@ -6787,6 +6818,7 @@ class SupervisorService:
         artifact_path: Path,
         written_bytes: bytes,
         previous_bytes: bytes | None,
+        expected_absent: bool = False,
         values: dict[str, object],
         audit_work_item_id: str,
         audit_event_type: str,
@@ -6811,7 +6843,13 @@ class SupervisorService:
             intent = await session.scalar(select(MemoryProposal.write_action_intent_json).where(MemoryProposal.id == proposal_id))
             if isinstance(intent, dict) and intent.get("vaultIdentity"):
                 _assert_directory_identity(Path(str(intent.get("vaultRoot", ""))), intent["vaultIdentity"], label="vault")
-            if previous_bytes is not None:
+            if expected_absent:
+                # Backup preparation has its own lock scope. Reprove absence
+                # again at the final writer fence so a foreign artifact that
+                # appeared between those scopes is never overwritten.
+                if artifact_path.exists() or artifact_path.is_symlink():
+                    raise ValueError("Memory proposal artifact appeared before finalization.")
+            elif previous_bytes is not None:
                 await asyncio.to_thread(_revalidate_memory_artifact_bytes, artifact_path, previous_bytes)
             elif artifact_path.exists():
                 raise ValueError("Memory proposal artifact appeared during backup; refusing to overwrite it.")
@@ -7215,34 +7253,52 @@ class SupervisorService:
                 )
                 await session.refresh(item)
             else:
-                await self._finalize_memory_proposal_write(
-                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
-                    action_token=action_token,
-                    values={
-                        "target_vault_path": relative_draft_path,
-                        "patch_summary": f"AI draft already exists at {relative_draft_path}; no duplicate draft was written.",
-                        "decision_needed_context": "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned.",
-                        "write_back_allowed": False,
-                        "updated_at": now,
-                    },
-                )
-            if not legacy_rebind:
-                await self._record_event(
-                    session,
-                    item,
-                    "memory_proposal.ai_draft_exists",
-                    "Memory proposal AI draft already existed in the dashboard queue.",
-                    {
-                        "proposalId": proposal.proposal_id,
-                        "draftPath": relative_draft_path,
-                        "backupPath": None,
-                        "writeBackAllowed": False,
-                        "retentionClass": "metadata_only",
-                        "rawPayloadRetained": False,
-                        "sourceContentCopied": False,
-                    },
-                )
-                await session.commit()
+                # The optimistic path above only selects the branch.  Lock and
+                # re-prove the exact existing artifact before recording an
+                # idempotent outcome; otherwise a deletion/replacement race
+                # could persist “already exists” for missing or foreign bytes.
+                async with _async_memory_artifact_lock(draft_path):
+                    if not draft_path.exists() or not draft_path.is_file() or draft_path.is_symlink():
+                        raise ValueError("AI draft write-back blocked: target draft changed before existing-artifact finalization.")
+                    locked_metadata, _ = self._parse_llm_wiki_artifact(
+                        draft_path.read_text(encoding="utf-8", errors="replace")
+                    )
+                    if not await self._llm_wiki_artifact_matches_proposal(
+                        session,
+                        proposal=proposal,
+                        work_item_id=work_item_id,
+                        expected_proposal_id=safe_id,
+                        expected_status="ai-draft",
+                        metadata=locked_metadata,
+                    ):
+                        raise ValueError("AI draft write-back blocked: target draft changed before existing-artifact finalization.")
+                    await self._finalize_memory_proposal_write(
+                        session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                        action_token=action_token,
+                        values={
+                            "target_vault_path": relative_draft_path,
+                            "patch_summary": f"AI draft already exists at {relative_draft_path}; no duplicate draft was written.",
+                            "decision_needed_context": "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned.",
+                            "write_back_allowed": False,
+                            "updated_at": now,
+                        },
+                    )
+                    await self._record_event(
+                        session,
+                        item,
+                        "memory_proposal.ai_draft_exists",
+                        "Memory proposal AI draft already existed in the dashboard queue.",
+                        {
+                            "proposalId": proposal.proposal_id,
+                            "draftPath": relative_draft_path,
+                            "backupPath": None,
+                            "writeBackAllowed": False,
+                            "retentionClass": "metadata_only",
+                            "rawPayloadRetained": False,
+                            "sourceContentCopied": False,
+                        },
+                    )
+                    await session.commit()
             await session.refresh(proposal)
             await self._publish_item(item)
             return proposal
@@ -7293,11 +7349,12 @@ class SupervisorService:
         await self._prepare_memory_proposal_backup(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, vault_root=vault_root, artifact_path=draft_path,
-            backup_path=backup_path, written_bytes=written_bytes,
+            backup_path=backup_path, written_bytes=written_bytes, expected_absent=True,
         )
         await self._write_and_finalize_memory_proposal_artifact(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, artifact_path=draft_path, written_bytes=written_bytes, previous_bytes=None,
+            expected_absent=True,
             values={
                 "target_vault_path": relative_draft_path,
                 "patch_summary": f"AI draft written to {relative_draft_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied.",
@@ -7475,38 +7532,52 @@ class SupervisorService:
                 )
                 await session.refresh(item)
             else:
-                await self._finalize_memory_proposal_write(
-                    session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
-                    action_token=action_token,
-                    values={
-                        "target_vault_path": relative_target_path,
-                        "target_vault_folder": llm_wiki_folder,
-                        "patch_summary": f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written.",
-                        "decision_needed_context": "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned.",
-                        "write_back_allowed": False,
-                        "updated_at": now,
-                    },
-                )
-            if not legacy_rebind:
-                await self._record_event(
-                    session,
-                    item,
-                    "llm_wiki.rebuild_artifact_exists",
-                    "Disposable LLM-Wiki rebuild artifact already existed in the dashboard queue.",
-                    {
-                        "proposalId": proposal.proposal_id,
-                        "targetPath": relative_target_path,
-                        "backupPath": None,
-                        "approvalRef": approval_ref,
-                        "authorityFamily": "memory-writeback-and-source-mutation",
-                        "writeBackAllowed": False,
-                        "retentionClass": "metadata_only",
-                        "rawPayloadRetained": False,
-                        "sourceContentCopied": False,
-                        "canonicalMutationAllowed": False,
-                    },
-                )
-                await session.commit()
+                async with _async_memory_artifact_lock(target_path):
+                    if not target_path.exists() or not target_path.is_file() or target_path.is_symlink():
+                        raise ValueError("LLM-Wiki rebuild blocked: target artifact changed before existing-artifact finalization.")
+                    locked_metadata, _ = self._parse_llm_wiki_artifact(
+                        target_path.read_text(encoding="utf-8", errors="replace")
+                    )
+                    if not await self._llm_wiki_artifact_matches_proposal(
+                        session,
+                        proposal=proposal,
+                        work_item_id=work_item_id,
+                        expected_proposal_id=safe_id,
+                        expected_status="llm-wiki-derived",
+                        metadata=locked_metadata,
+                    ):
+                        raise ValueError("LLM-Wiki rebuild blocked: target artifact changed before existing-artifact finalization.")
+                    await self._finalize_memory_proposal_write(
+                        session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
+                        action_token=action_token,
+                        values={
+                            "target_vault_path": relative_target_path,
+                            "target_vault_folder": llm_wiki_folder,
+                            "patch_summary": f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written.",
+                            "decision_needed_context": "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned.",
+                            "write_back_allowed": False,
+                            "updated_at": now,
+                        },
+                    )
+                    await self._record_event(
+                        session,
+                        item,
+                        "llm_wiki.rebuild_artifact_exists",
+                        "Disposable LLM-Wiki rebuild artifact already existed in the dashboard queue.",
+                        {
+                            "proposalId": proposal.proposal_id,
+                            "targetPath": relative_target_path,
+                            "backupPath": None,
+                            "approvalRef": approval_ref,
+                            "authorityFamily": "memory-writeback-and-source-mutation",
+                            "writeBackAllowed": False,
+                            "retentionClass": "metadata_only",
+                            "rawPayloadRetained": False,
+                            "sourceContentCopied": False,
+                            "canonicalMutationAllowed": False,
+                        },
+                    )
+                    await session.commit()
             await session.refresh(proposal)
             await self._publish_item(item)
             return proposal
@@ -7577,11 +7648,12 @@ class SupervisorService:
         await self._prepare_memory_proposal_backup(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, vault_root=vault_root, artifact_path=target_path,
-            backup_path=backup_path, written_bytes=written_bytes,
+            backup_path=backup_path, written_bytes=written_bytes, expected_absent=True,
         )
         await self._write_and_finalize_memory_proposal_artifact(
             session, proposal, work_item_id=work_item_id, expected_revision=payload.expectedRevision,
             action_token=action_token, artifact_path=target_path, written_bytes=written_bytes, previous_bytes=None,
+            expected_absent=True,
             values={
                 "target_vault_path": relative_target_path,
                 "target_vault_folder": llm_wiki_folder,
