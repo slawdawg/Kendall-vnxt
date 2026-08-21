@@ -1752,17 +1752,11 @@ async def update_work_item_memory_proposal(
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_review_rejected").model_dump()) from exc
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
-    # PATCH is part of the WorkItem V1 review surface.  Return the same
-    # migration-tolerant proposal shape as its read model so legacy rows with
-    # empty persisted reference arrays do not mutate successfully and then
-    # fail V0 response validation.
-    review = await service.get_work_item_memory_review(session, work_item_id)
-    if review is None:
-        raise HTTPException(status_code=404, detail=error_response("Work item memory review not found.", "work_item_memory_review_not_found").model_dump())
-    updated = next((entry for entry in review.proposals if entry.proposalRouteId == proposal.id), None)
-    if updated is None:
-        raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
-    return ApiEnvelope(data=updated)
+    # PATCH is part of the WorkItem V1 review surface. Build the persisted row
+    # directly: a whole-review rebuild can include vault-backed eligibility
+    # probes and otherwise outlive the proxy's short mutation response budget
+    # after this update has already committed.
+    return ApiEnvelope(data=service._work_item_memory_review_proposal_view(proposal))
 
 
 @app.post("/work-items/{work_item_id}/memory-proposals/{proposal_id}/ai-draft", response_model=ApiEnvelope)

@@ -1823,7 +1823,10 @@ def _safe_memory_proposal_id(value: str) -> str:
 
 
 def _yaml_string(value: object) -> str:
-    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+    rendered = str(value)
+    if "\n" in rendered or "\r" in rendered:
+        raise ValueError("Memory artifact YAML metadata must be single-line.")
+    return rendered.replace("\\", "\\\\").replace('"', '\\"')
 
 TERMINAL_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.CANCELLED.value,

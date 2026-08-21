@@ -8773,6 +8773,8 @@ try {
       { name: "plan digest", mutate: (packet) => ({ ...packet, plan_digest: "f".repeat(64) }) },
       { name: "expiry", mutate: (packet) => ({ ...packet, expires_at: "2026-07-25T00:00:00.000Z" }) },
       { name: "future timestamp", mutate: (packet) => ({ ...packet, updated_at: "2099-01-01T00:00:00.000Z" }) },
+      { name: "malformed recorded lifetime", mutate: (packet) => ({ ...packet, packet_lifetime_ms: "forever" }) },
+      { name: "oversized recorded lifetime", mutate: (packet) => ({ ...packet, packet_lifetime_ms: Number.MAX_SAFE_INTEGER }) },
       { name: "unexpected retained data", mutate: (packet) => ({ ...packet, raw_output: "fixture-packet-secret" }) },
       { name: "malformed", mutate: () => ({ status: "partial", raw_output: "fixture-packet-secret" }) },
     ]) {
@@ -8858,6 +8860,44 @@ try {
       assert(result.code !== 0, "fixture pause unexpectedly completed the packet");
       assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
       assert(readFixtureStageLog(stageLog).length === 0, "packet ran a stage before the pause seam");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr can discard a long-plan packet using its persisted original lifetime", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const lifetimeMs = 3 * 60 * 60_000 + 30 * 60_000;
+      const createdAt = new Date(Date.now() - 4 * 60 * 60_000);
+      const updatedAt = new Date(createdAt.getTime() + 3 * 60 * 60_000);
+      const failedAt = new Date(updatedAt.getTime() - 1_000);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+        head: "f".repeat(40),
+        created_at: createdAt.toISOString(),
+        updated_at: updatedAt.toISOString(),
+        expires_at: new Date(createdAt.getTime() + lifetimeMs).toISOString(),
+        packet_lifetime_ms: lifetimeMs,
+        stages: [{ stage: stages[0], completed_at: failedAt.toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }],
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "discard recovery unexpectedly completed");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "discarded long-plan packet ran a stage before the pause seam");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "partial", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -9636,11 +9676,42 @@ try {
     }
   });
 
+  test("finish-pr discards an exact self-describing passed packet from a retired plan", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const currentStages = ["check:packet-one"];
+      const retiredStages = ["check:packet-one", "check:packet-two", "check:packet-three"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, currentStages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixturePassedResumableCheckPacket(fixture, retiredStages, {
+        head: "f".repeat(40),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "historical passed packet recovery unexpectedly completed");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "historical passed packet ran a stage before the pause seam");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "partial", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr terminal packet recovery rejects implicit, nonterminal, mismatched-owner, and malformed resets", () => {
     for (const scenario of [
       { name: "implicit", args: [], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) }), expected: "binding changed" },
       { name: "legacy missing staged snapshot implicit", args: [], packet: (fixture, stages) => { const packet = fixtureFailedResumableCheckPacket(fixture, stages); delete packet.staged_input_digest; return packet; }, expected: "staged input binding is malformed" },
       { name: "unrecognized historical plan", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64), head: "f".repeat(40) }), expected: "plan digest is not current or a recognized legacy plan" },
+      { name: "self-describing failed historical plan", args: ["--stage-all"], packet: (fixture) => { const failedAt = new Date(Date.now() - 500).toISOString(); const retiredStage = "check:retired-historical"; return fixtureFailedResumableCheckPacket(fixture, [retiredStage], { head: "f".repeat(40), plan_digest: createHash("sha256").update(retiredStage).digest("hex"), stages: [{ stage: retiredStage, completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }], next_stage: retiredStage, failed_stage: retiredStage, updated_at: failedAt }); }, expected: "plan digest is not current or a recognized legacy plan" },
       { name: "malformed partial", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64) }), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },
       { name: "owner", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { owner: "other-runner" }), expected: "binding changed" },
       { name: "malformed", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureFailedResumableCheckPacket(fixture, stages), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },

@@ -64,6 +64,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         _read_strict_utf8_memory_artifact,
         _restore_private_memory_backup_mode,
         _restore_memory_artifact_after_lost_reservation,
+        _yaml_string,
     )
     import supervisor.application.service as service_module
 
@@ -80,6 +81,9 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     legacy_artifact.write_bytes(b"---\nstatus: approved\n---\n\xff")
     with pytest.raises(ValueError, match="not valid UTF-8"):
         _read_strict_utf8_memory_artifact(legacy_artifact)
+    with pytest.raises(ValueError, match="single-line"):
+        _yaml_string('operator\nwork_item_id: forged')
+    assert _yaml_string('operator "quoted"') == 'operator \\"quoted\\"'
 
     preliminary_backup = tmp_path / "preliminary-backup"
     preliminary_backup.mkdir()
@@ -5101,6 +5105,12 @@ def test_migrated_memory_proposal_update_returns_the_v1_review_shape(tmp_path, m
         finally:
             database.close()
 
+        import supervisor.api.main as main_module
+
+        async def _unexpected_full_review(*_args, **_kwargs):
+            raise AssertionError("PATCH must not rebuild the full memory review after commit")
+
+        monkeypatch.setattr(main_module.service, "get_work_item_memory_review", _unexpected_full_review)
         updated = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/{route_id}",
             json={"expectedRevision": 1, "status": "rejected", "operatorAction": "reject"},
