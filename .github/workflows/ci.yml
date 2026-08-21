@@ -330,6 +330,61 @@ jobs:
           path: ${{ runner.temp }}/static-bundle-summary/static-bundle-summary.json
           if-no-files-found: warn
 
+  promotion_evidence_summary:
+    if: always() && github.event_name == 'pull_request'
+    needs:
+      - changes
+      - static_bundle
+      - supervisor
+      - workspace_behavior_shadow
+      - supervisor_behavior_shadow
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Check out PR head for source identity
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Download command evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-command-evidence-*
+          path: ${{ runner.temp }}/ci-promotion-reports
+          merge-multiple: true
+
+      - name: Download workspace aggregate evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: static-bundle-report-workspace
+          path: ${{ runner.temp }}/ci-promotion-reports
+
+      - name: Collect same-head route observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="${RUNNER_TEMP}/ci-promotion-observation"
+          mkdir -p "$out_dir"
+          node ./scripts/collect-ci-promotion-observations.mjs \
+            --reports-dir "${RUNNER_TEMP}/ci-promotion-reports" \
+            --out "$out_dir/observation.json" \
+            --pair-id "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
+            --environment-id "github-actions-ubuntu-latest-node22"
+
+      - name: Upload promotion observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-promotion-observation
+          path: ${{ runner.temp }}/ci-promotion-observation/observation.json
+          if-no-files-found: warn
+
   javascript:
     if: github.event_name == 'pull_request' && needs.changes.outputs.javascript == 'true'
     needs: changes

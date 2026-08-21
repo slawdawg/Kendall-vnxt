@@ -8,6 +8,7 @@ const suites = {
     "check:workspace-coordination",
     "test:ci-promotion-evidence",
     "test:ci-evidence-command",
+    "test:ci-promotion-observations",
   ],
   workspace: [
     "test:codex-workspace-state",

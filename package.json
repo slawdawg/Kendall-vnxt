@@ -71,6 +71,7 @@
     "test:static-bundles": "node --test tests/static-bundles.test.mjs",
     "test:ci-promotion-evidence": "node --test tests/ci-promotion-evidence.test.mjs",
     "test:ci-evidence-command": "node --test tests/ci-evidence-command.test.mjs",
+    "test:ci-promotion-observations": "node --test tests/ci-promotion-observations.test.mjs",
     "test:static-bundle-summary": "node --test tests/static-bundles.test.mjs",
     "check:static-core": "node ./scripts/run-static-bundle.mjs core",
     "check:static-manager": "node ./scripts/run-static-bundle.mjs manager",

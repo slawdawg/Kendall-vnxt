@@ -140,6 +140,7 @@ for (const ciFastCommand of [
   '"check:workspace-coordination"',
   '"test:ci-promotion-evidence"',
   '"test:ci-evidence-command"',
+  '"test:ci-promotion-observations"',
 ]) {
   assertCondition(
     fastWorkflowRunner.includes(ciFastCommand),
@@ -156,6 +157,7 @@ for (const ciText of [
   "supervisor_behavior_shadow:",
   "static_bundle:",
   "static_bundle_summary:",
+  "promotion_evidence_summary:",
   "needs: changes",
   "fail-fast: false",
   "fromJSON(needs.changes.outputs.selected_workspace_profiles)",
@@ -174,6 +176,8 @@ for (const ciText of [
   "actions/download-artifact@v4",
   "static-bundle-report-${{ matrix.bundle }}",
   "static-bundle-summary",
+  "ci-promotion-observation",
+  "node ./scripts/collect-ci-promotion-observations.mjs",
   "node ./scripts/summarize-static-bundle-reports.mjs",
   "--static-result \"${{ needs.static.result }}\"",
   "--static-bundle-result \"${{ needs.static_bundle.result }}\"",
@@ -209,6 +213,14 @@ for (const ciText of [
 assertCondition(
   ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
   ".github/workflows/ci.yml static job must be gated by needs.changes.outputs.static == 'true'",
+  failures,
+);
+assertCondition(
+  ciJobBlock("promotion_evidence_summary").includes("continue-on-error: true") &&
+    ciJobBlock("promotion_evidence_summary").includes("ci-command-evidence-*") &&
+    ciJobBlock("promotion_evidence_summary").includes("static-bundle-report-workspace") &&
+    ciJobBlock("promotion_evidence_summary").includes("ci-promotion-observation"),
+  ".github/workflows/ci.yml promotion evidence summary must remain reporting-only and preserve command and workspace aggregate artifacts",
   failures,
 );
 assertCondition(
