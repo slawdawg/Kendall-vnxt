@@ -72,6 +72,11 @@ const resumableCheckPacketSchemaVersion = 1;
 // packets derive their bounded lifetime from each leaf's reviewed budget.
 // Keep a small minimum for ordinary resume/preflight overhead on short plans.
 const resumableCheckPacketMinimumLifetimeMs = 20 * 60 * 1000;
+// Schema-v1 packets did not record their per-plan budget.  Their former
+// three-hour ceiling remains accepted only by the discard-only validators so
+// a stale terminal packet can be proven safe and replaced; it can never be
+// resumed or used to run a new verification stage.
+const resumableCheckLegacyPacketMaximumLifetimeMs = 3 * 60 * 60 * 1000;
 const resumableCheckPacketFutureSkewMs = 30_000;
 // Retry history is audit evidence, not a scheduler. Thirty seconds tolerates
 // ordinary local clock skew while rejecting timestamps projected far enough
@@ -15135,6 +15140,10 @@ function resumableCheckPacketLifetimeMs(plan) {
   return Math.max(resumableCheckPacketMinimumLifetimeMs, executionBudgetMs);
 }
 
+function resumableCheckDiscardPacketMaximumLifetimeMs(plan) {
+  return Math.max(resumableCheckPacketLifetimeMs(plan), resumableCheckLegacyPacketMaximumLifetimeMs);
+}
+
 function resumableCheckObsoleteSupervisorAggregatePlan(plan) {
   const firstLeaf = plan.stages.indexOf(resumableCheckSupervisorLeaves[0]);
   const lastLeaf = plan.stages.lastIndexOf(resumableCheckSupervisorLeaves.at(-1));
@@ -15511,7 +15520,7 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at");
-  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckDiscardPacketMaximumLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   let previousCompletedAt = createdAt;
@@ -15553,7 +15562,7 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
-  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckDiscardPacketMaximumLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   const history = [];
