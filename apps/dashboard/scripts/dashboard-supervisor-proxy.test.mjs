@@ -131,6 +131,7 @@ test("artifact writes use their dedicated vault-durability deadline", async () =
       if (
         request.url === "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft"
         || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-rebuild"
+        || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write"
       ) {
         setTimeout(() => response.end(JSON.stringify({ data: { proposalId: "proposal-1" } })), 40);
         return;
@@ -170,6 +171,16 @@ test("artifact writes use their dedicated vault-durability deadline", async () =
     });
     assert.equal(rebuild.status, 200);
     assert.deepEqual(rebuild.body.data, { proposalId: "proposal-1" });
+    const recovery = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write", {
+      method: "POST",
+      headers: {
+        cookie: "session=ok; kendall_operator_csrf=csrf-ok",
+        origin: `https://127.0.0.1:${port}`,
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    assert.equal(recovery.status, 200);
+    assert.deepEqual(recovery.body.data, { proposalId: "proposal-1" });
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);

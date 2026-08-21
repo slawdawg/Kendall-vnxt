@@ -178,7 +178,11 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
     const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
     const memoryProposalMutation = MEMORY_PROPOSAL_MUTATION_PATH.test(targetPath);
-    const memoryProposalArtifactWrite = /\/(?:ai-draft|llm-wiki-rebuild)$/.test(targetPath);
+    // These operations may copy/fsync an entire configured vault. Recovery
+    // can also remove or reconcile a full interrupted backup, so it shares
+    // the write durability deadline rather than returning an ambiguous 503
+    // under the normal dashboard read deadline.
+    const memoryProposalArtifactWrite = /\/(?:ai-draft|llm-wiki-rebuild)$/.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
     if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
       sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
       return true;

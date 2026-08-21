@@ -72,6 +72,12 @@ const resumableCheckPacketSchemaVersion = 1;
 // packets derive their bounded lifetime from each leaf's reviewed budget.
 // Keep a small minimum for ordinary resume/preflight overhead on short plans.
 const resumableCheckPacketMinimumLifetimeMs = 20 * 60 * 1000;
+// A packet can be resumed between bounded leaves. Reserve a small fixed
+// admission/write allowance plus a bounded per-leaf allowance for process
+// startup and manifest durability, so a healthy interrupted plan does not
+// expire solely between successful leaves.
+const resumableCheckPacketResumeOverheadMs = 2 * 60 * 1000;
+const resumableCheckPacketStageOrchestrationReserveMs = 30 * 1000;
 // Schema-v1 packets did not record their per-plan budget.  Their former
 // three-hour ceiling remains accepted only by the discard-only validators so
 // a stale terminal packet can be proven safe and replaced; it can never be
@@ -15137,7 +15143,8 @@ function resumableCheckPacketLifetimeMs(plan) {
     if (resumableCheckSupervisorLeafSet.has(stage)) return total + resumableCheckSupervisorLeafExecutionReserveMs;
     return total + resumableCheckInvocationBudgetMs;
   }, 0);
-  return Math.max(resumableCheckPacketMinimumLifetimeMs, executionBudgetMs);
+  const orchestrationReserveMs = resumableCheckPacketResumeOverheadMs + stages.length * resumableCheckPacketStageOrchestrationReserveMs;
+  return Math.max(resumableCheckPacketMinimumLifetimeMs, executionBudgetMs + orchestrationReserveMs);
 }
 
 function resumableCheckDiscardPacketMaximumLifetimeMs(plan) {

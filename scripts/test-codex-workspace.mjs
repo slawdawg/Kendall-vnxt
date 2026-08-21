@@ -8832,6 +8832,37 @@ try {
     }
   });
 
+  test("finish-pr retains bounded orchestration headroom for a healthy resumable packet", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const executionBudgetMs = stages.length * 180_000;
+      const lifetimeMs = executionBudgetMs + 2 * 60_000 + stages.length * 30_000;
+      const createdAt = new Date(Date.now() - executionBudgetMs - 30_000);
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        created_at: createdAt.toISOString(),
+        updated_at: createdAt.toISOString(),
+        expires_at: new Date(createdAt.getTime() + lifetimeMs).toISOString(),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "fixture pause unexpectedly completed the packet");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "packet ran a stage before the pause seam");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr resumable check packet records a nonzero stage without raw output and blocks delivery", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
