@@ -9091,6 +9091,27 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-local-verification-contracts",
+                label="Local verification contract tests",
+                command="pnpm run test:local-verification-contracts",
+                status="required",
+                requiredFor=["local verification JSON contract changes", "agent lifecycle planning changes"],
+            ),
+            VerificationCommandView(
+                commandId="test-local-verification-state-store",
+                label="Local verification state-store tests",
+                command="pnpm run test:local-verification-state-store",
+                status="required",
+                requiredFor=["local verification receipt reuse", "durable lifecycle state changes"],
+            ),
+            VerificationCommandView(
+                commandId="test-local-verification-lifecycle",
+                label="Local verification lifecycle tests",
+                command="pnpm run test:local-verification-lifecycle",
+                status="required",
+                requiredFor=["owned verifier start/resume/cancel", "progress and failure scheduling changes"],
+            ),
+            VerificationCommandView(
                 commandId="test-supervisor-runner",
                 label="Supervisor runner diagnostics tests",
                 command="pnpm run test:supervisor-runner",

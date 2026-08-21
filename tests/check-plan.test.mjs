@@ -48,6 +48,17 @@ test("check plan maps CI acceleration planner files to focused planner tests", (
   assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:static-bundles"));
 });
 
+test("check plan maps local verification lifecycle files to their focused tests", () => {
+  const plan = buildCheckPlan([
+    "scripts/lib/local-verification/lifecycle.mjs",
+    "tests/local-verification-lifecycle.test.mjs",
+  ]);
+
+  assert.equal(plan.requiresFullStatic, false);
+  assert.deepEqual(plan.surfaces, ["localVerification"]);
+  assert.ok(plan.commands.some((command) => command.commandText === "pnpm run test:local-verification-lifecycle"));
+});
+
 test("check plan maps static bundle files to focused bundle tests", () => {
   const plan = buildCheckPlan([
     "scripts/run-static-bundle.mjs",

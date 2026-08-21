@@ -1962,6 +1962,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:fast", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:manager-lifecycle-status-parity", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:check-plan", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:local-verification-contracts", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:local-verification-state-store", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:local-verification-lifecycle", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:supervisor-runner", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:supervisor:review-route", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:static-bundles", { exact: true })).toBeVisible();
