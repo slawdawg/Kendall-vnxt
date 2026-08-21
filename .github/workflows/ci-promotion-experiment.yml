@@ -209,6 +209,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: git fetch origin main:refs/remotes/origin/main
 
+      - run: git config core.hooksPath .githooks
+
       - name: Measure or inject baseline workspace route
         shell: bash
         run: |
