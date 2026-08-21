@@ -181,6 +181,10 @@ jobs:
         run: |
           set -euo pipefail
           evidence_dir="${RUNNER_TEMP}/ci-command-evidence"
+          command=(pnpm run ${{ matrix.shard.script }})
+          if [ "${{ matrix.shard.id }}" = "integration-work-packets" ]; then
+            command+=(-- --timeout-ms=210000)
+          fi
           node ./scripts/run-ci-evidence-command.mjs \
             --report "$evidence_dir/supervisor-${{ matrix.shard.id }}.json" \
             --route proposed \
@@ -190,7 +194,7 @@ jobs:
             --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
             --environment-id "github-actions-ubuntu-latest-node22" \
             --cache-key "github-actions-run-${{ github.run_id }}" \
-            -- pnpm run ${{ matrix.shard.script }}
+            -- "${command[@]}"
 
       - name: Upload supervisor behavior evidence
         if: always()

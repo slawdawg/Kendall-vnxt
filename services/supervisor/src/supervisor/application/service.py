@@ -1135,6 +1135,27 @@ class SupervisorService:
         packet_id = payload.packetId or f"packet-{uuid.uuid4()}"
         existing_packet = await session.get(AuthoritativeWorkPacket, packet_id)
         if existing_packet:
+            if is_manager_source_intake:
+                # A concurrent request can mint its candidate contract before
+                # the winner commits, then observe the durable packet here.
+                # Replay against the winner's supervisor-owned contract rather
+                # than comparing its stale, never-persisted candidate.
+                existing_contract = self._canonical_contract_from_packet_metadata(existing_packet.source_ref_json)
+                if (
+                    existing_contract is None
+                    or not self._is_server_minted_manager_source_intake_contract(
+                        existing_contract,
+                        existing_packet.source_ref_json,
+                        existing_packet.id,
+                    )
+                ):
+                    raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
+                payload = payload.model_copy(update={"canonicalContract": existing_contract})
+                source_ref = self._authoritative_source_ref_payload(
+                    payload.sourceRef,
+                    existing_contract,
+                    trusted_manager_packet_id=payload.packetId if manager_source_intake_authorized else None,
+                )
             return await self._refresh_or_replay_authoritative_work_packet(
                 session,
                 packet_id=packet_id,

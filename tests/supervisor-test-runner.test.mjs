@@ -7,11 +7,11 @@ import test from "node:test";
 
 const runner = "scripts/run-supervisor-tests.mjs";
 
-test("work-packets behavior shard retains its independently bounded timeout", () => {
+test("work-packets behavior shard retains the fixed package-level timeout", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
   assert.match(
     packageJson.scripts["test:supervisor:check:integration:work-packets"],
-    /--timeout-ms=210000 tests\/integration\/test_work_packets\.py -q/,
+    /--timeout-ms=150000 tests\/integration\/test_work_packets\.py -q/,
   );
 });
 
