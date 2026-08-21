@@ -24,7 +24,8 @@ and migration surfaces still fail closed to a named elevated matrix.
    standalone scheduled/manual workflow, so experimental evidence collection
    cannot prevent the required PR CI from starting. After merge, it collects
    two ordinary and two controlled pairs per UTC day, aggregates only
-   successful isolated-cache observations, and publishes the evaluator packet
+   successful isolated-cache observations, retains each planner-selected
+   shard/profile set in the observation, and publishes the evaluator packet
    and status artifact. Each vector must prove the same failure reaches both
    baseline and proposed final fan-ins.
 5. Run full confidence after merge to `dev`, plus scheduled and manual routes,
