@@ -44,7 +44,8 @@ function routeSummary(records) {
   };
 }
 
-export function collectCiPromotionObservations({ reportsDir, pairId, source, generatedAt = new Date().toISOString() }) {
+export function collectCiPromotionObservations({ reportsDir, pairId, source, cohort = "ordinary", generatedAt = new Date().toISOString() }) {
+  if (!["ordinary", "controlled_failure"].includes(cohort)) throw new Error(`Unsupported evidence cohort ${cohort}`);
   const warnings = [];
   const records = [];
   for (const path of findJsonFiles(reportsDir)) {
@@ -82,6 +83,7 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, gen
     recordType: "ci-promotion-observation",
     generatedAt,
     pairId,
+    cohort,
     source,
     cacheControl: { strategy: "observed" },
     vectors,
@@ -90,13 +92,13 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, gen
 }
 
 export function parseObservationArgs(argv) {
-  const options = { reportsDir: null, out: null, pairId: null, headSha: null, baseSha: null, lockfileSha: null, environmentId: null };
+  const options = { reportsDir: null, out: null, pairId: null, headSha: null, baseSha: null, lockfileSha: null, environmentId: null, cohort: "ordinary" };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const value = argv[index + 1];
     const names = {
       "--reports-dir": "reportsDir", "--out": "out", "--pair-id": "pairId", "--head-sha": "headSha",
-      "--base-sha": "baseSha", "--lockfile-sha": "lockfileSha", "--environment-id": "environmentId",
+      "--base-sha": "baseSha", "--lockfile-sha": "lockfileSha", "--environment-id": "environmentId", "--cohort": "cohort",
     };
     const key = names[arg];
     if (!key) throw new Error(`Unknown option ${arg}`);
@@ -105,6 +107,7 @@ export function parseObservationArgs(argv) {
     index += 1;
   }
   for (const [key, value] of Object.entries(options)) if (!value) throw new Error(`Missing --${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`);
+  if (!["ordinary", "controlled_failure"].includes(options.cohort)) throw new Error("--cohort must be ordinary or controlled_failure");
   return options;
 }
 
@@ -114,6 +117,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const observation = collectCiPromotionObservations({
       reportsDir: options.reportsDir,
       pairId: options.pairId,
+      cohort: options.cohort,
       source: { headSha: options.headSha, baseSha: options.baseSha, lockfileSha: options.lockfileSha, environmentId: options.environmentId },
     });
     mkdirSync(dirname(options.out), { recursive: true });

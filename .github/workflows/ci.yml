@@ -372,6 +372,7 @@ jobs:
             --reports-dir "${RUNNER_TEMP}/ci-promotion-reports" \
             --out "$out_dir/observation.json" \
             --pair-id "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --cohort ordinary \
             --head-sha "${{ github.event.pull_request.head.sha }}" \
             --base-sha "${{ github.event.pull_request.base.sha }}" \
             --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \

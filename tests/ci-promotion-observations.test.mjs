@@ -24,8 +24,23 @@ test("promotion observation aggregates the proposed critical path and retains so
   assert.equal(observation.vectors[0].proposed.executionMs, 250);
   assert.equal(observation.vectors[0].sourceMatched, true);
   assert.equal(observation.vectors[0].readyForPromotion, false);
+  assert.equal(observation.cohort, "ordinary");
+});
+
+test("promotion observations retain a controlled-failure cohort", () => {
+  const directory = mkdtempSync(join(tmpdir(), "ci-promotion-controlled-"));
+  writeFileSync(
+    join(directory, "baseline.json"),
+    JSON.stringify(commandRecord("baseline", { id: "supervisor-elevated", shape: "aggregate" }, 800)),
+  );
+  const observation = collectCiPromotionObservations({ reportsDir: directory, pairId: "run-controlled", source, cohort: "controlled_failure" });
+  assert.equal(observation.cohort, "controlled_failure");
 });
 
 test("promotion observation parser requires a complete source identity", () => {
   assert.throws(() => parseObservationArgs(["--reports-dir", "reports"]), /Missing --out/);
+  assert.throws(
+    () => parseObservationArgs(["--reports-dir", "reports", "--out", "out", "--pair-id", "pair", "--head-sha", "head", "--base-sha", "base", "--lockfile-sha", "lock", "--environment-id", "ubuntu", "--cohort", "bad"]),
+    /--cohort/,
+  );
 });
