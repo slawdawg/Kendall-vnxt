@@ -2318,21 +2318,21 @@ class SupervisorService:
             proposals,
             item.id,
         )
+        ai_draft_eligibility = await self._memory_proposal_ai_draft_eligibility_for_review(
+            session,
+            proposals,
+            proposal_views,
+            alpha_source_refs,
+            evidence_refs,
+            item.id,
+        )
         proposal_views = [
             proposal_view.model_copy(update={
-                "aiDraftEligible": await self._memory_proposal_ai_draft_eligible(
-                    session,
-                    proposal,
-                    proposal_view,
-                    alpha_source_refs,
-                    evidence_refs,
-                    item.id,
-                    write_in_progress=proposal.write_action_token is not None,
-                ),
+                "aiDraftEligible": ai_draft_eligible_value,
                 "llmWikiArtifactSearchEligible": artifact_eligible_value,
             })
-            for proposal, proposal_view, artifact_eligible_value in zip(
-                proposals, proposal_views, eligibility, strict=True
+            for proposal_view, ai_draft_eligible_value, artifact_eligible_value in zip(
+                proposal_views, ai_draft_eligibility, eligibility, strict=True
             )
         ]
         return WorkItemMemoryReviewV1View(
@@ -2384,53 +2384,54 @@ class SupervisorService:
         work_item_id: str,
         *,
         write_in_progress: bool = False,
+        config: dict[str, object] | None = None,
+        ambiguous_legacy_proposal_ids: set[str] | None = None,
     ) -> bool:
-        try:
-            config = self._load_obsidian_memory_draft_config()
-            configured_folder = str(config["draft_folder"])
-        except (OSError, UnicodeError, ValueError):
-            return False
-        if proposal_view.targetVaultFolder.strip().strip("/") != configured_folder:
-            return False
+        if config is None:
+            try:
+                config = self._load_obsidian_memory_draft_config()
+            except (OSError, UnicodeError, ValueError):
+                return False
         # Eligibility is an advertised server action contract, not merely a
         # provenance readiness hint. Reuse the writer's deterministic target
         # selection and fail closed when an occupied leaf cannot be read and
         # bound to this exact proposal before any write reservation is made.
+        # Keep the complete vault probe off the request event loop: a mounted
+        # vault can make even exists()/stat() slow, not only the bounded read.
         try:
-            vault_root = _existing_non_symlink_directory(Path(config["vault_root"]))
-            draft_dir = vault_root / configured_folder
-            if draft_dir.exists():
-                draft_dir = _existing_non_symlink_directory(draft_dir)
-                draft_dir.relative_to(vault_root)
-            elif draft_dir.parent.exists():
-                _existing_non_symlink_directory(draft_dir.parent).relative_to(vault_root)
             safe_id = (
                 _safe_memory_proposal_id(proposal.proposal_id)
                 if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
                 else proposal.id
             )
-            draft_path = self._persisted_or_generated_memory_artifact_path(
-                vault_root,
-                draft_dir,
-                proposal.target_vault_path,
-                _memory_artifact_filename("", proposal.label, f"{safe_id}-{proposal.id}"),
-                _memory_artifact_filename("", proposal.label, safe_id),
+            target_is_eligible, existing_metadata = await asyncio.to_thread(
+                self._memory_proposal_ai_draft_artifact_probe,
+                proposal,
+                proposal_view,
+                config,
+                safe_id,
             )
-            if draft_path.exists():
-                existing_metadata, _ = self._parse_llm_wiki_artifact(
-                    await asyncio.to_thread(_read_bounded_utf8_text, draft_path)
-                )
-                if not await self._llm_wiki_artifact_matches_proposal(
-                    session,
-                    proposal=proposal,
-                    work_item_id=work_item_id,
-                    expected_proposal_id=safe_id,
-                    expected_status="ai-draft",
-                    metadata=existing_metadata,
-                ):
-                    return False
         except (OSError, UnicodeError, ValueError):
             return False
+        if not target_is_eligible:
+            return False
+        if existing_metadata is not None:
+            artifact_work_item_id = existing_metadata.get("work_item_id")
+            if artifact_work_item_id is not None:
+                if artifact_work_item_id != work_item_id:
+                    return False
+            elif ambiguous_legacy_proposal_ids is not None:
+                if proposal.proposal_id in ambiguous_legacy_proposal_ids:
+                    return False
+            elif not await self._llm_wiki_artifact_matches_proposal(
+                session,
+                proposal=proposal,
+                work_item_id=work_item_id,
+                expected_proposal_id=safe_id,
+                expected_status="ai-draft",
+                metadata=existing_metadata,
+            ):
+                return False
         selected_sources = [source_ref for source_ref in source_refs if source_ref.refId in set(proposal_view.sourceRefs)]
         readiness = self._llm_wiki_readiness(
             f"work_item:{work_item_id}", selected_sources, evidence_refs, [proposal_view]
@@ -2444,6 +2445,95 @@ class SupervisorService:
             and proposal_view.contradictionStatus == "none"
             and readiness.decisionState == "ready"
         )
+
+    def _memory_proposal_ai_draft_artifact_probe(
+        self,
+        proposal: MemoryProposal,
+        proposal_view: WorkItemMemoryReviewProposalV1View,
+        config: dict[str, object],
+        safe_id: str,
+    ) -> tuple[bool, dict[str, str] | None]:
+        """Resolve one AI-draft path and bounded metadata entirely off-loop."""
+        configured_folder = str(config["draft_folder"])
+        if proposal_view.targetVaultFolder.strip().strip("/") != configured_folder:
+            return False, None
+        vault_root = _existing_non_symlink_directory(Path(config["vault_root"]))
+        draft_dir = vault_root / configured_folder
+        if draft_dir.exists():
+            draft_dir = _existing_non_symlink_directory(draft_dir)
+            draft_dir.relative_to(vault_root)
+        elif draft_dir.parent.exists():
+            _existing_non_symlink_directory(draft_dir.parent).relative_to(vault_root)
+        draft_path = self._persisted_or_generated_memory_artifact_path(
+            vault_root,
+            draft_dir,
+            proposal.target_vault_path,
+            _memory_artifact_filename("", proposal.label, f"{safe_id}-{proposal.id}"),
+            _memory_artifact_filename("", proposal.label, safe_id),
+        )
+        if not draft_path.exists():
+            return True, None
+        existing_metadata, _ = self._parse_llm_wiki_artifact(_read_bounded_utf8_text(draft_path))
+        if (
+            existing_metadata.get("proposal_id") != safe_id
+            or existing_metadata.get("status") != "ai-draft"
+        ):
+            return False, None
+        return True, existing_metadata
+
+    async def _memory_proposal_ai_draft_eligibility_for_review(
+        self,
+        session: AsyncSession,
+        proposals: list[MemoryProposal],
+        proposal_views: list[WorkItemMemoryReviewProposalV1View],
+        source_refs: list[AuthoritativePacketSourceRefView],
+        evidence_refs: list[EvidenceRefV0View],
+        work_item_id: str,
+    ) -> list[bool]:
+        """Project bounded AI-draft eligibility without serial vault probes.
+
+        A WorkItem detail read has a short proxy deadline.  Load shared
+        configuration and the one legacy-ID ambiguity snapshot before starting
+        any bounded artifact reads, then keep the AsyncSession out of the
+        concurrent probe tasks.
+        """
+        if not proposals:
+            return []
+        try:
+            config = self._load_obsidian_memory_draft_config()
+        except (OSError, UnicodeError, ValueError):
+            return [False] * len(proposals)
+        proposal_ids = sorted({proposal.proposal_id for proposal in proposals})
+        duplicate_rows = await session.execute(
+            select(MemoryProposal.proposal_id)
+            .where(MemoryProposal.proposal_id.in_(proposal_ids))
+            .group_by(MemoryProposal.proposal_id)
+            .having(func.count(MemoryProposal.id) > 1)
+        )
+        ambiguous_legacy_proposal_ids = {str(row[0]) for row in duplicate_rows}
+        semaphore = asyncio.Semaphore(MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY)
+
+        async def eligible(
+            proposal: MemoryProposal,
+            proposal_view: WorkItemMemoryReviewProposalV1View,
+        ) -> bool:
+            async with semaphore:
+                return await self._memory_proposal_ai_draft_eligible(
+                    session,
+                    proposal,
+                    proposal_view,
+                    source_refs,
+                    evidence_refs,
+                    work_item_id,
+                    write_in_progress=proposal.write_action_token is not None,
+                    config=config,
+                    ambiguous_legacy_proposal_ids=ambiguous_legacy_proposal_ids,
+                )
+
+        return list(await asyncio.gather(*(
+            eligible(proposal, proposal_view)
+            for proposal, proposal_view in zip(proposals, proposal_views, strict=True)
+        )))
 
     async def _memory_proposal_llm_wiki_artifact_search_eligible(
         self,

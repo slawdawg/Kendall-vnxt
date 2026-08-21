@@ -394,6 +394,86 @@ def test_async_memory_artifact_lock_retries_nonblocking_flock_without_executor_w
     assert "asyncio.to_thread(fcntl.flock" not in lock_section
 
 
+def test_memory_review_ai_draft_eligibility_uses_shared_state_and_bounded_concurrency(monkeypatch) -> None:
+    """A many-proposal read cannot serially consume the dashboard proxy deadline."""
+    from supervisor.application.service import (
+        MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY,
+        SupervisorService,
+    )
+
+    service = object.__new__(SupervisorService)
+    config_loads = 0
+    active = 0
+    maximum_active = 0
+    probe_threads: set[int] = set()
+    counter_lock = threading.Lock()
+    main_thread_id = threading.get_ident()
+
+    def load_config() -> dict[str, object]:
+        nonlocal config_loads
+        config_loads += 1
+        return {"draft_folder": "01 Dashboard Queue/AI Drafts", "vault_root": "/unused"}
+
+    class EmptyDuplicateRowsSession:
+        async def execute(self, *_args, **_kwargs):
+            return []
+
+    def bounded_probe(*_args, **_kwargs) -> tuple[bool, None]:
+        nonlocal active, maximum_active
+        with counter_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            probe_threads.add(threading.get_ident())
+        try:
+            time.sleep(0.01)
+            return True, None
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(service, "_load_obsidian_memory_draft_config", load_config)
+    monkeypatch.setattr(service, "_memory_proposal_ai_draft_artifact_probe", bounded_probe)
+    monkeypatch.setattr(service, "_llm_wiki_readiness", lambda *_args: SimpleNamespace(decisionState="blocked"))
+    proposals = [
+        SimpleNamespace(
+            id=f"route-{index}",
+            proposal_id=f"proposal-{index}",
+            label=f"Proposal {index}",
+            write_action_token=None,
+            target_vault_path=None,
+        )
+        for index in range(MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY + 2)
+    ]
+    proposal_views = [
+        SimpleNamespace(
+            proposalId=f"proposal-{index}",
+            targetVaultFolder="01 Dashboard Queue/AI Drafts",
+            sourceRefs=[],
+            status="approved",
+            operatorAction="approve",
+            writeBackStatus="approved_for_future",
+            writeBackAllowed=False,
+            freshness="fresh",
+            contradictionStatus="none",
+        )
+        for index, _ in enumerate(proposals)
+    ]
+
+    eligible = asyncio.run(service._memory_proposal_ai_draft_eligibility_for_review(
+        EmptyDuplicateRowsSession(),
+        proposals,
+        proposal_views,
+        [],
+        [],
+        "work-item-1",
+    ))
+
+    assert eligible == [False] * len(proposals)
+    assert config_loads == 1
+    assert maximum_active == MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY
+    assert probe_threads and main_thread_id not in probe_threads
+
+
 def test_async_memory_artifact_lock_closes_descriptors_after_cancelled_open(tmp_path, monkeypatch) -> None:
     """Cancellation joins a completed open worker and closes its descriptors."""
     from supervisor.application.service import _async_memory_artifact_lock
@@ -5136,7 +5216,9 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         eligibility_section.index("async def _memory_proposal_ai_draft_eligible"):
         eligibility_section.index("async def _memory_proposal_llm_wiki_artifact_search_eligible")
     ]
-    assert "_read_bounded_utf8_text, draft_path" in eligibility_section
+    assert "await asyncio.to_thread(" in eligibility_section
+    assert "self._memory_proposal_ai_draft_artifact_probe" in eligibility_section
+    assert "def _memory_proposal_ai_draft_artifact_probe" in eligibility_section
     assert "_read_strict_utf8_memory_artifact, draft_path" not in eligibility_section
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft.db") as client:
         work_item = _create_work_item(
