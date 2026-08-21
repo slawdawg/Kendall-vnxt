@@ -4864,18 +4864,35 @@ def test_memory_review_keeps_later_artifact_eligibility_visible(tmp_path, monkey
         from supervisor.api.main import service
 
         probed: list[str] = []
+        active_probes = 0
+        max_active_probes = 0
 
-        async def eligible(_session, proposal, _work_item_id: str) -> bool:
+        async def eligible(_session, proposal, _work_item_id: str, **_kwargs) -> bool:
+            nonlocal active_probes, max_active_probes
             probed.append(proposal.proposal_id)
+            active_probes += 1
+            max_active_probes = max(max_active_probes, active_probes)
+            await asyncio.sleep(0.01)
+            active_probes -= 1
             return True
 
+        monkeypatch.setattr(
+            service,
+            "_load_obsidian_memory_draft_config",
+            lambda: {
+                "vault_root": str(tmp_path),
+                "draft_folder": "different-draft-folder",
+                "llm_wiki_folder": "different-llm-wiki-folder",
+            },
+        )
         monkeypatch.setattr(service, "_memory_proposal_llm_wiki_artifact_search_eligible", eligible)
         review_response = client.get(
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
         )
 
         assert review_response.status_code == 200, review_response.text
-        assert probed == proposal_ids
+        assert set(probed) == set(proposal_ids)
+        assert 1 < max_active_probes <= 4
         eligibility = {
             proposal["proposalId"]: proposal["llmWikiArtifactSearchEligible"]
             for proposal in review_response.json()["data"]["proposals"]

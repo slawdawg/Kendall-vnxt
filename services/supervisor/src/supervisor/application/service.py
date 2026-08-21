@@ -839,6 +839,12 @@ AUTHORITATIVE_PACKET_STAGE_LABELS = {
 
 PIPELINE_DASHBOARD_STALE_AFTER_SECONDS = 15
 MAX_LLM_WIKI_ARTIFACT_READ_BYTES = 200_000
+# The WorkItem memory-review read can contain an unbounded number of persisted
+# proposals.  Artifact eligibility is deliberately I/O-bound, so perform the
+# independent filesystem checks with bounded parallelism after collecting the
+# one shared database ambiguity snapshot.  Do not issue concurrent SQL on one
+# AsyncSession.
+MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY = 4
 # Keep generated names comfortably below common 255-byte filesystem component
 # limits while preserving an opaque proposal fence in every new artifact name.
 # `_atomic_write_memory_artifact` appends `.<uuid>.tmp` in the same directory;
@@ -2260,12 +2266,11 @@ class SupervisorService:
             proposal_views,
         )
         readiness = self._llm_wiki_readiness(f"work_item:{item.id}", alpha_source_refs, evidence_refs, proposal_views)
-        # One AsyncSession cannot safely issue concurrent SQL work. Inspect
-        # every persisted proposal serially rather than hiding later artifacts.
-        eligibility = [
-            await self._memory_proposal_llm_wiki_artifact_search_eligible(session, proposal, item.id)
-            for proposal in proposals
-        ]
+        eligibility = await self._memory_proposal_llm_wiki_artifact_search_eligibility_for_review(
+            session,
+            proposals,
+            item.id,
+        )
         proposal_views = [
             proposal_view.model_copy(update={
                 "aiDraftEligible": await self._memory_proposal_ai_draft_eligible(
@@ -2398,14 +2403,18 @@ class SupervisorService:
         session: AsyncSession,
         proposal: MemoryProposal,
         work_item_id: str,
+        *,
+        config: dict[str, object] | None = None,
+        ambiguous_legacy_proposal_ids: set[str] | None = None,
     ) -> bool:
         """Project only a verified, bound derived artifact as searchable."""
         if proposal.write_action_token is not None:
             return False
-        try:
-            config = self._load_obsidian_memory_draft_config()
-        except (OSError, UnicodeError, ValueError):
-            return False
+        if config is None:
+            try:
+                config = self._load_obsidian_memory_draft_config()
+            except (OSError, UnicodeError, ValueError):
+                return False
         folder = str(config["llm_wiki_folder"]).strip().strip("/")
         target = (proposal.target_vault_path or "").strip().strip("/")
         if not folder or proposal.target_vault_folder.strip().strip("/") != folder:
@@ -2434,6 +2443,16 @@ class SupervisorService:
             if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
             else proposal.id
         )
+        if (
+            metadata.get("proposal_id") != expected_proposal_id
+            or metadata.get("status") != "llm-wiki-derived"
+        ):
+            return False
+        artifact_work_item_id = metadata.get("work_item_id")
+        if artifact_work_item_id is not None:
+            return artifact_work_item_id == work_item_id
+        if ambiguous_legacy_proposal_ids is not None:
+            return proposal.proposal_id not in ambiguous_legacy_proposal_ids
         return await self._llm_wiki_artifact_matches_proposal(
             session,
             proposal=proposal,
@@ -2442,6 +2461,47 @@ class SupervisorService:
             expected_status="llm-wiki-derived",
             metadata=metadata,
         )
+
+    async def _memory_proposal_llm_wiki_artifact_search_eligibility_for_review(
+        self,
+        session: AsyncSession,
+        proposals: list[MemoryProposal],
+        work_item_id: str,
+    ) -> list[bool]:
+        """Read bounded artifact eligibility without serial per-proposal I/O.
+
+        The legacy artifact fallback needs one global duplicate-display-ID
+        snapshot.  Collect that before starting tasks, then run only
+        filesystem/config work concurrently.  This keeps a single AsyncSession
+        out of concurrent use while bounding slow vault probes.
+        """
+        if not proposals:
+            return []
+        try:
+            config = self._load_obsidian_memory_draft_config()
+        except (OSError, UnicodeError, ValueError):
+            return [False] * len(proposals)
+        proposal_ids = sorted({proposal.proposal_id for proposal in proposals})
+        duplicate_rows = await session.execute(
+            select(MemoryProposal.proposal_id)
+            .where(MemoryProposal.proposal_id.in_(proposal_ids))
+            .group_by(MemoryProposal.proposal_id)
+            .having(func.count(MemoryProposal.id) > 1)
+        )
+        ambiguous_legacy_proposal_ids = {str(row[0]) for row in duplicate_rows}
+        semaphore = asyncio.Semaphore(MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY)
+
+        async def eligible(proposal: MemoryProposal) -> bool:
+            async with semaphore:
+                return await self._memory_proposal_llm_wiki_artifact_search_eligible(
+                    session,
+                    proposal,
+                    work_item_id,
+                    config=config,
+                    ambiguous_legacy_proposal_ids=ambiguous_legacy_proposal_ids,
+                )
+
+        return list(await asyncio.gather(*(eligible(proposal) for proposal in proposals)))
 
     async def _work_item_memory_review_provenance(
         self,
