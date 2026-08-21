@@ -37,8 +37,11 @@ and migration surfaces still fail closed to a named elevated matrix.
 
 ## Current evidence
 
-The first same-head shadow run passed all behavior shards. Its legacy workspace
-static bundle took 14m28s and the legacy supervisor suite took 11m35s on the
-successful retry. A first supervisor run had an intermittent full-suite timeout
-in a test that passed in isolation and on retry; it remains part of the flake
-baseline rather than being discarded.
+The first same-head shadow run passed all behavior shards. The artifact from
+run `32432992908` binds the same head, base, lockfile, and runner environment
+for both routes: the supervisor baseline executed in 12m05s versus a 2m29s
+proposed critical path, and the workspace baseline executed in 14m02s versus
+4m57s proposed. These are observed-cache measurements only, so they are not
+promotion evidence yet. A prior supervisor run had an intermittent full-suite
+timeout in a test that passed in isolation and on retry; it remains part of the
+flake baseline rather than being discarded.
