@@ -16,10 +16,11 @@ Pull requests run a final `check` job backed by component jobs:
 - `fast` always runs `pnpm run check:fast` before the broader static gate. It
   covers CI policy wiring, workspace delivery command readiness,
   sandbox-boundary and anti-churn routing, and dashboard E2E runner contracts.
-- `static_bundle` runs required matrix jobs for `core`, `manager`,
-  `workspace`, `policy`, `pipeline-dashboard`, and `anti-churn` when
+- `static_bundle` runs required matrix jobs for `core`, `manager`, `policy`,
+  `pipeline-dashboard`, and `anti-churn` when
   `scripts/check-plan.mjs --ci-outputs` marks full static confidence as
-  required.
+  required. Workspace coverage moves to behavior profiles rather than the
+  serial aggregate bundle.
 - `static` is the retained aggregate static gate. It does not rerun
   `pnpm run check:static` in PR CI; it fans in `changes`, `fast`, and the
   required `static_bundle` matrix result so existing final-check semantics keep
@@ -29,8 +30,11 @@ Pull requests run a final `check` job backed by component jobs:
   the final static gate now requires the bundle matrix.
 - `javascript` runs only when dashboard, shared package, JavaScript lockfile, or
   JavaScript workflow inputs changed.
-- `supervisor` runs only when supervisor service files, supervisor test runner
-  inputs, Python preflight inputs, or workflow inputs changed.
+- `workspace_behavior_shadow` is required whenever the planner selects one or
+  more workspace behavior profiles; it runs the focused profiles in parallel.
+- `supervisor_behavior_shadow` is required whenever the planner selects one or
+  more supervisor shards; it runs the focused shards in parallel. The legacy
+  supervisor aggregate remains part of full post-merge confidence only.
 
 The final `check` job accepts skipped component jobs as intentional when the
 planner does not require that component. Failed or cancelled required component

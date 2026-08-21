@@ -267,8 +267,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  JSON.stringify(ciMatrixBundleNames("static_bundle")) === JSON.stringify(staticBundleNames()),
-  `${ciWorkflowPath} static_bundle matrix entries must match scripts/run-static-bundle.mjs STATIC_BUNDLES`,
+  JSON.stringify(ciMatrixBundleNames("static_bundle")) === JSON.stringify(staticBundleNames().filter((name) => name !== "workspace")),
+  `${ciWorkflowPath} static_bundle matrix must omit workspace because required behavior profiles cover that route`,
   failures,
 );
 for (const requiredText of [

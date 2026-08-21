@@ -159,7 +159,6 @@ for (const ciText of [
   "supervisor_behavior_shadow:",
   "static_bundle:",
   "static_bundle_summary:",
-  "promotion_evidence_summary:",
   "needs: changes",
   "fail-fast: false",
   "fromJSON(needs.changes.outputs.selected_workspace_profiles)",
@@ -169,7 +168,6 @@ for (const ciText of [
   "node ./scripts/run-ci-evidence-command.mjs",
   "ci-command-evidence-workspace-${{ matrix.profile.id }}",
   "ci-command-evidence-supervisor-${{ matrix.shard.id }}",
-  "ci-command-evidence-supervisor-aggregate",
   '--base-sha "${{ github.event.pull_request.base.sha }}"',
   "node ./scripts/run-static-bundle.mjs \"${{ matrix.bundle }}\"",
   "--report \"$report_dir/${{ matrix.bundle }}.json\"",
@@ -178,8 +176,6 @@ for (const ciText of [
   "actions/download-artifact@v4",
   "static-bundle-report-${{ matrix.bundle }}",
   "static-bundle-summary",
-  "ci-promotion-observation",
-  "node ./scripts/collect-ci-promotion-observations.mjs",
   "node ./scripts/summarize-static-bundle-reports.mjs",
   "--static-result \"${{ needs.static.result }}\"",
   "--static-bundle-result \"${{ needs.static_bundle.result }}\"",
@@ -196,15 +192,15 @@ for (const ciText of [
   "skipped_required_gates: ${{ steps.filter.outputs.skipped_required_gates }}",
   "selected_workspace_profiles: ${{ steps.filter.outputs.selected_workspace_profiles }}",
   "selected_supervisor_shards: ${{ steps.filter.outputs.selected_supervisor_shards }}",
-  "## CI routing (shadow)",
+  "## CI routing",
   "selectedStaticBundles",
   "skippedStaticBundles",
   "routingReasons",
   "requiredGates",
   "Current required gates:",
-  "Prospective selected static bundles:",
-  "Prospective workspace behavior profiles:",
-  "Prospective supervisor behavior shards:",
+  "Selected static bundles:",
+  "Required workspace behavior profiles:",
+  "Required supervisor behavior shards:",
   "pnpm run check:fast",
   "Fast workflow checks failed or did not complete",
   "Static checks were required but did not pass",
@@ -240,14 +236,6 @@ assertCondition(
   failures,
 );
 assertCondition(
-  ciJobBlock("promotion_evidence_summary").includes("continue-on-error: true") &&
-    ciJobBlock("promotion_evidence_summary").includes("ci-command-evidence-*") &&
-    ciJobBlock("promotion_evidence_summary").includes("static-bundle-report-workspace") &&
-    ciJobBlock("promotion_evidence_summary").includes("ci-promotion-observation"),
-  ".github/workflows/ci.yml promotion evidence summary must remain reporting-only and preserve command and workspace aggregate artifacts",
-  failures,
-);
-assertCondition(
   ciJobBlock("full").includes("github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'") &&
     ciJobBlock("full").includes("github.event_name == 'schedule' && 'dev'"),
   ".github/workflows/ci.yml full confidence must run after dev pushes and target dev for scheduled verification",
@@ -268,8 +256,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  JSON.stringify(ciMatrixBundleNames("static_bundle")) === JSON.stringify(staticBundleNames()),
-  ".github/workflows/ci.yml static_bundle matrix entries must match scripts/run-static-bundle.mjs STATIC_BUNDLES",
+  JSON.stringify(ciMatrixBundleNames("static_bundle")) === JSON.stringify(staticBundleNames().filter((name) => name !== "workspace")),
+  ".github/workflows/ci.yml static_bundle matrix must omit workspace because required behavior profiles cover that route",
   failures,
 );
 for (const requiredText of [
@@ -319,18 +307,14 @@ for (const requiredText of [
     failures,
   );
 }
-const supervisorJob = ciJobBlock("supervisor");
-const supervisorProfileTimeoutMs = Number(
-  supervisorJob.match(/test:supervisor:profile -- --timeout-ms=(\d+)/)?.[1],
-);
-const supervisorJobTimeoutMs = Number(
-  supervisorJob.match(/timeout-minutes: (\d+)/)?.[1],
-) * 60_000;
 assertCondition(
-  supervisorProfileTimeoutMs === 900_000 &&
-    Number.isFinite(supervisorJobTimeoutMs) &&
-    supervisorJobTimeoutMs - supervisorProfileTimeoutMs >= 300_000,
-  ".github/workflows/ci.yml supervisor job must retain the 15-minute child timeout and at least five minutes of job margin",
+  !ciJobBlock("workspace_behavior_shadow").includes("continue-on-error: true") &&
+    !ciJobBlock("supervisor_behavior_shadow").includes("continue-on-error: true") &&
+    ciJobBlock("check").includes("workspace_behavior_shadow") &&
+    ciJobBlock("check").includes("supervisor_behavior_shadow") &&
+    ciJobBlock("check").includes("Required workspace behavior profiles did not pass") &&
+    ciJobBlock("check").includes("Required supervisor behavior shards did not pass"),
+  ".github/workflows/ci.yml must require selected workspace profiles and supervisor shards through check",
   failures,
 );
 assertCondition(
