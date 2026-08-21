@@ -1147,6 +1147,17 @@ def _memory_artifact_parent_from_root_fd(root_fd: int, relative_path: Path):
     """Open an artifact parent below one already-pinned vault descriptor."""
     if relative_path.is_absolute() or ".." in relative_path.parts or relative_path.name in {"", ".", ".."}:
         raise ValueError("Memory proposal artifact path is not safely relative to the vault.")
+    parent_fd = _open_memory_artifact_parent_from_root_fd(root_fd, relative_path)
+    try:
+        yield parent_fd
+    finally:
+        os.close(parent_fd)
+
+
+def _open_memory_artifact_parent_from_root_fd(root_fd: int, relative_path: Path) -> int:
+    """Return one descriptor-bound artifact parent below a pinned vault."""
+    if relative_path.is_absolute() or ".." in relative_path.parts or relative_path.name in {"", ".", ".."}:
+        raise ValueError("Memory proposal artifact path is not safely relative to the vault.")
     parent_fd = os.dup(root_fd)
     try:
         for part in relative_path.parent.parts:
@@ -1155,35 +1166,45 @@ def _memory_artifact_parent_from_root_fd(root_fd: int, relative_path: Path):
             child_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
             os.close(parent_fd)
             parent_fd = child_fd
-        yield parent_fd
-    finally:
+        return parent_fd
+    except Exception:
         os.close(parent_fd)
+        raise
+
+
+def _memory_artifact_leaf_stat_from_parent_fd(parent_fd: int, leaf_name: str) -> os.stat_result | None:
+    try:
+        return os.stat(leaf_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _read_memory_artifact_bytes_from_parent_fd(parent_fd: int, leaf_name: str) -> bytes:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(leaf_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Memory proposal recovery artifact is not a regular file.")
+        with os.fdopen(descriptor, "rb") as artifact:
+            descriptor = None
+            return artifact.read()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _memory_artifact_leaf_stat_from_root_fd(root_fd: int, relative_path: Path) -> os.stat_result | None:
     """Inspect a leaf below the pinned vault without resolving any path hop."""
     with _memory_artifact_parent_from_root_fd(root_fd, relative_path) as parent_fd:
-        try:
-            return os.stat(relative_path.name, dir_fd=parent_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            return None
+        return _memory_artifact_leaf_stat_from_parent_fd(parent_fd, relative_path.name)
 
 
 def _read_memory_artifact_bytes_from_root_fd(root_fd: int, relative_path: Path) -> bytes:
     """Read one regular artifact from the exact descriptor-bound vault."""
     descriptor: int | None = None
     with _memory_artifact_parent_from_root_fd(root_fd, relative_path) as parent_fd:
-        try:
-            descriptor = os.open(relative_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode):
-                raise ValueError("Memory proposal recovery artifact is not a regular file.")
-            with os.fdopen(descriptor, "rb") as artifact:
-                descriptor = None
-                return artifact.read()
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
+        return _read_memory_artifact_bytes_from_parent_fd(parent_fd, relative_path.name)
 
 
 def _atomic_write_memory_artifact_from_root_fd(
@@ -1643,6 +1664,7 @@ def _reconcile_memory_artifact_intent_unlocked(
     vault_identity: dict[str, int] | None = None,
     *,
     vault_root_fd: int | None = None,
+    artifact_parent_fd: int | None = None,
 ) -> None:
     """Restore the snapshot version of an interrupted server-recorded write."""
     if vault_root_fd is not None:
@@ -1651,8 +1673,18 @@ def _reconcile_memory_artifact_intent_unlocked(
             vault_identity["device"], vault_identity["inode"]
         ):
             raise ValueError("Memory proposal vault changed after intent recording.")
+        if artifact_parent_fd is None:
+            with _memory_artifact_parent_from_root_fd(vault_root_fd, relative_path) as pinned_parent_fd:
+                return _reconcile_memory_artifact_intent_unlocked(
+                    vault_root, artifact_path, backup_path, expected_digest,
+                    expected_backup_digest, relative_path, backup_prepared,
+                    prior_artifact_digest, backup_identity, vault_identity,
+                    vault_root_fd=vault_root_fd, artifact_parent_fd=pinned_parent_fd,
+                )
 
     def artifact_metadata() -> os.stat_result | None:
+        if artifact_parent_fd is not None:
+            return _memory_artifact_leaf_stat_from_parent_fd(artifact_parent_fd, relative_path.name)
         if vault_root_fd is not None:
             return _memory_artifact_leaf_stat_from_root_fd(vault_root_fd, relative_path)
         try:
@@ -1661,11 +1693,19 @@ def _reconcile_memory_artifact_intent_unlocked(
             return None
 
     def artifact_bytes() -> bytes:
+        if artifact_parent_fd is not None:
+            return _read_memory_artifact_bytes_from_parent_fd(artifact_parent_fd, relative_path.name)
         if vault_root_fd is not None:
             return _read_memory_artifact_bytes_from_root_fd(vault_root_fd, relative_path)
         return _read_memory_artifact_bytes(artifact_path)
 
     def restore_artifact(payload: bytes, *, expected_existing_digest: str | None = None) -> None:
+        if artifact_parent_fd is not None:
+            _atomic_write_memory_artifact_from_root_fd(
+                artifact_parent_fd, Path(relative_path.name), payload,
+                expected_existing_digest=expected_existing_digest,
+            )
+            return
         if vault_root_fd is not None:
             _atomic_write_memory_artifact_from_root_fd(
                 vault_root_fd,
@@ -1681,6 +1721,10 @@ def _reconcile_memory_artifact_intent_unlocked(
         )
 
     def remove_artifact() -> None:
+        if artifact_parent_fd is not None:
+            os.unlink(relative_path.name, dir_fd=artifact_parent_fd)
+            os.fsync(artifact_parent_fd)
+            return
         if vault_root_fd is not None:
             with _memory_artifact_parent_from_root_fd(vault_root_fd, relative_path) as parent_fd:
                 os.unlink(relative_path.name, dir_fd=parent_fd)

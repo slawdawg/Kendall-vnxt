@@ -599,6 +599,60 @@ def test_memory_artifact_recovery_retains_the_verified_vault_descriptor(tmp_path
     assert replacement_artifact.read_bytes() == b"replacement vault artifact\n"
 
 
+def test_memory_artifact_recovery_keeps_parent_validation_and_restore_on_one_descriptor(tmp_path, monkeypatch) -> None:
+    """A replaced artifact parent cannot redirect recovery after it is pinned."""
+    from supervisor.application.service import (
+        _open_existing_non_symlink_directory,
+        _reconcile_memory_artifact_intent_unlocked,
+    )
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "queue" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    written_bytes = b"interrupted writer bytes\n"
+    snapshot_bytes = b"durable snapshot bytes\n"
+    artifact_path.write_bytes(written_bytes)
+    backup_path = tmp_path / "backups" / "snapshot"
+    backup_artifact = backup_path / artifact_path.relative_to(vault_root)
+    backup_artifact.parent.mkdir(parents=True)
+    backup_artifact.write_bytes(snapshot_bytes)
+    parked_parent = tmp_path / "parked-queue"
+    replacement_artifact = artifact_path
+    original_stat = service_module._memory_artifact_leaf_stat_from_parent_fd
+    swapped = False
+
+    def replace_lexical_parent(parent_fd: int, leaf_name: str):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            artifact_path.parent.rename(parked_parent)
+            replacement_artifact.parent.mkdir(parents=True)
+            replacement_artifact.write_bytes(written_bytes)
+        return original_stat(parent_fd, leaf_name)
+
+    monkeypatch.setattr(service_module, "_memory_artifact_leaf_stat_from_parent_fd", replace_lexical_parent)
+    root_fd = _open_existing_non_symlink_directory(vault_root)
+    try:
+        _reconcile_memory_artifact_intent_unlocked(
+            vault_root,
+            artifact_path,
+            backup_path,
+            hashlib.sha256(written_bytes).hexdigest(),
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+            artifact_path.relative_to(vault_root),
+            True,
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+            vault_root_fd=root_fd,
+        )
+    finally:
+        os.close(root_fd)
+
+    assert swapped
+    assert (parked_parent / "draft.md").read_bytes() == snapshot_bytes
+    assert replacement_artifact.read_bytes() == written_bytes
+
+
 def test_atomic_memory_artifact_write_preserves_prior_bytes_on_replace_failure(tmp_path, monkeypatch) -> None:
     """A failed writer leaves the durable artifact untouched, never truncated."""
     import supervisor.application.service as service_module
