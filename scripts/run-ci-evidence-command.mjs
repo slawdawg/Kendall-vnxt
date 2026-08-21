@@ -20,6 +20,7 @@ export function parseCiEvidenceCommandArgs(argv) {
     environmentId: null,
     cacheStrategy: "observed",
     cacheKey: null,
+    injectedFailureId: null,
     command: [],
   };
 
@@ -51,6 +52,7 @@ export function parseCiEvidenceCommandArgs(argv) {
     else if (arg === "--environment-id") set("environmentId");
     else if (arg === "--cache-strategy") set("cacheStrategy");
     else if (arg === "--cache-key") set("cacheKey");
+    else if (arg === "--inject-failure-id") set("injectedFailureId");
     else throw new Error(`Unknown option ${arg}`);
   }
 
@@ -73,13 +75,15 @@ export function buildCiCommandEvidence({
   source,
   cacheStrategy,
   cacheKey,
+  injectedFailureId = null,
   command,
   startedAtMs,
   completedAtMs,
   exitCode,
   signal,
 }) {
-  const status = exitCode === 0 ? "passed" : "failed";
+  const injected = exitCode === 0 && Boolean(injectedFailureId);
+  const status = exitCode === 0 && !injected ? "passed" : "failed";
   const durationMs = Math.max(0, completedAtMs - startedAtMs);
   return {
     schemaVersion: 1,
@@ -98,8 +102,10 @@ export function buildCiCommandEvidence({
     },
     outcome: {
       status,
-      exitCode: typeof exitCode === "number" ? exitCode : null,
+      exitCode: injected ? 1 : (typeof exitCode === "number" ? exitCode : null),
       signal: signal ?? null,
+      failureId: injectedFailureId,
+      injected,
     },
   };
 }
@@ -126,6 +132,7 @@ export function runCiEvidenceCommand(options) {
     },
     cacheStrategy: options.cacheStrategy,
     cacheKey: options.cacheKey,
+    injectedFailureId: options.injectedFailureId,
     command: options.command,
     startedAtMs,
     completedAtMs: Date.now(),

@@ -23,6 +23,27 @@ test("CI command evidence captures immutable source identity and failure time", 
   assert.deepEqual(evidence.cacheControl, { strategy: "observed", cacheKey: "github-cache-key" });
 });
 
+test("CI command evidence can inject a named deterministic failure after a successful target command", () => {
+  const evidence = buildCiCommandEvidence({
+    route: "baseline",
+    cohort: "controlled_failure",
+    selectionVector: { id: "supervisor-elevated" },
+    source: { headSha: "head", baseSha: "base", lockfileSha: "lock", environmentId: "ubuntu" },
+    cacheStrategy: "counterbalanced",
+    cacheKey: "cold-cache",
+    injectedFailureId: "supervisor-elevated:aggregate",
+    command: ["pnpm", "run", "test:supervisor:profile"],
+    startedAtMs: 10,
+    completedAtMs: 40,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.equal(evidence.outcome.status, "failed");
+  assert.equal(evidence.outcome.failureId, "supervisor-elevated:aggregate");
+  assert.equal(evidence.outcome.injected, true);
+  assert.equal(evidence.outcome.exitCode, 1);
+});
+
 test("CI command evidence CLI requires a complete and typed contract", () => {
   assert.deepEqual(
     parseCiEvidenceCommandArgs([
@@ -41,6 +62,7 @@ test("CI command evidence CLI requires a complete and typed contract", () => {
       environmentId: "runner",
       cacheStrategy: "isolated",
       cacheKey: "pair",
+      injectedFailureId: null,
       command: ["pnpm", "run", "test:codex-workspace"],
     },
   );
