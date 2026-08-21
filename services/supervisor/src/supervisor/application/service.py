@@ -6068,6 +6068,39 @@ class SupervisorService:
             and event.parallel_work_graph_json == manager_source_evidence
         )
 
+    def _manager_source_intake_create_replay_matches(
+        self,
+        event: AuthoritativeWorkPacketLifecycleEvent,
+        packet: AuthoritativeWorkPacket,
+        payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        payload_summary: str,
+        evidence_refs: list[str],
+        manager_source_evidence: dict[str, object] | None,
+    ) -> bool:
+        """Compare manager-intake replays without reminting server-owned metadata.
+
+        Concurrent requests mint candidate contracts before either transaction
+        commits.  Once one request wins, the persisted contract is the only
+        canonical representation.  Compare every caller-controlled field, but
+        compare the source reference at its bounded input shape so equivalent
+        requests do not conflict on serialization details of server metadata.
+        """
+        return (
+            event.source_ref_json == packet.source_ref_json
+            and self._packet_source_ref_payload(packet.source_ref_json)
+            == payload.sourceRef.model_dump(mode="json", exclude_none=True)
+            and self._authoritative_create_event_matches(
+                event,
+                payload,
+                source_ref=event.source_ref_json,
+                payload_summary=payload_summary,
+                evidence_refs=evidence_refs,
+                parallel_work_graph=None,
+                manager_source_evidence=manager_source_evidence,
+            )
+        )
+
     def _authoritative_graph_refresh_event_matches(
         self,
         event: AuthoritativeWorkPacketLifecycleEvent,
@@ -11195,6 +11228,27 @@ class SupervisorService:
                     "Validates focused check-plan routing and conservative full-static escalation.",
                     "Confirms the planner regression suite remains wired into aggregate static checks.",
                 ],
+            ),
+            VerificationCommandView(
+                commandId="test-local-verification-contracts",
+                label="Local verification contract tests",
+                command="pnpm run test:local-verification-contracts",
+                status="required",
+                requiredFor=["local verification JSON contract changes", "agent lifecycle planning changes"],
+            ),
+            VerificationCommandView(
+                commandId="test-local-verification-state-store",
+                label="Local verification state-store tests",
+                command="pnpm run test:local-verification-state-store",
+                status="required",
+                requiredFor=["local verification receipt reuse", "durable lifecycle state changes"],
+            ),
+            VerificationCommandView(
+                commandId="test-local-verification-lifecycle",
+                label="Local verification lifecycle tests",
+                command="pnpm run test:local-verification-lifecycle",
+                status="required",
+                requiredFor=["owned verifier start/resume/cancel", "progress and failure scheduling changes"],
             ),
             VerificationCommandView(
                 commandId="test-supervisor-runner",

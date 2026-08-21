@@ -6,6 +6,10 @@ const suites = {
   ci: [
     "check:github-workflow-policy",
     "check:workspace-coordination",
+    "test:ci-promotion-evidence",
+    "test:ci-promotion-packet",
+    "test:ci-evidence-command",
+    "test:ci-promotion-observations",
   ],
   workspace: [
     "test:codex-workspace-state",
@@ -33,11 +37,16 @@ const suites = {
     "test:dashboard-pipeline-loader",
     "test:dashboard-pipeline-fixtures",
   ],
+  localVerification: [
+    "test:local-verification-contracts",
+    "test:local-verification-state-store",
+    "test:local-verification-lifecycle",
+  ],
 };
 
 const requested = process.argv[2] || "all";
 const commands = requested === "all"
-  ? [...suites.ci, ...suites.workspace, ...suites.sandbox, ...suites.dashboard]
+  ? [...suites.ci, ...suites.workspace, ...suites.sandbox, ...suites.dashboard, ...suites.localVerification]
   : suites[requested];
 
 if (!commands) {
