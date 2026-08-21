@@ -55,7 +55,7 @@ jobs:
             --head "${{ github.event.pull_request.head.sha }}" \
             --ci-outputs > "$ci_outputs"
 
-          node -e 'const fs = require("node:fs"); const outputs = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const key of ["javascript", "supervisor", "static"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${outputs[key] ? "true" : "false"}\n`); for (const key of ["routingMode", "selectedStaticBundles", "skippedStaticBundles", "routingReasons", "requiredGates", "skippedRequiredGates", "selectedWorkspaceProfiles", "selectedSupervisorShards"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}=${typeof outputs[key] === "string" ? outputs[key] : JSON.stringify(outputs[key])}\n`); const required = outputs.requiredGates.map((gate) => `- \`${gate.id}\`: ${gate.reason}`).join("\n"); const selected = outputs.selectedStaticBundles.map((bundle) => `- \`${bundle.id}\`: ${bundle.reasons.join("; ")}`).join("\n") || "- none"; const skipped = outputs.skippedStaticBundles.map((bundle) => `- \`${bundle.id}\`: ${bundle.reasons.join("; ")}`).join("\n") || "- none"; const workspace = outputs.selectedWorkspaceProfiles.map((profile) => `- \`${profile.id}\`: ${profile.reason}`).join("\n") || "- none"; const supervisor = outputs.selectedSupervisorShards.map((shard) => `- \`${shard.id}\`: ${shard.reason}`).join("\n") || "- none"; fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CI routing (shadow)\n\nMode: \`${outputs.routingMode}\`\n\nCurrent required gates:\n${required}\n\nProspective selected static bundles:\n${selected}\n\nProspective skipped static bundles:\n${skipped}\n\nProspective workspace behavior profiles:\n${workspace}\n\nProspective supervisor behavior shards:\n${supervisor}\n\nReasons:\n${outputs.routingReasons.map((reason) => `- ${reason}`).join("\n") || "- no changed files"}\n`); console.log(JSON.stringify(outputs, null, 2));' "$ci_outputs"
+          node -e 'const fs = require("node:fs"); const outputs = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const key of ["javascript", "supervisor", "static"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${outputs[key] ? "true" : "false"}\n`); for (const key of ["routingMode", "selectedStaticBundles", "skippedStaticBundles", "routingReasons", "requiredGates", "skippedRequiredGates", "selectedWorkspaceProfiles", "selectedSupervisorShards"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}=${typeof outputs[key] === "string" ? outputs[key] : JSON.stringify(outputs[key])}\n`); const required = outputs.requiredGates.map((gate) => `- \`${gate.id}\`: ${gate.reason}`).join("\n"); const selected = outputs.selectedStaticBundles.map((bundle) => `- \`${bundle.id}\`: ${bundle.reasons.join("; ")}`).join("\n") || "- none"; const skipped = outputs.skippedStaticBundles.map((bundle) => `- \`${bundle.id}\`: ${bundle.reasons.join("; ")}`).join("\n") || "- none"; const workspace = outputs.selectedWorkspaceProfiles.map((profile) => `- \`${profile.id}\`: ${profile.reason}`).join("\n") || "- none"; const supervisor = outputs.selectedSupervisorShards.map((shard) => `- \`${shard.id}\`: ${shard.reason}`).join("\n") || "- none"; fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CI routing\n\nMode: \`${outputs.routingMode}\`\n\nCurrent required gates:\n${required}\n\nSelected static bundles:\n${selected}\n\nSkipped static bundles:\n${skipped}\n\nRequired workspace behavior profiles:\n${workspace}\n\nRequired supervisor behavior shards:\n${supervisor}\n\nReasons:\n${outputs.routingReasons.map((reason) => `- ${reason}`).join("\n") || "- no changed files"}\n`); console.log(JSON.stringify(outputs, null, 2));' "$ci_outputs"
 
   fast:
     if: github.event_name == 'pull_request'
@@ -91,7 +91,6 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.selected_workspace_profiles != '[]'
     needs: changes
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -147,7 +146,6 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.selected_supervisor_shards != '[]'
     needs: changes
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -239,17 +237,12 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
     needs: changes
     runs-on: ubuntu-latest
-    # The current broad workspace bundle can take roughly 21 minutes on a
-    # healthy runner. Bound genuinely stalled runs without rejecting that
-    # observed healthy baseline while the targeted-route experiment matures.
-    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         bundle:
           - core
           - manager
-          - workspace
           - policy
           - pipeline-dashboard
           - anti-churn
@@ -338,81 +331,6 @@ jobs:
           path: ${{ runner.temp }}/static-bundle-summary/static-bundle-summary.json
           if-no-files-found: warn
 
-  promotion_evidence_summary:
-    if: always() && github.event_name == 'pull_request'
-    needs:
-      - changes
-      - static_bundle
-      - supervisor
-      - workspace_behavior_shadow
-      - supervisor_behavior_shadow
-    runs-on: ubuntu-latest
-    continue-on-error: true
-
-    steps:
-      - name: Check out PR head for source identity
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Download command evidence
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ci-command-evidence-*
-          path: ${{ runner.temp }}/ci-promotion-reports
-          merge-multiple: true
-
-      - name: Download workspace aggregate evidence
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: static-bundle-report-workspace
-          path: ${{ runner.temp }}/ci-promotion-reports
-
-      - name: Collect GitHub job timings
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.actions.listJobsForWorkflowRun({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              run_id: context.runId,
-              per_page: 100,
-            });
-            const fs = require("node:fs");
-            const path = `${process.env.RUNNER_TEMP}/ci-promotion-reports/github-job-timings.json`;
-            fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
-            fs.writeFileSync(path, JSON.stringify({
-              schemaVersion: 1,
-              recordType: "github-job-timings",
-              jobs: data.jobs.map((job) => ({ name: job.name, createdAt: job.created_at, startedAt: job.started_at, completedAt: job.completed_at })),
-            }, null, 2));
-
-      - name: Collect same-head route observation
-        shell: bash
-        run: |
-          set -euo pipefail
-          out_dir="${RUNNER_TEMP}/ci-promotion-observation"
-          mkdir -p "$out_dir"
-          node ./scripts/collect-ci-promotion-observations.mjs \
-            --reports-dir "${RUNNER_TEMP}/ci-promotion-reports" \
-            --out "$out_dir/observation.json" \
-            --pair-id "${{ github.run_id }}:${{ github.run_attempt }}" \
-            --cohort ordinary \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
-            --base-sha "${{ github.event.pull_request.base.sha }}" \
-            --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
-            --environment-id "github-actions-ubuntu-latest-node22"
-
-      - name: Upload promotion observation
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-promotion-observation
-          path: ${{ runner.temp }}/ci-promotion-observation/observation.json
-          if-no-files-found: warn
-
   javascript:
     if: github.event_name == 'pull_request' && needs.changes.outputs.javascript == 'true'
     needs: changes
@@ -436,68 +354,6 @@ jobs:
 
       - name: Build dashboard
         run: pnpm run build:dashboard
-
-  supervisor:
-    if: github.event_name == 'pull_request' && needs.changes.outputs.supervisor == 'true'
-    needs: changes
-    runs-on: ubuntu-latest
-    # Keep five minutes above the child profile for setup and job teardown,
-    # so GitHub does not cancel a still-healthy bounded test process.
-    timeout-minutes: 20
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: 0.11.21
-          enable-cache: true
-          cache-dependency-glob: services/supervisor/uv.lock
-
-      - name: Sync supervisor virtualenv
-        run: uv sync --directory services/supervisor --locked
-
-      - name: Run supervisor preflight
-        run: pnpm run test:supervisor:preflight
-
-      - name: Run supervisor tests with duration profile
-        # Full supervisor teardown can outlive the test assertions; retain a
-        # bounded 15-minute budget. Recent CI needed 12 minutes (including
-        # asynchronous SQLite cleanup) after pytest reported success; the
-        # 20-minute parent job preserves five minutes for setup and teardown.
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence_dir="${RUNNER_TEMP}/ci-command-evidence"
-          node ./scripts/run-ci-evidence-command.mjs \
-            --report "$evidence_dir/supervisor-aggregate.json" \
-            --route baseline \
-            --selection-vector '{"id":"supervisor-elevated","shape":"aggregate"}' \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
-            --base-sha "${{ github.event.pull_request.base.sha }}" \
-            --lockfile-sha "$(git rev-parse HEAD:pnpm-lock.yaml)" \
-            --environment-id "github-actions-ubuntu-latest-node22" \
-            --cache-key "github-actions-run-${{ github.run_id }}" \
-            -- pnpm run test:supervisor:profile -- --timeout-ms=900000
-
-      - name: Upload supervisor aggregate evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-command-evidence-supervisor-aggregate
-          path: ${{ runner.temp }}/ci-command-evidence/supervisor-aggregate.json
-          if-no-files-found: warn
 
   full:
     if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -550,7 +406,8 @@ jobs:
       - fast
       - static
       - javascript
-      - supervisor
+      - workspace_behavior_shadow
+      - supervisor_behavior_shadow
       - full
     runs-on: ubuntu-latest
 
@@ -588,7 +445,12 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ needs.changes.outputs.supervisor }}" = "true" ] && [ "${{ needs.supervisor.result }}" != "success" ]; then
-            echo "Supervisor checks were required but did not pass: ${{ needs.supervisor.result }}"
+          if [ "${{ needs.changes.outputs.selected_workspace_profiles }}" != "[]" ] && [ "${{ needs.workspace_behavior_shadow.result }}" != "success" ]; then
+            echo "Required workspace behavior profiles did not pass: ${{ needs.workspace_behavior_shadow.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.changes.outputs.selected_supervisor_shards }}" != "[]" ] && [ "${{ needs.supervisor_behavior_shadow.result }}" != "success" ]; then
+            echo "Required supervisor behavior shards did not pass: ${{ needs.supervisor_behavior_shadow.result }}"
             exit 1
           fi

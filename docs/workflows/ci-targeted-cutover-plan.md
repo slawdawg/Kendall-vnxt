@@ -1,7 +1,7 @@
 # CI Targeted Cutover Plan
 
-Status: in progress. The PR route remains conservative until the evaluator
-accepts the policy evidence packet.
+Status: cut over. The validated targeted PR route is required; the independent
+scheduled evaluator remains active as post-cutover monitoring.
 
 ## Outcome
 
@@ -35,9 +35,9 @@ and migration surfaces still fail closed to a named elevated matrix.
    mismatched heads/bases/lockfiles, unequal cache control, detection loss,
    increased flake/retry rate, a duration P95 regression over 10%, or slower
    first actionable failure.
-7. Commit the authority cutover only after the evaluator reports ready for every
-   vector: targeted matrices become required, `check` fans them in, and legacy
-   aggregate PR jobs are removed. Full confidence remains required off-PR.
+7. The authority cutover makes targeted matrices required, fans them into
+   `check`, and removes the legacy aggregate PR jobs. Full confidence remains
+   required off-PR.
 8. Verify the cutover from a clean head, publish the acceptance packet, and
    retain a documented rollback commit that restores the legacy aggregate path.
 
@@ -57,3 +57,8 @@ experiment runs. A clean PR measurement on 2026-08-21 took 20m46s, almost all
 of it in the 522-test `test:codex-workspace` aggregate; the bound is a
 containment guard, not the performance solution. The gated targeted profiles
 are the route intended to remove that wait from ordinary focused pull requests.
+
+The route was cut over on 2026-08-21 after the same-head shadow validation
+passed. The scheduled isolated experiment remains enabled to detect a
+post-cutover regression; full confidence continues after merge, on schedule,
+and when manually dispatched.
