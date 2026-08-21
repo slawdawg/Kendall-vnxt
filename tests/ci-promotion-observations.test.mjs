@@ -8,7 +8,7 @@ import { collectCiPromotionObservations, parseObservationArgs } from "../scripts
 
 const source = { headSha: "head", baseSha: "base", lockfileSha: "lock", environmentId: "ubuntu" };
 
-function commandRecord(route, selectionVector, executionMs) {
+function commandRecord(route, selectionVector, executionMs, cacheControl = { strategy: "observed" }) {
   return {
     schemaVersion: 1,
     recordType: "ci-command-evidence",
@@ -17,6 +17,7 @@ function commandRecord(route, selectionVector, executionMs) {
     source,
     startedAt: "2026-08-21T00:00:20.000Z",
     metrics: { executionMs },
+    cacheControl,
     outcome: { status: "passed" },
   };
 }
@@ -52,6 +53,16 @@ test("promotion observations retain a controlled-failure cohort", () => {
   );
   const observation = collectCiPromotionObservations({ reportsDir: directory, pairId: "run-controlled", source, cohort: "controlled_failure" });
   assert.equal(observation.cohort, "controlled_failure");
+});
+
+test("promotion observations preserve equivalent isolated cache provenance", () => {
+  const directory = mkdtempSync(join(tmpdir(), "ci-promotion-isolated-"));
+  const isolated = { strategy: "isolated", cacheKey: "pair-1" };
+  writeFileSync(join(directory, "baseline.json"), JSON.stringify(commandRecord("baseline", { id: "supervisor-elevated", shape: "aggregate" }, 800, isolated)));
+  writeFileSync(join(directory, "proposed.json"), JSON.stringify(commandRecord("proposed", { id: "supervisor-elevated", shard: "target" }, 100, isolated)));
+  const observation = collectCiPromotionObservations({ reportsDir: directory, pairId: "pair-1", source });
+  assert.deepEqual(observation.cacheControl, isolated);
+  assert.match(observation.vectors[0].blockingReason, /Evidence collection is complete/);
 });
 
 test("promotion observation parser requires a complete source identity", () => {

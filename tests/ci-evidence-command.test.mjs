@@ -46,6 +46,25 @@ test("CI command evidence can inject a named deterministic failure after a succe
   assert.equal(evidence.outcome.exitCode, 1);
 });
 
+test("CI command evidence does not relabel a target-command failure as an injected failure", () => {
+  const evidence = buildCiCommandEvidence({
+    route: "baseline",
+    cohort: "controlled_failure",
+    selectionVector: { id: "supervisor-elevated" },
+    source: { headSha: "head", baseSha: "base", lockfileSha: "lock", environmentId: "ubuntu" },
+    cacheStrategy: "isolated",
+    cacheKey: "pair",
+    injectedFailureId: "supervisor-elevated:aggregate",
+    command: ["pnpm", "run", "test:supervisor:profile"],
+    startedAtMs: 10,
+    completedAtMs: 40,
+    exitCode: 1,
+    signal: null,
+  });
+  assert.equal(evidence.outcome.failureId, null);
+  assert.equal(evidence.outcome.injected, false);
+});
+
 test("CI command evidence CLI requires a complete and typed contract", () => {
   assert.deepEqual(
     parseCiEvidenceCommandArgs([

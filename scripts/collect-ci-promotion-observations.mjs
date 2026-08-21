@@ -69,6 +69,19 @@ function sourceMatches(record, source) {
     (!candidate.environmentId || candidate.environmentId === source.environmentId);
 }
 
+function cacheControl(records) {
+  const controls = records.map((record) => record.cacheControl).filter((control) => control && typeof control === "object");
+  if (controls.length === 0) return { strategy: "observed" };
+  const [first] = controls;
+  if (first.strategy === "isolated" && first.cacheKey && controls.every((control) => control.strategy === "isolated" && control.cacheKey === first.cacheKey)) {
+    return { strategy: "isolated", cacheKey: first.cacheKey };
+  }
+  if (first.strategy === "counterbalanced" && first.cacheState && controls.every((control) => control.strategy === "counterbalanced" && control.cacheState === first.cacheState)) {
+    return { strategy: "counterbalanced", cacheState: first.cacheState };
+  }
+  return { strategy: "observed" };
+}
+
 function routeSummary(records, jobs) {
   const components = records.map((record) => ({
     id: componentId(record),
@@ -113,6 +126,7 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, coh
     }
   }
   const commandRecords = records.filter((record) => record.recordType === "ci-command-evidence");
+  const observedCacheControl = cacheControl(commandRecords);
   const timingRecord = records.find((record) => record.recordType === "github-job-timings");
   const jobs = Array.isArray(timingRecord?.jobs) ? timingRecord.jobs : [];
   const vectors = [];
@@ -132,7 +146,9 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, coh
       baseline: routeSummary(baseline, jobs),
       proposed: routeSummary(proposed, jobs),
       readyForPromotion: false,
-      blockingReason: "Observed-cache command evidence is a raw same-head observation, not a counterbalanced or isolated promotion sample.",
+      blockingReason: observedCacheControl.strategy === "isolated" || observedCacheControl.strategy === "counterbalanced"
+        ? "Evidence collection is complete but remains non-authoritative until the promotion evaluator accepts the required sample count and duration gates."
+        : "Observed-cache command evidence is a raw same-head observation, not a counterbalanced or isolated promotion sample.",
     });
   }
   return {
@@ -142,7 +158,7 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, coh
     pairId,
     cohort,
     source,
-    cacheControl: { strategy: "observed" },
+    cacheControl: observedCacheControl,
     vectors,
     warnings,
   };

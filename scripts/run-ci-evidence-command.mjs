@@ -108,7 +108,7 @@ export function buildCiCommandEvidence({
       status,
       exitCode: injected ? 1 : (typeof exitCode === "number" ? exitCode : null),
       signal: signal ?? null,
-      failureId: injectedFailureId,
+      failureId: injected ? injectedFailureId : null,
       injected,
     },
   };
