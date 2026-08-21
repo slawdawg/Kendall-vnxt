@@ -51,3 +51,9 @@ proposed critical path, and the workspace baseline executed in 14m02s versus
 promotion evidence yet. A prior supervisor run had an intermittent full-suite
 timeout in a test that passed in isolation and on retry; it remains part of the
 flake baseline rather than being discarded.
+
+The broad workspace bundle is explicitly bounded at 30 minutes while this
+experiment runs. A clean PR measurement on 2026-08-21 took 20m46s, almost all
+of it in the 522-test `test:codex-workspace` aggregate; the bound is a
+containment guard, not the performance solution. The gated targeted profiles
+are the route intended to remove that wait from ordinary focused pull requests.

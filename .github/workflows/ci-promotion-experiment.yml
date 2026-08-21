@@ -196,6 +196,9 @@ jobs:
     runs-on: ubuntu-latest
     name: promotion-workspace-baseline
     continue-on-error: ${{ needs.prepare.outputs.cohort == 'controlled_failure' }}
+    # Keep the experiment's broad baseline bounded consistently with PR CI.
+    # This accommodates the observed healthy 21-minute workspace aggregate.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4

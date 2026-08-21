@@ -239,6 +239,10 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.static == 'true'
     needs: changes
     runs-on: ubuntu-latest
+    # The current broad workspace bundle can take roughly 21 minutes on a
+    # healthy runner. Bound genuinely stalled runs without rejecting that
+    # observed healthy baseline while the targeted-route experiment matures.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
