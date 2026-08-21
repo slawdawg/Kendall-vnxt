@@ -28,6 +28,9 @@ function componentId(record) {
 }
 
 function jobForRecord(record, jobs) {
+  if (record.jobName) {
+    return jobs.find((job) => job.name === record.jobName || job.name.startsWith(`${record.jobName} (`)) ?? null;
+  }
   const vector = record.selectionVector ?? {};
   if (record.route === "baseline" && vector.id === "supervisor-elevated") return jobs.find((job) => job.name === "supervisor") ?? null;
   if (record.bundle === "workspace") return jobs.find((job) => job.name === "static_bundle (workspace)") ?? null;

@@ -11,6 +11,7 @@ test("CI command evidence captures immutable source identity and failure time", 
     source: { headSha: "head", baseSha: "base", lockfileSha: "lock", environmentId: "ubuntu-latest-node22" },
     cacheStrategy: "observed",
     cacheKey: "github-cache-key",
+    jobName: "proposed-supervisor (integration-work-packets)",
     command: ["pnpm", "run", "test:supervisor:check:integration:work-packets"],
     startedAtMs: 1000,
     completedAtMs: 1600,
@@ -21,6 +22,7 @@ test("CI command evidence captures immutable source identity and failure time", 
   assert.equal(evidence.metrics.executionMs, 600);
   assert.equal(evidence.metrics.firstActionableFailureMs, 600);
   assert.deepEqual(evidence.cacheControl, { strategy: "observed", cacheKey: "github-cache-key" });
+  assert.equal(evidence.jobName, "proposed-supervisor (integration-work-packets)");
 });
 
 test("CI command evidence can inject a named deterministic failure after a successful target command", () => {
@@ -62,6 +64,7 @@ test("CI command evidence CLI requires a complete and typed contract", () => {
       environmentId: "runner",
       cacheStrategy: "isolated",
       cacheKey: "pair",
+      jobName: null,
       injectedFailureId: null,
       command: ["pnpm", "run", "test:codex-workspace"],
     },

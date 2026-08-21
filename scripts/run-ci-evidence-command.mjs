@@ -20,6 +20,7 @@ export function parseCiEvidenceCommandArgs(argv) {
     environmentId: null,
     cacheStrategy: "observed",
     cacheKey: null,
+    jobName: null,
     injectedFailureId: null,
     command: [],
   };
@@ -52,6 +53,7 @@ export function parseCiEvidenceCommandArgs(argv) {
     else if (arg === "--environment-id") set("environmentId");
     else if (arg === "--cache-strategy") set("cacheStrategy");
     else if (arg === "--cache-key") set("cacheKey");
+    else if (arg === "--job-name") set("jobName");
     else if (arg === "--inject-failure-id") set("injectedFailureId");
     else throw new Error(`Unknown option ${arg}`);
   }
@@ -75,6 +77,7 @@ export function buildCiCommandEvidence({
   source,
   cacheStrategy,
   cacheKey,
+  jobName = null,
   injectedFailureId = null,
   command,
   startedAtMs,
@@ -93,6 +96,7 @@ export function buildCiCommandEvidence({
     selectionVector,
     source,
     cacheControl: { strategy: cacheStrategy, cacheKey },
+    jobName,
     command,
     startedAt: new Date(startedAtMs).toISOString(),
     completedAt: new Date(completedAtMs).toISOString(),
@@ -132,6 +136,7 @@ export function runCiEvidenceCommand(options) {
     },
     cacheStrategy: options.cacheStrategy,
     cacheKey: options.cacheKey,
+    jobName: options.jobName,
     injectedFailureId: options.injectedFailureId,
     command: options.command,
     startedAtMs,
