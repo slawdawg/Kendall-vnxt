@@ -15,6 +15,20 @@ on:
         required: false
         default: dev
         type: string
+      base_ref:
+        description: "Base commit used only by the isolated promotion experiment."
+        required: false
+        default: dev~1
+        type: string
+      promotion_cohort:
+        description: "Run the normal full check or an isolated evidence experiment."
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - ordinary
+          - controlled_failure
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
@@ -495,8 +509,16 @@ jobs:
           path: ${{ runner.temp }}/ci-command-evidence/supervisor-aggregate.json
           if-no-files-found: warn
 
+  promotion_experiment:
+    if: github.event_name == 'workflow_dispatch' && inputs.promotion_cohort != 'full'
+    uses: ./.github/workflows/ci-promotion-experiment.yml
+    with:
+      ref: ${{ inputs.ref }}
+      base_ref: ${{ inputs.base_ref }}
+      cohort: ${{ inputs.promotion_cohort }}
+
   full:
-    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.promotion_cohort == 'full')
     runs-on: ubuntu-latest
 
     steps:
@@ -547,6 +569,7 @@ jobs:
       - static
       - javascript
       - supervisor
+      - promotion_experiment
       - full
     runs-on: ubuntu-latest
 
@@ -555,6 +578,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.promotion_cohort }}" != "full" ]; then
+            if [ "${{ needs.promotion_experiment.result }}" != "success" ]; then
+              echo "Promotion experiment failed or did not complete: ${{ needs.promotion_experiment.result }}"
+              exit 1
+            fi
+            exit 0
+          fi
 
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             if [ "${{ needs.full.result }}" != "success" ]; then

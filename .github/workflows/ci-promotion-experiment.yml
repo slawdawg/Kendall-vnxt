@@ -1,6 +1,17 @@
 name: CI promotion experiment
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      base_ref:
+        required: true
+        type: string
+      cohort:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       ref:

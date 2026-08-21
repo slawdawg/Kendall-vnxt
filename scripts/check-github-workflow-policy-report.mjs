@@ -154,6 +154,8 @@ for (const ciText of [
   "fast:",
   "schedule:",
   "workflow_dispatch:",
+  "promotion_cohort:",
+  "promotion_experiment:",
   "- dev",
   "workspace_behavior_shadow:",
   "supervisor_behavior_shadow:",
@@ -240,7 +242,7 @@ assertCondition(
   failures,
 );
 assertCondition(
-  ciJobBlock("full").includes("github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'") &&
+  ciJobBlock("full").includes("github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.promotion_cohort == 'full')") &&
     ciJobBlock("full").includes("github.event_name == 'schedule' && 'dev'"),
   ".github/workflows/ci.yml full confidence must run after dev pushes and target dev for scheduled verification",
   failures,
