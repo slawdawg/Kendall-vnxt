@@ -1,0 +1,408 @@
+name: CI promotion experiment
+
+on:
+  schedule:
+    # Two ordinary and two deterministic controlled-failure pairs per UTC day.
+    # Five complete days satisfy the 20-pair, five-day promotion evidence gate.
+    - cron: "11 0 * * *"
+    - cron: "11 6 * * *"
+    - cron: "11 12 * * *"
+    - cron: "11 18 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit or branch to measure.
+        required: false
+        default: dev
+        type: string
+      base_ref:
+        description: Base commit used to derive the same planner-selected route.
+        required: false
+        default: dev~1
+        type: string
+      cohort:
+        description: Ordinary isolated measurement or deterministic controlled failure.
+        required: true
+        default: controlled_failure
+        type: choice
+        options:
+          - ordinary
+          - controlled_failure
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ci-promotion-experiment-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.source.outputs.head_sha }}
+      base_sha: ${{ steps.source.outputs.base_sha }}
+      lockfile_sha: ${{ steps.source.outputs.lockfile_sha }}
+      cohort: ${{ steps.source.outputs.cohort }}
+      workspace_profiles: ${{ steps.plan.outputs.workspace_profiles }}
+      supervisor_shards: ${{ steps.plan.outputs.supervisor_shards }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'dev') }}
+          fetch-depth: 0
+
+      - id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse '${{ inputs.base_ref || (github.event_name == 'schedule' && 'dev~1') }}')" >> "$GITHUB_OUTPUT"
+          echo "lockfile_sha=$(git rev-parse HEAD:pnpm-lock.yaml)" >> "$GITHUB_OUTPUT"
+          echo "cohort=${{ github.event_name == 'schedule' && ((github.event.schedule == '11 0 * * *' || github.event.schedule == '11 12 * * *') && 'controlled_failure' || 'ordinary') || inputs.cohort }}" >> "$GITHUB_OUTPUT"
+
+      - id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan_file="$RUNNER_TEMP/promotion-plan.json"
+          node ./scripts/check-plan.mjs \
+            --base "${{ steps.source.outputs.base_sha }}" \
+            --head "${{ steps.source.outputs.head_sha }}" \
+            --ci-outputs > "$plan_file"
+          node -e 'const fs = require("node:fs"); const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const [name, value] of [["workspace_profiles", plan.selectedWorkspaceProfiles], ["supervisor_shards", plan.selectedSupervisorShards]]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${JSON.stringify(value)}\n`);' "$plan_file"
+
+  supervisor_baseline:
+    needs: prepare
+    runs-on: ubuntu-latest
+    name: promotion-supervisor-baseline
+    continue-on-error: ${{ needs.prepare.outputs.cohort == 'controlled_failure' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.11.21
+          enable-cache: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --directory services/supervisor --locked
+
+      - name: Measure or inject baseline supervisor route
+        shell: bash
+        run: |
+          set -euo pipefail
+          injected=()
+          if [ "${{ needs.prepare.outputs.cohort }}" = "controlled_failure" ]; then
+            injected=(--inject-failure-id "ci-promotion-supervisor-elevated-v1")
+          fi
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$RUNNER_TEMP/ci-command-evidence/supervisor-baseline.json" \
+            --route baseline \
+            --cohort "${{ needs.prepare.outputs.cohort }}" \
+            --selection-vector '{"id":"supervisor-elevated","shape":"aggregate"}' \
+            --head-sha "${{ needs.prepare.outputs.head_sha }}" \
+            --base-sha "${{ needs.prepare.outputs.base_sha }}" \
+            --lockfile-sha "${{ needs.prepare.outputs.lockfile_sha }}" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-strategy isolated \
+            --cache-key "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --job-name "promotion-supervisor-baseline" \
+            "${injected[@]}" \
+            -- pnpm run test:supervisor:profile -- --timeout-ms=900000
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-promotion-supervisor-baseline
+          path: ${{ runner.temp }}/ci-command-evidence/supervisor-baseline.json
+
+  supervisor_proposed:
+    needs: prepare
+    if: needs.prepare.outputs.supervisor_shards != '[]'
+    runs-on: ubuntu-latest
+    name: promotion-supervisor-proposed (${{ matrix.shard.id }})
+    continue-on-error: ${{ needs.prepare.outputs.cohort == 'controlled_failure' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.supervisor_shards) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.11.21
+          enable-cache: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --directory services/supervisor --locked
+
+      - name: Measure or inject proposed supervisor shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          command=(pnpm run ${{ matrix.shard.script }})
+          if [ "${{ matrix.shard.id }}" = "integration-work-packets" ]; then
+            command+=(-- --timeout-ms=210000)
+          fi
+          injected=()
+          if [ "${{ needs.prepare.outputs.cohort }}" = "controlled_failure" ]; then
+            injected=(--inject-failure-id "ci-promotion-supervisor-elevated-v1")
+          fi
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$RUNNER_TEMP/ci-command-evidence/supervisor-${{ matrix.shard.id }}.json" \
+            --route proposed \
+            --cohort "${{ needs.prepare.outputs.cohort }}" \
+            --selection-vector '{"id":"supervisor-elevated","shard":"${{ matrix.shard.id }}"}' \
+            --head-sha "${{ needs.prepare.outputs.head_sha }}" \
+            --base-sha "${{ needs.prepare.outputs.base_sha }}" \
+            --lockfile-sha "${{ needs.prepare.outputs.lockfile_sha }}" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-strategy isolated \
+            --cache-key "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --job-name "promotion-supervisor-proposed" \
+            "${injected[@]}" \
+            -- "${command[@]}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-promotion-supervisor-${{ matrix.shard.id }}
+          path: ${{ runner.temp }}/ci-command-evidence/supervisor-${{ matrix.shard.id }}.json
+
+  workspace_baseline:
+    needs: prepare
+    runs-on: ubuntu-latest
+    name: promotion-workspace-baseline
+    continue-on-error: ${{ needs.prepare.outputs.cohort == 'controlled_failure' }}
+    # Keep the experiment's broad baseline bounded consistently with PR CI.
+    # This accommodates the observed healthy 21-minute workspace aggregate.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --frozen-lockfile
+      - run: git fetch origin main:refs/remotes/origin/main
+
+      - run: git config core.hooksPath .githooks
+
+      - name: Measure or inject baseline workspace route
+        shell: bash
+        run: |
+          set -euo pipefail
+          injected=()
+          if [ "${{ needs.prepare.outputs.cohort }}" = "controlled_failure" ]; then
+            injected=(--inject-failure-id "ci-promotion-workspace-elevated-v1")
+          fi
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$RUNNER_TEMP/ci-command-evidence/workspace-baseline.json" \
+            --route baseline \
+            --cohort "${{ needs.prepare.outputs.cohort }}" \
+            --selection-vector '{"id":"workspace-elevated","shape":"aggregate"}' \
+            --head-sha "${{ needs.prepare.outputs.head_sha }}" \
+            --base-sha "${{ needs.prepare.outputs.base_sha }}" \
+            --lockfile-sha "${{ needs.prepare.outputs.lockfile_sha }}" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-strategy isolated \
+            --cache-key "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --job-name "promotion-workspace-baseline" \
+            "${injected[@]}" \
+            -- node ./scripts/run-static-bundle.mjs workspace
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-promotion-workspace-baseline
+          path: ${{ runner.temp }}/ci-command-evidence/workspace-baseline.json
+
+  workspace_proposed:
+    needs: prepare
+    if: needs.prepare.outputs.workspace_profiles != '[]'
+    runs-on: ubuntu-latest
+    name: promotion-workspace-proposed (${{ matrix.profile.id }})
+    continue-on-error: ${{ needs.prepare.outputs.cohort == 'controlled_failure' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.prepare.outputs.workspace_profiles) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --frozen-lockfile
+      - run: git fetch origin main:refs/remotes/origin/main
+
+      - name: Measure or inject proposed workspace profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          injected=()
+          if [ "${{ needs.prepare.outputs.cohort }}" = "controlled_failure" ]; then
+            injected=(--inject-failure-id "ci-promotion-workspace-elevated-v1")
+          fi
+          node ./scripts/run-ci-evidence-command.mjs \
+            --report "$RUNNER_TEMP/ci-command-evidence/workspace-${{ matrix.profile.id }}.json" \
+            --route proposed \
+            --cohort "${{ needs.prepare.outputs.cohort }}" \
+            --selection-vector '{"id":"workspace-elevated","profile":"${{ matrix.profile.id }}"}' \
+            --head-sha "${{ needs.prepare.outputs.head_sha }}" \
+            --base-sha "${{ needs.prepare.outputs.base_sha }}" \
+            --lockfile-sha "${{ needs.prepare.outputs.lockfile_sha }}" \
+            --environment-id "github-actions-ubuntu-latest-node22" \
+            --cache-strategy isolated \
+            --cache-key "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --job-name "promotion-workspace-proposed" \
+            "${injected[@]}" \
+            -- pnpm run test:codex-workspace:${{ matrix.profile.id }}
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-command-evidence-promotion-workspace-${{ matrix.profile.id }}
+          path: ${{ runner.temp }}/ci-command-evidence/workspace-${{ matrix.profile.id }}.json
+
+  fan_in:
+    if: always()
+    needs:
+      - prepare
+      - supervisor_baseline
+      - supervisor_proposed
+      - workspace_baseline
+      - workspace_proposed
+    runs-on: ubuntu-latest
+    name: promotion-evidence-fan-in
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+
+      - name: Download command evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-command-evidence-promotion-*
+          path: ${{ runner.temp }}/ci-promotion-reports
+          merge-multiple: true
+
+      - name: Collect GitHub job timings
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100 });
+            const fs = require("node:fs");
+            const path = `${process.env.RUNNER_TEMP}/ci-promotion-reports/github-job-timings.json`;
+            fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+            fs.writeFileSync(path, JSON.stringify({ schemaVersion: 1, recordType: "github-job-timings", jobs: data.jobs.map((job) => ({ name: job.name, createdAt: job.created_at, startedAt: job.started_at, completedAt: job.completed_at })) }, null, 2));
+
+      - name: Collect isolated route observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ./scripts/collect-ci-promotion-observations.mjs \
+            --reports-dir "$RUNNER_TEMP/ci-promotion-reports" \
+            --out "$RUNNER_TEMP/observation.json" \
+            --pair-id "${{ github.run_id }}:${{ github.run_attempt }}" \
+            --cohort "${{ needs.prepare.outputs.cohort }}" \
+            --head-sha "${{ needs.prepare.outputs.head_sha }}" \
+            --base-sha "${{ needs.prepare.outputs.base_sha }}" \
+            --lockfile-sha "${{ needs.prepare.outputs.lockfile_sha }}" \
+            --environment-id "github-actions-ubuntu-latest-node22"
+
+      - name: Verify controlled-failure fan-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'const observation = require(process.argv[1]); const cohort = process.argv[2]; const vectors = observation.vectors; if (vectors.length !== 2) throw new Error(`expected both vectors, found ${vectors.length}`); for (const vector of vectors) { const baseline = vector.baseline.outcome; const proposed = vector.proposed.outcome; if (cohort === "controlled_failure") { if (baseline.status !== "failed" || proposed.status !== "failed" || !baseline.failureId || baseline.failureId !== proposed.failureId) throw new Error(`${vector.id} did not propagate the same controlled failure through both route fan-ins`); } else if (baseline.status !== "passed" || proposed.status !== "passed") throw new Error(`${vector.id} ordinary isolated pair did not pass both route fan-ins`); }' "$RUNNER_TEMP/observation.json" "${{ needs.prepare.outputs.cohort }}"
+
+      - name: Aggregate successful retained promotion evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          history_dir="$RUNNER_TEMP/ci-promotion-history"
+          mkdir -p "$history_dir/current"
+          cp "$RUNNER_TEMP/observation.json" "$history_dir/current/observation.json"
+
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            destination="$history_dir/$run_id"
+            mkdir -p "$destination"
+            gh run download "$run_id" \
+              --repo "${{ github.repository }}" \
+              --name ci-promotion-observation \
+              --dir "$destination"
+          done < <(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow ci-promotion-experiment.yml \
+            --event schedule \
+            --status success \
+            --limit 100 \
+            --json databaseId \
+            --jq '.[].databaseId')
+
+          node ./scripts/build-ci-promotion-evidence-packet.mjs \
+            --observations-dir "$history_dir" \
+            --out "$RUNNER_TEMP/promotion-evidence-packet.json" >/dev/null
+          set +e
+          node ./scripts/evaluate-ci-promotion-evidence.mjs \
+            "$RUNNER_TEMP/promotion-evidence-packet.json" > "$RUNNER_TEMP/promotion-evidence-evaluation.json"
+          evaluator_status=$?
+          set -e
+          if [ "$evaluator_status" -ne 0 ] && [ "$evaluator_status" -ne 1 ]; then
+            echo "Promotion evidence evaluator failed with status $evaluator_status"
+            exit "$evaluator_status"
+          fi
+          node -e 'const fs = require("node:fs"); const evaluation = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const lines = [`## CI promotion evidence`, `Status: \`${evaluation.status}\``]; for (const vector of evaluation.vectors ?? []) lines.push(`- \`${vector.id}\`: \`${vector.status}\``); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\\n")}\\n`);' "$RUNNER_TEMP/promotion-evidence-evaluation.json"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-promotion-evaluation
+          path: |
+            ${{ runner.temp }}/promotion-evidence-packet.json
+            ${{ runner.temp }}/promotion-evidence-evaluation.json
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-promotion-observation
+          path: ${{ runner.temp }}/observation.json

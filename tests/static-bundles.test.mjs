@@ -52,6 +52,7 @@ test("static bundles have package script entry points", () => {
 test("static bundle coverage matches the monolithic static aggregate", () => {
   const aggregateCommands = aggregateStaticCommands();
   const bundleCommands = staticBundleNames().flatMap((bundleName) => STATIC_BUNDLES[bundleName]);
+  const integrityBaseline = ["check:fast"];
 
   assert.deepEqual(
     new Set(bundleCommands).size,
@@ -60,9 +61,10 @@ test("static bundle coverage matches the monolithic static aggregate", () => {
   );
 
   assert.deepEqual(
-    bundleCommands.sort(),
+    [...integrityBaseline, ...bundleCommands].sort(),
     [...aggregateCommands].sort(),
   );
+  assert.ok(!STATIC_BUNDLES.core.includes("check:fast"));
 });
 
 test("all static bundle expands bundles in declared order", () => {
@@ -81,16 +83,19 @@ test("static bundle CLI accepts report output path", () => {
     bundleName: "core",
     reportPath: "reports/core.json",
     headSha: null,
+    baseSha: null,
   });
   assert.deepEqual(parseStaticBundleArgs(["core", "--report=reports/core.json"]), {
     bundleName: "core",
     reportPath: "reports/core.json",
     headSha: null,
+    baseSha: null,
   });
   assert.deepEqual(parseStaticBundleArgs(["core", "--head-sha", "abc123"]), {
     bundleName: "core",
     reportPath: null,
     headSha: "abc123",
+    baseSha: null,
   });
   assert.throws(() => parseStaticBundleArgs(["core", "--unexpected"]), /Unknown option "--unexpected"/);
 });
@@ -423,5 +428,6 @@ test("static bundle CLI parser leaves missing bundle name for entry guard", () =
     bundleName: undefined,
     reportPath: null,
     headSha: null,
+    baseSha: null,
   });
 });

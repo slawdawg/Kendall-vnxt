@@ -996,7 +996,9 @@ def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_cont
     with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_main, socket_path):
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(lambda _index: _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload), range(2)))
-        assert [response.status_code for response in responses] == [200, 200]
+        assert [response.status_code for response in responses] == [200, 200], [
+            response.text for response in responses
+        ]
         contracts = [response.json()["data"]["canonicalContract"] for response in responses]
         assert contracts[0] == contracts[1]
         assert contracts[0]["canonicalSource"]["sourceId"] == "supervisor-manager-source-intake"

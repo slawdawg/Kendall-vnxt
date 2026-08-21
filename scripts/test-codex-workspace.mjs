@@ -7,11 +7,19 @@ import { fileURLToPath } from "node:url";
 import { evaluateMutationAdmission } from "./lib/mutation-admission.mjs";
 import { handoffAdmittedManagedLane } from "./lib/mutation-admission-workspace-handoff.mjs";
 import { approveManagedSourceWrite } from "./lib/mutation-admission-prewrite-guard.mjs";
+import { isWorkspaceTestProfile, workspaceTestProfileForName } from "./lib/codex-workspace-test-profiles.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
-const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
 const testFilter = String(process.env.CODEX_WORKSPACE_TEST_FILTER || "").trim().toLowerCase();
+const workspaceTestProfile = String(process.env.CODEX_WORKSPACE_TEST_PROFILE || "all").trim().toLowerCase();
+if (!isWorkspaceTestProfile(workspaceTestProfile)) {
+  throw new Error(`Unknown CODEX_WORKSPACE_TEST_PROFILE: ${workspaceTestProfile}`);
+}
+if (testFilter && workspaceTestProfile !== "all") {
+  throw new Error("CODEX_WORKSPACE_TEST_FILTER and CODEX_WORKSPACE_TEST_PROFILE cannot be combined");
+}
+const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
 const routingPreviewCheckLeafStages = Object.freeze([
   "test:supervisor:check-routing-preview-01",
   "test:supervisor:check-routing-preview-02",
@@ -87,6 +95,15 @@ try {
     assert(!markers[0].includes("fixture-secret-token-123"), markers[0]);
   });
 
+  test("workspace behavior profiles classify lifecycle tests deterministically", () => {
+    assert(workspaceTestProfileForName("doctor accepts an empty state root") === "discovery-readonly");
+    assert(workspaceTestProfileForName("start dry-run defaults new work to dev") === "start-resume");
+    assert(workspaceTestProfileForName("claim-next creates an assignment lease") === "assignment-lease");
+    assert(workspaceTestProfileForName("finish-pr creates a review-ready pull request") === "delivery-review");
+    assert(workspaceTestProfileForName("cleanup-orphans removes targeted orphan directory") === "cleanup-recovery");
+    assert(workspaceTestProfileForName("test harness emits a deterministic sanitized failure marker") === "shared-core");
+  });
+
   test("resumable check fixture requires explicit declarations for source stages outside its executable plan", () => {
     let message = "";
     try {
@@ -127,7 +144,11 @@ try {
       cwd: rootDir,
       encoding: "utf8",
       stdio: "pipe",
-      env: { ...process.env, CODEX_WORKSPACE_TEST_FILTER: "definitely-no-codex-workspace-test-name" },
+      env: {
+        ...process.env,
+        CODEX_WORKSPACE_TEST_FILTER: "definitely-no-codex-workspace-test-name",
+        CODEX_WORKSPACE_TEST_PROFILE: "all",
+      },
     });
     assert((result.status ?? 0) !== 0, "unknown focused test filter unexpectedly succeeded");
     assert((result.stderr || "").includes("matched no tests"), result.stderr || result.stdout);
@@ -19483,9 +19504,11 @@ try {
       rmSync(isolatedStateRoot, { recursive: true, force: true });
     }
   });
-  if (testFilter && executedTestCount === 0) {
-    throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
+  if (executedTestCount === 0) {
+    if (testFilter) throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
+    if (workspaceTestProfile !== "all") throw new Error(`CODEX_WORKSPACE_TEST_PROFILE matched no tests: ${workspaceTestProfile}`);
   }
+  console.log(`WORKSPACE_TEST_PROFILE_SUMMARY=${JSON.stringify({ profile: workspaceTestProfile, executedTestCount })}`);
 } finally {
   rmSync(stateRoot, { recursive: true, force: true });
 }
@@ -22445,6 +22468,9 @@ function processStartIdentityForTest() {
 
 function test(name, fn) {
   if (testFilter && !name.toLowerCase().includes(testFilter)) {
+    return;
+  }
+  if (workspaceTestProfile !== "all" && workspaceTestProfileForName(name) !== workspaceTestProfile) {
     return;
   }
   executedTestCount += 1;

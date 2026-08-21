@@ -48,6 +48,7 @@ const connectorWorkflow = readWorkspaceFile("docs/github-connector-workflow.md")
 const currentSessionRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 const ciGateBehavior = readWorkspaceFile("docs/workflows/ci-gate-behavior.md");
 const ciWorkflow = readWorkspaceFile(".github/workflows/ci.yml");
+const promotionExperimentWorkflow = readWorkspaceFile(".github/workflows/ci-promotion-experiment.yml");
 const fastWorkflowRunner = readWorkspaceFile("scripts/run-fast-workflow-checks.mjs");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
@@ -138,6 +139,10 @@ assertCondition(
 for (const ciFastCommand of [
   '"check:github-workflow-policy"',
   '"check:workspace-coordination"',
+  '"test:ci-promotion-evidence"',
+  '"test:ci-promotion-packet"',
+  '"test:ci-evidence-command"',
+  '"test:ci-promotion-observations"',
 ]) {
   assertCondition(
     fastWorkflowRunner.includes(ciFastCommand),
@@ -147,10 +152,25 @@ for (const ciFastCommand of [
 }
 for (const ciText of [
   "fast:",
+  "schedule:",
+  "workflow_dispatch:",
+  "- dev",
+  "workspace_behavior_shadow:",
+  "supervisor_behavior_shadow:",
   "static_bundle:",
   "static_bundle_summary:",
+  "promotion_evidence_summary:",
   "needs: changes",
   "fail-fast: false",
+  "fromJSON(needs.changes.outputs.selected_workspace_profiles)",
+  "fromJSON(needs.changes.outputs.selected_supervisor_shards)",
+  "pnpm run test:codex-workspace:${{ matrix.profile.id }}",
+  "pnpm run ${{ matrix.shard.script }}",
+  "node ./scripts/run-ci-evidence-command.mjs",
+  "ci-command-evidence-workspace-${{ matrix.profile.id }}",
+  "ci-command-evidence-supervisor-${{ matrix.shard.id }}",
+  "ci-command-evidence-supervisor-aggregate",
+  '--base-sha "${{ github.event.pull_request.base.sha }}"',
   "node ./scripts/run-static-bundle.mjs \"${{ matrix.bundle }}\"",
   "--report \"$report_dir/${{ matrix.bundle }}.json\"",
   "--head-sha \"${{ github.event.pull_request.head.sha }}\"",
@@ -158,6 +178,8 @@ for (const ciText of [
   "actions/download-artifact@v4",
   "static-bundle-report-${{ matrix.bundle }}",
   "static-bundle-summary",
+  "ci-promotion-observation",
+  "node ./scripts/collect-ci-promotion-observations.mjs",
   "node ./scripts/summarize-static-bundle-reports.mjs",
   "--static-result \"${{ needs.static.result }}\"",
   "--static-bundle-result \"${{ needs.static_bundle.result }}\"",
@@ -166,15 +188,69 @@ for (const ciText of [
   "--ci-outputs",
   "RUNNER_TEMP",
   "static: ${{ steps.filter.outputs.static }}",
+  "routing_mode: ${{ steps.filter.outputs.routing_mode }}",
+  "selected_static_bundles: ${{ steps.filter.outputs.selected_static_bundles }}",
+  "skipped_static_bundles: ${{ steps.filter.outputs.skipped_static_bundles }}",
+  "routing_reasons: ${{ steps.filter.outputs.routing_reasons }}",
+  "required_gates: ${{ steps.filter.outputs.required_gates }}",
+  "skipped_required_gates: ${{ steps.filter.outputs.skipped_required_gates }}",
+  "selected_workspace_profiles: ${{ steps.filter.outputs.selected_workspace_profiles }}",
+  "selected_supervisor_shards: ${{ steps.filter.outputs.selected_supervisor_shards }}",
+  "## CI routing (shadow)",
+  "selectedStaticBundles",
+  "skippedStaticBundles",
+  "routingReasons",
+  "requiredGates",
+  "Current required gates:",
+  "Prospective selected static bundles:",
+  "Prospective workspace behavior profiles:",
+  "Prospective supervisor behavior shards:",
   "pnpm run check:fast",
   "Fast workflow checks failed or did not complete",
   "Static checks were required but did not pass",
+  "github.event_name == 'schedule' && 'dev'",
 ]) {
   assertIncludes(ciWorkflow, ciText, ".github/workflows/ci.yml", failures);
+}
+for (const experimentText of [
+  "schedule:",
+  "workflow_dispatch:",
+  'cron: "11 0 * * *"',
+  'cron: "11 6 * * *"',
+  'cron: "11 12 * * *"',
+  'cron: "11 18 * * *"',
+  "controlled_failure",
+  "cache-strategy isolated",
+  "--inject-failure-id",
+  "promotion-evidence-fan-in",
+  "Verify controlled-failure fan-in",
+  "ci-promotion-observation",
+  "Aggregate successful retained promotion evidence",
+  "ci-promotion-evaluation",
+  "promotion-evidence-evaluation.json",
+  "github-job-timings",
+  "fromJSON(needs.prepare.outputs.workspace_profiles)",
+  "fromJSON(needs.prepare.outputs.supervisor_shards)",
+]) {
+  assertIncludes(promotionExperimentWorkflow, experimentText, ".github/workflows/ci-promotion-experiment.yml", failures);
 }
 assertCondition(
   ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
   ".github/workflows/ci.yml static job must be gated by needs.changes.outputs.static == 'true'",
+  failures,
+);
+assertCondition(
+  ciJobBlock("promotion_evidence_summary").includes("continue-on-error: true") &&
+    ciJobBlock("promotion_evidence_summary").includes("ci-command-evidence-*") &&
+    ciJobBlock("promotion_evidence_summary").includes("static-bundle-report-workspace") &&
+    ciJobBlock("promotion_evidence_summary").includes("ci-promotion-observation"),
+  ".github/workflows/ci.yml promotion evidence summary must remain reporting-only and preserve command and workspace aggregate artifacts",
+  failures,
+);
+assertCondition(
+  ciJobBlock("full").includes("github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'") &&
+    ciJobBlock("full").includes("github.event_name == 'schedule' && 'dev'"),
+  ".github/workflows/ci.yml full confidence must run after dev pushes and target dev for scheduled verification",
   failures,
 );
 assertCondition(
@@ -200,6 +276,7 @@ for (const requiredText of [
   'node ./scripts/run-static-bundle.mjs "${{ matrix.bundle }}"',
   '--report "$report_dir/${{ matrix.bundle }}.json"',
   '--head-sha "${{ github.event.pull_request.head.sha }}"',
+  '--base-sha "${{ github.event.pull_request.base.sha }}"',
   "actions/upload-artifact@v4",
   "static-bundle-report-${{ matrix.bundle }}",
   "${{ runner.temp }}/static-bundle-reports/${{ matrix.bundle }}.json",

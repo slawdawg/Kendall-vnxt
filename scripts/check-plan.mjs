@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { relative } from "node:path";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
+import { staticBundleNames } from "./run-static-bundle.mjs";
+import { WORKSPACE_TEST_PROFILE_NAMES } from "./lib/codex-workspace-test-profiles.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const JS_SYNTAX_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
@@ -47,6 +49,33 @@ const SURFACE_COMMANDS = Object.freeze({
   ciAcceleration: [COMMANDS.testCheckPlan, COMMANDS.testStaticBundles],
   managerDispatcherPort: [COMMANDS.testManagerControlPlaneDispatcherPort],
 });
+
+const SURFACE_STATIC_BUNDLES = Object.freeze({
+  docs: ["core"],
+  workflow: ["core"],
+  manager: ["manager"],
+  managerDispatcherPort: ["manager"],
+  workspace: ["workspace"],
+  dashboard: ["pipeline-dashboard"],
+  pipeline: ["pipeline-dashboard"],
+  antiChurn: ["anti-churn"],
+  ciAcceleration: ["core"],
+});
+
+const SUPERVISOR_SHARDS = Object.freeze([
+  "preflight", "non-integration", "integration-orchestrator-fake-workers", "integration-operational-action-v1-pause-drain",
+  "integration-work-packets", "integration-bmad-import-parser", "integration-epic25-evidence-chain",
+  "routing-preview-01", "routing-preview-02", "routing-preview-03", "routing-preview-04", "routing-preview-05",
+  "routing-preview-06", "routing-preview-07", "routing-preview-08", "integration-review-route-packet",
+  "integration-manager-source-intake-adapter", "integration-operational-action-v1-retry-reassign",
+  "integration-candidate-work-api", "integration-local-dogfood-attestation", "integration-manager-terminal-events",
+  "integration-supervisor-flow",
+].map((id) => ({
+  id,
+  script: id.startsWith("routing-preview-")
+    ? `test:supervisor:check-${id}`
+    : `test:supervisor:check:${id.replace(/^integration-/, "integration:")}`,
+})));
 
 function commandToString(command) {
   return command.map((part) => part.includes(" ") ? JSON.stringify(part) : part).join(" ");
@@ -94,6 +123,10 @@ function classifyFile(path) {
     requiresFullStatic = true;
     reasons.push(`${file}: CI workflow changes affect check authority`);
   }
+  if (/^\.githooks\/pre-push$/.test(file)) {
+    surfaces.add("workflow");
+    reasons.push(`${file}: local CI quick-fail hook surface`);
+  }
   if (/^scripts\/check-(?:github-workflow-policy|workspace-coordination)-report\.mjs$/.test(file)) {
     surfaces.add("workflow");
     reasons.push(`${file}: CI workflow policy drift-check surface`);
@@ -108,8 +141,9 @@ function classifyFile(path) {
     reasons.push(`${file}: supervisor preflight input surface`);
   }
   if (/^scripts\/run-fast-workflow-checks\.mjs$/.test(file)) {
+    surfaces.add("ciAcceleration");
     requiresFullStatic = true;
-    reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; escalating to full static`);
+    reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; named elevated CI boundary requires full static confidence`);
   }
   if (/^scripts\/test-codex-workspace\.mjs$/.test(file)) {
     requiresFullStatic = true;
@@ -169,7 +203,7 @@ function classifyFile(path) {
     surfaces.add("ciAcceleration");
     reasons.push(`${file}: static bundle topology changes require full static confidence`);
   }
-  if (/^(scripts\/check-plan\.mjs|tests\/check-plan\.test\.mjs|docs\/workflows\/ci-acceleration-plan\.md)$/.test(file)) {
+  if (/^(scripts\/(?:check-plan|evaluate-ci-promotion-evidence|run-ci-evidence-command)\.mjs|tests\/(?:check-plan|ci-promotion-evidence|ci-evidence-command)\.test\.mjs|docs\/workflows\/ci-(?:acceleration-plan|targeted-cutover-plan)\.md)$/.test(file)) {
     surfaces.add("ciAcceleration");
     reasons.push(`${file}: CI acceleration planner surface`);
   }
@@ -228,20 +262,152 @@ function buildCheckPlan(files = [], options = {}) {
   };
 }
 
+function buildStaticBundleSelection(plan) {
+  const bundleNames = staticBundleNames();
+  const reasonsByBundle = new Map();
+  const unknownPath = plan.reasons.some((reason) => reason.includes("no focused check mapping"));
+
+  if (plan.requiresFullStatic) {
+    const reason = unknownPath
+      ? "fail-closed: an unmapped path requires broad static confidence"
+      : "elevated: a shared or high-risk change requires broad static confidence";
+    for (const bundleName of bundleNames) reasonsByBundle.set(bundleName, [reason]);
+  } else {
+    for (const surface of plan.surfaces) {
+      for (const bundleName of SURFACE_STATIC_BUNDLES[surface] || []) {
+        const reasons = reasonsByBundle.get(bundleName) || [];
+        reasons.push(`affected ${surface} surface`);
+        reasonsByBundle.set(bundleName, reasons);
+      }
+    }
+  }
+
+  return bundleNames.map((bundleName) => ({
+    id: bundleName,
+    selected: reasonsByBundle.has(bundleName),
+    reasons: reasonsByBundle.get(bundleName) || ["not selected by affected-domain routing"],
+  }));
+}
+
+function buildRequiredGateSelection({ static: staticRequired, javascript, supervisor }) {
+  const selected = [{ id: "fast", reason: "PR integrity baseline" }];
+  const skipped = [];
+
+  for (const [id, selectedByCurrentRoute, selectedReason] of [
+    ["static", staticRequired, "broad static matrix required by elevated routing"],
+    ["javascript", javascript, "JavaScript/dashboard gate required by the changed risk surface"],
+    ["supervisor", supervisor, "supervisor gate required by the changed risk surface"],
+  ]) {
+    if (selectedByCurrentRoute) selected.push({ id, reason: selectedReason });
+    else skipped.push({ id, reason: "not required by the current conservative PR route" });
+  }
+
+  return { selected, skipped };
+}
+
+const WORKSPACE_PROFILE_PATHS = Object.freeze([
+  [/^scripts\/lib\/base-checkout-recovery\.mjs$/, "discovery-readonly"],
+  [/^scripts\/lib\/mutation-admission(?:-prewrite-guard|-workspace-handoff)?\.mjs$/, "assignment-lease"],
+  [/^(scripts\/lib\/workspace-command-resolution\.mjs|tests\/(?:workspace-command-resolution|workspace-fast-profile)\.test\.mjs)$/, "shared-core"],
+]);
+
+const SUPERVISOR_SHARD_PATHS = Object.freeze([
+  [/^services\/supervisor\/tests\/integration\/test_orchestrator_fake_workers\.py$/, ["integration-orchestrator-fake-workers"]],
+  [/^services\/supervisor\/tests\/integration\/test_operational_action_v1_pause_drain\.py$/, ["integration-operational-action-v1-pause-drain"]],
+  [/^services\/supervisor\/tests\/integration\/test_work_packets\.py$/, ["integration-work-packets"]],
+  [/^services\/supervisor\/tests\/integration\/test_bmad_import_parser\.py$/, ["integration-bmad-import-parser"]],
+  [/^services\/supervisor\/tests\/integration\/test_epic25_evidence_chain\.py$/, ["integration-epic25-evidence-chain"]],
+  [/^services\/supervisor\/tests\/integration\/test_routing_preview\.py$/, SUPERVISOR_SHARDS.filter((shard) => shard.id.startsWith("routing-preview-")).map((shard) => shard.id)],
+  [/^services\/supervisor\/tests\/integration\/test_review_route_packet\.py$/, ["integration-review-route-packet"]],
+  [/^services\/supervisor\/tests\/integration\/test_manager_source_intake_adapter\.py$/, ["integration-manager-source-intake-adapter"]],
+  [/^services\/supervisor\/tests\/integration\/test_operational_action_v1_retry_reassign\.py$/, ["integration-operational-action-v1-retry-reassign"]],
+  [/^services\/supervisor\/tests\/integration\/test_candidate_work_api\.py$/, ["integration-candidate-work-api"]],
+  [/^services\/supervisor\/tests\/integration\/test_local_dogfood_attestation\.py$/, ["integration-local-dogfood-attestation"]],
+  [/^services\/supervisor\/tests\/integration\/test_manager_terminal_events\.py$/, ["integration-manager-terminal-events"]],
+  [/^services\/supervisor\/tests\/integration\/test_supervisor_flow\.py$/, ["integration-supervisor-flow"]],
+]);
+
+function buildBehaviorShardSelection({ changedFiles, surfaces, requiresFullStatic, supervisor }) {
+  const workspaceSelected = requiresFullStatic || surfaces.has("workspace");
+  const supervisorSelected = supervisor;
+  const workspaceProfiles = new Map();
+  const supervisorShardIds = new Map();
+  const files = changedFiles || [];
+
+  if (workspaceSelected) {
+    if (requiresFullStatic) {
+      for (const id of WORKSPACE_TEST_PROFILE_NAMES) workspaceProfiles.set(id, "elevated static confidence includes all workspace behaviors");
+    } else {
+      for (const file of files) {
+        for (const [pattern, profile] of WORKSPACE_PROFILE_PATHS) {
+          if (pattern.test(file)) workspaceProfiles.set(profile, `affected workspace implementation: ${file}`);
+        }
+      }
+      if (workspaceProfiles.size === 0) {
+        for (const id of WORKSPACE_TEST_PROFILE_NAMES) workspaceProfiles.set(id, "workspace surface lacks a precise behavior mapping; retaining all behaviors");
+      } else {
+        workspaceProfiles.set("shared-core", workspaceProfiles.get("shared-core") || "shared workspace safety baseline for a focused behavior profile");
+      }
+    }
+  }
+
+  if (supervisorSelected) {
+    if (requiresFullStatic) {
+      for (const shard of SUPERVISOR_SHARDS) supervisorShardIds.set(shard.id, "elevated confidence includes all supervisor behaviors");
+    } else {
+      for (const file of files) {
+        for (const [pattern, shardIds] of SUPERVISOR_SHARD_PATHS) {
+          if (pattern.test(file)) {
+            for (const id of shardIds) supervisorShardIds.set(id, `affected supervisor integration test: ${file}`);
+          }
+        }
+        if (/^services\/supervisor\/tests\/test_.*\.py$/.test(file)) supervisorShardIds.set("non-integration", `affected supervisor non-integration test: ${file}`);
+      }
+      if (supervisorShardIds.size === 0) {
+        for (const shard of SUPERVISOR_SHARDS) supervisorShardIds.set(shard.id, "supervisor surface lacks a precise behavior mapping; retaining all behaviors");
+      } else {
+        supervisorShardIds.set("preflight", supervisorShardIds.get("preflight") || "shared supervisor preflight baseline for a focused behavior shard");
+        supervisorShardIds.set("non-integration", supervisorShardIds.get("non-integration") || "shared supervisor non-integration safety baseline for a focused behavior shard");
+      }
+    }
+  }
+
+  return {
+    workspaceProfiles: WORKSPACE_TEST_PROFILE_NAMES.filter((id) => workspaceProfiles.has(id)).map((id) => ({ id, reason: workspaceProfiles.get(id) })),
+    supervisorShards: SUPERVISOR_SHARDS.filter((shard) => supervisorShardIds.has(shard.id)).map((shard) => ({ ...shard, reason: supervisorShardIds.get(shard.id) })),
+  };
+}
+
 function buildCiOutputs(plan) {
   const changedFiles = new Set(plan.changedFiles);
   const packageOrWorkflowChanged = [...changedFiles].some((file) =>
     /^(package\.json|pnpm-lock\.yaml|packages\/|\.github\/workflows\/)/.test(file)
   );
   const surfaces = new Set(plan.surfaces);
+  const staticBundleSelection = buildStaticBundleSelection(plan);
+  const unknownPath = plan.reasons.some((reason) => reason.includes("no focused check mapping"));
+  const routingMode = unknownPath ? "fail-closed-unknown" : plan.requiresFullStatic ? "elevated" : "affected";
+  const staticRequired = plan.requiresFullStatic;
+  const javascript = packageOrWorkflowChanged || surfaces.has("dashboard");
+  const supervisor = packageOrWorkflowChanged || surfaces.has("supervisor");
+  const requiredGateSelection = buildRequiredGateSelection({ static: staticRequired, javascript, supervisor });
+  const behaviorShards = buildBehaviorShardSelection({ changedFiles: plan.changedFiles, surfaces, requiresFullStatic: staticRequired, supervisor });
   return {
-    static: plan.requiresFullStatic,
-    javascript: packageOrWorkflowChanged || surfaces.has("dashboard"),
-    supervisor: packageOrWorkflowChanged || surfaces.has("supervisor"),
+    static: staticRequired,
+    javascript,
+    supervisor,
     requiresFullStatic: plan.requiresFullStatic,
     surfaces: plan.surfaces,
     changedFiles: plan.changedFiles,
     commands: plan.commands.map((command) => command.commandText),
+    routingMode,
+    routingReasons: plan.reasons,
+    selectedStaticBundles: staticBundleSelection.filter((bundle) => bundle.selected),
+    skippedStaticBundles: staticBundleSelection.filter((bundle) => !bundle.selected),
+    requiredGates: requiredGateSelection.selected,
+    skippedRequiredGates: requiredGateSelection.skipped,
+    selectedWorkspaceProfiles: behaviorShards.workspaceProfiles,
+    selectedSupervisorShards: behaviorShards.supervisorShards,
   };
 }
 
