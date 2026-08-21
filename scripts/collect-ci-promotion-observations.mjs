@@ -80,6 +80,18 @@ function routeSummary(records, jobs) {
       metric,
       maxDuration(components.map((component) => ({ durationMs: component.metrics[metric] }))),
     ])),
+    outcome: {
+      status: status(records),
+      failureId: [...new Set(records.map((record) => record.outcome?.failureId).filter(Boolean))].length === 1
+        ? records.find((record) => record.outcome?.failureId)?.outcome.failureId
+        : null,
+      retryCount: records.reduce((total, record) => total + (Number.isInteger(record.outcome?.retryCount) ? record.outcome.retryCount : 0), 0),
+      flake: records.some((record) => record.outcome?.flake === true),
+    },
+    firstActionableFailureMs: (() => {
+      const values = records.map((record) => record.metrics?.firstActionableFailureMs).filter(Number.isFinite);
+      return values.length === 0 ? null : Math.min(...values);
+    })(),
     components,
   };
 }

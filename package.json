@@ -70,6 +70,7 @@
     "test:check-plan": "node --test tests/check-plan.test.mjs",
     "test:static-bundles": "node --test tests/static-bundles.test.mjs",
     "test:ci-promotion-evidence": "node --test tests/ci-promotion-evidence.test.mjs",
+    "test:ci-promotion-packet": "node --test tests/ci-promotion-packet.test.mjs",
     "test:ci-evidence-command": "node --test tests/ci-evidence-command.test.mjs",
     "test:ci-promotion-observations": "node --test tests/ci-promotion-observations.test.mjs",
     "test:static-bundle-summary": "node --test tests/static-bundles.test.mjs",
