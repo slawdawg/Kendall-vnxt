@@ -5,10 +5,12 @@ import os
 import shutil
 import socket
 import sqlite3
+import stat
 import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -47,6 +49,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
         MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
         _atomic_write_memory_artifact,
+        _assert_llm_wiki_front_matter_within_read_limit,
         _assert_memory_backup_matches_preliminary_artifact,
         _canonical_memory_artifact_leaf,
         _assert_directory_identity,
@@ -59,6 +62,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
         _read_strict_utf8_memory_artifact,
+        _restore_private_memory_backup_mode,
         _restore_memory_artifact_after_lost_reservation,
     )
     import supervisor.application.service as service_module
@@ -66,6 +70,11 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     artifact_path = tmp_path / "derived.md"
     artifact_path.write_bytes(b"---\nstatus: llm-wiki-derived\n---\n" + b"x" * (MAX_LLM_WIKI_ARTIFACT_READ_BYTES + 4096))
     assert len(_read_bounded_utf8_text(artifact_path).encode("utf-8")) == MAX_LLM_WIKI_ARTIFACT_READ_BYTES
+    _assert_llm_wiki_front_matter_within_read_limit("---\nstatus: ai-draft\n---\nbody\n")
+    with pytest.raises(ValueError, match="front matter exceeds"):
+        _assert_llm_wiki_front_matter_within_read_limit(
+            "---\nsource_refs: \"" + ("x" * MAX_LLM_WIKI_ARTIFACT_READ_BYTES) + "\"\n---\nbody\n"
+        )
 
     legacy_artifact = tmp_path / "legacy-non-utf8.md"
     legacy_artifact.write_bytes(b"---\nstatus: approved\n---\n\xff")
@@ -102,6 +111,19 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     assert _canonical_memory_artifact_leaf(vault_root, substituted_leaf).is_symlink()
     with pytest.raises(ValueError, match="regular non-symlink"):
         _read_strict_utf8_memory_artifact(substituted_leaf)
+
+    source_vault = tmp_path / "mode-source-vault"
+    source_vault.mkdir(mode=0o755)
+    os.chmod(source_vault, 0o755)
+    private_backups = tmp_path / "private-backups"
+    with _pinned_new_memory_backup_directory(private_backups, "vault-backup-20260821T182900000000Z") as (
+        pinned_backup,
+        visible_backup,
+    ):
+        shutil.copytree(source_vault, pinned_backup, dirs_exist_ok=True)
+        assert stat.S_IMODE(visible_backup.stat().st_mode) == 0o755
+        _restore_private_memory_backup_mode(pinned_backup)
+        assert stat.S_IMODE(visible_backup.stat().st_mode) == 0o700
 
     artifact_id = f"{'p' * 120}-{'a' * 36}"
     filename = _memory_artifact_filename("llm-wiki-derived-", "L" * 80, artifact_id)
@@ -402,6 +424,43 @@ def test_async_memory_artifact_lock_closes_descriptors_after_cancelled_open(tmp_
             os.fstat(lock_fd)
         with pytest.raises(OSError):
             os.fstat(directory_fd)
+
+
+def test_memory_proposal_write_reservation_is_registered_before_commit_cancellation() -> None:
+    """A durable reservation remains releasable if commit raises cancellation."""
+    from supervisor.application.service import SupervisorService
+
+    class CommitThenCancelledSession:
+        def __init__(self) -> None:
+            self.info: dict[str, object] = {}
+
+        async def execute(self, _statement):
+            return SimpleNamespace(rowcount=1)
+
+        async def refresh(self, _proposal) -> None:
+            return None
+
+        async def commit(self) -> None:
+            # Model a durable database commit followed by disconnect
+            # cancellation before the awaiting coroutine can resume.
+            raise asyncio.CancelledError()
+
+    async def scenario() -> None:
+        session = CommitThenCancelledSession()
+        proposal = SimpleNamespace(id="memory-proposal-row")
+        with pytest.raises(asyncio.CancelledError):
+            await object.__new__(SupervisorService)._reserve_memory_proposal_write(
+                session,
+                proposal,
+                work_item_id="work-item-row",
+                expected_revision=1,
+            )
+        reservation = session.info.get("memory_proposal_write_reservation")
+        assert isinstance(reservation, tuple)
+        assert reservation[0] == proposal.id
+        assert isinstance(reservation[1], str) and reservation[1]
+
+    asyncio_run(scenario())
 
 
 def test_memory_artifact_recovery_rejects_symlinked_restored_digest(tmp_path) -> None:
@@ -4930,8 +4989,65 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
 
 
+def test_migrated_memory_proposal_update_returns_the_v1_review_shape(tmp_path, monkeypatch) -> None:
+    """PATCH must keep legacy empty-reference rows visible after mutation."""
+    db_name = "work-packet-memory-proposal-migrated-update.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Migrated memory proposal review")
+        created = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-migrated-empty-refs",
+                "label": "Migrated proposal",
+                "summary": "This row predates required memory provenance arrays.",
+                "sourceRefs": ["obsidian:migrated-source"],
+                "evidenceRefs": ["evidence:migrated-proof"],
+                "targetVaultPath": "01 Dashboard Queue/AI Drafts/migrated.md",
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Retain the review row without a legacy V0 serialization failure.",
+                "sensitivity": "low",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "medium",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No write has occurred.",
+                "writeBackStatus": "review_gated",
+            },
+        )
+        assert created.status_code == 200, created.text
+        route_id = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["proposalRouteId"]
+
+        database = sqlite3.connect(tmp_path / db_name)
+        try:
+            database.execute(
+                "UPDATE memory_proposals SET source_refs_json = ?, evidence_refs_json = ? WHERE id = ?",
+                ("[]", "[]", route_id),
+            )
+            database.commit()
+        finally:
+            database.close()
+
+        updated = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/{route_id}",
+            json={"expectedRevision": 1, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert updated.status_code == 200, updated.text
+        data = updated.json()["data"]
+        assert data["proposalRouteId"] == route_id
+        assert data["revision"] == 2
+        assert data["sourceRefs"] == []
+        assert data["evidenceRefs"] == []
+        assert "packetId" not in data
+
+
 def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, monkeypatch) -> None:
     config_path, vault_root, backup_root = _write_obsidian_memory_config(tmp_path)
+    # copytree normally copies this source-root mode onto the already-created
+    # backup destination. The writer must restore the destination to 0700.
+    os.chmod(vault_root, 0o755)
     monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
     service_source = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
     eligibility_section = service_source.read_text(encoding="utf-8")
@@ -5123,6 +5239,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert "Create a Kendall-authored draft for operator review." in draft_text
         assert not (vault_root / "00 Inbox" / "memory-proposal-ai-draft-mp-ai-draft.md").exists()
         assert any(backup_root.iterdir())
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in backup_root.iterdir())
 
         # An action-side mutation also advances the review fence, so an open
         # tab loaded before the draft write cannot overwrite its current state.

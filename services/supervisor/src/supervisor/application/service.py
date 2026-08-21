@@ -1002,6 +1002,16 @@ def _read_bounded_utf8_text(path: Path) -> str:
     return _read_memory_artifact_bytes(path, limit=MAX_LLM_WIKI_ARTIFACT_READ_BYTES).decode("utf-8", errors="replace")
 
 
+def _assert_llm_wiki_front_matter_within_read_limit(text: str) -> None:
+    """Keep generated YAML fully parseable by the bounded artifact reader."""
+    encoded = text.encode("utf-8")
+    if not encoded.startswith(b"---\n"):
+        raise ValueError("LLM-Wiki artifact requires generated YAML front matter.")
+    closing_start = encoded.find(b"\n---\n", len(b"---\n"))
+    if closing_start < 0 or closing_start + len(b"\n---\n") > MAX_LLM_WIKI_ARTIFACT_READ_BYTES:
+        raise ValueError("LLM-Wiki generated front matter exceeds the bounded read limit.")
+
+
 def _read_strict_utf8_memory_artifact(path: Path) -> str:
     """Read a regular, non-symlink legacy artifact without normalizing bytes."""
     try:
@@ -1455,6 +1465,21 @@ def _fsync_memory_backup_tree(root: Path) -> None:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+
+def _restore_private_memory_backup_mode(root: Path) -> None:
+    """Reassert the private backup root mode after copytree copies source mode."""
+    # The just-created backup uses a pinned `/proc/self/fd/N` path.  Opening
+    # that already-held directory intentionally dereferences only the pinned
+    # descriptor, not a mutable configured backup-root pathname.
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError("Memory proposal backup root is not a directory.")
+        os.fchmod(descriptor, 0o700)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 async def _complete_threaded_artifact_work(operation, /, *args, **kwargs):
@@ -6964,8 +6989,12 @@ class SupervisorService:
         # or derived-artifact write. The persisted revision itself is the
         # durable action reservation; later event/proposal updates use a new
         # short transaction.
-        await session.commit()
         session.info["memory_proposal_write_reservation"] = (proposal.id, action_token)
+        # Register the durable token before awaiting commit.  A disconnect can
+        # arrive after the database commit becomes durable but before this
+        # coroutine resumes; endpoint cancellation cleanup then still has the
+        # exact token needed for a conditional release.
+        await session.commit()
         return now, action_token
 
     async def release_failed_memory_proposal_write(self, session: AsyncSession, work_item_id: str) -> None:
@@ -7156,6 +7185,13 @@ class SupervisorService:
                     pinned_backup_path,
                     symlinks=True,
                     dirs_exist_ok=True,
+                )
+                # copytree applies the source root's mode to an existing
+                # destination.  Reassert the backup's private 0700 contract
+                # before its completed intent can publish the copied vault.
+                await _complete_threaded_artifact_work(
+                    _restore_private_memory_backup_mode,
+                    pinned_backup_path,
                 )
                 # `copytree` returning only proves the data reached the page
                 # cache.  The completed intent is recovery authority after a
@@ -7803,6 +7839,7 @@ class SupervisorService:
                 ),
             ]
         )
+        _assert_llm_wiki_front_matter_within_read_limit(body)
         _mkdir_memory_vault_directory(vault_root, draft_dir.relative_to(vault_root))
         written_bytes = body.encode("utf-8")
         await self._prepare_memory_proposal_backup(
@@ -8105,6 +8142,7 @@ class SupervisorService:
                 readiness.rebuildDryRunPlan.discardRecoveryPath,
             ]
         )
+        _assert_llm_wiki_front_matter_within_read_limit(body)
         _mkdir_memory_vault_directory(vault_root, target_dir.relative_to(vault_root))
         written_bytes = body.encode("utf-8")
         await self._prepare_memory_proposal_backup(
