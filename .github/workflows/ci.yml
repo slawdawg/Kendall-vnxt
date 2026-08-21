@@ -362,6 +362,25 @@ jobs:
           name: static-bundle-report-workspace
           path: ${{ runner.temp }}/ci-promotion-reports
 
+      - name: Collect GitHub job timings
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const fs = require("node:fs");
+            const path = `${process.env.RUNNER_TEMP}/ci-promotion-reports/github-job-timings.json`;
+            fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+            fs.writeFileSync(path, JSON.stringify({
+              schemaVersion: 1,
+              recordType: "github-job-timings",
+              jobs: data.jobs.map((job) => ({ name: job.name, createdAt: job.created_at, startedAt: job.started_at, completedAt: job.completed_at })),
+            }, null, 2));
+
       - name: Collect same-head route observation
         shell: bash
         run: |

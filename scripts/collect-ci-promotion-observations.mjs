@@ -18,6 +18,42 @@ function maxDuration(records) {
   return values.length === 0 ? null : Math.max(...values);
 }
 
+function asMilliseconds(value) {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function componentId(record) {
+  return record.selectionVector?.profile ?? record.selectionVector?.shard ?? record.selectionVector?.shape ?? record.bundle ?? record.command?.join(" ") ?? "unknown";
+}
+
+function jobForRecord(record, jobs) {
+  const vector = record.selectionVector ?? {};
+  if (record.route === "baseline" && vector.id === "supervisor-elevated") return jobs.find((job) => job.name === "supervisor") ?? null;
+  if (record.bundle === "workspace") return jobs.find((job) => job.name === "static_bundle (workspace)") ?? null;
+  if (vector.id === "workspace-elevated" && vector.profile) {
+    return jobs.find((job) => job.name.startsWith(`workspace_behavior_shadow (${vector.profile},`)) ?? null;
+  }
+  if (vector.id === "supervisor-elevated" && vector.shard) {
+    return jobs.find((job) => job.name.startsWith(`supervisor_behavior_shadow (${vector.shard},`)) ?? null;
+  }
+  return null;
+}
+
+function jobMetrics(record, jobs) {
+  const job = jobForRecord(record, jobs);
+  const createdAtMs = asMilliseconds(job?.createdAt);
+  const startedAtMs = asMilliseconds(job?.startedAt);
+  const completedAtMs = asMilliseconds(job?.completedAt);
+  const commandStartedAtMs = asMilliseconds(record.startedAt);
+  return {
+    queueMs: createdAtMs === null || startedAtMs === null ? null : Math.max(0, startedAtMs - createdAtMs),
+    setupMs: startedAtMs === null || commandStartedAtMs === null ? null : Math.max(0, commandStartedAtMs - startedAtMs),
+    executionMs: record.metrics?.executionMs ?? record.durationMs ?? null,
+    wallMs: createdAtMs === null || completedAtMs === null ? null : Math.max(0, completedAtMs - createdAtMs),
+  };
+}
+
 function status(records) {
   if (records.length === 0) return "missing";
   return records.every((record) => (record.outcome?.status ?? record.status) === "passed") ? "passed" : "failed";
@@ -30,17 +66,21 @@ function sourceMatches(record, source) {
     (!candidate.environmentId || candidate.environmentId === source.environmentId);
 }
 
-function routeSummary(records) {
+function routeSummary(records, jobs) {
+  const components = records.map((record) => ({
+    id: componentId(record),
+    status: record.outcome?.status ?? record.status ?? "unknown",
+    metrics: jobMetrics(record, jobs),
+    command: record.command ?? null,
+  }));
   return {
     status: status(records),
     componentCount: records.length,
-    executionMs: maxDuration(records),
-    components: records.map((record) => ({
-      id: record.selectionVector?.profile ?? record.selectionVector?.shard ?? record.selectionVector?.shape ?? record.bundle ?? record.command?.join(" ") ?? "unknown",
-      status: record.outcome?.status ?? record.status ?? "unknown",
-      executionMs: record.metrics?.executionMs ?? record.durationMs ?? null,
-      command: record.command ?? null,
-    })),
+    metrics: Object.fromEntries(["queueMs", "setupMs", "executionMs", "wallMs"].map((metric) => [
+      metric,
+      maxDuration(components.map((component) => ({ durationMs: component.metrics[metric] }))),
+    ])),
+    components,
   };
 }
 
@@ -58,6 +98,8 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, coh
     }
   }
   const commandRecords = records.filter((record) => record.recordType === "ci-command-evidence");
+  const timingRecord = records.find((record) => record.recordType === "github-job-timings");
+  const jobs = Array.isArray(timingRecord?.jobs) ? timingRecord.jobs : [];
   const vectors = [];
   for (const vectorId of ["supervisor-elevated", "workspace-elevated"]) {
     const vectorRecords = commandRecords.filter((record) => record.selectionVector?.id === vectorId);
@@ -72,8 +114,8 @@ export function collectCiPromotionObservations({ reportsDir, pairId, source, coh
     vectors.push({
       id: vectorId,
       sourceMatched: mismatched.length === 0,
-      baseline: routeSummary(baseline),
-      proposed: routeSummary(proposed),
+      baseline: routeSummary(baseline, jobs),
+      proposed: routeSummary(proposed, jobs),
       readyForPromotion: false,
       blockingReason: "Observed-cache command evidence is a raw same-head observation, not a counterbalanced or isolated promotion sample.",
     });
