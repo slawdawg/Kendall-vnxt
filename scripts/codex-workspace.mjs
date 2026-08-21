@@ -67,11 +67,12 @@ const resumableCheckDefaultLeafExecutionReserveMs = 30_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
 const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
-// A packet can legitimately contain the 30-minute workspace leaf plus the
-// independently bounded supervisor leaves. Keep one fixed lifetime large
-// enough for that reviewed aggregate, while every resume still rebinds the
-// immutable head, plan, staged input, and ordered metadata-only evidence.
-const resumableCheckPacketTtlMs = 2 * 60 * 60 * 1000;
+// The two 30-minute leaves plus twenty-two 170-second supervisor leaves need
+// 7,340 seconds before ordinary leaves or resume overhead. Three hours leaves
+// a bounded 3,460-second allowance for the ordinary plan while every resume
+// still rebinds the immutable head, plan, staged input, and ordered
+// metadata-only evidence.
+const resumableCheckPacketTtlMs = 3 * 60 * 60 * 1000;
 const resumableCheckPacketFutureSkewMs = 30_000;
 // Retry history is audit evidence, not a scheduler. Thirty seconds tolerates
 // ordinary local clock skew while rejecting timestamps projected far enough

@@ -1044,18 +1044,20 @@ def _atomic_write_memory_artifact(
     # replaced with a symlink in the meantime.
     if vault_root is not None:
         root_fd = _open_existing_non_symlink_directory(vault_root)
+        parent_fd = root_fd
         try:
             metadata = os.fstat(root_fd)
             if vault_identity and (metadata.st_dev, metadata.st_ino) != (vault_identity["device"], vault_identity["inode"]):
                 raise ValueError("Memory proposal vault changed before artifact replacement.")
             relative_parent = path.parent.relative_to(vault_root)
-            parent_fd = root_fd
             for part in relative_parent.parts:
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
                 if parent_fd != root_fd:
                     os.close(parent_fd)
                 parent_fd = child
         except Exception:
+            if parent_fd != root_fd:
+                os.close(parent_fd)
             os.close(root_fd)
             raise
         if parent_fd == root_fd:
@@ -1142,19 +1144,61 @@ def _restore_memory_artifact_after_lost_reservation(
     path: Path,
     written_bytes: bytes,
     previous_bytes: bytes | None,
+    *,
+    vault_root: Path | None = None,
+    vault_identity: dict[str, int] | None = None,
 ) -> None:
     """Undo only this writer's exact artifact mutation after a lost DB fence."""
+    root_fd: int | None = None
+    parent_fd: int | None = None
+    descriptor: int | None = None
     try:
-        if path.read_bytes() != written_bytes:
+        if vault_root is None:
+            return
+        root_fd = _open_existing_non_symlink_directory(vault_root)
+        metadata = os.fstat(root_fd)
+        if vault_identity and (metadata.st_dev, metadata.st_ino) != (vault_identity["device"], vault_identity["inode"]):
+            return
+        relative_parent = path.parent.relative_to(vault_root)
+        parent_fd = root_fd
+        for part in relative_parent.parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            parent_fd = child
+        try:
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return
+        artifact_metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(artifact_metadata.st_mode):
+            return
+        with os.fdopen(descriptor, "rb") as artifact:
+            descriptor = None
+            current_bytes = artifact.read()
+        if current_bytes != written_bytes:
             return
         if previous_bytes is None:
-            path.unlink(missing_ok=True)
+            os.unlink(path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
         else:
-            _atomic_write_memory_artifact(path, previous_bytes)
+            _atomic_write_memory_artifact(
+                path,
+                previous_bytes,
+                vault_root=vault_root,
+                vault_identity=vault_identity,
+            )
     except OSError:
         # The caller still reports the ownership conflict.  Do not overwrite a
         # concurrently replaced path while attempting best-effort compensation.
         return
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_fd is not None and parent_fd != root_fd:
+            os.close(parent_fd)
+        if root_fd is not None:
+            os.close(root_fd)
 
 
 def _memory_artifact_lock_name(path: Path) -> str:
@@ -6938,6 +6982,8 @@ class SupervisorService:
                         artifact_path,
                         written_bytes,
                         previous_bytes,
+                        vault_root=Path(str(intent.get("vaultRoot", ""))) if isinstance(intent, dict) and intent.get("vaultRoot") else None,
+                        vault_identity=intent.get("vaultIdentity") if isinstance(intent, dict) else None,
                     )
                 finally:
                     await session.execute(
@@ -7052,6 +7098,8 @@ class SupervisorService:
                     artifact_path,
                     written_bytes,
                     previous_bytes,
+                    vault_root=Path(str(intent.get("vaultRoot", ""))) if isinstance(intent, dict) and intent.get("vaultRoot") else None,
+                    vault_identity=intent.get("vaultIdentity") if isinstance(intent, dict) else None,
                 )
                 raise
 

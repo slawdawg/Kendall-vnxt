@@ -8742,8 +8742,8 @@ try {
 
   test("finish-pr resumable check packet fails closed before execution on binding drift, expiry, or malformed state", () => {
     assert(
-      readFileSync(scriptPath, "utf8").includes("const resumableCheckPacketTtlMs = 2 * 60 * 60 * 1000;"),
-      "resumable check packet must retain its reviewed two-hour aggregate lifetime",
+      readFileSync(scriptPath, "utf8").includes("const resumableCheckPacketTtlMs = 3 * 60 * 60 * 1000;"),
+      "resumable check packet must retain its reviewed three-hour aggregate lifetime",
     );
     for (const scenario of [
       { name: "task", mutate: (packet) => ({ ...packet, task_id: "other-task" }) },

@@ -59,6 +59,7 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
         _read_strict_utf8_memory_artifact,
+        _restore_memory_artifact_after_lost_reservation,
     )
     import supervisor.application.service as service_module
 
@@ -215,6 +216,66 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     identity_root.mkdir()
     with pytest.raises(ValueError, match="changed after intent recording"):
         _assert_directory_identity(identity_root, identity, label="vault")
+
+    # Compensation must not re-resolve a replaced vault path. A lost writer
+    # can only remove/restore bytes through the same vault inode recorded in
+    # its durable intent.
+    compensation_vault = tmp_path / "compensation-vault"
+    compensation_path = compensation_vault / "01 Dashboard Queue" / "AI Drafts" / "proposal.md"
+    compensation_path.parent.mkdir(parents=True)
+    compensation_path.write_bytes(b"writer bytes\n")
+    compensation_identity = _directory_identity(compensation_vault)
+    parked_compensation_vault = tmp_path / "parked-compensation-vault"
+    compensation_vault.rename(parked_compensation_vault)
+    compensation_path.parent.mkdir(parents=True)
+    compensation_path.write_bytes(b"writer bytes\n")
+    _restore_memory_artifact_after_lost_reservation(
+        compensation_path,
+        b"writer bytes\n",
+        None,
+        vault_root=compensation_vault,
+        vault_identity=compensation_identity,
+    )
+    assert compensation_path.read_bytes() == b"writer bytes\n"
+
+    source = Path(service_module.__file__).read_text(encoding="utf-8")
+    atomic_write = source[source.index("def _atomic_write_memory_artifact"):source.index("def _revalidate_memory_artifact_bytes")]
+    assert "if parent_fd != root_fd:\n                os.close(parent_fd)\n            os.close(root_fd)" in atomic_write
+
+
+def test_atomic_memory_artifact_closes_intermediate_parent_on_traversal_failure(tmp_path, monkeypatch) -> None:
+    """A failed nested queue open must not leak the already-open parent FD."""
+    from supervisor.application.service import _atomic_write_memory_artifact, _directory_identity
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    (vault_root / "queue").mkdir(parents=True)
+    target = vault_root / "queue" / "missing" / "proposal.md"
+    original_open = service_module.os.open
+    original_close = service_module.os.close
+    opened: set[int] = set()
+
+    def tracked_open(path, flags, *args, **kwargs):
+        if path == "missing":
+            raise FileNotFoundError("injected nested queue removal")
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened.add(descriptor)
+        return descriptor
+
+    def tracked_close(descriptor: int) -> None:
+        opened.discard(descriptor)
+        original_close(descriptor)
+
+    monkeypatch.setattr(service_module.os, "open", tracked_open)
+    monkeypatch.setattr(service_module.os, "close", tracked_close)
+    with pytest.raises(FileNotFoundError, match="injected nested queue removal"):
+        _atomic_write_memory_artifact(
+            target,
+            b"metadata-only artifact\n",
+            vault_root=vault_root,
+            vault_identity=_directory_identity(vault_root),
+        )
+    assert not opened
 
 
 def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(tmp_path) -> None:

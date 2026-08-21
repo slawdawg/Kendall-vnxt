@@ -148,7 +148,12 @@ export function MemoryProposalReviewPanel({
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor rejected that memory proposal update.");
-          return;
+        // A conflicting PATCH is normally an optimistic-concurrency signal.
+        // Re-read the review before allowing another action so this panel does
+        // not keep resubmitting the stale proposal revision.
+        router.refresh();
+        invalidateAuthenticatedPageData();
+        return;
         }
 
         setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);

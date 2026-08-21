@@ -52,6 +52,7 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(panelSource, /The LLM-Wiki artifact read was interrupted; no result was retained\./);
   assert.match(panelSource, /The AI draft request was interrupted; no draft write was confirmed\./);
   assert.match(panelSource, /The supervisor blocked the AI draft write-back\.[\s\S]{0,500}router\.refresh\(\);/);
+  assert.match(panelSource, /The supervisor rejected that memory proposal update\.[\s\S]{0,500}router\.refresh\(\);/);
   assert.match(panelSource, /Search artifact/);
   assert.match(panelSource, /LLM-Wiki search/);
   assert.match(panelSource, /Planned sections/);
