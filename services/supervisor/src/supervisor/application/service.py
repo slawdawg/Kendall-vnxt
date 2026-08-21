@@ -1206,14 +1206,25 @@ class SupervisorService:
                     if replay_packet:
                         if self._is_manager_source_intake_actor(payload.actor.model_dump()):
                             replay_contract = self._canonical_contract_from_packet_metadata(replay_packet.source_ref_json)
-                            if replay_contract is None:
+                            if (
+                                replay_contract is None
+                                or not self._is_server_minted_manager_source_intake_contract(
+                                    replay_contract,
+                                    replay_packet.source_ref_json,
+                                    replay_packet.id,
+                                )
+                            ):
                                 raise ValueError("Manager source intake replay requires the persisted server-minted canonical contract.")
-                            payload = payload.model_copy(update={"canonicalContract": replay_contract})
-                            source_ref = self._authoritative_source_ref_payload(
-                                payload.sourceRef,
-                                replay_contract,
-                                trusted_manager_packet_id=payload.packetId if manager_source_intake_authorized else None,
-                            )
+                            if self._manager_source_intake_create_replay_matches(
+                                replay_event,
+                                replay_packet,
+                                payload,
+                                payload_summary=payload_summary,
+                                evidence_refs=evidence_refs,
+                                manager_source_evidence=manager_source_evidence,
+                            ):
+                                return await self.to_authoritative_work_packet_view(session, replay_packet)
+                            raise ValueError("Create idempotency key already belongs to different lifecycle metadata.")
                         if not self._authoritative_create_event_matches(
                             replay_event,
                             payload,
@@ -4761,6 +4772,39 @@ class SupervisorService:
             and event.payload_summary == payload_summary
             and list(event.evidence_refs_json or []) == evidence_refs
             and event.parallel_work_graph_json == manager_source_evidence
+        )
+
+    def _manager_source_intake_create_replay_matches(
+        self,
+        event: AuthoritativeWorkPacketLifecycleEvent,
+        packet: AuthoritativeWorkPacket,
+        payload: AuthoritativeWorkPacketCreateRequest,
+        *,
+        payload_summary: str,
+        evidence_refs: list[str],
+        manager_source_evidence: dict[str, object] | None,
+    ) -> bool:
+        """Compare manager-intake replays without reminting server-owned metadata.
+
+        Concurrent requests mint candidate contracts before either transaction
+        commits.  Once one request wins, the persisted contract is the only
+        canonical representation.  Compare every caller-controlled field, but
+        compare the source reference at its bounded input shape so equivalent
+        requests do not conflict on serialization details of server metadata.
+        """
+        return (
+            event.source_ref_json == packet.source_ref_json
+            and self._packet_source_ref_payload(packet.source_ref_json)
+            == payload.sourceRef.model_dump(mode="json", exclude_none=True)
+            and self._authoritative_create_event_matches(
+                event,
+                payload,
+                source_ref=event.source_ref_json,
+                payload_summary=payload_summary,
+                evidence_refs=evidence_refs,
+                parallel_work_graph=None,
+                manager_source_evidence=manager_source_evidence,
+            )
         )
 
     def _authoritative_graph_refresh_event_matches(
