@@ -213,7 +213,12 @@ for (const ciText of [
   assertIncludes(ciWorkflow, ciText, ".github/workflows/ci.yml", failures);
 }
 for (const experimentText of [
+  "schedule:",
   "workflow_dispatch:",
+  'cron: "11 0 * * *"',
+  'cron: "11 6 * * *"',
+  'cron: "11 12 * * *"',
+  'cron: "11 18 * * *"',
   "controlled_failure",
   "cache-strategy isolated",
   "--inject-failure-id",

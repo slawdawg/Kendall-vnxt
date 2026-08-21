@@ -1,6 +1,13 @@
 name: CI promotion experiment
 
 on:
+  schedule:
+    # Two ordinary and two deterministic controlled-failure pairs per UTC day.
+    # Five complete days satisfy the 20-pair, five-day promotion evidence gate.
+    - cron: "11 0 * * *"
+    - cron: "11 6 * * *"
+    - cron: "11 12 * * *"
+    - cron: "11 18 * * *"
   workflow_dispatch:
     inputs:
       ref:
@@ -44,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'dev') }}
           fetch-depth: 0
 
       - id: source
@@ -52,9 +59,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$(git rev-parse '${{ inputs.base_ref }}')" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse '${{ inputs.base_ref || (github.event_name == 'schedule' && 'dev~1') }}')" >> "$GITHUB_OUTPUT"
           echo "lockfile_sha=$(git rev-parse HEAD:pnpm-lock.yaml)" >> "$GITHUB_OUTPUT"
-          echo "cohort=${{ inputs.cohort }}" >> "$GITHUB_OUTPUT"
+          echo "cohort=${{ github.event_name == 'schedule' && ((github.event.schedule == '11 0 * * *' || github.event.schedule == '11 12 * * *') && 'controlled_failure' || 'ordinary') || inputs.cohort }}" >> "$GITHUB_OUTPUT"
 
       - id: plan
         shell: bash
