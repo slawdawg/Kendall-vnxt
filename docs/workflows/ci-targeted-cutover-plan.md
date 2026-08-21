@@ -20,8 +20,10 @@ and migration surfaces still fail closed to a named elevated matrix.
    queue/setup/execution/wall timings and writes an immutable sample packet.
 3. Refine planner selection from "all behavior shards" to the affected shard(s)
    plus the named shared core. Keep unknown/shared routing explicitly elevated.
-4. Add an opt-in, deterministic controlled-failure workflow route. Each vector
-   must prove the same failure reaches both baseline and proposed final fan-ins.
+4. Add an opt-in, deterministic controlled-failure workflow route. It is a
+   standalone manually dispatched workflow, so experimental evidence collection
+   cannot prevent the required PR CI from starting. Each vector must prove the
+   same failure reaches both baseline and proposed final fan-ins.
 5. Run full confidence after merge to `dev`, plus scheduled and manual routes,
    before reducing any aggregate PR requirement.
 6. Collect at least 20 ordinary and 20 controlled-failure same-head pairs per
