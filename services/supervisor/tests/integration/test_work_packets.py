@@ -462,6 +462,48 @@ def test_memory_artifact_intent_rejects_symlinked_backup_hierarchy(tmp_path) -> 
     assert marker.read_text(encoding="utf-8") == "must survive\n"
 
 
+def test_memory_artifact_recovery_retains_the_verified_vault_descriptor(tmp_path, monkeypatch) -> None:
+    """A vault swap after intent validation cannot redirect recovery cleanup."""
+    from supervisor.application.service import _directory_identity, _reconcile_memory_artifact_intent
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "queue" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    written_bytes = b"interrupted writer bytes\n"
+    artifact_path.write_bytes(written_bytes)
+    backup_path = tmp_path / "backups" / "empty-snapshot"
+    backup_path.mkdir(parents=True)
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1",
+        "vaultRoot": str(vault_root),
+        "vaultIdentity": _directory_identity(vault_root),
+        "artifactPath": str(artifact_path),
+        "backupPath": str(backup_path),
+        "writtenSha256": hashlib.sha256(written_bytes).hexdigest(),
+        "backupArtifactSha256": None,
+        "backupPrepared": True,
+        "priorArtifactSha256": None,
+    }
+    original_lock = service_module._memory_artifact_lock
+    parked_vault = tmp_path / "parked-vault"
+    replacement_artifact = vault_root / "queue" / "draft.md"
+
+    @contextmanager
+    def swap_after_validation(path):
+        vault_root.rename(parked_vault)
+        replacement_artifact.parent.mkdir(parents=True)
+        replacement_artifact.write_bytes(b"replacement vault artifact\n")
+        with original_lock(path):
+            yield
+
+    monkeypatch.setattr(service_module, "_memory_artifact_lock", swap_after_validation)
+    with pytest.raises(ValueError, match="vault changed after intent recording"):
+        _reconcile_memory_artifact_intent(intent)
+    assert (parked_vault / "queue" / "draft.md").read_bytes() == written_bytes
+    assert replacement_artifact.read_bytes() == b"replacement vault artifact\n"
+
+
 def test_atomic_memory_artifact_write_preserves_prior_bytes_on_replace_failure(tmp_path, monkeypatch) -> None:
     """A failed writer leaves the durable artifact untouched, never truncated."""
     import supervisor.application.service as service_module
@@ -4923,7 +4965,38 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
             f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
         )
         assert before_artifact_review.status_code == 200
+        assert before_artifact_review.json()["data"]["proposals"][0]["aiDraftEligible"] is True
         assert before_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+
+        # Eligibility must not advertise a write that the deterministic target
+        # fence will reject. Exercise both an unsafe leaf and an occupied but
+        # unrelated regular artifact before any writer reservation is made.
+        proposal_route_id = before_artifact_review.json()["data"]["proposals"][0]["proposalRouteId"]
+        deterministic_draft = (
+            vault_root
+            / "01 Dashboard Queue"
+            / "AI Drafts"
+            / f"memory-proposal-ai-draft-mp-ai-draft-{proposal_route_id}.md"
+        )
+        outside_draft = tmp_path / "outside-ai-draft.md"
+        outside_draft.write_text("untrusted draft", encoding="utf-8")
+        deterministic_draft.symlink_to(outside_draft)
+        symlink_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert symlink_review.status_code == 200
+        assert symlink_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        deterministic_draft.unlink()
+        deterministic_draft.write_text(
+            "---\nstatus: ai-draft\nproposal_id: other\nwork_item_id: other\n---\nunrelated draft\n",
+            encoding="utf-8",
+        )
+        mismatched_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert mismatched_review.status_code == 200
+        assert mismatched_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        deterministic_draft.unlink()
 
         # Memory-review is a read surface: a temporarily unreadable config
         # must make its action ineligible, not make the whole WorkItem page
@@ -5085,6 +5158,10 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         abandoned_intent = {
             "schemaVersion": "memory-proposal-write-intent/v1",
             "vaultRoot": str(vault_root),
+            "vaultIdentity": {
+                "device": vault_root.stat().st_dev,
+                "inode": vault_root.stat().st_ino,
+            },
             "artifactPath": str(draft_path),
             "backupPath": str(crashed_backup_path),
             "writtenSha256": hashlib.sha256(abandoned_draft_bytes).hexdigest(),

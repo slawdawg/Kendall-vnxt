@@ -1126,6 +1126,102 @@ def _atomic_write_memory_artifact(
                 os.close(root_fd)
 
 
+@contextmanager
+def _memory_artifact_parent_from_root_fd(root_fd: int, relative_path: Path):
+    """Open an artifact parent below one already-pinned vault descriptor."""
+    if relative_path.is_absolute() or ".." in relative_path.parts or relative_path.name in {"", ".", ".."}:
+        raise ValueError("Memory proposal artifact path is not safely relative to the vault.")
+    parent_fd = os.dup(root_fd)
+    try:
+        for part in relative_path.parent.parts:
+            if part == ".":
+                continue
+            child_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = child_fd
+        yield parent_fd
+    finally:
+        os.close(parent_fd)
+
+
+def _memory_artifact_leaf_stat_from_root_fd(root_fd: int, relative_path: Path) -> os.stat_result | None:
+    """Inspect a leaf below the pinned vault without resolving any path hop."""
+    with _memory_artifact_parent_from_root_fd(root_fd, relative_path) as parent_fd:
+        try:
+            return os.stat(relative_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+
+
+def _read_memory_artifact_bytes_from_root_fd(root_fd: int, relative_path: Path) -> bytes:
+    """Read one regular artifact from the exact descriptor-bound vault."""
+    descriptor: int | None = None
+    with _memory_artifact_parent_from_root_fd(root_fd, relative_path) as parent_fd:
+        try:
+            descriptor = os.open(relative_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Memory proposal recovery artifact is not a regular file.")
+            with os.fdopen(descriptor, "rb") as artifact:
+                descriptor = None
+                return artifact.read()
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def _atomic_write_memory_artifact_from_root_fd(
+    root_fd: int,
+    relative_path: Path,
+    payload: bytes,
+    *,
+    expected_existing_digest: str | None = None,
+) -> None:
+    """Atomically replace a leaf below a retained vault descriptor."""
+    temporary_name = f".{relative_path.name}.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    with _memory_artifact_parent_from_root_fd(root_fd, relative_path) as parent_fd:
+        try:
+            try:
+                previous = os.stat(relative_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                previous = None
+            if previous is not None and not stat.S_ISREG(previous.st_mode):
+                raise ValueError("Memory proposal artifact replacement requires a regular file.")
+            if expected_existing_digest is not None:
+                if previous is None:
+                    raise ValueError("Memory proposal artifact changed before recovery replacement.")
+                current = _read_memory_artifact_bytes_from_root_fd(root_fd, relative_path)
+                if hashlib.sha256(current).hexdigest() != expected_existing_digest:
+                    raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            with os.fdopen(descriptor, "wb") as artifact:
+                descriptor = None
+                artifact.write(payload)
+                artifact.flush()
+                os.fsync(artifact.fileno())
+            os.chmod(
+                temporary_name,
+                0o600 if previous is None else stat.S_IMODE(previous.st_mode),
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            os.replace(temporary_name, relative_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+
+
 def _revalidate_memory_artifact_bytes(path: Path, expected_bytes: bytes) -> None:
     """Fail closed if a legacy artifact changed before its final locked rebind."""
     if not path.is_file() or path.is_symlink() or path.read_bytes() != expected_bytes:
@@ -1368,7 +1464,15 @@ async def _complete_threaded_artifact_work(operation, /, *args, **kwargs):
 
 async def _complete_threaded_artifact_reconciliation(*args: object) -> None:
     """Join reconciliation work before cancellation can release its artifact lock."""
-    await _complete_threaded_artifact_work(_reconcile_memory_artifact_intent_unlocked, *args)
+    # The public recovery path always provides validated intent coordinates.
+    # Keep the low-level cancellation helper injectable for its focused worker
+    # test without letting the production path drop the descriptor fence.
+    operation = (
+        _reconcile_memory_artifact_intent_with_pinned_vault
+        if args and isinstance(args[0], Path)
+        else _reconcile_memory_artifact_intent_unlocked
+    )
+    await _complete_threaded_artifact_work(operation, *args)
 
 
 def _existing_non_symlink_directory(raw_path: object) -> Path:
@@ -1433,7 +1537,7 @@ def _remove_verified_backup_directory(backup_path: Path, expected_identity: dict
         os.close(parent_fd)
 
 
-def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path, bool, str | None, dict[str, int] | None]:
+def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str, str | None, Path, bool, str | None, dict[str, int] | None, dict[str, int] | None]:
     """Validate and return the immutable filesystem coordinates in an intent."""
     if not isinstance(intent, dict) or intent.get("schemaVersion") != "memory-proposal-write-intent/v1":
         raise ValueError("Memory proposal recovery requires a valid durable write intent.")
@@ -1473,7 +1577,13 @@ def _memory_artifact_intent_paths(intent: object) -> tuple[Path, Path, Path, str
         or not all(isinstance(backup_identity.get(key), int) for key in ("device", "inode"))
     ):
         raise ValueError("Memory proposal recovery intent is invalid.")
-    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path, backup_prepared, str(prior_artifact_digest) if prior_artifact_digest else None, backup_identity
+    vault_identity = intent.get("vaultIdentity")
+    if vault_identity is not None and (
+        not isinstance(vault_identity, dict)
+        or not all(isinstance(vault_identity.get(key), int) for key in ("device", "inode"))
+    ):
+        raise ValueError("Memory proposal recovery intent is invalid.")
+    return vault_root, artifact_path, backup_path, expected_digest, str(expected_backup_digest) if expected_backup_digest else None, relative_path, backup_prepared, str(prior_artifact_digest) if prior_artifact_digest else None, backup_identity, vault_identity
 
 
 def _reconcile_memory_artifact_intent_unlocked(
@@ -1486,14 +1596,66 @@ def _reconcile_memory_artifact_intent_unlocked(
     backup_prepared: bool = True,
     prior_artifact_digest: str | None = None,
     backup_identity: dict[str, int] | None = None,
+    vault_identity: dict[str, int] | None = None,
+    *,
+    vault_root_fd: int | None = None,
 ) -> None:
     """Restore the snapshot version of an interrupted server-recorded write."""
-    del vault_root  # The containment proof was completed by the caller.
+    if vault_root_fd is not None:
+        metadata = os.fstat(vault_root_fd)
+        if vault_identity is not None and (metadata.st_dev, metadata.st_ino) != (
+            vault_identity["device"], vault_identity["inode"]
+        ):
+            raise ValueError("Memory proposal vault changed after intent recording.")
+
+    def artifact_metadata() -> os.stat_result | None:
+        if vault_root_fd is not None:
+            return _memory_artifact_leaf_stat_from_root_fd(vault_root_fd, relative_path)
+        try:
+            return os.lstat(artifact_path)
+        except FileNotFoundError:
+            return None
+
+    def artifact_bytes() -> bytes:
+        if vault_root_fd is not None:
+            return _read_memory_artifact_bytes_from_root_fd(vault_root_fd, relative_path)
+        return _read_memory_artifact_bytes(artifact_path)
+
+    def restore_artifact(payload: bytes, *, expected_existing_digest: str | None = None) -> None:
+        if vault_root_fd is not None:
+            _atomic_write_memory_artifact_from_root_fd(
+                vault_root_fd,
+                relative_path,
+                payload,
+                expected_existing_digest=expected_existing_digest,
+            )
+            return
+        _atomic_write_memory_artifact(
+            artifact_path,
+            payload,
+            expected_existing_digest=expected_existing_digest,
+        )
+
+    def remove_artifact() -> None:
+        if vault_root_fd is not None:
+            with _memory_artifact_parent_from_root_fd(vault_root_fd, relative_path) as parent_fd:
+                os.unlink(relative_path.name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            return
+        parent = _existing_non_symlink_directory(artifact_path.parent)
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.unlink(artifact_path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+
     if not backup_prepared:
-        if artifact_path.exists():
-            if not artifact_path.is_file() or artifact_path.is_symlink() or prior_artifact_digest is None:
+        current_metadata = artifact_metadata()
+        if current_metadata is not None:
+            if not stat.S_ISREG(current_metadata.st_mode) or prior_artifact_digest is None:
                 raise ValueError("Memory proposal recovery found an artifact changed before backup completion.")
-            if _sha256_file(artifact_path) != prior_artifact_digest:
+            if hashlib.sha256(artifact_bytes()).hexdigest() != prior_artifact_digest:
                 raise ValueError("Memory proposal recovery found an artifact changed before backup completion.")
         elif prior_artifact_digest is not None:
             raise ValueError("Memory proposal recovery found a missing artifact before backup completion.")
@@ -1513,54 +1675,49 @@ def _reconcile_memory_artifact_intent_unlocked(
         # regular file that a prior recovery restored.  ``read_bytes`` follows
         # links, so reject a substituted link before its target can be treated
         # as that durable restored artifact.
-        if artifact_path.is_symlink() or (artifact_path.exists() and not artifact_path.is_file()):
+        current_metadata = artifact_metadata()
+        if current_metadata is not None and not stat.S_ISREG(current_metadata.st_mode):
             raise ValueError("Memory proposal recovery artifact is not a regular file.")
-        if artifact_path.exists():
-            artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        if current_metadata is not None:
+            artifact_digest = hashlib.sha256(artifact_bytes()).hexdigest()
             if artifact_digest == expected_backup_digest:
                 # A prior recovery restored the exact snapshot but failed before
                 # committing its DB/event outcome.  This retry is safe to finish.
                 return
             if artifact_digest != expected_digest:
                 raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
-        _atomic_write_memory_artifact(
-            artifact_path,
-            backup_bytes,
-            expected_existing_digest=expected_digest,
-        )
+        restore_artifact(backup_bytes, expected_existing_digest=expected_digest)
     else:
         if expected_backup_digest is not None:
             raise ValueError("Memory proposal recovery backup artifact is missing.")
-        if artifact_path.is_symlink() or (artifact_path.exists() and not artifact_path.is_file()):
+        current_metadata = artifact_metadata()
+        if current_metadata is not None and not stat.S_ISREG(current_metadata.st_mode):
             raise ValueError("Memory proposal recovery artifact is not a regular file.")
-        parent = _existing_non_symlink_directory(artifact_path.parent)
-        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            try:
-                metadata = os.stat(artifact_path.name, dir_fd=parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                metadata = None
-            if metadata is not None:
-                if not stat.S_ISREG(metadata.st_mode):
-                    raise ValueError("Memory proposal recovery artifact is not a regular file.")
-                descriptor = os.open(artifact_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
-                try:
-                    digest = hashlib.sha256()
-                    with os.fdopen(descriptor, "rb") as artifact:
-                        descriptor = -1
-                        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
-                            digest.update(chunk)
-                    if digest.hexdigest() != expected_digest:
-                        raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
-                finally:
-                    if descriptor >= 0:
-                        os.close(descriptor)
-                os.unlink(artifact_path.name, dir_fd=parent_fd)
-                # The recovery intent is durable authority.  Do not clear it
-                # until the removal itself has survived the parent directory.
-                os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
+        if current_metadata is not None:
+            if hashlib.sha256(artifact_bytes()).hexdigest() != expected_digest:
+                raise ValueError("Memory proposal recovery found an artifact changed after the abandoned write.")
+            # The recovery intent is durable authority. Do not clear it until
+            # the removal itself has survived the parent directory.
+            remove_artifact()
+
+
+def _reconcile_memory_artifact_intent_with_pinned_vault(*paths: object) -> None:
+    """Reconcile only through the exact vault directory recorded by the intent."""
+    vault_root = paths[0]
+    vault_identity = paths[-1]
+    if not isinstance(vault_root, Path) or not isinstance(vault_identity, dict):
+        raise ValueError("Memory proposal recovery vault path is invalid.")
+    root_fd = _open_existing_non_symlink_directory(vault_root)
+    try:
+        metadata = os.fstat(root_fd)
+        if vault_identity is not None and (
+            not isinstance(vault_identity, dict)
+            or (metadata.st_dev, metadata.st_ino) != (vault_identity["device"], vault_identity["inode"])
+        ):
+            raise ValueError("Memory proposal vault changed after intent recording.")
+        _reconcile_memory_artifact_intent_unlocked(*paths, vault_root_fd=root_fd)
+    finally:
+        os.close(root_fd)
 
 
 def _reconcile_memory_artifact_intent(intent: object) -> None:
@@ -1568,7 +1725,7 @@ def _reconcile_memory_artifact_intent(intent: object) -> None:
     paths = _memory_artifact_intent_paths(intent)
     artifact_path = paths[1]
     with _memory_artifact_lock(artifact_path):
-        _reconcile_memory_artifact_intent_unlocked(*paths)
+        _reconcile_memory_artifact_intent_with_pinned_vault(*paths)
 
 
 def _safe_memory_proposal_id(value: str) -> str:
@@ -2073,7 +2230,9 @@ class SupervisorService:
         ]
         proposal_views = [
             proposal_view.model_copy(update={
-                "aiDraftEligible": self._memory_proposal_ai_draft_eligible(
+                "aiDraftEligible": await self._memory_proposal_ai_draft_eligible(
+                    session,
+                    proposal,
                     proposal_view,
                     alpha_source_refs,
                     evidence_refs,
@@ -2125,9 +2284,11 @@ class SupervisorService:
             writeBackAllowed=False,
         )
 
-    def _memory_proposal_ai_draft_eligible(
+    async def _memory_proposal_ai_draft_eligible(
         self,
-        proposal: WorkItemMemoryReviewProposalV1View,
+        session: AsyncSession,
+        proposal: MemoryProposal,
+        proposal_view: WorkItemMemoryReviewProposalV1View,
         source_refs: list[AuthoritativePacketSourceRefView],
         evidence_refs: list[EvidenceRefV0View],
         work_item_id: str,
@@ -2135,22 +2296,62 @@ class SupervisorService:
         write_in_progress: bool = False,
     ) -> bool:
         try:
-            configured_folder = str(self._load_obsidian_memory_draft_config()["draft_folder"])
+            config = self._load_obsidian_memory_draft_config()
+            configured_folder = str(config["draft_folder"])
         except (OSError, UnicodeError, ValueError):
             return False
-        if proposal.targetVaultFolder.strip().strip("/") != configured_folder:
+        if proposal_view.targetVaultFolder.strip().strip("/") != configured_folder:
             return False
-        selected_sources = [source_ref for source_ref in source_refs if source_ref.refId in set(proposal.sourceRefs)]
+        # Eligibility is an advertised server action contract, not merely a
+        # provenance readiness hint. Reuse the writer's deterministic target
+        # selection and fail closed when an occupied leaf cannot be read and
+        # bound to this exact proposal before any write reservation is made.
+        try:
+            vault_root = _existing_non_symlink_directory(Path(config["vault_root"]))
+            draft_dir = vault_root / configured_folder
+            if draft_dir.exists():
+                draft_dir = _existing_non_symlink_directory(draft_dir)
+                draft_dir.relative_to(vault_root)
+            elif draft_dir.parent.exists():
+                _existing_non_symlink_directory(draft_dir.parent).relative_to(vault_root)
+            safe_id = (
+                _safe_memory_proposal_id(proposal.proposal_id)
+                if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
+                else proposal.id
+            )
+            draft_path = self._persisted_or_generated_memory_artifact_path(
+                vault_root,
+                draft_dir,
+                proposal.target_vault_path,
+                _memory_artifact_filename("", proposal.label, f"{safe_id}-{proposal.id}"),
+                _memory_artifact_filename("", proposal.label, safe_id),
+            )
+            if draft_path.exists():
+                existing_metadata, _ = self._parse_llm_wiki_artifact(
+                    await asyncio.to_thread(_read_strict_utf8_memory_artifact, draft_path)
+                )
+                if not await self._llm_wiki_artifact_matches_proposal(
+                    session,
+                    proposal=proposal,
+                    work_item_id=work_item_id,
+                    expected_proposal_id=safe_id,
+                    expected_status="ai-draft",
+                    metadata=existing_metadata,
+                ):
+                    return False
+        except (OSError, UnicodeError, ValueError):
+            return False
+        selected_sources = [source_ref for source_ref in source_refs if source_ref.refId in set(proposal_view.sourceRefs)]
         readiness = self._llm_wiki_readiness(
-            f"work_item:{work_item_id}", selected_sources, evidence_refs, [proposal]
+            f"work_item:{work_item_id}", selected_sources, evidence_refs, [proposal_view]
         )
         return not write_in_progress and (
-            proposal.status == "approved"
-            and proposal.operatorAction == "approve"
-            and proposal.writeBackStatus == "approved_for_future"
-            and proposal.writeBackAllowed is False
-            and proposal.freshness == "fresh"
-            and proposal.contradictionStatus == "none"
+            proposal_view.status == "approved"
+            and proposal_view.operatorAction == "approve"
+            and proposal_view.writeBackStatus == "approved_for_future"
+            and proposal_view.writeBackAllowed is False
+            and proposal_view.freshness == "fresh"
+            and proposal_view.contradictionStatus == "none"
             and readiness.decisionState == "ready"
         )
 
