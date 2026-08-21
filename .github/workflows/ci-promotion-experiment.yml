@@ -349,6 +349,55 @@ jobs:
           set -euo pipefail
           node -e 'const observation = require(process.argv[1]); const cohort = process.argv[2]; const vectors = observation.vectors; if (vectors.length !== 2) throw new Error(`expected both vectors, found ${vectors.length}`); for (const vector of vectors) { const baseline = vector.baseline.outcome; const proposed = vector.proposed.outcome; if (cohort === "controlled_failure") { if (baseline.status !== "failed" || proposed.status !== "failed" || !baseline.failureId || baseline.failureId !== proposed.failureId) throw new Error(`${vector.id} did not propagate the same controlled failure through both route fan-ins`); } else if (baseline.status !== "passed" || proposed.status !== "passed") throw new Error(`${vector.id} ordinary isolated pair did not pass both route fan-ins`); }' "$RUNNER_TEMP/observation.json" "${{ needs.prepare.outputs.cohort }}"
 
+      - name: Aggregate successful retained promotion evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          history_dir="$RUNNER_TEMP/ci-promotion-history"
+          mkdir -p "$history_dir/current"
+          cp "$RUNNER_TEMP/observation.json" "$history_dir/current/observation.json"
+
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            destination="$history_dir/$run_id"
+            mkdir -p "$destination"
+            gh run download "$run_id" \
+              --repo "${{ github.repository }}" \
+              --name ci-promotion-observation \
+              --dir "$destination"
+          done < <(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow ci-promotion-experiment.yml \
+            --event schedule \
+            --status success \
+            --limit 100 \
+            --json databaseId \
+            --jq '.[].databaseId')
+
+          node ./scripts/build-ci-promotion-evidence-packet.mjs \
+            --observations-dir "$history_dir" \
+            --out "$RUNNER_TEMP/promotion-evidence-packet.json" >/dev/null
+          set +e
+          node ./scripts/evaluate-ci-promotion-evidence.mjs \
+            "$RUNNER_TEMP/promotion-evidence-packet.json" > "$RUNNER_TEMP/promotion-evidence-evaluation.json"
+          evaluator_status=$?
+          set -e
+          if [ "$evaluator_status" -ne 0 ] && [ "$evaluator_status" -ne 1 ]; then
+            echo "Promotion evidence evaluator failed with status $evaluator_status"
+            exit "$evaluator_status"
+          fi
+          node -e 'const fs = require("node:fs"); const evaluation = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const lines = [`## CI promotion evidence`, `Status: \`${evaluation.status}\``]; for (const vector of evaluation.vectors ?? []) lines.push(`- \`${vector.id}\`: \`${vector.status}\``); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\\n")}\\n`);' "$RUNNER_TEMP/promotion-evidence-evaluation.json"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-promotion-evaluation
+          path: |
+            ${{ runner.temp }}/promotion-evidence-packet.json
+            ${{ runner.temp }}/promotion-evidence-evaluation.json
+
       - if: always()
         uses: actions/upload-artifact@v4
         with:

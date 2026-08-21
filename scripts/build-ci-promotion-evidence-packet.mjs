@@ -15,6 +15,11 @@ function finite(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function hasIsolatedCacheControl(observation) {
+  return observation?.cacheControl?.strategy === "isolated" &&
+    typeof observation.cacheControl.cacheKey === "string" && observation.cacheControl.cacheKey.length > 0;
+}
+
 function sampleFromRoute({ observation, vector, member }) {
   const route = vector[member];
   const metrics = route?.metrics ?? {};
@@ -50,6 +55,10 @@ export function buildPromotionEvidencePacket(observations) {
   for (const observation of observations) {
     if (observation?.schemaVersion !== 1 || observation.recordType !== "ci-promotion-observation") {
       warnings.push("Ignored unsupported promotion observation");
+      continue;
+    }
+    if (!hasIsolatedCacheControl(observation)) {
+      warnings.push(`Ignored ${observation.pairId ?? "unknown"} promotion observation without isolated cache control`);
       continue;
     }
     for (const vector of observation.vectors ?? []) {

@@ -36,9 +36,24 @@ test("rejects incomplete observations instead of inventing timing metrics", () =
     pairId: "pair-1",
     generatedAt: "2026-08-21T00:00:00.000Z",
     source,
-    cacheControl: { strategy: "observed" },
+    cacheControl: { strategy: "isolated", cacheKey: "pair-1" },
     vectors: [{ id: "supervisor-elevated", sourceMatched: true, baseline: route(), proposed: { ...route(), metrics: { queueMs: null } } }],
   }]);
   assert.equal(packet.samples.length, 0);
   assert.match(packet.warnings.join("\n"), /incomplete timing/);
+});
+
+test("rejects observed-cache observations from promotion evidence", () => {
+  const packet = buildPromotionEvidencePacket([{
+    schemaVersion: 1,
+    recordType: "ci-promotion-observation",
+    cohort: "ordinary",
+    pairId: "observed-pair",
+    generatedAt: "2026-08-21T00:00:00.000Z",
+    source,
+    cacheControl: { strategy: "observed" },
+    vectors: [{ id: "supervisor-elevated", sourceMatched: true, baseline: route(), proposed: route() }],
+  }]);
+  assert.equal(packet.samples.length, 0);
+  assert.match(packet.warnings.join("\n"), /without isolated cache control/);
 });
