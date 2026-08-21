@@ -1,6 +1,11 @@
 name: CI promotion experiment
 
 on:
+  # Temporary pre-merge validation path. Remove after one real fan-in run; the
+  # shipped experiment is manual-only so it never competes with normal PR CI.
+  pull_request:
+    paths:
+      - .github/workflows/ci-promotion-experiment.yml
   workflow_dispatch:
     inputs:
       ref:
@@ -44,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - id: source
@@ -52,9 +57,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$(git rev-parse '${{ inputs.base_ref }}')" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse '${{ inputs.base_ref || github.event.pull_request.base.sha }}')" >> "$GITHUB_OUTPUT"
           echo "lockfile_sha=$(git rev-parse HEAD:pnpm-lock.yaml)" >> "$GITHUB_OUTPUT"
-          echo "cohort=${{ inputs.cohort }}" >> "$GITHUB_OUTPUT"
+          echo "cohort=${{ inputs.cohort || 'controlled_failure' }}" >> "$GITHUB_OUTPUT"
 
       - id: plan
         shell: bash
