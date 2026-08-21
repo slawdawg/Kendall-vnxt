@@ -1380,7 +1380,20 @@ async def _async_memory_artifact_lock(path: Path | None):
     if path is None:
         yield
         return
-    directory_fd, lock_fd = await asyncio.to_thread(_open_memory_artifact_lock, path)
+    open_task = asyncio.create_task(asyncio.to_thread(_open_memory_artifact_lock, path))
+    try:
+        directory_fd, lock_fd = await asyncio.shield(open_task)
+    except asyncio.CancelledError:
+        # `to_thread` cannot be cancelled. Join its result and close both
+        # descriptors before allowing a disconnect/timeout to unwind.
+        try:
+            directory_fd, lock_fd = await asyncio.shield(open_task)
+        except Exception:
+            pass
+        else:
+            await asyncio.to_thread(os.close, lock_fd)
+            await asyncio.to_thread(os.close, directory_fd)
+        raise
     try:
         # Do not park an executor worker in a blocking flock call.  The lock
         # holder needs that same executor for backup fsync/copy work before it
@@ -2328,7 +2341,7 @@ class SupervisorService:
             )
             if draft_path.exists():
                 existing_metadata, _ = self._parse_llm_wiki_artifact(
-                    await asyncio.to_thread(_read_strict_utf8_memory_artifact, draft_path)
+                    await asyncio.to_thread(_read_bounded_utf8_text, draft_path)
                 )
                 if not await self._llm_wiki_artifact_matches_proposal(
                     session,

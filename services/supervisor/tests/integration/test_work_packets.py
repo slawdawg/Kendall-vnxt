@@ -368,6 +368,42 @@ def test_async_memory_artifact_lock_retries_nonblocking_flock_without_executor_w
     assert "asyncio.to_thread(fcntl.flock" not in lock_section
 
 
+def test_async_memory_artifact_lock_closes_descriptors_after_cancelled_open(tmp_path, monkeypatch) -> None:
+    """Cancellation joins a completed open worker and closes its descriptors."""
+    from supervisor.application.service import _async_memory_artifact_lock
+    import supervisor.application.service as service_module
+
+    original_open = service_module._open_memory_artifact_lock
+    opened = threading.Event()
+    release = threading.Event()
+    descriptors: list[tuple[int, int]] = []
+
+    def delayed_open(path: Path) -> tuple[int, int]:
+        result = original_open(path)
+        descriptors.append(result)
+        opened.set()
+        assert release.wait(timeout=2), "test failed to release lock opener"
+        return result
+
+    monkeypatch.setattr(service_module, "_open_memory_artifact_lock", delayed_open)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(_async_memory_artifact_lock(tmp_path / "artifact.md").__aenter__())
+        assert await asyncio.to_thread(opened.wait, 2), "lock opener did not start"
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio_run(scenario())
+    assert descriptors
+    for directory_fd, lock_fd in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(lock_fd)
+        with pytest.raises(OSError):
+            os.fstat(directory_fd)
+
+
 def test_memory_artifact_recovery_rejects_symlinked_restored_digest(tmp_path) -> None:
     """A link to snapshot bytes is never accepted as an idempotent recovery."""
     from supervisor.application.service import (
@@ -4897,6 +4933,14 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
 def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, monkeypatch) -> None:
     config_path, vault_root, backup_root = _write_obsidian_memory_config(tmp_path)
     monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
+    service_source = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
+    eligibility_section = service_source.read_text(encoding="utf-8")
+    eligibility_section = eligibility_section[
+        eligibility_section.index("async def _memory_proposal_ai_draft_eligible"):
+        eligibility_section.index("async def _memory_proposal_llm_wiki_artifact_search_eligible")
+    ]
+    assert "_read_bounded_utf8_text, draft_path" in eligibility_section
+    assert "_read_strict_utf8_memory_artifact, draft_path" not in eligibility_section
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft.db") as client:
         work_item = _create_work_item(
             client,
