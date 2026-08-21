@@ -4,7 +4,17 @@ on:
   push:
     branches:
       - main
+      - dev
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch, or tag to verify; defaults to the protected integration branch."
+        required: false
+        default: dev
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
@@ -407,12 +417,14 @@ jobs:
           if-no-files-found: warn
 
   full:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event_name == 'schedule' && 'dev' || github.sha }}
 
       - name: Enable Corepack
         run: corepack enable
@@ -465,7 +477,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
             if [ "${{ needs.full.result }}" != "success" ]; then
               echo "Full check failed or did not complete: ${{ needs.full.result }}"
               exit 1

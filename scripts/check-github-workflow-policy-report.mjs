@@ -149,6 +149,9 @@ for (const ciFastCommand of [
 }
 for (const ciText of [
   "fast:",
+  "schedule:",
+  "workflow_dispatch:",
+  "- dev",
   "workspace_behavior_shadow:",
   "supervisor_behavior_shadow:",
   "static_bundle:",
@@ -199,12 +202,19 @@ for (const ciText of [
   "pnpm run check:fast",
   "Fast workflow checks failed or did not complete",
   "Static checks were required but did not pass",
+  "github.event_name == 'schedule' && 'dev'",
 ]) {
   assertIncludes(ciWorkflow, ciText, ".github/workflows/ci.yml", failures);
 }
 assertCondition(
   ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
   ".github/workflows/ci.yml static job must be gated by needs.changes.outputs.static == 'true'",
+  failures,
+);
+assertCondition(
+  ciJobBlock("full").includes("github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'") &&
+    ciJobBlock("full").includes("github.event_name == 'schedule' && 'dev'"),
+  ".github/workflows/ci.yml full confidence must run after dev pushes and target dev for scheduled verification",
   failures,
 );
 assertCondition(
