@@ -2176,13 +2176,16 @@ class SupervisorService:
         if not target.startswith(f"{folder}/"):
             return False
         try:
-            artifact_path = (Path(config["vault_root"]).resolve() / target).resolve()
-            artifact_path.relative_to((Path(config["vault_root"]).resolve() / folder).resolve())
-        except ValueError:
+            vault_root = Path(config["vault_root"]).resolve()
+            queue_root = _existing_non_symlink_directory(vault_root / folder)
+            artifact_path = _canonical_memory_artifact_leaf(vault_root, vault_root / target)
+            if artifact_path.parent != queue_root:
+                return False
+        except (OSError, ValueError):
             return False
         try:
-            if not artifact_path.is_file():
-                return False
+            # Match the read endpoint exactly: do not follow a substituted leaf
+            # merely to advertise an action that the read boundary will block.
             artifact_text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
             metadata, _ = self._parse_llm_wiki_artifact(artifact_text)
         except (OSError, ValueError):

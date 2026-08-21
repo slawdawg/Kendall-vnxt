@@ -5696,6 +5696,20 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert after_artifact_review.status_code == 200
         assert after_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is True
 
+        # Eligibility must use the same no-follow leaf boundary as the search
+        # route.  A symlink to an otherwise matching artifact is not readable
+        # through that route and must not advertise a deterministic failure.
+        matching_target = artifact_path.with_name(f"{artifact_path.stem}-matching-target.md")
+        artifact_path.rename(matching_target)
+        artifact_path.symlink_to(matching_target.name)
+        symlink_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert symlink_review.status_code == 200
+        assert symlink_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+        artifact_path.unlink()
+        matching_target.rename(artifact_path)
+
         # An unfinished writer may have produced or rebound this path but has
         # not finalized its durable proposal state. Neither the review read nor
         # the artifact reader may expose those provisional bytes.
