@@ -48,6 +48,7 @@ const connectorWorkflow = readWorkspaceFile("docs/github-connector-workflow.md")
 const currentSessionRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 const ciGateBehavior = readWorkspaceFile("docs/workflows/ci-gate-behavior.md");
 const ciWorkflow = readWorkspaceFile(".github/workflows/ci.yml");
+const promotionExperimentWorkflow = readWorkspaceFile(".github/workflows/ci-promotion-experiment.yml");
 const fastWorkflowRunner = readWorkspaceFile("scripts/run-fast-workflow-checks.mjs");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
@@ -210,6 +211,20 @@ for (const ciText of [
   "github.event_name == 'schedule' && 'dev'",
 ]) {
   assertIncludes(ciWorkflow, ciText, ".github/workflows/ci.yml", failures);
+}
+for (const experimentText of [
+  "workflow_dispatch:",
+  "controlled_failure",
+  "cache-strategy isolated",
+  "--inject-failure-id",
+  "promotion-evidence-fan-in",
+  "Verify controlled-failure fan-in",
+  "ci-promotion-observation",
+  "github-job-timings",
+  "fromJSON(needs.prepare.outputs.workspace_profiles)",
+  "fromJSON(needs.prepare.outputs.supervisor_shards)",
+]) {
+  assertIncludes(promotionExperimentWorkflow, experimentText, ".github/workflows/ci-promotion-experiment.yml", failures);
 }
 assertCondition(
   ciJobBlock("static").includes("needs.changes.outputs.static == 'true'"),
