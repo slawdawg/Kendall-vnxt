@@ -67,12 +67,11 @@ const resumableCheckDefaultLeafExecutionReserveMs = 30_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
 const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
-// The two 30-minute leaves plus twenty-two 170-second supervisor leaves need
-// 7,340 seconds before ordinary leaves or resume overhead. Three hours leaves
-// a bounded 3,460-second allowance for the ordinary plan while every resume
-// still rebinds the immutable head, plan, staged input, and ordered
-// metadata-only evidence.
-const resumableCheckPacketTtlMs = 3 * 60 * 60 * 1000;
+// Packets need enough lifetime for every leaf in their exact immutable plan.
+// The plan has grown beyond the old three-hour aggregate assumption, so new
+// packets derive their bounded lifetime from each leaf's reviewed budget.
+// Keep a small minimum for ordinary resume/preflight overhead on short plans.
+const resumableCheckPacketMinimumLifetimeMs = 20 * 60 * 1000;
 const resumableCheckPacketFutureSkewMs = 30_000;
 // Retry history is audit evidence, not a scheduler. Thirty seconds tolerates
 // ordinary local clock skew while rejecting timestamps projected far enough
@@ -15123,6 +15122,19 @@ function resumableCheckPlanDigest(stages) {
   return createHash("sha256").update(stages.join("\n")).digest("hex");
 }
 
+function resumableCheckPacketLifetimeMs(plan) {
+  const stages = Array.isArray(plan) ? plan : plan?.stages;
+  if (!Array.isArray(stages) || stages.length === 0 || stages.length > 256) {
+    throw new Error("resumable check packet lifetime requires a bounded stage plan.");
+  }
+  const executionBudgetMs = stages.reduce((total, stage) => {
+    if (resumableCheckLongLeafStages.has(stage)) return total + resumableCheckLongLeafBudgetMs;
+    if (resumableCheckSupervisorLeafSet.has(stage)) return total + resumableCheckSupervisorLeafExecutionReserveMs;
+    return total + resumableCheckInvocationBudgetMs;
+  }, 0);
+  return Math.max(resumableCheckPacketMinimumLifetimeMs, executionBudgetMs);
+}
+
 function resumableCheckObsoleteSupervisorAggregatePlan(plan) {
   const firstLeaf = plan.stages.indexOf(resumableCheckSupervisorLeaves[0]);
   const lastLeaf = plan.stages.lastIndexOf(resumableCheckSupervisorLeaves.at(-1));
@@ -15192,7 +15204,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     }
   }
   if (!packet) {
-    packet = createResumableCheckPacket({ taskId: manifest.task_id, owner: options.owner, head, planDigest: plan.digest, stagedInputDigest, nextStage: plan.stages[0] });
+    packet = createResumableCheckPacket({ taskId: manifest.task_id, owner: options.owner, head, planDigest: plan.digest, stagedInputDigest, nextStage: plan.stages[0], packetLifetimeMs: resumableCheckPacketLifetimeMs(plan) });
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
   }
@@ -15499,7 +15511,7 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at");
-  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   let previousCompletedAt = createdAt;
@@ -15541,7 +15553,7 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
-  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   const history = [];
@@ -15585,7 +15597,10 @@ function stagedInputDigestForWorktree(cwd) {
   return createHash("sha256").update(`index-tree:${tree}`).digest("hex");
 }
 
-function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInputDigest, nextStage }) {
+function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInputDigest, nextStage, packetLifetimeMs }) {
+  if (!Number.isInteger(packetLifetimeMs) || packetLifetimeMs < resumableCheckPacketMinimumLifetimeMs) {
+    throw new Error("resumable check packet lifetime is invalid.");
+  }
   const createdAt = new Date();
   return {
     schema_version: resumableCheckPacketSchemaVersion,
@@ -15599,7 +15614,7 @@ function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInp
     next_stage: nextStage,
     created_at: createdAt.toISOString(),
     updated_at: createdAt.toISOString(),
-    expires_at: new Date(createdAt.getTime() + resumableCheckPacketTtlMs).toISOString(),
+    expires_at: new Date(createdAt.getTime() + packetLifetimeMs).toISOString(),
   };
 }
 
@@ -15631,7 +15646,7 @@ function validateResumableCheckPacket(packet, expected) {
   const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
   if (updatedAt < createdAt || expiresAt <= createdAt) invalid("timestamp ordering is invalid");
   if (expiresAt <= now) invalid("packet expired");
-  if (expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("expiry exceeds packet lifetime");
+  if (expiresAt - createdAt > resumableCheckPacketLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("expiry exceeds packet lifetime");
 
   for (let index = 0; index < packet.stages.length; index += 1) {
     const evidence = packet.stages[index];

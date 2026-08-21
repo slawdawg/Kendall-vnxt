@@ -5,6 +5,11 @@ const DISABLED_MEMORY_INBOX_UPLOAD_PATH = `${PREFIX}memory-inbox/upload`;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
+// AI-draft and LLM-Wiki writes copy and fsync a complete configured vault.
+// Keep their UDS response deadline distinct from the short dashboard-read
+// deadline so an honest completed write is never reported as an unconfirmed
+// 503 solely because backup durability exceeded two seconds.
+const MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS = 15 * 60 * 1000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const MEMORY_INBOX_PROPOSAL_DECISION_PATH = /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/(?:return|deny|approve)$/;
 const LLM_WIKI_ARTIFACT_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/llm-wiki-artifact$/;
@@ -145,8 +150,14 @@ function encodedSupervisorPath(targetPath) {
   return targetPath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
 
-export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS }) {
+export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS, memoryProposalArtifactWriteTimeoutMs = MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS }) {
   if (typeof supervisorUdsPath !== "string" || !supervisorUdsPath.startsWith("/")) throw new Error("Supervisor proxy requires a fixed absolute UDS path.");
+  if (
+    !Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS
+    || !Number.isInteger(memoryProposalArtifactWriteTimeoutMs) || memoryProposalArtifactWriteTimeoutMs < timeoutMs || memoryProposalArtifactWriteTimeoutMs > MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS
+  ) {
+    throw new Error("Supervisor proxy timeouts must be positive bounded integers.");
+  }
   return async function proxy(request, response) {
     let url;
     try { url = new URL(request.url || "/", "https://dashboard.invalid"); } catch { return false; }
@@ -167,6 +178,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
     const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
     const memoryProposalMutation = MEMORY_PROPOSAL_MUTATION_PATH.test(targetPath);
+    const memoryProposalArtifactWrite = /\/(?:ai-draft|llm-wiki-rebuild)$/.test(targetPath);
     if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
       sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
       return true;
@@ -231,7 +243,8 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       }
       const encodedTargetPath = encodedSupervisorPath(targetPath);
       const upstreamPath = url.search ? `${encodedTargetPath}?${url.searchParams.toString()}` : encodedTargetPath;
-      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, timeoutMs, controlsRead ? MAX_CONTROLS_RESPONSE_BYTES : Infinity);
+      const upstreamTimeoutMs = memoryProposalArtifactWrite ? memoryProposalArtifactWriteTimeoutMs : timeoutMs;
+      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, upstreamTimeoutMs, controlsRead ? MAX_CONTROLS_RESPONSE_BYTES : Infinity);
       // A viewer revocation concurrent with an in-flight read must win before
       // the browser receives data. Operator requests retain existing behavior.
       if (role === "test_viewer") {

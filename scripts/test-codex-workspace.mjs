@@ -8763,8 +8763,8 @@ try {
 
   test("finish-pr resumable check packet fails closed before execution on binding drift, expiry, or malformed state", () => {
     assert(
-      readFileSync(scriptPath, "utf8").includes("const resumableCheckPacketTtlMs = 3 * 60 * 60 * 1000;"),
-      "resumable check packet must retain its reviewed three-hour aggregate lifetime",
+      readFileSync(scriptPath, "utf8").includes("function resumableCheckPacketLifetimeMs(plan)"),
+      "resumable check packet lifetime must derive from its complete bounded stage plan",
     );
     for (const scenario of [
       { name: "task", mutate: (packet) => ({ ...packet, task_id: "other-task" }) },
@@ -8799,6 +8799,36 @@ try {
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+  });
+
+  test("finish-pr accepts a resumable packet whose complete bounded plan exceeds the retired three-hour aggregate", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = Array.from({ length: 91 }, (_, index) => `check:ttl-leaf-${index + 1}`);
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const createdAt = new Date(Date.now() - (3 * 60 * 60 * 1_000) - 60_000);
+      const lifetimeMs = stages.length * 180_000;
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        created_at: createdAt.toISOString(),
+        updated_at: createdAt.toISOString(),
+        expires_at: new Date(createdAt.getTime() + lifetimeMs).toISOString(),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "fixture pause unexpectedly completed the long packet");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "long packet ran a stage before the pause seam");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 

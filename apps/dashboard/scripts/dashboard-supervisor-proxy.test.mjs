@@ -120,6 +120,62 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
   }
 });
 
+test("artifact writes use their dedicated vault-durability deadline", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-supervisor-proxy-timeout-"));
+  const socketPath = join(directory, "supervisor.sock");
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") { response.end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
+      if (
+        request.url === "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft"
+        || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-rebuild"
+      ) {
+        setTimeout(() => response.end(JSON.stringify({ data: { proposalId: "proposal-1" } })), 40);
+        return;
+      }
+      response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+    });
+    await listen(supervisor, socketPath);
+    dashboard = http.createServer(async (request, response) => {
+      const proxy = createSupervisorProxy({
+        supervisorUdsPath: socketPath,
+        expectedOrigin: `https://127.0.0.1:${dashboard.address().port}`,
+        timeoutMs: 10,
+        memoryProposalArtifactWriteTimeoutMs: 100,
+      });
+      if (await proxy(request, response)) return;
+      response.writeHead(404).end(JSON.stringify({ state: "not_found" }));
+    });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    const response = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/ai-draft", {
+      method: "POST",
+      headers: {
+        cookie: "session=ok; kendall_operator_csrf=csrf-ok",
+        origin: `https://127.0.0.1:${port}`,
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data, { proposalId: "proposal-1" });
+    const rebuild = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-rebuild", {
+      method: "POST",
+      headers: {
+        cookie: "session=ok; kendall_operator_csrf=csrf-ok",
+        origin: `https://127.0.0.1:${port}`,
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    assert.equal(rebuild.status, 200);
+    assert.deepEqual(rebuild.body.data, { proposalId: "proposal-1" });
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
 function canonicalPacketWithRawBrowserUnsafeFields() {
   return {
     packetId: "packet-1",
