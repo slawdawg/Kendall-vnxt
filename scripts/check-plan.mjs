@@ -30,6 +30,9 @@ const COMMANDS = Object.freeze({
   testAntiChurnEventWriter: ["pnpm", "run", "test:anti-churn-event-writer"],
   testAntiChurnSignatureClassifier: ["pnpm", "run", "test:anti-churn-signature-classifier"],
   testCheckPlan: ["pnpm", "run", "test:check-plan"],
+  testLocalVerificationContracts: ["pnpm", "run", "test:local-verification-contracts"],
+  testLocalVerificationStateStore: ["pnpm", "run", "test:local-verification-state-store"],
+  testLocalVerificationLifecycle: ["pnpm", "run", "test:local-verification-lifecycle"],
   testStaticBundles: ["pnpm", "run", "test:static-bundles"],
   checkStatic: ["pnpm", "run", "check:static"],
 });
@@ -45,6 +48,7 @@ const SURFACE_COMMANDS = Object.freeze({
   supervisor: [COMMANDS.testSupervisorRunner, COMMANDS.testSupervisorPreflight, COMMANDS.testSupervisorProfile],
   antiChurn: [COMMANDS.testSandboxBoundaryClassifier, COMMANDS.testAntiChurnEventWriter, COMMANDS.testAntiChurnSignatureClassifier],
   ciAcceleration: [COMMANDS.testCheckPlan, COMMANDS.testStaticBundles],
+  localVerification: [COMMANDS.testLocalVerificationContracts, COMMANDS.testLocalVerificationStateStore, COMMANDS.testLocalVerificationLifecycle],
   managerDispatcherPort: [COMMANDS.testManagerControlPlaneDispatcherPort],
 });
 
@@ -173,6 +177,10 @@ function classifyFile(path) {
     surfaces.add("ciAcceleration");
     reasons.push(`${file}: CI acceleration planner surface`);
   }
+  if (/^(scripts\/local-verification\.mjs|scripts\/lib\/local-verification\/.*|tests\/local-verification-.*|docs\/workflows\/local-verification\.md)$/.test(file)) {
+    surfaces.add("localVerification");
+    reasons.push(`${file}: local verification lifecycle surface`);
+  }
 
   if (surfaces.size === 0) {
     requiresFullStatic = true;
@@ -293,7 +301,7 @@ function runChangedPlan(plan) {
 }
 
 function gitLines(args, { allowFailure = false } = {}) {
-  const result = spawnSync("git", args, { cwd: rootDir, encoding: "utf8", stdio: "pipe" });
+  const result = spawnSync("git", [...args, "-z"], { cwd: rootDir, encoding: "utf8", stdio: "pipe" });
   if (result.status !== 0) {
     if (allowFailure) return [];
     const stderr = result.stderr?.trim();
@@ -301,7 +309,7 @@ function gitLines(args, { allowFailure = false } = {}) {
     const detail = stderr || stdout || `git exited with status ${result.status}`;
     throw new Error(`Failed to collect changed files with git ${args.join(" ")}: ${detail}`);
   }
-  return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return result.stdout.split("\0").filter(Boolean);
 }
 
 function collectChangedFiles({ base = "origin/dev", head = "HEAD", explicitFiles = [] } = {}) {
