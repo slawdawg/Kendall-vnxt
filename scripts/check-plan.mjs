@@ -141,8 +141,9 @@ function classifyFile(path) {
     reasons.push(`${file}: supervisor preflight input surface`);
   }
   if (/^scripts\/run-fast-workflow-checks\.mjs$/.test(file)) {
+    surfaces.add("ciAcceleration");
     requiresFullStatic = true;
-    reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; escalating to full static`);
+    reasons.push(`${file}: shared fast runner dispatches CI, workspace, sandbox, and dashboard suites; named elevated CI boundary requires full static confidence`);
   }
   if (/^scripts\/test-codex-workspace\.mjs$/.test(file)) {
     requiresFullStatic = true;
