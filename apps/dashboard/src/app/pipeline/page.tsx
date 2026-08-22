@@ -9,13 +9,14 @@ export default async function PipelinePage() {
   if (process.env.KENDALL_LAN_AUTH_ENABLED === "true") {
     return <LanPipelinePage lanAuthEnabled />;
   }
-  const { fixtureMode, canonicalPackets, operationalTruth, operationalProjection, projectionError } = await loadPipelineCockpitPackets();
+  const { fixtureMode, canonicalPackets, operationalTruth, activeBoardProjection, operationalProjection, projectionError } = await loadPipelineCockpitPackets();
   return (
     <Shell compactHeader realtimeRefresh={false} wide>
       <PipelineCockpit
         fixtureMode={fixtureMode}
         canonicalPackets={canonicalPackets}
         operationalTruth={operationalTruth}
+        activeBoardProjection={activeBoardProjection}
         operationalProjection={operationalProjection}
         projectionError={projectionError}
       />

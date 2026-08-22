@@ -68,6 +68,272 @@ export type DashboardCanonicalOperationalProjectionTruthInputV1 = Omit<
 >;
 
 /**
+ * Client-safe read model for the normal/LAN active board.  Unlike the first
+ * operational-projection endpoint contract, this is not a V0-shaped board
+ * alias: every field below is deliberately owned by the dashboard and is
+ * reconstructed at the loader boundary.
+ *
+ * Direct-detail evidence continues to use the separately named operational
+ * projection hold until its own migration slice.  Do not add that evidence to
+ * this board DTO merely for convenience.
+ */
+export type DashboardCanonicalActiveBoardProjectionV1 = {
+  schemaVersion: "dashboard-canonical-active-board/v1";
+  projectionId: string;
+  generatedAt: string;
+  sourceUpdatedAt: string;
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1;
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
+  staleAfterSeconds: number;
+  backendReachability: {
+    state: "reachable" | "unavailable" | "unknown";
+    checkedAt: string;
+    reason: DashboardCanonicalProjectionEmptyReasonV1 | null;
+    summary: string;
+  };
+  fixtureMode: {
+    enabled: boolean;
+    reason: string | null;
+    allowedForEnvironment: boolean;
+    visibleLabelRequired: true;
+    canSatisfyLiveProof: false;
+  };
+  truthSummary: {
+    label: DashboardCanonicalOperationalSourceLabelV1;
+    emptyReason: DashboardCanonicalProjectionEmptyReasonV1 | null;
+    backendEmpty: boolean;
+    backendUnavailable: boolean;
+    fixtureBacked: boolean;
+    stale: boolean;
+    summary: string;
+  };
+  stageSummaries: DashboardCanonicalActiveBoardStageSummaryV1[];
+  sourceStates: DashboardCanonicalActiveBoardSourceStateV1[];
+  workPackets: DashboardCanonicalActiveBoardWorkPacketV1[];
+  selectedPacketDetails: DashboardCanonicalActiveBoardPacketDetailV1[];
+  managerSummary: DashboardCanonicalActiveBoardManagerSummaryV1;
+  workerSummary: DashboardCanonicalActiveBoardWorkerSummaryV1;
+  reliabilityProblems: DashboardCanonicalActiveBoardReliabilityProblemV1[];
+  gatedControls: DashboardCanonicalActiveBoardGatedControlV1[];
+  runtimeReadiness: DashboardCanonicalActiveBoardRuntimeReadinessV1 | null;
+  actionCapabilities: DashboardCanonicalActiveBoardLegacyActionCapabilityV1[];
+  executeAdmission: DashboardCanonicalActiveBoardExecuteAdmissionV1;
+  queueSummary: DashboardCanonicalActiveBoardQueueSummaryV1;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+};
+
+export type DashboardCanonicalProjectionEmptyReasonV1 =
+  | "healthy_empty"
+  | "source_exhausted"
+  | "blocked"
+  | "refilling"
+  | "usage_limited"
+  | "resource_limited"
+  | "cleanup_gated"
+  | "approval_required"
+  | "failure_budget_hit"
+  | "backend_unavailable"
+  | "projection_stale"
+  | "unknown";
+
+export type DashboardCanonicalActiveBoardStageSummaryV1 = {
+  stage: AuthoritativePacketStage;
+  label: string;
+  packetCount: number;
+  sourceLabel: DashboardCanonicalOperationalSourceLabelV1;
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
+  emptyReason: DashboardCanonicalProjectionEmptyReasonV1 | null;
+};
+
+export type DashboardCanonicalActiveBoardSourceStateV1 = {
+  sourceId: string;
+  sourceRef: string;
+  sourceKind: string;
+  state: "healthy" | "exhausted" | "blocked" | "gated" | "stale" | "unavailable" | "refilling" | "unknown";
+  summary: string;
+  evidenceRefs: string[];
+  updatedAt: string;
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardReadyToTestV1 = DashboardCanonicalReadyToTestV1;
+
+export type DashboardCanonicalActiveBoardWorkPacketV1 = {
+  packetId: string;
+  title: string;
+  currentStage: AuthoritativePacketStage;
+  status: AuthoritativePacketStatus;
+  truthLabel: DashboardCanonicalOperationalSourceLabelV1;
+  sourceRef: AuthoritativePacketSourceRef | null;
+  canonicalContract: null;
+  productModeMapping: null;
+  blocker: string | null;
+  nextAction: string | null;
+  unblocker: "operator" | "manager" | "worker" | "source" | "system" | "unknown";
+  readyToTest: DashboardCanonicalActiveBoardReadyToTestV1 | null;
+  evidenceRefs: string[];
+  updatedAt: string;
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardPacketDetailV1 = {
+  packetId: string;
+  sourceRefs: AuthoritativePacketSourceRef[];
+  canonicalContract: null;
+  productModeMapping: null;
+  evidenceRefs: string[];
+  currentStage: AuthoritativePacketStage;
+  status: AuthoritativePacketStatus;
+  truthLabel: DashboardCanonicalOperationalSourceLabelV1;
+  blocker: string | null;
+  nextAction: string | null;
+  unblocker: "operator" | "manager" | "worker" | "source" | "system" | "unknown";
+  readyToTest: DashboardCanonicalActiveBoardReadyToTestV1 | null;
+  recentTransitionEventRefs: string[];
+  latestTransitionEventRef: string | null;
+  latestMovementSummary: string | null;
+  canSatisfyLiveMovementProof: boolean;
+  actionCapabilitiesV1: PipelineOperationalActionCapabilityV1[];
+  actionCapabilities: DashboardCanonicalActiveBoardLegacyActionCapabilityV1[];
+  reviewRoute: DashboardCanonicalActiveBoardReviewRouteV1;
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardLegacyActionCapabilityV1 = {
+  actionId: string;
+  targetType: string;
+  targetId: string | null;
+  capabilityState: string;
+  authorityState: string;
+  riskTier: string;
+  typedReason: string | null;
+  expectedResultSummary: string;
+  correlationRequired: true;
+  idempotencyRequired: true;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+};
+
+export type DashboardCanonicalActiveBoardReviewRouteV1 = {
+  schemaVersion: "pipeline-review-route-evidence/v0";
+  availability: "available" | "stale" | "unavailable";
+  packetId: string;
+  routeState: "report_only" | "simulated" | "blocked" | "unavailable";
+  reasonCode:
+    | "report_only"
+    | "simulated_completed"
+    | "immutable_identity_stale"
+    | "policy_vetoed"
+    | "review_blocked"
+    | "issuance_expired"
+    | "issuance_revoked"
+    | "issuance_cancelled"
+    | "review_evidence_unavailable";
+  reason: string;
+  safeFallback: string;
+  exactIdentity: "current" | "changed" | "unavailable";
+  issuanceState: "active" | "expired" | "revoked" | "cancelled" | "unavailable";
+  findingSummary: { count: number; highestSeverity: "info" | "low" | "medium" | "high" | null; evidenceRefs: string[] };
+  dataClass: "metadata_only";
+  execution: "none";
+  deliveryEvidenceEligible: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
+};
+
+export type DashboardCanonicalActiveBoardManagerSummaryV1 = {
+  stateSource: "supervisor_projection" | "manager_summary" | "unavailable" | "unknown";
+  reliabilityState: "ready" | "running" | "healthy_idle" | "source_exhausted" | "waiting_for_approval" | "blocked" | "refilling" | "degraded" | "unavailable" | "unknown";
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
+  activeLeaseCount: number | null;
+  activeWorkerCount: number | null;
+  dispatchableQueueCount: number | null;
+  exhaustedSourceCount: number | null;
+  sourceExhausted: boolean;
+  inactivityReason: DashboardCanonicalProjectionEmptyReasonV1 | null;
+  summary: string;
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardWorkerSummaryV1 = {
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
+  activeCount: number | null;
+  stalledCount: number | null;
+  failedCount: number | null;
+  unavailableCount: number | null;
+  summary: string;
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardReliabilityProblemV1 = {
+  problemId: string;
+  kind: "idle_with_ready_work" | "stalled_worker" | "stale_projection" | "backend_unavailable" | "source_blocked" | "approval_required" | "usage_limited" | "resource_limited" | "unknown";
+  severity: "info" | "attention" | "blocked";
+  likelyIssue: "manager" | "worker" | "source" | "approval" | "usage" | "resource" | "unknown";
+  summary: string;
+  evidenceRefs: string[];
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardGatedControlV1 = {
+  controlId: string;
+  operation: string;
+  status: "gated" | "action_needed" | "blocked";
+  authorityFamily: string;
+  stopLine: string;
+  nextAction: string;
+  packetId: string | null;
+  evidenceRefs: string[];
+  metadataOnly: true;
+};
+
+export type DashboardCanonicalActiveBoardRuntimeReadinessV1 = {
+  schemaVersion: "dashboard-canonical-runtime-readiness/v1";
+  readinessState: "ready" | "degraded" | "blocked" | "unavailable" | "unknown";
+  operationalMode: "disabled" | "local_proof" | "read_only" | "bounded_write" | "unavailable" | "unknown";
+  freshnessState: DashboardCanonicalOperationalFreshnessV1;
+  capabilityState: string;
+  typedReason: string | null;
+  checkedAt: string;
+  expiresAt: string;
+  summary: string;
+  actionCapabilitiesV1: PipelineOperationalActionCapabilityV1[];
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+};
+
+export type DashboardCanonicalActiveBoardExecuteAdmissionV1 = {
+  schemaVersion: "dashboard-canonical-execute-admission/v1";
+  policyVersion: "supervisor-wip/v0";
+  state: "ready" | "blocked" | "unavailable";
+  capacityAvailable: boolean;
+  typedReason: "capacity_available" | "review_wip_limit_reached" | "deliver_wip_limit_reached" | "verification_wip_limit_reached" | "operator_testing_wip_limit_reached" | "runtime_unavailable";
+  limits: { review: number; deliver: number; verification: number; operatorTesting: number } | null;
+  observed: { review: number; deliver: number; verification: number; operatorTesting: number } | null;
+  blockingDimensions: Array<"review" | "deliver" | "verification" | "operatorTesting">;
+  nextSafeAction: string;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+};
+
+export type DashboardCanonicalActiveBoardQueueSummaryV1 = {
+  activeCount: number | null;
+  blockedCount: number | null;
+  dispatchableCount: number | null;
+  gatedCount: number | null;
+  staleCount: number | null;
+  emptyReason: DashboardCanonicalProjectionEmptyReasonV1 | null;
+  sourceExhausted: boolean;
+  summary: string;
+};
+
+/**
  * Canonical dashboard board-read model. It is intentionally dashboard-owned
  * and versioned: normal cockpit consumers must not accept the supervisor's
  * `pipeline-dashboard-projection/v0` envelope directly.

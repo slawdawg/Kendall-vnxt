@@ -1,5 +1,6 @@
 import type { PipelineOperationalActionResultV0 } from "@kendall/contracts";
 import type {
+  DashboardCanonicalActiveBoardProjectionV1,
   DashboardCanonicalOperationalProjectionTruthV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
@@ -32,6 +33,8 @@ export type PipelineCockpitPacketLoad = {
   operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
   /** Strict dashboard-owned board model; the upstream V0 envelope stays server-side. */
   operationalProjection: DashboardCanonicalOperationalProjectionV1 | null;
+  /** Independently reconstructed client-safe model for normal/LAN active-board rendering. */
+  activeBoardProjection: DashboardCanonicalActiveBoardProjectionV1 | null;
   projectionError: string | null;
 };
 
@@ -71,6 +74,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       fixtureMode: projectionReadErrorSourceState(projectionResult.error),
       canonicalPackets: [],
       operationalProjection: null,
+      activeBoardProjection: null,
       projectionError: projectionResult.error,
     };
   }
@@ -84,6 +88,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       ),
       canonicalPackets: [],
       operationalProjection: null,
+      activeBoardProjection: null,
       projectionError: projectionRuntimeError.summary,
     };
   }
@@ -93,6 +98,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", "Supervisor projection is missing after runtime validation; no runtime or demo packets are shown."),
       canonicalPackets: [],
       operationalProjection: null,
+      activeBoardProjection: null,
       projectionError: "Supervisor projection is missing after runtime validation.",
     };
   }
@@ -105,6 +111,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
           fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${emptyContradiction} No runtime or demo packets are shown.`),
           canonicalPackets: [],
           operationalProjection: null,
+          activeBoardProjection: null,
           projectionError: emptyContradiction,
         };
       }
@@ -113,6 +120,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
         operationalTruth: clientSafeOperationalTruth(verifiedProjection),
         operationalProjection: clientSafeOperationalProjection(verifiedProjection),
+        activeBoardProjection: clientSafeActiveBoardProjection(verifiedProjection),
         projectionError: projectionResult.error,
       };
     }
@@ -122,6 +130,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", "Canonical supervisor packet identities are duplicated; no runtime or demo packets are shown."),
         canonicalPackets: [],
         operationalProjection: null,
+        activeBoardProjection: null,
         projectionError: "Canonical supervisor packet identities are duplicated.",
       };
     }
@@ -133,6 +142,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         fixtureMode: runtimeSourceState("invalid", "Supervisor invalid", `${packetContradiction} No runtime or demo packets are shown.`),
         canonicalPackets: [],
         operationalProjection: null,
+        activeBoardProjection: null,
         projectionError: packetContradiction,
       };
     }
@@ -147,6 +157,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       canonicalPackets: canonicalPackets.map(projectDashboardCanonicalPacketForClient),
       operationalTruth: clientSafeOperationalTruth(verifiedProjection),
       operationalProjection: clientSafeOperationalProjection(verifiedProjection),
+      activeBoardProjection: clientSafeActiveBoardProjection(verifiedProjection),
       projectionError: projectionResult.error,
     };
   } catch (error) {
@@ -157,6 +168,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
       fixtureMode: runtimeSourceState("unavailable", "Supervisor unavailable", "Supervisor canonical packet state could not be read; no demo packets are substituted."),
       canonicalPackets: [],
       operationalProjection: null,
+      activeBoardProjection: null,
       projectionError: workPacketError,
     };
   }
@@ -183,6 +195,363 @@ function clientSafeOperationalTruth(projection: DashboardCanonicalOperationalPro
     },
     workPackets: projection.workPackets.map((packet) => ({ packetId: packet.packetId })),
   };
+}
+
+/**
+ * Rebuild the active-board surface independently from the compatibility
+ * operational projection.  This keeps V0-labelled payload shapes out of the
+ * active-board contract and intentionally leaves detail-only evidence behind.
+ */
+function clientSafeActiveBoardProjection(
+  projection: DashboardCanonicalOperationalProjectionV1,
+): DashboardCanonicalActiveBoardProjectionV1 {
+  return {
+    schemaVersion: "dashboard-canonical-active-board/v1",
+    projectionId: projection.projectionId,
+    generatedAt: projection.generatedAt,
+    sourceUpdatedAt: projection.sourceUpdatedAt,
+    sourceLabel: projection.sourceLabel,
+    freshnessState: projection.freshnessState,
+    staleAfterSeconds: projection.staleAfterSeconds,
+    backendReachability: {
+      state: projection.backendReachability.state,
+      checkedAt: projection.backendReachability.checkedAt,
+      reason: projection.backendReachability.reason ?? null,
+      summary: projection.backendReachability.summary,
+    },
+    fixtureMode: {
+      enabled: projection.fixtureMode.enabled,
+      reason: projection.fixtureMode.reason ?? null,
+      allowedForEnvironment: projection.fixtureMode.allowedForEnvironment,
+      visibleLabelRequired: true,
+      canSatisfyLiveProof: false,
+    },
+    truthSummary: {
+      label: projection.truthSummary.label,
+      emptyReason: projection.truthSummary.emptyReason ?? null,
+      backendEmpty: projection.truthSummary.backendEmpty,
+      backendUnavailable: projection.truthSummary.backendUnavailable,
+      fixtureBacked: projection.truthSummary.fixtureBacked,
+      stale: projection.truthSummary.stale,
+      summary: projection.truthSummary.summary,
+    },
+    stageSummaries: projection.stageSummaries.map((stage) => ({
+      stage: stage.stage,
+      label: stage.label,
+      packetCount: stage.packetCount,
+      sourceLabel: stage.sourceLabel,
+      freshnessState: stage.freshnessState,
+      emptyReason: stage.emptyReason ?? null,
+    })),
+    sourceStates: projection.sourceStates.map((source) => ({
+      sourceId: source.sourceId,
+      sourceRef: source.sourceRef,
+      sourceKind: source.sourceKind,
+      state: source.state,
+      summary: source.summary,
+      evidenceRefs: [...source.evidenceRefs],
+      updatedAt: source.updatedAt,
+      metadataOnly: true,
+    })),
+    workPackets: projection.workPackets.map((packet) => ({
+      packetId: packet.packetId,
+      title: packet.title,
+      currentStage: packet.currentStage,
+      status: packet.status,
+      truthLabel: packet.truthLabel,
+      sourceRef: clientSafeSourceRef(packet.sourceRef),
+      canonicalContract: null,
+      productModeMapping: null,
+      blocker: packet.blocker,
+      nextAction: packet.nextAction,
+      unblocker: packet.unblocker,
+      readyToTest: packet.readyToTest ? {
+        readyId: packet.readyToTest.readyId,
+        userFacingSummary: packet.readyToTest.userFacingSummary,
+        testableSurface: packet.readyToTest.testableSurface,
+        verificationRefs: [...packet.readyToTest.verificationRefs],
+        evidenceRefs: [...packet.readyToTest.evidenceRefs],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      } : null,
+      evidenceRefs: [...packet.evidenceRefs],
+      updatedAt: packet.updatedAt,
+      metadataOnly: true,
+    })),
+    selectedPacketDetails: projection.selectedPacketDetails.flatMap((detail) => {
+      // Detail-only evidence is not needed to render a board card. Omit an
+      // incomplete legacy detail rather than making the active-board read
+      // permissive or failing the complete canonical packet list.
+      if (!isCompleteActiveBoardDetail(detail)) return [];
+      return [{
+      packetId: detail.packetId,
+      sourceRefs: (detail.sourceRefs ?? []).map(clientSafeSourceRef),
+      canonicalContract: null,
+      productModeMapping: null,
+      evidenceRefs: [...detail.evidenceRefs],
+      currentStage: detail.currentStage,
+      status: detail.status,
+      truthLabel: detail.truthLabel,
+      blocker: detail.blocker,
+      nextAction: detail.nextAction,
+      unblocker: detail.unblocker,
+      readyToTest: detail.readyToTest ? {
+        readyId: detail.readyToTest.readyId,
+        userFacingSummary: detail.readyToTest.userFacingSummary,
+        testableSurface: detail.readyToTest.testableSurface,
+        verificationRefs: [...detail.readyToTest.verificationRefs],
+        evidenceRefs: [...detail.readyToTest.evidenceRefs],
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      } : null,
+      recentTransitionEventRefs: [...(detail.recentTransitionEventRefs ?? [])],
+      latestTransitionEventRef: detail.latestTransitionEventRef ?? null,
+      latestMovementSummary: detail.latestMovementSummary ?? null,
+      canSatisfyLiveMovementProof: detail.canSatisfyLiveMovementProof === true,
+      actionCapabilitiesV1: clientSafeActionCapabilitiesV1(detail.actionCapabilitiesV1) ?? [],
+      actionCapabilities: clientSafeActiveBoardLegacyActionCapabilities(detail.actionCapabilities),
+      reviewRoute: {
+        schemaVersion: detail.reviewRoute.schemaVersion,
+        availability: detail.reviewRoute.availability,
+        packetId: detail.reviewRoute.packetId,
+        routeState: detail.reviewRoute.routeState,
+        reasonCode: detail.reviewRoute.reasonCode,
+        reason: detail.reviewRoute.reason,
+        safeFallback: detail.reviewRoute.safeFallback,
+        exactIdentity: detail.reviewRoute.exactIdentity,
+        issuanceState: detail.reviewRoute.issuanceState,
+        findingSummary: {
+          count: detail.reviewRoute.findingSummary.count,
+          highestSeverity: detail.reviewRoute.findingSummary.highestSeverity,
+          evidenceRefs: [...detail.reviewRoute.findingSummary.evidenceRefs],
+        },
+        dataClass: "metadata_only",
+        execution: "none",
+        deliveryEvidenceEligible: false,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+        retention: "metadata_only_evidence_references",
+      },
+      metadataOnly: true,
+      }];
+    }),
+    managerSummary: {
+      stateSource: projection.managerSummary.stateSource,
+      reliabilityState: projection.managerSummary.reliabilityState,
+      freshnessState: projection.managerSummary.freshnessState,
+      activeLeaseCount: projection.managerSummary.activeLeaseCount,
+      activeWorkerCount: projection.managerSummary.activeWorkerCount,
+      dispatchableQueueCount: projection.managerSummary.dispatchableQueueCount,
+      exhaustedSourceCount: projection.managerSummary.exhaustedSourceCount,
+      sourceExhausted: projection.managerSummary.sourceExhausted,
+      inactivityReason: projection.managerSummary.inactivityReason ?? null,
+      summary: projection.managerSummary.summary,
+      metadataOnly: true,
+    },
+    workerSummary: {
+      freshnessState: projection.workerSummary.freshnessState,
+      activeCount: projection.workerSummary.activeCount,
+      stalledCount: projection.workerSummary.stalledCount,
+      failedCount: projection.workerSummary.failedCount,
+      unavailableCount: projection.workerSummary.unavailableCount,
+      summary: projection.workerSummary.summary,
+      metadataOnly: true,
+    },
+    reliabilityProblems: projection.reliabilityProblems.map((problem) => ({
+      problemId: problem.problemId,
+      kind: problem.kind,
+      severity: problem.severity,
+      likelyIssue: problem.likelyIssue,
+      summary: problem.summary,
+      evidenceRefs: [...problem.evidenceRefs],
+      metadataOnly: true,
+    })),
+    gatedControls: projection.gatedControls.map((control) => ({
+      controlId: control.controlId,
+      operation: control.operation,
+      status: control.status,
+      authorityFamily: control.authorityFamily,
+      stopLine: control.stopLine,
+      nextAction: control.nextAction,
+      packetId: control.packetId ?? null,
+      evidenceRefs: [...control.evidenceRefs],
+      metadataOnly: true,
+    })),
+    runtimeReadiness: projection.runtimeReadiness ? {
+      schemaVersion: "dashboard-canonical-runtime-readiness/v1",
+      readinessState: projection.runtimeReadiness.readinessState,
+      operationalMode: projection.runtimeReadiness.operationalMode,
+      freshnessState: projection.runtimeReadiness.freshnessState,
+      capabilityState: projection.runtimeReadiness.capabilityState,
+      typedReason: projection.runtimeReadiness.typedReason ?? null,
+      checkedAt: projection.runtimeReadiness.checkedAt,
+      expiresAt: projection.runtimeReadiness.expiresAt,
+      summary: projection.runtimeReadiness.summary,
+      actionCapabilitiesV1: clientSafeActionCapabilitiesV1(projection.runtimeReadiness.actionCapabilitiesV1) ?? [],
+      evidenceRefs: [...projection.runtimeReadiness.evidenceRefs],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    } : null,
+    actionCapabilities: clientSafeActiveBoardLegacyActionCapabilities(projection.actionCapabilities),
+    executeAdmission: {
+      schemaVersion: "dashboard-canonical-execute-admission/v1",
+      policyVersion: projection.executeAdmission.policyVersion ?? "supervisor-wip/v0",
+      state: projection.executeAdmission.state ?? "unavailable",
+      capacityAvailable: projection.executeAdmission.capacityAvailable ?? false,
+      typedReason: projection.executeAdmission.typedReason ?? "runtime_unavailable",
+      limits: projection.executeAdmission.limits ? {
+        review: projection.executeAdmission.limits.review,
+        deliver: projection.executeAdmission.limits.deliver,
+        verification: projection.executeAdmission.limits.verification,
+        operatorTesting: projection.executeAdmission.limits.operatorTesting,
+      } : null,
+      observed: projection.executeAdmission.observed ? {
+        review: projection.executeAdmission.observed.review,
+        deliver: projection.executeAdmission.observed.deliver,
+        verification: projection.executeAdmission.observed.verification,
+        operatorTesting: projection.executeAdmission.observed.operatorTesting,
+      } : null,
+      blockingDimensions: [...(projection.executeAdmission.blockingDimensions ?? [])],
+      nextSafeAction: projection.executeAdmission.nextSafeAction ?? "Refresh the supervisor operational projection before acting.",
+      evidenceRefs: [...(projection.executeAdmission.evidenceRefs ?? [])],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+    queueSummary: {
+      activeCount: projection.queueSummary.activeCount,
+      blockedCount: projection.queueSummary.blockedCount,
+      dispatchableCount: projection.queueSummary.dispatchableCount,
+      gatedCount: projection.queueSummary.gatedCount,
+      staleCount: projection.queueSummary.staleCount,
+      emptyReason: projection.queueSummary.emptyReason ?? null,
+      sourceExhausted: projection.queueSummary.sourceExhausted,
+      summary: projection.queueSummary.summary,
+    },
+    evidenceRefs: [...projection.evidenceRefs],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+const ACTIVE_BOARD_REVIEW_ROUTE_KEYS = new Set([
+  "schemaVersion", "availability", "packetId", "routeState", "reasonCode", "reason", "safeFallback", "exactIdentity", "issuanceState",
+  "findingSummary", "dataClass", "execution", "deliveryEvidenceEligible", "metadataOnly", "rawPayloadRetained", "retention",
+]);
+const ACTIVE_BOARD_REVIEW_FINDING_KEYS = new Set(["count", "highestSeverity", "evidenceRefs"]);
+
+function isRecordWithOnlyKeys(value: unknown, keys: ReadonlySet<string>): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.keys(value).every((key) => keys.has(key));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isCompleteActiveBoardReviewRoute(value: unknown): boolean {
+  if (!isRecordWithOnlyKeys(value, ACTIVE_BOARD_REVIEW_ROUTE_KEYS)
+    || value.schemaVersion !== "pipeline-review-route-evidence/v0"
+    || !["available", "stale", "unavailable"].includes(String(value.availability))
+    || typeof value.packetId !== "string"
+    || !["report_only", "simulated", "blocked", "unavailable"].includes(String(value.routeState))
+    || !["report_only", "simulated_completed", "immutable_identity_stale", "policy_vetoed", "review_blocked", "issuance_expired", "issuance_revoked", "issuance_cancelled", "review_evidence_unavailable"].includes(String(value.reasonCode))
+    || typeof value.reason !== "string"
+    || typeof value.safeFallback !== "string"
+    || !["current", "changed", "unavailable"].includes(String(value.exactIdentity))
+    || !["active", "expired", "revoked", "cancelled", "unavailable"].includes(String(value.issuanceState))
+    || value.dataClass !== "metadata_only"
+    || value.execution !== "none"
+    || value.deliveryEvidenceEligible !== false
+    || value.metadataOnly !== true
+    || value.rawPayloadRetained !== false
+    || value.retention !== "metadata_only_evidence_references"
+    || !isRecordWithOnlyKeys(value.findingSummary, ACTIVE_BOARD_REVIEW_FINDING_KEYS)) {
+    return false;
+  }
+  return typeof value.findingSummary.count === "number"
+    && (value.findingSummary.highestSeverity === null || ["info", "low", "medium", "high"].includes(String(value.findingSummary.highestSeverity)))
+    && isStringArray(value.findingSummary.evidenceRefs);
+}
+
+function isCompleteActiveBoardDetail(detail: DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number]): boolean {
+  const value = detail as unknown as Record<string, unknown>;
+  if (typeof value.packetId !== "string"
+    || !isStringArray(value.evidenceRefs)
+    || !isStringArray(value.recentTransitionEventRefs)
+    || !Array.isArray(value.sourceRefs)
+    || !Array.isArray(value.actionCapabilities)
+    || !Array.isArray(value.actionCapabilitiesV1)
+    || typeof value.currentStage !== "string"
+    || typeof value.status !== "string"
+    || typeof value.truthLabel !== "string"
+    || !["operator", "manager", "worker", "source", "system", "unknown"].includes(String(value.unblocker))
+    || !(value.blocker === null || typeof value.blocker === "string")
+    || !(value.nextAction === null || typeof value.nextAction === "string")
+    || !(value.latestMovementSummary === null || typeof value.latestMovementSummary === "string")
+    || !(value.latestTransitionEventRef === null || typeof value.latestTransitionEventRef === "string")
+    || typeof value.canSatisfyLiveMovementProof !== "boolean"
+    || value.canonicalContract !== null
+    || value.productModeMapping !== null
+    || value.metadataOnly !== true
+    || !isCompleteActiveBoardReviewRoute(value.reviewRoute)) {
+    return false;
+  }
+  const reviewRoute = value.reviewRoute as Record<string, unknown>;
+  if (reviewRoute.packetId !== value.packetId) return false;
+  if (value.readyToTest !== null && !isCompleteActiveBoardReadyToTest(value.readyToTest)) return false;
+  return value.sourceRefs.every(isCompleteActiveBoardSourceRef)
+    && value.actionCapabilities.every(isCompleteActiveBoardLegacyActionCapability)
+    && value.actionCapabilitiesV1.every(isCompleteActiveBoardV1ActionCapability);
+}
+
+function isCompleteActiveBoardSourceRef(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  return typeof source.refId === "string" && typeof source.sourceType === "string"
+    && (source.pathOrUrl === null || typeof source.pathOrUrl === "string")
+    && (source.title === null || typeof source.title === "string")
+    && (source.contentSha256 === null || typeof source.contentSha256 === "string");
+}
+
+function isCompleteActiveBoardReadyToTest(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const ready = value as Record<string, unknown>;
+  return typeof ready.readyId === "string"
+    && typeof ready.userFacingSummary === "string"
+    && typeof ready.testableSurface === "string"
+    && isStringArray(ready.verificationRefs)
+    && isStringArray(ready.evidenceRefs)
+    && ready.metadataOnly === true
+    && ready.rawPayloadRetained === false;
+}
+
+function isCompleteActiveBoardLegacyActionCapability(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const capability = value as Record<string, unknown>;
+  return typeof capability.actionId === "string"
+    && typeof capability.targetType === "string"
+    && (capability.targetId === null || typeof capability.targetId === "string")
+    && typeof capability.capabilityState === "string"
+    && typeof capability.authorityState === "string"
+    && typeof capability.riskTier === "string"
+    && (capability.typedReason === null || typeof capability.typedReason === "string")
+    && typeof capability.expectedResultSummary === "string"
+    && capability.correlationRequired === true
+    && capability.idempotencyRequired === true
+    && isStringArray(capability.evidenceRefs)
+    && capability.metadataOnly === true
+    && capability.rawPayloadRetained === false;
+}
+
+function isCompleteActiveBoardV1ActionCapability(value: unknown): boolean {
+  if (!isCompleteActiveBoardLegacyActionCapability(value)) return false;
+  const capability = value as Record<string, unknown>;
+  return capability.schemaVersion === "pipeline-operational-action/v1"
+    && capability.actionContext !== null
+    && typeof capability.actionContext === "object"
+    && typeof capability.actionContextDigestSha256 === "string"
+    && typeof capability.sourceMode === "string"
+    && capability.serverBound === true;
 }
 
 /**
@@ -458,6 +827,24 @@ function clientSafeLegacyActionCapabilities(capabilities: readonly LegacyActionC
     evidenceRefs: [...capability.evidenceRefs],
     metadataOnly: capability.metadataOnly,
     rawPayloadRetained: capability.rawPayloadRetained,
+  }));
+}
+
+function clientSafeActiveBoardLegacyActionCapabilities(capabilities: readonly LegacyActionCapability[] | undefined) {
+  return (capabilities ?? []).map((capability) => ({
+    actionId: capability.actionId,
+    targetType: capability.targetType,
+    targetId: capability.targetId ?? null,
+    capabilityState: capability.capabilityState,
+    authorityState: capability.authorityState,
+    riskTier: capability.riskTier,
+    typedReason: capability.typedReason,
+    expectedResultSummary: capability.expectedResultSummary,
+    correlationRequired: true as const,
+    idempotencyRequired: true as const,
+    evidenceRefs: [...capability.evidenceRefs],
+    metadataOnly: true as const,
+    rawPayloadRetained: false as const,
   }));
 }
 

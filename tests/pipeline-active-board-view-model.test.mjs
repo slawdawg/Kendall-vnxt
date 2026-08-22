@@ -730,7 +730,7 @@ test("packet detail why diagnostics contract explains placement without retainin
   const detail = model.packetDetails.byPacketId["packet-why-detail"];
 
   assert.equal(detail.packetId, "packet-why-detail");
-  assert.equal(detail.detailSource, "PipelineDashboardProjectionV0.selectedPacketDetails");
+  assert.equal(detail.detailSource, "DashboardCanonicalActiveBoardProjectionV1.selectedPacketDetails");
   assert.equal(detail.selectedDetailAvailable, true);
   assert.equal(detail.placement, "active_board");
   assert.equal(detail.actionability, "actionable");
@@ -754,7 +754,7 @@ test("packet detail why diagnostics contract explains placement without retainin
   assert.equal(fallbackDetail.why.nextDiagnosticAction, "Continue packet-level work.");
 
   const staleDetail = model.packetDetails.byPacketId["packet-why-stale"];
-  assert.equal(staleDetail.detailSource, "PipelineDashboardProjectionV0.workPackets");
+  assert.equal(staleDetail.detailSource, "DashboardCanonicalActiveBoardProjectionV1.workPackets");
   assert.equal(staleDetail.selectedDetailAvailable, false);
   assert.equal(staleDetail.placement, "stale_history");
   assert.equal(staleDetail.actionability, "history");
