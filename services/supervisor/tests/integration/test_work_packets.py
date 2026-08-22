@@ -1342,111 +1342,96 @@ def test_canonical_work_item_packet_lookup_uses_only_persisted_authoritative_lin
         assert client.get(f"/pipeline-control-plane/work-items/{item['id']}/packet").status_code == 404
 
 
-def test_work_packets_include_candidate_only_work_item_only_combined_and_dangling_promoted_packets(tmp_path, monkeypatch) -> None:
-    db_name = "work-packets.db"
+def test_native_work_item_and_candidate_reads_persist_without_synthetic_work_packets(tmp_path, monkeypatch) -> None:
+    db_name = "native-work-item-candidate-reads.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
-        candidate_only = _create_candidate(client)
-        dangling_promoted_candidate = _create_candidate(client, title="Dangling promoted cockpit packet")
-        direct_work_item = _create_work_item(client)
-        promoted_candidate = _create_candidate(client, title="Promoted cockpit packet")
-        approved = client.patch(f"/candidate-work/{promoted_candidate['id']}", json={"status": "approved"})
-        assert approved.status_code == 200
-        promoted = client.post(f"/candidate-work/{promoted_candidate['id']}/promote")
-        assert promoted.status_code == 200
-        combined = promoted.json()["data"]
-        combined_work_item = combined["workItem"]
-        _update_candidate_fixture(
+        created_packet = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-native-identity-proof",
+                "title": "Native identity persistence proof",
+                "sourceRef": {"refId": "repo:native-proof", "sourceType": "repo_doc", "pathOrUrl": "docs/native-proof.md", "title": "Native proof"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-identity-proof",
+                "payloadSummary": "Persist canonical and native identity reads without synthetic packets.",
+            },
+        )
+        assert created_packet.status_code == 200
+        packet_id = created_packet.json()["data"]["packetId"]
+        mismatched_packet = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "packet-native-metadata-mismatch",
+                "title": "Native metadata mismatch fence",
+                "sourceRef": {"refId": "repo:native-mismatch", "sourceType": "repo_doc", "pathOrUrl": "docs/native-mismatch.md", "title": "Native mismatch"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-metadata-mismatch",
+                "payloadSummary": "Prove a mismatched persisted WorkItem packet link fails closed.",
+            },
+        )
+        assert mismatched_packet.status_code == 200
+        mismatched_packet_id = mismatched_packet.json()["data"]["packetId"]
+        linked_work_item = _create_work_item(client, title="Linked native WorkItem")
+        unlinked_work_item = _create_work_item(client, title="Unlinked native WorkItem")
+        mismatched_work_item = _create_work_item(client, title="Mismatched native WorkItem link")
+        unpromoted_candidate = _create_candidate(client, title="Unpromoted native CandidateWork")
+        promoted_candidate = _create_candidate(client, title="Promoted native CandidateWork")
+        assert client.patch(f"/candidate-work/{promoted_candidate['id']}", json={"status": "approved"}).status_code == 200
+        promotion = client.post(f"/candidate-work/{promoted_candidate['id']}/promote")
+        assert promotion.status_code == 200
+        promoted_work_item = promotion.json()["data"]["workItem"]
+
+        _update_work_item_fixture(
             db_path,
-            dangling_promoted_candidate["id"],
-            status="approved",
-            promoted_work_item_id="missing-work-item-id",
+            linked_work_item["id"],
+            authoritative_packet_id=packet_id,
+            metadata_json={"authoritativePacketId": packet_id},
+        )
+        _update_work_item_fixture(
+            db_path,
+            mismatched_work_item["id"],
+            authoritative_packet_id=mismatched_packet_id,
+            metadata_json={"authoritativePacketId": packet_id},
         )
 
-        packets_response = client.get("/work-packets")
-        assert packets_response.status_code == 200
-        packets = packets_response.json()["data"]
+        canonical_packets = client.get("/pipeline-control-plane/work-packets")
+        assert canonical_packets.status_code == 200
+        assert {packet["packetId"] for packet in canonical_packets.json()["data"]} == {packet_id, mismatched_packet_id}
+        assert client.get(f"/pipeline-control-plane/work-packets/{packet_id}").json()["data"]["packetId"] == packet_id
+        assert client.get(f"/pipeline-control-plane/work-items/{linked_work_item['id']}/packet").json()["data"]["packetId"] == packet_id
+        assert client.get(f"/pipeline-control-plane/work-items/{unlinked_work_item['id']}/packet").status_code == 404
+        assert client.get(f"/pipeline-control-plane/work-items/{mismatched_work_item['id']}/packet").status_code == 404
 
-        packet_ids = {packet["packetId"] for packet in packets}
-        assert packet_ids == {
-            f"candidate_work:{candidate_only['id']}",
-            f"candidate_work:{dangling_promoted_candidate['id']}",
-            f"work_item:{direct_work_item['id']}",
-            f"work_item:{combined_work_item['id']}",
-        }
+        work_items = {item["id"]: item for item in client.get("/work-items").json()["data"]}
+        assert work_items[linked_work_item["id"]]["metadata"]["authoritativePacketId"] == packet_id
+        assert work_items[unlinked_work_item["id"]]["id"] == unlinked_work_item["id"]
+        assert work_items[promoted_work_item["id"]]["id"] == promoted_work_item["id"]
+        assert client.get(f"/work-items/{linked_work_item['id']}").json()["data"]["id"] == linked_work_item["id"]
+        assert client.get(f"/work-items/{unlinked_work_item['id']}").json()["data"]["id"] == unlinked_work_item["id"]
+        assert client.get(f"/work-items/{promoted_work_item['id']}").json()["data"]["id"] == promoted_work_item["id"]
 
-        candidate_packet = next(packet for packet in packets if packet["packetId"] == f"candidate_work:{candidate_only['id']}")
-        assert candidate_packet["candidateWork"]["id"] == candidate_only["id"]
-        assert candidate_packet["workItem"] is None
-        assert candidate_packet["taskPacket"] is None
-        assert candidate_packet["routingPreview"] is None
-        assert candidate_packet["executionAttempts"] == []
-        assert candidate_packet["currentStage"] == "capture"
-        assert candidate_packet["currentOwner"] == "kendall"
-        assert candidate_packet["status"] == "waiting"
-        assert candidate_packet["lifecycleState"]["source"] == "candidate_work"
-        assert candidate_packet["lifecycleState"]["stage"] == "capture"
-        assert candidate_packet["lifecycleState"]["owner"] == "kendall"
-        assert candidate_packet["lifecycleState"]["status"] == "waiting"
-        assert candidate_packet["lifecycleState"]["authoritativeRef"] == f"candidate_work:{candidate_only['id']}"
-        assert candidate_packet["lifecycleState"]["derivedFromRefs"][0] == f"candidate_work:{candidate_only['id']}"
-        assert candidate_packet["lifecycleState"]["transitionEventRefs"] == []
-        assert candidate_packet["lifecycleState"]["latestTransitionEventRef"] is None
-        assert candidate_packet["lifecycleState"]["attemptRef"] is None
-        assert candidate_packet["lifecycleState"]["metadataOnly"] is True
-        assert candidate_packet["lifecycleState"]["sourceMutationAllowed"] is False
-        assert candidate_packet["lifecycleState"]["providerCallsAllowed"] is False
-        assert candidate_packet["lifecycleState"]["workerLaunchAllowed"] is False
-        assert candidate_packet["lifecycleState"]["githubMutationAllowed"] is False
-        assert candidate_packet["lifecycleState"]["cleanupAllowed"] is False
-        assert candidate_packet["riskLevel"] == "medium"
-        assert candidate_packet["priority"] == "high"
-        assert candidate_packet["routeSummary"]["recommendation"] == "not_available"
-        assert candidate_packet["routeSummary"]["confidenceScore"] == 0
-        assert candidate_packet["routeSummary"]["reasonCodes"]
-        assert candidate_packet["reviewSummaries"][0]["status"] == "not_applicable"
-        assert candidate_packet["sourceRefs"][0]["sourceType"] == "candidate_work"
-        assert candidate_packet["sourceRefs"][0]["accessState"] == "allowed"
-        assert candidate_packet["artifactRefs"][0]["artifactType"] == "plan"
-        assert candidate_packet["artifactRefs"][0]["pathOrUrl"] == "docs/operator-note.md"
-        assert candidate_packet["humanGateActions"] == []
-        assert candidate_packet["laneCards"] == []
-        assert candidate_packet["memoryProposals"] == []
-        assert candidate_packet["recoveryActions"] == []
+        candidates = {candidate["id"]: candidate for candidate in client.get("/candidate-work").json()["data"]}
+        assert candidates[unpromoted_candidate["id"]]["promotedWorkItemId"] is None
+        assert candidates[promoted_candidate["id"]]["promotedWorkItemId"] == promoted_work_item["id"]
 
-        direct_packet = next(packet for packet in packets if packet["packetId"] == f"work_item:{direct_work_item['id']}")
-        assert direct_packet["candidateWork"] is None
-        assert direct_packet["workItem"]["id"] == direct_work_item["id"]
-        assert direct_packet["priority"] == "urgent"
-        assert direct_packet["sourceRefs"][0]["sourceType"] == "work_item"
-        assert direct_packet["sourceRefs"][0]["accessState"] == "allowed"
-
-        combined_packet = next(packet for packet in packets if packet["packetId"] == f"work_item:{combined_work_item['id']}")
-        assert combined_packet["candidateWork"]["id"] == promoted_candidate["id"]
-        assert combined_packet["workItem"]["id"] == combined_work_item["id"]
-        assert {ref["sourceType"] for ref in combined_packet["sourceRefs"]} == {"candidate_work", "work_item"}
-
-        dangling_packet = next(packet for packet in packets if packet["packetId"] == f"candidate_work:{dangling_promoted_candidate['id']}")
-        assert dangling_packet["candidateWork"]["id"] == dangling_promoted_candidate["id"]
-        assert dangling_packet["workItem"] is None
-        assert dangling_packet["currentStage"] == "capture"
-        assert dangling_packet["currentOwner"] == "kendall"
-        assert dangling_packet["status"] == "waiting"
-        assert "candidate.promoted_missing_work_item" in dangling_packet["routeSummary"]["reasonCodes"]
-
-        single_response = client.get(f"/work-packets/work_item:{combined_work_item['id']}")
-        assert single_response.status_code == 200
-        assert single_response.json()["data"]["packetId"] == f"work_item:{combined_work_item['id']}"
-
-        candidate_lookup_response = client.get(f"/work-packets/candidate_work:{promoted_candidate['id']}")
-        assert candidate_lookup_response.status_code == 200
-        assert candidate_lookup_response.json()["data"]["packetId"] == f"work_item:{combined_work_item['id']}"
-
-        missing_response = client.get("/work-packets/work_item:not-found")
-        assert missing_response.status_code == 404
-        assert missing_response.json()["detail"]["error"]["code"] == "work_packet_not_found"
-
-        assert client.post("/work-packets", json={}).status_code == 405
+    with _client(tmp_path, monkeypatch, db_name) as restarted_client:
+        restarted_packets = restarted_client.get("/pipeline-control-plane/work-packets")
+        assert restarted_packets.status_code == 200
+        assert {packet["packetId"] for packet in restarted_packets.json()["data"]} == {packet_id, mismatched_packet_id}
+        assert restarted_client.get(f"/pipeline-control-plane/work-packets/{packet_id}").json()["data"]["packetId"] == packet_id
+        assert restarted_client.get(f"/pipeline-control-plane/work-items/{linked_work_item['id']}/packet").json()["data"]["packetId"] == packet_id
+        assert restarted_client.get(f"/pipeline-control-plane/work-items/{unlinked_work_item['id']}/packet").status_code == 404
+        assert restarted_client.get(f"/pipeline-control-plane/work-items/{mismatched_work_item['id']}/packet").status_code == 404
+        restarted_work_items = {item["id"]: item for item in restarted_client.get("/work-items").json()["data"]}
+        assert restarted_work_items[unlinked_work_item["id"]]["id"] == unlinked_work_item["id"]
+        assert restarted_work_items[promoted_work_item["id"]]["id"] == promoted_work_item["id"]
+        assert restarted_client.get(f"/work-items/{linked_work_item['id']}").json()["data"]["id"] == linked_work_item["id"]
+        assert restarted_client.get(f"/work-items/{unlinked_work_item['id']}").json()["data"]["id"] == unlinked_work_item["id"]
+        assert restarted_client.get(f"/work-items/{promoted_work_item['id']}").json()["data"]["id"] == promoted_work_item["id"]
+        restarted_candidates = {candidate["id"]: candidate for candidate in restarted_client.get("/candidate-work").json()["data"]}
+        assert restarted_candidates[unpromoted_candidate["id"]]["promotedWorkItemId"] is None
+        assert restarted_candidates[promoted_candidate["id"]]["promotedWorkItemId"] == promoted_work_item["id"]
 
 
 def test_authoritative_work_packet_lifecycle_persists_current_stage_and_history_after_restart(tmp_path, monkeypatch) -> None:
