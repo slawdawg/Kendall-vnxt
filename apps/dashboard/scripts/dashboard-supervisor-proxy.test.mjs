@@ -83,6 +83,20 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     });
     assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body.data.activeManagerLaneClarity), /rawProviderResponse|python-only extension/i);
     assert.equal(canonicalOperationalProjection.body.data.activeManagerLaneClarity.goal.sourceRef, "requirement:token-rotation");
+    assert.deepEqual(canonicalOperationalProjection.body.data.coordinationHealth, {
+      observedAt: "2026-08-22T00:00:00.000Z",
+      source: "manager_workspace_inventory",
+      freshness: "fresh",
+      availability: "incomplete",
+      activeWorkCount: 2,
+      staleOwnerTargetCount: 17,
+      staleOwnerProjectedCount: 12,
+      dirtyPreserveCount: 3,
+      missingWorktreeJournalHold: true,
+      nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+      metadataOnly: true,
+    });
+    assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body.data.coordinationHealth), /run:coordination|manager:assignment-report|rawProviderResponse|python-only extension/i);
     for (const malformedClarity of [
       ["raw provider payload must not cross"],
       { goal: { summary: "Keep the lane on scope.", sourceRef: "requirement:lane-clarity" }, criteria: ["raw provider payload must not cross"] },
@@ -93,6 +107,17 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
       assert.equal(malformed.status, 200);
       assert.equal(malformed.body.data.activeManagerLaneClarity, null);
       assert.doesNotMatch(JSON.stringify(malformed.body), /raw provider payload must not cross/i);
+    }
+    for (const malformedHealth of [
+      { schemaVersion: "manager-coordination-health/v0", nextSafeAction: ["raw provider payload must not cross"] },
+      { ...projectionWithRawCanonicalExtensions().coordinationHealth, availability: "impossible", rawProviderResponse: "must-not-reach-client" },
+      { ...projectionWithRawCanonicalExtensions().coordinationHealth, nextSafeAction: "reasoning traces: must not cross the browser boundary" },
+    ]) {
+      canonicalProjectionOverrides = { coordinationHealth: malformedHealth };
+      const malformed = await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { headers: { cookie: "session=ok" } });
+      assert.equal(malformed.status, 200);
+      assert.equal(malformed.body.data.coordinationHealth, null);
+      assert.doesNotMatch(JSON.stringify(malformed.body), /raw provider payload must not cross|must-not-reach-client|reasoning traces/i);
     }
     canonicalProjectionOverrides = null;
     const malformedCanonicalLookup = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet/extra", { headers: { cookie: "session=ok" } });
@@ -272,6 +297,24 @@ function projectionWithRawCanonicalExtensions(overrides = {}) {
       canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh", rawProviderResponse: "python-only extension" },
       nextGate: { summary: "Verify the canonical dashboard read.", nextSafeAction: "verify_pipeline_render", rawProviderResponse: "python-only extension" },
       criteria: [{ criterionId: "criterion:token-rotation", summary: "Token rotation is tracked as a requirement.", disposition: "met", evidenceRefs: ["evidence:token-rotation"], rawProviderResponse: "python-only extension" }],
+      rawProviderResponse: "python-only extension",
+    },
+    coordinationHealth: {
+      schemaVersion: "manager-coordination-health/v0",
+      runId: "run:coordination",
+      observedAt: "2026-08-22T00:00:00.000Z",
+      source: "manager_workspace_inventory",
+      freshness: "fresh",
+      availability: "incomplete",
+      activeWorkCount: 2,
+      staleOwnerTargetCount: 17,
+      staleOwnerProjectedCount: 12,
+      dirtyPreserveCount: 3,
+      missingWorktreeJournalHold: true,
+      nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+      evidenceRefs: ["manager:assignment-report"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
       rawProviderResponse: "python-only extension",
     },
     ...overrides,

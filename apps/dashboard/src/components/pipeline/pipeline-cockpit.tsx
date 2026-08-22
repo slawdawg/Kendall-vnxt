@@ -148,7 +148,7 @@ type CockpitStageSummary = {
 type ProjectionSelectedPacketDetail = DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number];
 type ActiveBoardSelectedPacketDetail = DashboardCanonicalActiveBoardProjectionV1["selectedPacketDetails"][number];
 type ActiveManagerLaneClarity = NonNullable<DashboardCanonicalActiveBoardProjectionV1["activeManagerLaneClarity"]>;
-type PipelineCoordinationHealth = NonNullable<DashboardCanonicalOperationalProjectionV1["coordinationHealth"]>;
+type PipelineCoordinationHealth = NonNullable<DashboardCanonicalActiveBoardProjectionV1["coordinationHealth"]>;
 type ActiveBoardCockpitPacket = PipelineCockpitPacket;
 
 export function PipelineCockpit({
@@ -829,7 +829,7 @@ export function PipelineCockpit({
               readyToTestCount={activeBoardViewModel?.summary.readyToTestCount ?? 0}
             />
             {managerExecutionLane?.operatorAttentionRequired ? <ManagerAttentionSummary lane={managerExecutionLane} /> : null}
-            <CoordinationHealthPanel health={currentProjection?.coordinationHealth ?? null} />
+            <CoordinationHealthPanel health={currentActiveBoardProjection?.coordinationHealth ?? null} />
             {managerExecutionLane ? (
               <details className="mt-3 rounded-[0.5rem] border border-[var(--line)] bg-[var(--surface)] p-2">
                 <summary className="cursor-pointer text-sm font-semibold text-[var(--foreground)]">Manager</summary>

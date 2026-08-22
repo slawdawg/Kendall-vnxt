@@ -14,6 +14,7 @@ import {
   type DashboardCanonicalPresentationV1,
   type DashboardCanonicalWorkPacketV1,
 } from "./pipeline-supervisor-runtime";
+import { isDashboardCoordinationHealthInput } from "./pipeline-supervisor-projection";
 
 /** The only canonical form that is allowed to cross the dashboard client boundary. */
 export type DashboardCanonicalWorkPacketClientV1 = {
@@ -351,6 +352,7 @@ function clientSafeActiveBoardProjection(
       metadataOnly: true,
     },
     activeManagerLaneClarity: clientSafeActiveManagerLaneClarity(projection.activeManagerLaneClarity) ?? null,
+    coordinationHealth: clientSafeCoordinationHealth(projection.coordinationHealth) ?? null,
     workerSummary: {
       freshnessState: projection.workerSummary.freshnessState,
       activeCount: projection.workerSummary.activeCount,
@@ -633,7 +635,7 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
     managerSummary: projection.managerSummary,
     // This nested schema has its own strict client projection below.
     activeManagerLaneClarity: null,
-    coordinationHealth: projection.coordinationHealth,
+    coordinationHealth: null,
     workerSummary: projection.workerSummary,
     reliabilityProblems: projection.reliabilityProblems,
     gatedControls: projection.gatedControls,
@@ -687,6 +689,25 @@ function clientSafeActiveManagerLaneClarity(
       disposition: criterion.disposition,
       evidenceRefs: [...criterion.evidenceRefs],
     })),
+  };
+}
+
+function clientSafeCoordinationHealth(
+  health: DashboardCanonicalOperationalProjectionV1["coordinationHealth"],
+): DashboardCanonicalActiveBoardProjectionV1["coordinationHealth"] {
+  if (!health || !isDashboardCoordinationHealthInput(health)) return null;
+  return {
+    observedAt: health.observedAt,
+    source: "manager_workspace_inventory",
+    freshness: health.freshness,
+    availability: health.availability,
+    activeWorkCount: health.activeWorkCount,
+    staleOwnerTargetCount: health.staleOwnerTargetCount,
+    staleOwnerProjectedCount: health.staleOwnerProjectedCount,
+    dirtyPreserveCount: health.dirtyPreserveCount,
+    missingWorktreeJournalHold: health.missingWorktreeJournalHold,
+    nextSafeAction: health.nextSafeAction,
+    metadataOnly: true,
   };
 }
 
