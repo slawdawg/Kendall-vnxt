@@ -847,6 +847,7 @@ test("Work Graph remains a supervisor-backed Packet Detail group and never enter
   assert.match(cockpitSource, /aria-label="Work Graph"/);
   assert.match(cockpitSource, /aria-live="assertive"/);
   assert.match(packetDetailSource, /<PacketDetailWorkGraph workGraph=\{workGraph\}/);
+  assert.doesNotMatch(packetDetailSource, /PipelineDashboardProjectionV0/);
   assert.match(lanDetailSource, /aria-label="Work Graph"/);
   assert.match(lanDetailSource, /credentials: "same-origin"/);
   assert.match(mediatorSource, /\/internal\/dashboard\/packet-detail\//);

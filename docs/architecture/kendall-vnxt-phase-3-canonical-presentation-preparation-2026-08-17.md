@@ -22,6 +22,13 @@ compatibility holds while their canonical replacements are delivered; the
 upstream V0 envelope remains server-side and is assembled through a strict
 allowlist. Source-zero and persisted-readback retirement remain later gates.
 
+The direct packet-detail work graph is now a separately reconstructed
+`DashboardCanonicalWorkGraphEvidenceV1`; it no longer passes a
+`PipelineDashboardProjectionV0` work-graph object into the detail component.
+The supervisor projection transport and its other explicitly inventoried V0
+board values remain compatibility surfaces until their own replacement and
+readback proofs land.
+
 ## Starting point
 
 Phase 2 closed at `origin/dev` commit
@@ -91,7 +98,7 @@ even if their first field set is intentionally isomorphic.
 | --- | --- | --- |
 | Canonical packet presentation | `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`, `apps/dashboard/src/lib/pipeline-supervisor-projector.ts`, `apps/dashboard/src/lib/pipeline-packet-loader.ts` | Canonical lifecycle fields map to the new presentation; malformed lifecycle and unknown fields fail closed; no legacy request is issued. |
 | Operational projection | `apps/dashboard/src/lib/pipeline-packet-loader.ts`, `apps/dashboard/src/lib/pipeline-supervisor-projection.ts`, `apps/dashboard/src/lib/supervisor.ts`, and the dashboard proxy | Whitelist preserves required V1 action-context fences and active-board fields while stripping unknown root and nested fields in normal and LAN paths. |
-| Cockpit and direct packet detail consumers | `apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx`, `packet-detail-page.tsx`, `apps/dashboard/src/lib/pipeline/active-board-view-model.ts`, normal/LAN route components | Runtime rows use canonical presentation; demo remains explicit; direct packet detail preserves URL behavior. |
+| Cockpit and direct packet detail consumers | `apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx`, `packet-detail-page.tsx`, `apps/dashboard/src/lib/pipeline/active-board-view-model.ts`, normal/LAN route components | Runtime rows use canonical presentation; the direct-detail work graph uses `DashboardCanonicalWorkGraphEvidenceV1`; demo remains explicit; direct packet detail preserves URL behavior. |
 | WorkItem memory review | `apps/dashboard/src/components/work-item-detail-page.tsx`, `apps/dashboard/src/components/memory-proposal-review-panel.tsx` | The panel uses the canonical, work-item-scoped memory-review DTO. PATCH and every durable proposal action use its opaque route key, persisted revision fence, and the dashboard's operator mutation transport (Origin and CSRF fenced); reserved canonical evidence namespaces are resolved from WorkItem-scoped records before an AI draft or derived rebuild can proceed. |
 | Tests | `tests/dashboard-pipeline-packet-loader.test.mjs`, `tests/dashboard-lan-pipeline-routing.test.mjs`, proxy/fixture/boundary tests | Normal/LAN no-V0 import or adapter assertions, extension/privacy tests, V1 action-context preservation, render/typecheck/build coverage. |
 

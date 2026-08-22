@@ -7,7 +7,7 @@ import {
 } from "../../lib/pipeline-supervisor-projector";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 import type { DashboardCanonicalWorkPacketV1 } from "../../lib/pipeline-supervisor-runtime";
-import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+import type { DashboardCanonicalWorkGraphEvidenceV1 } from "../../lib/pipeline/canonical-operational-projection";
 
 type PipelineFixturePacket = PipelineDashboardPacket;
 type PipelineGoldenPathSnapshot = {
@@ -41,7 +41,7 @@ export function PacketDetailPage({
   snapshot?: PipelineGoldenPathSnapshot | null;
   sourceBoundaries?: SourceBoundaryDeclarationV0[];
   sourceState?: PipelineRuntimeSourceState;
-  workGraph?: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | null;
+  workGraph?: DashboardCanonicalWorkGraphEvidenceV1 | null;
 }) {
   const canonicalPresentation = canonicalPacket
     ? projectDashboardCanonicalPresentationsToCockpitPackets([canonicalPacket.presentation])
@@ -252,7 +252,7 @@ export function PacketDetailPage({
   );
 }
 
-function PacketDetailWorkGraph({ workGraph }: { workGraph: NonNullable<PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"]> }) {
+function PacketDetailWorkGraph({ workGraph }: { workGraph: DashboardCanonicalWorkGraphEvidenceV1 }) {
   const attention = workGraph.availability !== "available" || workGraph.waveMembership === "blocked" || workGraph.waveMembership === "deferred";
   return (
     <DetailSection title="Work Graph">

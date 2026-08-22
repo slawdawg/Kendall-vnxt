@@ -37,8 +37,9 @@ export type PipelineCockpitPacketLoad = {
 
 export type PipelineCockpitPacketDetailLoad = {
   fixtureMode: PipelineRuntimeSourceState;
-  /** Canonical source state; PacketDetailPage owns the temporary V0 adapter. */
+  /** Canonical source state; PacketDetailPage owns the remaining presentation adapter. */
   canonicalPacket: DashboardCanonicalWorkPacketV1 | null;
+  /** Independently reconstructed client-safe V1 work-graph evidence. */
   workGraph: DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number]["workGraph"] | null;
 };
 
@@ -254,7 +255,7 @@ function clientSafeOperationalProjection(projection: PipelineDashboardProjection
       executionAttempts: detail.executionAttempts,
       correlationIds: detail.correlationIds,
       reviewRoute: detail.reviewRoute,
-      workGraph: detail.workGraph,
+      workGraph: clientSafeWorkGraph(detail.workGraph, detail.packetId),
       metadataOnly: detail.metadataOnly,
     })),
     managerSummary: projection.managerSummary,
@@ -270,6 +271,62 @@ function clientSafeOperationalProjection(projection: PipelineDashboardProjection
     queueSummary: projection.queueSummary,
     evidenceRefs: projection.evidenceRefs,
   });
+}
+
+/** Build the independent dashboard V1 graph shape; never pass the V0 object through. */
+function clientSafeWorkGraph(
+  workGraph: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | undefined,
+  packetId: string,
+): DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number]["workGraph"] {
+  if (!workGraph) {
+    return {
+      schemaVersion: "dashboard-canonical-work-graph/v1",
+      sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+      availability: "unavailable",
+      packetId,
+      executionJobId: null,
+      reportIdentity: null,
+      generatedAt: null,
+      freshnessState: "unavailable",
+      waveMembership: "unavailable",
+      dependencyState: "unavailable",
+      reservation: { status: "unavailable", owner: null, reasonCode: "work_graph_unavailable" },
+      capacity: { posture: "unavailable", reasonCode: "work_graph_unavailable" },
+      reason: "Supervisor work-graph evidence is unavailable.",
+      nextSafeAction: "Refresh the supervisor-backed packet detail before acting.",
+      evidenceRefs: [],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    };
+  }
+  return {
+    schemaVersion: "dashboard-canonical-work-graph/v1",
+    sourceSchemaVersion: workGraph.sourceSchemaVersion,
+    availability: workGraph.availability,
+    packetId: workGraph.packetId,
+    executionJobId: workGraph.executionJobId,
+    reportIdentity: workGraph.reportIdentity,
+    generatedAt: workGraph.generatedAt,
+    freshnessState: workGraph.freshnessState,
+    waveMembership: workGraph.waveMembership,
+    dependencyState: workGraph.dependencyState,
+    reservation: {
+      status: workGraph.reservation.status,
+      owner: workGraph.reservation.owner,
+      reasonCode: workGraph.reservation.reasonCode,
+    },
+    capacity: {
+      posture: workGraph.capacity.posture,
+      reasonCode: workGraph.capacity.reasonCode,
+    },
+    reason: workGraph.reason,
+    nextSafeAction: workGraph.nextSafeAction,
+    evidenceRefs: [...workGraph.evidenceRefs],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  };
 }
 
 /** Strip unknown nested extension keys as well as the explicit root/row allowlists. */
@@ -462,6 +519,7 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
     if (detailProjectionContradictionMessage) {
       return { fixtureMode: runtimeSourceState("invalid", "Supervisor packet invalid", `${detailProjectionContradictionMessage} No demo packet was substituted.`), canonicalPacket: null, workGraph: null };
     }
+    const selectedDetail = projectionResult.projection?.selectedPacketDetails.find((detail) => detail.packetId === canonicalPacketId);
     return {
       fixtureMode: runtimeSourceState(
         projectionResult.projection && canonicalStaleProjectionTruth(projectionResult.projection) ? "stale" : "runtime",
@@ -471,7 +529,7 @@ export async function loadPipelineCockpitPacket(packetId: unknown): Promise<Pipe
           : "This detail is a read-only canonical supervisor packet resolved by packet identity.",
       ),
       canonicalPacket,
-      workGraph: projectionResult.projection?.selectedPacketDetails.find((detail) => detail.packetId === canonicalPacketId)?.workGraph ?? null,
+      workGraph: selectedDetail ? clientSafeWorkGraph(selectedDetail.workGraph, selectedDetail.packetId) : null,
     };
   } catch (error) {
     const errorMessage = error && typeof error === "object" && "message" in error
