@@ -69,8 +69,38 @@ export type PipelineRuntimePacket = Omit<PipelineDashboardPacket, "fixtureId" | 
 };
 
 /** Canonical dashboard packet rendered from the versioned presentation DTO. */
-export type PipelineCanonicalPresentationPacketV1 = PipelineRuntimePacket & {
+export type PipelineCanonicalPresentationPacketV1 = {
   schemaVersion: "dashboard-canonical-presentation/v1";
+  packetId: string;
+  title: string;
+  requestedOutcome: string;
+  currentStage: PipelineStage;
+  currentOwner: "kendall" | "operator" | "local_model" | "hermes_worker_mock" | "codex_worker" | "claude_reviewer" | "github" | "memory_review" | "blocked";
+  status: "active" | "waiting" | "blocked" | "failed" | "complete" | "deferred";
+  riskLevel: "low" | "medium" | "high";
+  priority: "low" | "normal" | "high" | "urgent";
+  lifecycleState: DashboardCanonicalPresentationV1["lifecycleState"];
+  transitionEvents: DashboardCanonicalPresentationV1["transitionEvents"];
+  sourceRefs: DashboardCanonicalPresentationV1["sourceRefs"];
+  evidenceRefs: DashboardCanonicalPresentationV1["evidenceRefs"];
+  executionAttempts: Array<{ attemptId: string; authorityMode: string; workerId: string; status: string; evidenceRefs: string[] }>;
+  humanGateActions: Array<{ label: string }>;
+  routeSummary: null;
+  sourceKind: "supervisor-runtime";
+  sourceId: string;
+  fixtureLabel: string;
+  summary: string;
+  nextAction: string;
+  confidenceLabel: string;
+  freshnessLabel: string;
+  sourceTrustState: PipelineSourceTrustState;
+  sourceTrustStates: PipelineSourceTrustState[];
+  sourceTrustSummary: string;
+  routeFork: PipelineRouteFork;
+  lastEvent: string;
+  riskFlags: string[];
+  matrixRowIds: string[];
+  laneCards: [];
 };
 
 export type PipelineSupervisorProjectionResult =
@@ -348,11 +378,69 @@ const canonicalPresentationAccessStates = new Set(["allowed", "blocked"]);
 function projectDashboardCanonicalPresentationToCockpitPacket(
   presentation: DashboardCanonicalPresentationV1,
 ): PipelineCanonicalPresentationPacketV1 {
-  const base = canonicalPresentationBase(presentation);
+  const sourceTrustStates = sourceTrustStatesForCanonicalPresentation(presentation);
+  const freshnessLabel = freshnessLabelForCanonicalPresentation(presentation);
+  const reasonCodes = presentation.lifecycleState.reasonCodes;
   return {
-    ...projectCanonicalBaseToCockpitPacket(base),
     schemaVersion: "dashboard-canonical-presentation/v1",
+    packetId: presentation.packetId,
+    title: presentation.title,
+    requestedOutcome: presentation.requestedOutcome,
+    currentStage: presentation.currentStage,
+    currentOwner: presentation.currentOwner,
+    status: presentation.status,
+    riskLevel: presentation.riskLevel,
+    priority: presentation.priority,
+    lifecycleState: presentation.lifecycleState,
+    transitionEvents: presentation.transitionEvents,
+    sourceRefs: presentation.sourceRefs,
+    evidenceRefs: presentation.evidenceRefs,
+    executionAttempts: [],
+    humanGateActions: [],
+    routeSummary: null,
+    sourceKind: "supervisor-runtime",
+    sourceId: presentation.packetId,
+    fixtureLabel: "Supervisor runtime",
+    summary: presentation.requestedOutcome,
+    nextAction: plainStageLabel(presentation.currentStage),
+    confidenceLabel: "Medium confidence",
+    freshnessLabel,
+    sourceTrustState: sourceTrustStates[0] ?? "included",
+    sourceTrustStates,
+    sourceTrustSummary: sourceTrustSummaryForCanonicalPresentation(presentation),
+    routeFork: {
+      selectedRoute: presentation.currentStage,
+      rejectedRoutes: rejectedRoutesFor(presentation.currentStage),
+      tags: ["supervisor runtime", presentation.currentStage, presentation.currentOwner, presentation.status],
+      sourceContext: sourceTrustSummaryForCanonicalPresentation(presentation),
+      lowConfidenceActions: [],
+    },
+    lastEvent: `Canonical dashboard presentation rendered from ${reasonCodes[0] ?? "authoritative lifecycle"}.`,
+    riskFlags: riskFlagsFor(presentation.riskLevel, freshnessLabel),
+    matrixRowIds: reasonCodes,
+    laneCards: [],
   };
+}
+
+function sourceTrustStatesForCanonicalPresentation(presentation: DashboardCanonicalPresentationV1): PipelineSourceTrustState[] {
+  const states = presentation.sourceRefs.map((source) => {
+    if (source.accessState === "blocked") return "unavailable" as const;
+    if (source.freshness === "stale") return "stale" as const;
+    return "included" as const;
+  });
+  return states.length > 0 ? states : ["included"];
+}
+
+function freshnessLabelForCanonicalPresentation(presentation: DashboardCanonicalPresentationV1): string {
+  return presentation.sourceRefs.some((source) => source.freshness === "stale") ? "stale" : "current";
+}
+
+function sourceTrustSummaryForCanonicalPresentation(presentation: DashboardCanonicalPresentationV1): string {
+  const blocked = presentation.sourceRefs.filter((source) => source.accessState === "blocked").length;
+  const stale = presentation.sourceRefs.filter((source) => source.freshness === "stale").length;
+  if (blocked > 0) return `${blocked} canonical source${blocked === 1 ? "" : "s"} unavailable`;
+  if (stale > 0) return `${stale} canonical source${stale === 1 ? "" : "s"} stale`;
+  return "canonical source metadata included";
 }
 
 function canonicalPresentationBase(presentation: DashboardCanonicalPresentationV1): WorkPacketV0View {

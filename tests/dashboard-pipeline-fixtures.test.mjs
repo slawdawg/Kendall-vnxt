@@ -1788,7 +1788,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   );
 });
 
-test("/pipeline route uses supervisor WorkPacketV0 projections and isolates explicit demo fixtures", async () => {
+test("/pipeline route uses canonical presentations and isolates explicit V0 demo fixtures", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const demoRouteSource = await readFile(demoRoutePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
@@ -2865,8 +2865,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
     /export interface Pipeline(Read)?Packet(V0|View)?\s*\{/,
     "dashboard fixtures should not define a parallel dashboard model"
   );
-  assert.match(cockpitSource, /import \{[\s\S]*projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
-  assert.match(cockpitSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
+  assert.match(cockpitSource, /import \{[\s\S]*projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*PipelineCanonicalPresentationPacketV1[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
+  assert.match(cockpitSource, /type PipelineCanonicalCockpitPacket = PipelineCanonicalPresentationPacketV1 & PipelineCockpitPacket;/);
+  assert.match(cockpitSource, /canonicalPresentation\.packets as PipelineCanonicalCockpitPacket\[\]/);
+  assert.match(cockpitSource, /type PipelineFixturePacket = PipelineCockpitPacket;/);
+  assert.doesNotMatch(cockpitSource, /import[^\n]*PipelineDashboardPacket/);
   assert.match(packetDetailSource, /import type \{ PipelineDashboardPacket \} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
   assert.match(packetDetailSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
   const canonicalPacketDetailSource = await readFile(canonicalPacketDetailPath, "utf8");
