@@ -84,7 +84,6 @@ import type {
   WorkItemExecutionRecipeView,
   WorkItemManagedActionPayload,
   WorkItemRecipeGateAuditView,
-  WorkPacketLearnFollowUpCandidateWorkPayload,
   VerificationReadinessReportView,
   WorkflowEventView,
   WorkItemView,
@@ -290,23 +289,6 @@ export async function getWorkItem(id: string, options?: RequestOptions): Promise
 
 export async function getWorkItemEvents(id: string, options?: RequestOptions): Promise<WorkflowEventView[]> {
   return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`, options);
-}
-
-export async function createLearnFollowUpCandidateWork(
-  packetId: string,
-  payload: WorkPacketLearnFollowUpCandidateWorkPayload,
-): Promise<CandidateWorkView> {
-  const response = await fetch(`${getSupervisorBaseUrl()}/work-packets/${encodeURIComponent(packetId)}/learn-follow-up-candidate-work`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to create Learn follow-up Candidate Work: ${response.status}`);
-  }
-  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
-  return envelope.data;
 }
 
 export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {

@@ -55,6 +55,13 @@ The readiness inventory therefore validates canonical lifecycle/history and
 boundary content on the normal detail component, while fixture-only worker,
 gate, and legacy memory evidence remains attached to `PacketDetailFixturePage`.
 
+The unused legacy `POST /work-packets/{packet_id}/learn-follow-up-candidate-work`
+workflow is retired in its own source-zero slice. The supervisor handler and
+request schema, dashboard helper, and proxy mutation admission are removed
+together. Existing `candidate_work` rows whose metadata was created by that
+workflow remain listable after restart; this does not retire the separately
+inventoried legacy WorkPacket read routes.
+
 ## Starting point
 
 Phase 2 closed at `origin/dev` commit
