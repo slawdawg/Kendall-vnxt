@@ -490,6 +490,10 @@ from supervisor.api.schemas import (
     PipelineEpic25EvidenceChainV1View,
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
+    DashboardCanonicalOperationalProjectionV1View,
+    DashboardCanonicalOperationalWorkPacketV1View,
+    DashboardCanonicalOperationalSelectedPacketDetailV1View,
+    DashboardCanonicalWorkGraphEvidenceV1View,
     PipelineExecuteAdmissionCountsV0View,
     PipelineExecuteAdmissionV0View,
     PipelineExecutionAttemptLineageV0View,
@@ -9583,6 +9587,117 @@ class SupervisorService:
                 summary=summary_text,
             ),
             evidenceRefs=sorted(set(evidence_refs)),
+        )
+
+    async def get_dashboard_canonical_operational_projection(
+        self,
+        session: AsyncSession,
+        *,
+        mutation_access: bool = True,
+    ) -> DashboardCanonicalOperationalProjectionV1View:
+        """Reconstruct the dashboard-owned v1 board read without relabelling V0 rows."""
+        projection = await self.get_pipeline_dashboard_projection(session, mutation_access=mutation_access)
+        return self._dashboard_canonical_operational_projection_from_v0(projection)
+
+    def _dashboard_canonical_operational_projection_from_v0(
+        self,
+        projection: PipelineDashboardProjectionV0View,
+    ) -> DashboardCanonicalOperationalProjectionV1View:
+        return DashboardCanonicalOperationalProjectionV1View(
+            projectionId=projection.projectionId,
+            generatedAt=projection.generatedAt,
+            sourceUpdatedAt=projection.sourceUpdatedAt,
+            sourceLabel=projection.sourceLabel,
+            freshnessState=projection.freshnessState,
+            staleAfterSeconds=projection.staleAfterSeconds,
+            backendReachability=projection.backendReachability,
+            fixtureMode=projection.fixtureMode,
+            truthSummary=projection.truthSummary,
+            stageSummaries=list(projection.stageSummaries),
+            sourceStates=list(projection.sourceStates),
+            workPackets=[
+                DashboardCanonicalOperationalWorkPacketV1View(
+                    packetId=packet.packetId,
+                    title=packet.title,
+                    currentStage=packet.currentStage,
+                    status=packet.status,
+                    truthLabel=packet.truthLabel,
+                    sourceRef=packet.sourceRef,
+                    blocker=packet.blocker,
+                    nextAction=packet.nextAction,
+                    unblocker=packet.unblocker,
+                    readyToTest=packet.readyToTest,
+                    evidenceRefs=list(packet.evidenceRefs),
+                    workItemId=packet.workItemId,
+                    queueLease=packet.queueLease,
+                    executionAttempts=list(packet.executionAttempts),
+                    correlationIds=list(packet.correlationIds),
+                    updatedAt=packet.updatedAt,
+                    metadataOnly=True,
+                )
+                for packet in projection.workPackets
+            ],
+            selectedPacketDetails=[
+                DashboardCanonicalOperationalSelectedPacketDetailV1View(
+                    packetId=detail.packetId,
+                    sourceRefs=list(detail.sourceRefs),
+                    evidenceRefs=list(detail.evidenceRefs),
+                    currentStage=detail.currentStage,
+                    status=detail.status,
+                    truthLabel=detail.truthLabel,
+                    blocker=detail.blocker,
+                    nextAction=detail.nextAction,
+                    unblocker=detail.unblocker,
+                    readyToTest=detail.readyToTest,
+                    latestTransitionEventRef=detail.latestTransitionEventRef,
+                    recentTransitionEventRefs=list(detail.recentTransitionEventRefs),
+                    latestMovementSummary=detail.latestMovementSummary,
+                    canSatisfyLiveMovementProof=detail.canSatisfyLiveMovementProof,
+                    parentPacketId=detail.parentPacketId,
+                    lineageKind=detail.lineageKind,
+                    operatorTestState=detail.operatorTestState,
+                    operatorTestNote=detail.operatorTestNote,
+                    actionCapabilities=list(detail.actionCapabilities),
+                    actionCapabilitiesV1=list(detail.actionCapabilitiesV1),
+                    actionResults=list(detail.actionResults),
+                    reviewRoute=detail.reviewRoute,
+                    workGraph=DashboardCanonicalWorkGraphEvidenceV1View(
+                        availability=detail.workGraph.availability,
+                        packetId=detail.workGraph.packetId,
+                        executionJobId=detail.workGraph.executionJobId,
+                        reportIdentity=detail.workGraph.reportIdentity,
+                        generatedAt=detail.workGraph.generatedAt,
+                        freshnessState=detail.workGraph.freshnessState,
+                        waveMembership=detail.workGraph.waveMembership,
+                        dependencyState=detail.workGraph.dependencyState,
+                        reservation=detail.workGraph.reservation,
+                        capacity=detail.workGraph.capacity,
+                        reason=detail.workGraph.reason,
+                        nextSafeAction=detail.workGraph.nextSafeAction,
+                        evidenceRefs=list(detail.workGraph.evidenceRefs),
+                        metadataOnly=True,
+                        rawPayloadRetained=False,
+                    ),
+                    workItemId=detail.workItemId,
+                    queueLease=detail.queueLease,
+                    executionAttempts=list(detail.executionAttempts),
+                    correlationIds=list(detail.correlationIds),
+                    metadataOnly=True,
+                )
+                for detail in projection.selectedPacketDetails
+            ],
+            managerSummary=projection.managerSummary,
+            activeManagerLaneClarity=projection.activeManagerLaneClarity,
+            coordinationHealth=projection.coordinationHealth,
+            workerSummary=projection.workerSummary,
+            reliabilityProblems=list(projection.reliabilityProblems),
+            gatedControls=list(projection.gatedControls),
+            runtimeReadiness=projection.runtimeReadiness,
+            actionCapabilities=list(projection.actionCapabilities),
+            actionCapabilitiesV1=list(projection.actionCapabilitiesV1),
+            executeAdmission=projection.executeAdmission,
+            queueSummary=projection.queueSummary,
+            evidenceRefs=list(projection.evidenceRefs),
         )
 
     def _unavailable_pipeline_dashboard_projection(

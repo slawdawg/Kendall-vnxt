@@ -14,13 +14,16 @@ its own canonical, work-item-scoped memory DTO with an opaque action route key
 and persisted decision fence.
 
 The active operational-truth sub-slice moves the normal and LAN action-gating
-path and projection-truth helpers onto a versioned canonical DTO. The active
-board now receives the dashboard-owned
-`DashboardCanonicalOperationalProjectionV1` rather than the supervisor V0
-envelope. Its nested legacy action and board-detail values remain explicit
-compatibility holds while their canonical replacements are delivered; the
-upstream V0 envelope remains server-side and is assembled through a strict
-allowlist. Source-zero and persisted-readback retirement remain later gates.
+path and projection-truth helpers onto the read-only
+`GET /pipeline-control-plane/canonical-operational-projection` boundary. The
+supervisor explicitly reconstructs its versioned
+`DashboardCanonicalOperationalProjectionV1` response from its internal V0
+board read; it does not relabel or forward the V0 envelope. Its nested legacy
+action and board-detail values remain explicit compatibility holds while their
+canonical replacements are delivered. The old
+`GET /pipeline-control-plane/projection` endpoint remains a separately
+inventoried compatibility read until source-zero and persisted-readback
+retirement gates pass.
 
 The direct packet-detail work graph is now a separately reconstructed
 `DashboardCanonicalWorkGraphEvidenceV1`; it no longer passes a
@@ -54,9 +57,10 @@ forms:
 1. `DashboardCanonicalWorkPacketV1.compatibilityProjection`, projected into
    `PipelineDashboardPacket` by
    `apps/dashboard/src/lib/pipeline-supervisor-projector.ts`; and
-2. the live `/pipeline-control-plane/projection` response,
-   `PipelineDashboardProjectionV0`, carried by
-   `apps/dashboard/src/lib/pipeline-packet-loader.ts` into `PipelineCockpit`.
+2. the internal supervisor `PipelineDashboardProjectionV0` board read and its
+   public `/pipeline-control-plane/projection` compatibility endpoint. Normal
+   and LAN cockpit loaders now use the separate canonical operational endpoint;
+   the V0 endpoint remains for named compatibility consumers only.
 
 These are active compatibility surfaces, not dead code. Phase 3 must replace
 them before removing `WorkPacketV0View`, the legacy supervisor routes, or their
@@ -113,7 +117,7 @@ even if their first field set is intentionally isomorphic.
 | Area | First-slice files | Required evidence |
 | --- | --- | --- |
 | Canonical packet presentation | `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`, `apps/dashboard/src/lib/pipeline-supervisor-projector.ts`, `apps/dashboard/src/lib/pipeline-packet-loader.ts` | Canonical lifecycle fields map to the new presentation; malformed lifecycle and unknown fields fail closed; no legacy request is issued. |
-| Operational projection | `apps/dashboard/src/lib/pipeline-packet-loader.ts`, `apps/dashboard/src/lib/pipeline-supervisor-projection.ts`, `apps/dashboard/src/lib/supervisor.ts`, and the dashboard proxy | Whitelist preserves required V1 action-context fences and active-board fields while stripping unknown root and nested fields in normal and LAN paths. |
+| Operational projection | supervisor canonical operational endpoint, `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`, `apps/dashboard/src/lib/pipeline-packet-loader.ts`, and the dashboard proxy | The supervisor reconstructs a strict versioned V1 envelope; dashboard and proxy allowlists preserve required V1 action-context fences and active-board fields while stripping unknown root and nested fields in normal and LAN paths. The V0 endpoint is a named compatibility hold. |
 | Cockpit and direct packet detail consumers | `apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx`, `packet-detail-page.tsx`, `apps/dashboard/src/lib/pipeline/active-board-view-model.ts`, normal/LAN route components | Runtime rows use canonical presentation; the direct-detail work graph uses `DashboardCanonicalWorkGraphEvidenceV1`; demo remains explicit; direct packet detail preserves URL behavior. |
 | WorkItem memory review | `apps/dashboard/src/components/work-item-detail-page.tsx`, `apps/dashboard/src/components/memory-proposal-review-panel.tsx` | The panel uses the canonical, work-item-scoped memory-review DTO. PATCH and every durable proposal action use its opaque route key, persisted revision fence, and the dashboard's operator mutation transport (Origin and CSRF fenced); reserved canonical evidence namespaces are resolved from WorkItem-scoped records before an AI draft or derived rebuild can proceed. |
 | Tests | `tests/dashboard-pipeline-packet-loader.test.mjs`, `tests/dashboard-lan-pipeline-routing.test.mjs`, proxy/fixture/boundary tests | Normal/LAN no-V0 import or adapter assertions, extension/privacy tests, V1 action-context preservation, render/typecheck/build coverage. |

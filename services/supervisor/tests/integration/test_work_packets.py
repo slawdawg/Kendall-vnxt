@@ -7080,6 +7080,30 @@ def test_pipeline_dashboard_projection_endpoint_projects_live_work_packets(tmp_p
         assert detail["metadataOnly"] is True
         assert detail["sourceRefs"] == []
 
+
+def test_dashboard_canonical_operational_projection_reconstructs_safe_v1_rows(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-canonical-operational-projection.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Canonical operational projection packet")
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+
+        assert projection["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
+        assert projection["fixtureMode"]["enabled"] is False
+        assert projection["truthSummary"]["fixtureBacked"] is False
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        assert packet["canonicalContract"] is None
+        assert packet["productModeMapping"] is None
+        assert "rawProviderResponse" not in packet
+        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"])
+        assert detail["canonicalContract"] is None
+        assert detail["productModeMapping"] is None
+        assert "actionResultsV1" not in detail
+        assert detail["workGraph"]["schemaVersion"] == "dashboard-canonical-work-graph/v1"
+        assert detail["workGraph"]["rawPayloadRetained"] is False
+
 def test_work_packet_transition_events_replay_work_item_and_subscription_launch_events(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-transition-event-replay.db"
     db_path = _db_path(tmp_path, db_name)

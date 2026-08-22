@@ -19,7 +19,6 @@ import type {
   AuthoritativePacketSourceRef,
   AuthoritativePacketStage,
   AuthoritativePacketStatus,
-  PipelineCanonicalContractV1,
   PipelineCoordinationHealthV0,
   PipelineExecuteAdmissionV0,
   PipelineFixtureModeV0,
@@ -29,7 +28,6 @@ import type {
   PipelineOperationalActionCapabilityV1,
   PipelineOperationalActionResultV0,
   PipelineOperationalRuntimeReadinessV0,
-  PipelineProductModeMappingV0,
   PipelineProjectionEmptyReasonV0,
   PipelineQueueSummaryV0,
   PipelineReliabilityProblemV0,
@@ -140,9 +138,9 @@ export type DashboardCanonicalOperationalWorkPacketV1 = {
   status: AuthoritativePacketStatus;
   truthLabel: DashboardCanonicalOperationalSourceLabelV1;
   sourceRef: AuthoritativePacketSourceRef | null;
-  /** Raw canonical extensions never cross the client board boundary. */
-  canonicalContract: PipelineCanonicalContractV1 | null;
-  productModeMapping: PipelineProductModeMappingV0 | null;
+  /** This board read deliberately omits raw canonical extensions. */
+  canonicalContract: null;
+  productModeMapping: null;
   blocker: string | null;
   nextAction: string | null;
   unblocker: "operator" | "manager" | "worker" | "source" | "system" | "unknown";
@@ -159,8 +157,9 @@ export type DashboardCanonicalOperationalWorkPacketV1 = {
 export type DashboardCanonicalOperationalSelectedPacketDetailV1 = {
   packetId: string;
   sourceRefs: AuthoritativePacketSourceRef[];
-  canonicalContract: PipelineCanonicalContractV1 | null;
-  productModeMapping: PipelineProductModeMappingV0 | null;
+  /** This board read deliberately omits raw canonical extensions. */
+  canonicalContract: null;
+  productModeMapping: null;
   evidenceRefs: string[];
   currentStage: AuthoritativePacketStage;
   status: AuthoritativePacketStatus;

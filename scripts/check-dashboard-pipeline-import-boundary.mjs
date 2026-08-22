@@ -43,6 +43,7 @@ const forbiddenCallPatterns = [
 ];
 
 const readOnlyPipelineRuntimeFunctions = [
+  "getDashboardCanonicalOperationalProjection",
   "getPipelineDashboardProjection",
   "getWorkPacket",
   "getWorkPacketForWorkItem",
@@ -51,6 +52,7 @@ const readOnlyPipelineRuntimeFunctions = [
 ];
 
 const readOnlyPipelineRuntimeEndpoints = new Map([
+  ["getDashboardCanonicalOperationalProjection", "/pipeline-control-plane/canonical-operational-projection"],
   ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
   ["getWorkPacket", "/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}"],
   ["getWorkPacketForWorkItem", "/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet"],

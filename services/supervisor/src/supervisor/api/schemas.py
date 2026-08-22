@@ -4908,6 +4908,136 @@ class PipelineDashboardProjectionApiEnvelope(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+class DashboardCanonicalWorkGraphEvidenceV1View(BaseModel):
+    """Client-safe, dashboard-owned reconstruction of the V0 work-graph evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["dashboard-canonical-work-graph/v1"] = "dashboard-canonical-work-graph/v1"
+    sourceSchemaVersion: Literal["parallel-execution-graph-reservation/v1"] = "parallel-execution-graph-reservation/v1"
+    availability: Literal["available", "stale", "unavailable"]
+    packetId: str
+    executionJobId: str | None = None
+    reportIdentity: str | None = None
+    generatedAt: datetime | None = None
+    freshnessState: Literal["live", "stale", "unavailable"]
+    waveMembership: Literal["selected", "deferred", "blocked", "unavailable"]
+    dependencyState: Literal["clear", "declared", "blocked", "unavailable"]
+    reservation: PipelineWorkGraphReservationV0View
+    capacity: PipelineWorkGraphCapacityV0View
+    reason: str
+    nextSafeAction: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+    retention: Literal["metadata_only_evidence_references"] = "metadata_only_evidence_references"
+
+
+class DashboardCanonicalOperationalWorkPacketV1View(BaseModel):
+    """Canonical board row with Python-only contract extensions intentionally nulled."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    packetId: str
+    title: str
+    currentStage: AuthoritativePacketStage
+    status: AuthoritativePacketStatus
+    truthLabel: PipelineProjectionSourceLabelV0
+    sourceRef: AuthoritativePacketSourceRefView | None = None
+    canonicalContract: Literal[None] = None
+    productModeMapping: Literal[None] = None
+    blocker: str | None = None
+    nextAction: str | None = None
+    unblocker: PipelinePacketUnblockerV0 = "unknown"
+    readyToTest: WorkPacketReadyToTestV0View | None = None
+    evidenceRefs: list[str] = Field(default_factory=list)
+    workItemId: str | None = None
+    queueLease: PipelineQueueLeaseV0View | None = None
+    executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
+    correlationIds: list[str] = Field(default_factory=list)
+    updatedAt: datetime
+    metadataOnly: Literal[True] = True
+
+
+class DashboardCanonicalOperationalSelectedPacketDetailV1View(BaseModel):
+    """Canonical detail row; raw extensions and V1 action-result history never cross this read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    packetId: str
+    sourceRefs: list[AuthoritativePacketSourceRefView] = Field(default_factory=list)
+    canonicalContract: Literal[None] = None
+    productModeMapping: Literal[None] = None
+    evidenceRefs: list[str] = Field(default_factory=list)
+    currentStage: AuthoritativePacketStage
+    status: AuthoritativePacketStatus
+    truthLabel: PipelineProjectionSourceLabelV0
+    blocker: str | None = None
+    nextAction: str | None = None
+    unblocker: PipelinePacketUnblockerV0 = "unknown"
+    readyToTest: WorkPacketReadyToTestV0View | None = None
+    latestTransitionEventRef: str | None = None
+    recentTransitionEventRefs: list[str] = Field(default_factory=list)
+    latestMovementSummary: str | None = None
+    canSatisfyLiveMovementProof: bool = False
+    parentPacketId: str | None = None
+    lineageKind: str = "root"
+    operatorTestState: Literal["not_ready", "ready", "passed", "failed", "rework"] = "not_ready"
+    operatorTestNote: str | None = None
+    actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    actionCapabilitiesV1: list[OperationalActionCapabilityV1] = Field(default_factory=list)
+    actionResults: list[OperationalActionResultView] = Field(default_factory=list)
+    reviewRoute: PipelineReviewRouteEvidenceV0View
+    workGraph: DashboardCanonicalWorkGraphEvidenceV1View
+    workItemId: str | None = None
+    queueLease: PipelineQueueLeaseV0View | None = None
+    executionAttempts: list[PipelineExecutionAttemptLineageV0View] = Field(default_factory=list)
+    correlationIds: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
+class DashboardCanonicalOperationalProjectionV1View(BaseModel):
+    """Versioned dashboard board read; nested V0-labelled compatibility values are explicit temporary holds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["dashboard-canonical-operational-projection/v1"] = "dashboard-canonical-operational-projection/v1"
+    projectionId: str
+    generatedAt: datetime
+    sourceUpdatedAt: datetime
+    sourceLabel: PipelineProjectionSourceLabelV0
+    freshnessState: PipelineProjectionFreshnessStateV0
+    staleAfterSeconds: int
+    backendReachability: PipelineBackendReachabilityV0View
+    fixtureMode: PipelineFixtureModeV0View
+    truthSummary: PipelineTruthSummaryV0View
+    stageSummaries: list[PipelineStageSummaryV0View] = Field(default_factory=list)
+    sourceStates: list[PipelineSourceStateV0View] = Field(default_factory=list)
+    workPackets: list[DashboardCanonicalOperationalWorkPacketV1View] = Field(default_factory=list)
+    selectedPacketDetails: list[DashboardCanonicalOperationalSelectedPacketDetailV1View] = Field(default_factory=list)
+    managerSummary: PipelineManagerSummaryV0View
+    activeManagerLaneClarity: PipelineActiveManagerLaneClarityV0View | None = None
+    coordinationHealth: "PipelineCoordinationHealthV0View | None" = None
+    workerSummary: PipelineWorkerSummaryV0View
+    reliabilityProblems: list[PipelineReliabilityProblemV0View] = Field(default_factory=list)
+    gatedControls: list[PipelineGatedControlV0View] = Field(default_factory=list)
+    runtimeReadiness: PipelineRuntimeReadinessV0View
+    actionCapabilities: list[OperationalActionCapabilityView] = Field(default_factory=list)
+    actionCapabilitiesV1: list[OperationalActionCapabilityV1] = Field(default_factory=list)
+    executeAdmission: PipelineExecuteAdmissionV0View
+    queueSummary: PipelineQueueSummaryV0View
+    evidenceRefs: list[str] = Field(default_factory=list)
+
+
+class DashboardCanonicalOperationalProjectionApiEnvelope(BaseModel):
+    """Typed response boundary for the dashboard-owned operational board read."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: DashboardCanonicalOperationalProjectionV1View
+    meta: dict[str, Any] | None = None
+
+
 class WorkPacketRouteSummaryV0View(BaseModel):
     recommendation: str
     confidenceScore: float | None = None

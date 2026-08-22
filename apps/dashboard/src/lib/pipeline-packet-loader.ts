@@ -1,11 +1,11 @@
-import type { PipelineDashboardProjectionV0, PipelineOperationalActionResultV0 } from "@kendall/contracts";
+import type { PipelineOperationalActionResultV0 } from "@kendall/contracts";
 import type {
   DashboardCanonicalOperationalProjectionTruthV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
 
 import {
-  getPipelineDashboardProjection,
+  getDashboardCanonicalOperationalProjection,
   getWorkPacket,
   getWorkPackets,
   type DashboardCanonicalPresentationV1,
@@ -61,7 +61,7 @@ async function readWorkPacket(packetId: CanonicalRuntimePacketId) {
 }
 
 async function readPipelineDashboardProjection() {
-  return getPipelineDashboardProjection();
+  return getDashboardCanonicalOperationalProjection();
 }
 
 export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacketLoad> {
@@ -162,7 +162,7 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
   }
 }
 
-function clientSafeOperationalTruth(projection: PipelineDashboardProjectionV0): DashboardCanonicalOperationalProjectionTruthV1 {
+function clientSafeOperationalTruth(projection: DashboardCanonicalOperationalProjectionV1): DashboardCanonicalOperationalProjectionTruthV1 {
   return {
     schemaVersion: "dashboard-canonical-operational-projection/v1",
     sourceUpdatedAt: projection.sourceUpdatedAt,
@@ -191,7 +191,7 @@ function clientSafeOperationalTruth(projection: PipelineDashboardProjectionV0): 
  * contracts or mode mappings (including any permissive upstream extension
  * keys) over this boundary.
  */
-function clientSafeOperationalProjection(projection: PipelineDashboardProjectionV0): DashboardCanonicalOperationalProjectionV1 {
+function clientSafeOperationalProjection(projection: DashboardCanonicalOperationalProjectionV1): DashboardCanonicalOperationalProjectionV1 {
   return clientSafeProjectionMetadata({
     schemaVersion: "dashboard-canonical-operational-projection/v1",
     projectionId: projection.projectionId,
@@ -275,7 +275,7 @@ function clientSafeOperationalProjection(projection: PipelineDashboardProjection
 
 /** Build the independent dashboard V1 graph shape; never pass the V0 object through. */
 function clientSafeWorkGraph(
-  workGraph: PipelineDashboardProjectionV0["selectedPacketDetails"][number]["workGraph"] | undefined,
+  workGraph: DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number]["workGraph"] | undefined,
   packetId: string,
 ): DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number]["workGraph"] {
   if (!workGraph) {
@@ -380,7 +380,7 @@ function clientSafeActionContext<T>(context: T): T {
   return Object.fromEntries(keys.map((key) => [key, record[key]])) as T;
 }
 
-type V1ActionCapability = NonNullable<PipelineDashboardProjectionV0["actionCapabilitiesV1"]>[number];
+type V1ActionCapability = NonNullable<DashboardCanonicalOperationalProjectionV1["actionCapabilitiesV1"]>[number];
 
 function clientSafeActionCapabilitiesV1(capabilities: readonly V1ActionCapability[] | undefined): V1ActionCapability[] | undefined {
   return capabilities?.map((capability) => ({
@@ -405,7 +405,7 @@ function clientSafeActionCapabilitiesV1(capabilities: readonly V1ActionCapabilit
   })) as V1ActionCapability[];
 }
 
-function clientSafeRuntimeReadiness<T extends NonNullable<PipelineDashboardProjectionV0["runtimeReadiness"]> | undefined>(readiness: T): T {
+function clientSafeRuntimeReadiness<T extends NonNullable<DashboardCanonicalOperationalProjectionV1["runtimeReadiness"]> | undefined>(readiness: T): T {
   if (!readiness) return readiness;
   return {
     schemaVersion: readiness.schemaVersion,
@@ -440,7 +440,7 @@ function clientSafeRuntimeReadiness<T extends NonNullable<PipelineDashboardProje
   } as T;
 }
 
-type LegacyActionCapability = NonNullable<PipelineDashboardProjectionV0["actionCapabilities"]>[number];
+type LegacyActionCapability = NonNullable<DashboardCanonicalOperationalProjectionV1["actionCapabilities"]>[number];
 type LegacyActionResult = PipelineOperationalActionResultV0;
 
 function clientSafeLegacyActionCapabilities(capabilities: readonly LegacyActionCapability[] | undefined): LegacyActionCapability[] | undefined {
@@ -577,7 +577,7 @@ function toCanonicalRuntimePacketId(packetId: unknown): CanonicalRuntimePacketId
     : null;
 }
 
-function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null, mode: "list" | "detail"): { kind: "invalid" | "unavailable"; summary: string } | null {
+function runtimeProjectionError(projection: DashboardCanonicalOperationalProjectionV1 | null, mode: "list" | "detail"): { kind: "invalid" | "unavailable"; summary: string } | null {
   if (!hasProjectionProofShape(projection)) {
     return { kind: "invalid", summary: "Supervisor projection is missing or malformed; no runtime or demo packets are shown." };
   }
@@ -609,7 +609,7 @@ function runtimeProjectionError(projection: PipelineDashboardProjectionV0 | null
   return null;
 }
 
-function staleRuntimeContradiction(projection: PipelineDashboardProjectionV0): string | null {
+function staleRuntimeContradiction(projection: DashboardCanonicalOperationalProjectionV1): string | null {
   if (!canonicalStaleProjectionTruth(projection)) {
     return "Supervisor projection stale state is contradictory.";
   }
@@ -622,7 +622,7 @@ function staleRuntimeContradiction(projection: PipelineDashboardProjectionV0): s
   return null;
 }
 
-function projectionFreshnessState(projection: PipelineDashboardProjectionV0): { kind: "invalid" | "stale"; summary: string } | null {
+function projectionFreshnessState(projection: DashboardCanonicalOperationalProjectionV1): { kind: "invalid" | "stale"; summary: string } | null {
   const generatedAt = Date.parse(projection.generatedAt);
   const sourceUpdatedAt = Date.parse(projection.sourceUpdatedAt);
   if (!Number.isFinite(generatedAt) || !Number.isFinite(sourceUpdatedAt) || !Number.isFinite(projection.staleAfterSeconds) || projection.staleAfterSeconds <= 0) {
@@ -644,7 +644,7 @@ function projectionFreshnessState(projection: PipelineDashboardProjectionV0): { 
   return null;
 }
 
-function canonicalStaleProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
+function canonicalStaleProjectionTruth(projection: DashboardCanonicalOperationalProjectionV1): boolean {
   return projection.sourceLabel === "stale" &&
     projection.freshnessState === "stale" &&
     projection.truthSummary.label === "stale" &&
@@ -657,7 +657,7 @@ function canonicalStaleProjectionTruth(projection: PipelineDashboardProjectionV0
     projection.fixtureMode.canSatisfyLiveProof === false;
 }
 
-function canonicalLiveProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
+function canonicalLiveProjectionTruth(projection: DashboardCanonicalOperationalProjectionV1): boolean {
   return projection.sourceLabel === "live" &&
     projection.freshnessState === "live" &&
     projection.truthSummary.label === "live" &&
@@ -669,7 +669,7 @@ function canonicalLiveProjectionTruth(projection: PipelineDashboardProjectionV0)
     projection.fixtureMode.canSatisfyLiveProof === false;
 }
 
-function emptyRuntimeContradiction(projection: PipelineDashboardProjectionV0 | null): string | null {
+function emptyRuntimeContradiction(projection: DashboardCanonicalOperationalProjectionV1 | null): string | null {
   if (!projection) {
     return "Supervisor WorkPacket list returned zero rows without a canonical live projection.";
   }
@@ -700,7 +700,7 @@ function emptyRuntimeContradiction(projection: PipelineDashboardProjectionV0 | n
   return null;
 }
 
-function emptyRuntimeSummary(projection: PipelineDashboardProjectionV0 | null): string {
+function emptyRuntimeSummary(projection: DashboardCanonicalOperationalProjectionV1 | null): string {
   if (!projection) {
     return "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted.";
   }
@@ -711,7 +711,7 @@ function emptyRuntimeSummary(projection: PipelineDashboardProjectionV0 | null): 
   return "Supervisor returned zero persisted WorkPacketV0 rows; no demo packets are substituted.";
 }
 
-function emptyRuntimeReasonContradiction(projection: PipelineDashboardProjectionV0): string | null {
+function emptyRuntimeReasonContradiction(projection: DashboardCanonicalOperationalProjectionV1): string | null {
   const truthReason = canonicalEmptyReason(projection.truthSummary.emptyReason);
   const queueReason = canonicalEmptyReason(projection.queueSummary.emptyReason);
   const effectiveReason = truthReason ?? queueReason;
@@ -724,11 +724,11 @@ function emptyRuntimeReasonContradiction(projection: PipelineDashboardProjection
   return null;
 }
 
-function canonicalEmptyReason(value: PipelineDashboardProjectionV0["truthSummary"]["emptyReason"]): string | null {
+function canonicalEmptyReason(value: DashboardCanonicalOperationalProjectionV1["truthSummary"]["emptyReason"]): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function canonicalEmptyProjectionTruth(projection: PipelineDashboardProjectionV0): boolean {
+function canonicalEmptyProjectionTruth(projection: DashboardCanonicalOperationalProjectionV1): boolean {
   return projection.sourceLabel === "live" &&
     projection.freshnessState === "live" &&
     projection.truthSummary.label === "live" &&
@@ -741,7 +741,7 @@ function canonicalEmptyProjectionTruth(projection: PipelineDashboardProjectionV0
     projection.fixtureMode.canSatisfyLiveProof === false;
 }
 
-function populatedRuntimeContradiction(projection: PipelineDashboardProjectionV0 | null, packetIds: readonly string[]): string | null {
+function populatedRuntimeContradiction(projection: DashboardCanonicalOperationalProjectionV1 | null, packetIds: readonly string[]): string | null {
   if (!projection) {
     return "Supervisor returned packets without a canonical live projection.";
   }
@@ -754,7 +754,7 @@ function populatedRuntimeContradiction(projection: PipelineDashboardProjectionV0
   return packetIdentityContradiction(projection, packetIds);
 }
 
-function packetIdentityContradiction(projection: PipelineDashboardProjectionV0, packetIds: readonly string[]): string | null {
+function packetIdentityContradiction(projection: DashboardCanonicalOperationalProjectionV1, packetIds: readonly string[]): string | null {
   const invalidPacketId = packetIds.find((packetId) => !toCanonicalRuntimePacketId(packetId));
   if (invalidPacketId) {
     return `Supervisor returned malformed runtime packet identity ${invalidPacketId}.`;
@@ -793,10 +793,10 @@ function packetIdentityContradiction(projection: PipelineDashboardProjectionV0, 
   return null;
 }
 
-function hasProjectionProofShape(projection: unknown): projection is PipelineDashboardProjectionV0 {
+function hasProjectionProofShape(projection: unknown): projection is DashboardCanonicalOperationalProjectionV1 {
   try {
     if (!projection || typeof projection !== "object") return false;
-    const candidate = projection as Partial<PipelineDashboardProjectionV0>;
+    const candidate = projection as Partial<DashboardCanonicalOperationalProjectionV1>;
     if (!candidate.truthSummary || typeof candidate.truthSummary !== "object") return false;
     if (!candidate.backendReachability || typeof candidate.backendReachability !== "object") return false;
     if (!candidate.fixtureMode || typeof candidate.fixtureMode !== "object") return false;
@@ -809,7 +809,7 @@ function hasProjectionProofShape(projection: unknown): projection is PipelineDas
   }
 }
 
-function projectionQueuePacketCount(projection: PipelineDashboardProjectionV0): number {
+function projectionQueuePacketCount(projection: DashboardCanonicalOperationalProjectionV1): number {
   const queueCounts = [
     projection.queueSummary.activeCount,
     projection.queueSummary.dispatchableCount,
@@ -835,7 +835,7 @@ function firstDuplicate(values: readonly string[]): string | null {
 }
 
 function detailProjectionContradiction(
-  projection: PipelineDashboardProjectionV0 | null,
+  projection: DashboardCanonicalOperationalProjectionV1 | null,
   packetId: CanonicalRuntimePacketId,
   canonicalPacket: DashboardCanonicalWorkPacketV1,
 ): string | null {
@@ -876,7 +876,7 @@ function detailProjectionContradiction(
   return null;
 }
 
-async function loadPipelineDashboardProjection(): Promise<{ projection: PipelineDashboardProjectionV0 | null; error: string | null }> {
+async function loadPipelineDashboardProjection(): Promise<{ projection: DashboardCanonicalOperationalProjectionV1 | null; error: string | null }> {
   try {
     const projection = await readPipelineDashboardProjection();
     if (!projection) {

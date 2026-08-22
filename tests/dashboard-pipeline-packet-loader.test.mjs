@@ -48,7 +48,7 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   const authoritativePacket = authoritativeWorkPacket();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => {
+    getDashboardCanonicalOperationalProjection: async () => {
       calls.push("projection");
       return runtimeProjection([authoritativePacket.packetId]);
     },
@@ -1249,6 +1249,53 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
   await assert.rejects(
     () => context.module.exports.getWorkPackets(),
     /Request timed out for \/pipeline-control-plane\/work-packets/,
+  );
+});
+
+test("canonical operational runtime requires the exact endpoint and rejects extension-bearing board rows", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const projection = runtimeProjection(["manager-source-authoritative-only"], {
+    schemaVersion: "dashboard-canonical-operational-projection/v1",
+  });
+  const calls = [];
+  const context = {
+    exports: {}, module: { exports: {} }, process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (value) => value, isPipelineDashboardProjection: () => true };
+      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+      if (specifier === "./dashboard-supervisor-transport") return {
+        requestSupervisorJson: async (path, options) => {
+          calls.push({ path, options });
+          return projection;
+        },
+      };
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  assert.equal((await context.module.exports.getDashboardCanonicalOperationalProjection()).schemaVersion, "dashboard-canonical-operational-projection/v1");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/pipeline-control-plane/canonical-operational-projection");
+  assert.equal(calls[0].options.timeoutMs, 10_000);
+  assert.equal(calls[0].options.rejectServerLanAuth, true);
+
+  projection.workPackets[0].rawProviderResponse = "must not cross the canonical board boundary";
+  await assert.rejects(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    /Invalid canonical operational projection payload/,
+  );
+  delete projection.workPackets[0].rawProviderResponse;
+  projection.workPackets[0].canonicalContract = { source: "must remain null" };
+  await assert.rejects(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    /Invalid canonical operational projection payload/,
   );
 });
 
@@ -3122,6 +3169,13 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
     issuePipelineOperationalApproval: async () => { throw new Error("operational approvals are outside this proof"); },
     ...supervisorOverrides,
   };
+  // Existing focused fixtures predate the canonical operational endpoint.
+  // Keep their V0-shaped values as test data only; production loader code
+  // imports and invokes the new canonical runtime function exclusively.
+  if (typeof supervisor.getDashboardCanonicalOperationalProjection !== "function"
+    && typeof supervisor.getPipelineDashboardProjection === "function") {
+    supervisor.getDashboardCanonicalOperationalProjection = supervisor.getPipelineDashboardProjection;
+  }
   let projectorModule;
   const context = {
     exports: {},
