@@ -1343,6 +1343,10 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
   );
   projection.activeManagerLaneClarity.goal.sourceRef = "requirement:lane-clarity";
 
+  projection.activeManagerLaneClarity.goal.sourceRef = "requirement:token-rotation";
+  await assert.doesNotReject(() => context.module.exports.getDashboardCanonicalOperationalProjection());
+  projection.activeManagerLaneClarity.goal.sourceRef = "requirement:lane-clarity";
+
   projection.workPackets[0].rawProviderResponse = "must not cross the canonical board boundary";
   await assert.rejects(
     () => context.module.exports.getDashboardCanonicalOperationalProjection(),

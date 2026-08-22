@@ -821,7 +821,9 @@ function isSafeCanonicalLaneClarityRef(value: unknown): value is string {
     && value.length <= 255
     && !LANE_CLARITY_CONTROL_CHARACTER_RE.test(value)
     && !UNSAFE_LIFECYCLE_TEXT_RE.test(value)
-    && !UNSAFE_LANE_CLARITY_TEXT_RE.test(value)
+    // References use the supervisor's metadata-reference contract, not the
+    // stricter free-text contract. For example, requirement:token-rotation is
+    // an opaque semantic ref, not credential material.
     && (!TOKEN_LIKE_LANE_CLARITY_VALUE_RE.test(value) || MANAGER_SOURCE_LANE_CLARITY_REF_RE.test(value))
     && !LANE_CLARITY_PEM_OR_HIGH_ENTROPY_RE.test(value)
     && (!value.toLowerCase().startsWith("manager-source-") || MANAGER_SOURCE_LANE_CLARITY_REF_RE.test(value))

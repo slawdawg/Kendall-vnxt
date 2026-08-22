@@ -302,6 +302,52 @@ function redactCanonicalOperationalProjectionResponse(body) {
   return redactPipelineProjectionResponse(body, { includeActionResultsV1: false });
 }
 
+/** Rebuild the compact V1 Lane Clarity DTO; the generic projection scrubber has no nested schema for it. */
+function redactCanonicalManagerLaneClarity(clarity) {
+  const record = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const goal = record(clarity?.goal);
+  const posture = record(clarity?.posture);
+  const canonicalState = record(clarity?.canonicalState);
+  const nextGate = record(clarity?.nextGate);
+  if (!record(clarity) || !goal || !posture || !canonicalState || !nextGate
+    || typeof goal.summary !== "string" || typeof goal.sourceRef !== "string"
+    || typeof posture.state !== "string" || typeof posture.reason !== "string" || typeof posture.nextSafeAction !== "string"
+    || !(posture.decisionRef === null || typeof posture.decisionRef === "string")
+    || !(posture.qualification === null || typeof posture.qualification === "string")
+    || typeof canonicalState.phase !== "string" || typeof canonicalState.freshness !== "string" || typeof canonicalState.evidenceFreshness !== "string"
+    || typeof nextGate.summary !== "string" || typeof nextGate.nextSafeAction !== "string"
+    || !Array.isArray(clarity.criteria)
+    || !clarity.criteria.every((criterion) => {
+      const item = record(criterion);
+      return item && typeof item.criterionId === "string" && typeof item.summary === "string"
+        && typeof item.disposition === "string" && Array.isArray(item.evidenceRefs)
+        && item.evidenceRefs.every((ref) => typeof ref === "string");
+    })) return null;
+  const criteria = clarity.criteria.map((criterion) => ({
+    criterionId: criterion.criterionId,
+    summary: criterion.summary,
+    disposition: criterion.disposition,
+    evidenceRefs: criterion.evidenceRefs,
+  }));
+  return {
+    goal: { summary: goal.summary, sourceRef: goal.sourceRef },
+    posture: {
+      state: posture.state,
+      reason: posture.reason,
+      nextSafeAction: posture.nextSafeAction,
+      decisionRef: posture.decisionRef,
+      qualification: posture.qualification,
+    },
+    canonicalState: {
+      phase: canonicalState.phase,
+      freshness: canonicalState.freshness,
+      evidenceFreshness: canonicalState.evidenceFreshness,
+    },
+    nextGate: { summary: nextGate.summary, nextSafeAction: nextGate.nextSafeAction },
+    criteria,
+  };
+}
+
 function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true } = {}) {
   let payload;
   try {
@@ -369,7 +415,7 @@ function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true 
     : detail;
   const redact = (projection) => {
     if (!projection || typeof projection !== "object" || Array.isArray(projection)) return { state: "unavailable" };
-    return redactNestedProjectionMetadata({
+    const safeProjection = redactNestedProjectionMetadata({
       schemaVersion: projection.schemaVersion,
       projectionId: projection.projectionId,
       generatedAt: projection.generatedAt,
@@ -385,7 +431,8 @@ function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true 
       workPackets: Array.isArray(projection.workPackets) ? projection.workPackets.map(redactWorkPacket) : projection.workPackets,
       selectedPacketDetails: Array.isArray(projection.selectedPacketDetails) ? projection.selectedPacketDetails.map(redactSelectedPacketDetail) : projection.selectedPacketDetails,
       managerSummary: projection.managerSummary,
-      activeManagerLaneClarity: projection.activeManagerLaneClarity,
+      // Reinserted below by the dedicated strict V1 DTO reconstruction.
+      activeManagerLaneClarity: null,
       coordinationHealth: projection.coordinationHealth,
       workerSummary: projection.workerSummary,
       reliabilityProblems: projection.reliabilityProblems,
@@ -397,6 +444,10 @@ function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true 
       queueSummary: projection.queueSummary,
       evidenceRefs: projection.evidenceRefs,
     });
+    return {
+      ...safeProjection,
+      activeManagerLaneClarity: redactCanonicalManagerLaneClarity(projection.activeManagerLaneClarity),
+    };
   };
   const safePayload = payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
     ? { data: redact(payload.data) }
