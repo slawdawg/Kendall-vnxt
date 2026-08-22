@@ -1885,6 +1885,13 @@ test("canonical dashboard presentation rejects unknown root and nested fields be
   const accepted = loader.__projectCanonicalPresentationsForTest([presentation]);
   assert.equal(accepted.kind, "runtime");
   assert.equal(accepted.packets[0].schemaVersion, "dashboard-canonical-presentation/v1");
+  assert.equal(accepted.packets[0].packetId, packet.packetId);
+  assert.equal(accepted.packets[0].executionAttempts.length, 0);
+  assert.equal(accepted.packets[0].humanGateActions.length, 0);
+  assert.equal(Object.hasOwn(accepted.packets[0], "candidateWork"), false);
+  assert.equal(Object.hasOwn(accepted.packets[0], "memoryProposals"), false);
+  assert.equal(Object.hasOwn(accepted.packets[0], "artifactRefs"), false);
+  assert.equal(Object.hasOwn(accepted.packets[0], "humanGateActionRequests"), false);
 
   const unknownRoot = loader.__projectCanonicalPresentationsForTest([{ ...presentation, rawProviderResponse: "server-only" }]);
   assert.equal(unknownRoot.kind, "invalid");

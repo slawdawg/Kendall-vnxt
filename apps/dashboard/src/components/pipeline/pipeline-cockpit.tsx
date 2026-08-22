@@ -13,7 +13,7 @@ import type {
 } from "@kendall/contracts";
 import {
   projectDashboardCanonicalPresentationsToCockpitPackets,
-  type PipelineDashboardPacket,
+  type PipelineCanonicalPresentationPacketV1,
 } from "../../lib/pipeline-supervisor-projector";
 import {
   projectionDisplayLabels,
@@ -55,7 +55,45 @@ import type {
   DashboardCanonicalOperationalProjectionV1,
 } from "../../lib/pipeline/canonical-operational-projection";
 
-type PipelineFixturePacket = PipelineDashboardPacket;
+/** Demo fixtures retain the legacy packet model; normal runtime uses this canonical packet DTO. */
+type PipelineCockpitPacket = {
+  packetId: string;
+  title: string;
+  requestedOutcome: string;
+  currentStage: PipelineStage;
+  currentOwner: string;
+  status: "active" | "waiting" | "blocked" | "failed" | "complete" | "deferred";
+  riskLevel: "low" | "medium" | "high";
+  priority: "low" | "normal" | "high" | "urgent";
+  sourceRefs: Array<{ refId: string; sourceType: string; freshness: string; accessState: string; pathOrUrl?: string | null; canonical?: boolean; summaryOnly?: boolean; blockedReason?: string | null }>;
+  evidenceRefs: Array<{ refId: string }>;
+  executionAttempts: Array<{ attemptId: string; authorityMode: string; workerId: string; status: string; evidenceRefs: string[] }>;
+  humanGateActions: Array<{ label: string }>;
+  laneCards: Array<{ laneId: string; label: string; status: string; summary: string; currentOwner?: string | null; evidenceRefs: string[] }>;
+  fixtureId?: string;
+  fixtureKind?: string;
+  sourceKind?: "supervisor-runtime" | "demo-fixture" | "projection";
+  sourceId?: string;
+  fixtureLabel: string;
+  summary: string;
+  nextAction: string;
+  confidenceLabel: string;
+  freshnessLabel: string;
+  sourceTrustState: string;
+  sourceTrustStates: string[];
+  sourceTrustSummary: string;
+  lastEvent: string;
+  matrixRowIds: string[];
+  lifecycleState: unknown;
+  routeSummary?: null | { recommendation?: string | null; confidenceScore?: number | null; confidenceBand?: string | null; reasonCodes?: string[] | null };
+  routeFork: { selectedRoute: string; rejectedRoutes: string[]; tags: string[]; sourceContext: string; lowConfidenceActions: string[] };
+  riskFlags: string[];
+  activeBoardCard?: PipelineCompactPacketCard;
+};
+
+type PipelineFixturePacket = PipelineCockpitPacket;
+/** The normal path reaches this component only through the canonical presentation projector below. */
+type PipelineCanonicalCockpitPacket = PipelineCanonicalPresentationPacketV1 & PipelineCockpitPacket;
 
 const pipelineStages: PipelineStage[] = [
   "capture",
@@ -109,9 +147,7 @@ type CockpitStageSummary = {
 type ProjectionSelectedPacketDetail = DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number];
 type ActiveManagerLaneClarity = NonNullable<DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"]>;
 type PipelineCoordinationHealth = NonNullable<DashboardCanonicalOperationalProjectionV1["coordinationHealth"]>;
-type ActiveBoardCockpitPacket = PipelineFixturePacket & {
-  activeBoardCard?: PipelineCompactPacketCard;
-};
+type ActiveBoardCockpitPacket = PipelineCockpitPacket;
 
 export function PipelineCockpit({
   fixtureMode,
@@ -128,7 +164,7 @@ export function PipelineCockpit({
   managerExecutionLane?: PipelineManagerExecutionLaneState | null;
   /** Fixed test_viewer sessions can inspect truth but never receive action affordances. */
   readOnly?: boolean;
-  /** Client-safe canonical runtime rows; this boundary owns the temporary V0 adapter. */
+  /** Client-safe canonical runtime rows; this boundary owns the canonical presentation projector. */
   canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
   /** Versioned canonical truth for action gating. */
   operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
@@ -139,12 +175,14 @@ export function PipelineCockpit({
   projectionError?: string | null;
   selectedPacket?: PipelineFixturePacket | null;
 }) {
-  const presentationPackets = useMemo(() => {
+  const presentationPackets = useMemo<PipelineCockpitPacket[]>(() => {
     if (!canonicalPackets) return packets ?? [];
     const canonicalPresentation = projectDashboardCanonicalPresentationsToCockpitPackets(
       canonicalPackets.map((packet) => packet.presentation),
     );
-    return canonicalPresentation.kind === "runtime" ? canonicalPresentation.packets : [];
+    return canonicalPresentation.kind === "runtime"
+      ? canonicalPresentation.packets as PipelineCanonicalCockpitPacket[]
+      : [];
   }, [canonicalPackets, packets]);
   const [selectedItem, setSelectedItem] = useState<SelectedMapItem>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1193,10 +1231,6 @@ function projectionToCockpitPackets(
       },
       riskLevel: packet.status === "blocked" || packet.status === "failed" ? "medium" : "low",
       priority: packet.status === "blocked" || currentStage === "human_gate" ? "high" : "normal",
-      candidateWork: null,
-      workItem: null,
-      taskPacket: null,
-      routingPreview: null,
       routeSummary: {
         recommendation: currentStage,
         confidenceScore: packetIsLive ? 0.86 : 0.42,
@@ -1204,18 +1238,10 @@ function projectionToCockpitPackets(
         reasonCodes: [packetSourceLabel, packetFreshness],
       },
       executionAttempts: [],
-      transitionEvents: [],
       sourceRefs,
       evidenceRefs,
-      artifactRefs: [],
       humanGateActions: [],
-      humanGateActionRequests: [],
       laneCards: [],
-      memoryProposals: [],
-      alphaMemorySourceStatus: null,
-      reviewSummaries: [],
-      recoveryActions: [],
-      loopStopStates: [],
       fixtureId: `projection:${packet.packetId}`,
       sourceKind: "projection" as const,
       sourceId: packet.packetId,
@@ -1241,13 +1267,6 @@ function projectionToCockpitPackets(
       lastEvent: detail?.latestMovementSummary ?? `projection updated ${packet.updatedAt}`,
       riskFlags: packetIsLive ? [] : [packetSourceLabel, packetFreshness],
       matrixRowIds: [],
-      humanGateFixtureEvents: [],
-      recoveryFixtureEvents: [],
-      actionGuardFixtures: [],
-      localModelHealth: null,
-      hermesJob: null,
-      codexWorker: null,
-      claudeReview: null,
       activeBoardCard: activeBoardCardByPacketId.get(card.packetId),
     } satisfies ActiveBoardCockpitPacket;
   });
@@ -1341,10 +1360,6 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     },
     riskLevel: packet.status === "blocked" || packet.status === "failed" ? "medium" : "low",
     priority: packet.status === "blocked" || packet.status === "failed" ? "high" : "normal",
-    candidateWork: null,
-    workItem: null,
-    taskPacket: null,
-    routingPreview: null,
     routeSummary: {
       recommendation: stage,
       confidenceScore: 0.42,
@@ -1352,18 +1367,10 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
       reasonCodes: [sourceLabel, freshnessState, "detail-only"],
     },
     executionAttempts: [],
-    transitionEvents: [],
     sourceRefs,
     evidenceRefs,
-    artifactRefs: [],
     humanGateActions: [],
-    humanGateActionRequests: [],
     laneCards: [],
-    memoryProposals: [],
-    alphaMemorySourceStatus: null,
-    reviewSummaries: [],
-    recoveryActions: [],
-    loopStopStates: [],
     fixtureId: `projection-detail:${packet.packetId}`,
     sourceKind: "projection" as const,
     sourceId: packet.packetId,
@@ -1387,13 +1394,6 @@ function projectionWorkPacketToDetailOnlyCockpitPacket(
     lastEvent: detail?.latestMovementSummary ?? `projection updated ${packet.updatedAt}`,
     riskFlags: sourceLabel === "live" && freshnessState === "live" ? ["detail-only"] : ["detail-only", sourceLabel, freshnessState],
     matrixRowIds: [],
-    humanGateFixtureEvents: [],
-    recoveryFixtureEvents: [],
-    actionGuardFixtures: [],
-    localModelHealth: null,
-    hermesJob: null,
-    codexWorker: null,
-    claudeReview: null,
     activeBoardCard: undefined,
   };
 }
