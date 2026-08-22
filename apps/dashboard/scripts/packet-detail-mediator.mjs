@@ -10,8 +10,9 @@ const DENIED_BODY = JSON.stringify({ state: "sign_in_required" });
 const UNAVAILABLE_BODY = JSON.stringify({ state: "unavailable", message: "Attestation readback unavailable" });
 const UNSAFE_METADATA_TEXT = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
 const EXECUTABLE_METADATA_TEXT = /\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b/i;
-const PACKET_DETAIL_LEGACY_PACKET_KEYS = ["packetId", "title", "currentStage", "status", "truthLabel", "evidence"];
-const PACKET_DETAIL_CURRENT_PACKET_KEYS = [...PACKET_DETAIL_LEGACY_PACKET_KEYS, "workGraph"];
+const CANONICAL_LAN_PACKET_DETAIL_SCHEMA = "dashboard-canonical-lan-packet-detail/v1";
+const CANONICAL_LAN_PACKET_KEYS = ["presentation", "evidence", "workGraph"];
+const CANONICAL_LAN_PRESENTATION_KEYS = ["schemaVersion", "packetId", "title", "requestedOutcome", "currentStage", "currentOwner", "status", "truthLabel", "currentEventId", "createdAt", "updatedAt", "metadataOnly", "rawPayloadRetained"];
 const PACKET_DETAIL_EVIDENCE_KEYS = ["schemaVersion", "evidenceClass", "checkedAt", "expiresAt", "freshnessState", "effectiveDecision", "typedBlockers"];
 const UTC_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/;
 
@@ -50,29 +51,6 @@ function parseCanonicalUtcTimestamp(value) {
   return timestamp * 1_000 + Number((match[2] || "").padEnd(6, "0"));
 }
 
-function unavailableWorkGraph(packetId) {
-  return {
-    schemaVersion: "parallel-work-graph-evidence/v0",
-    sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
-    availability: "unavailable",
-    packetId,
-    executionJobId: null,
-    reportIdentity: null,
-    generatedAt: null,
-    freshnessState: "unavailable",
-    waveMembership: "unavailable",
-    dependencyState: "unavailable",
-    reservation: { status: "unavailable", owner: null, reasonCode: "parallel_report_unavailable" },
-    capacity: { posture: "unavailable", reasonCode: "parallel_capacity_unavailable" },
-    reason: "Parallel work graph evidence is unavailable.",
-    nextSafeAction: "Inspect the authoritative packet lifecycle before relying on work graph evidence.",
-    evidenceRefs: [],
-    metadataOnly: true,
-    rawPayloadRetained: false,
-    retention: "metadata_only_evidence_references",
-  };
-}
-
 function isSafePacketEvidence(evidence) {
   if (evidence === null) return true;
   if (!hasExactKeys(evidence, PACKET_DETAIL_EVIDENCE_KEYS)) return false;
@@ -93,33 +71,35 @@ function isSafePacketEvidence(evidence) {
     && evidence.typedBlockers.every(isSafeReference);
 }
 
-function isSafePacketDetailPacket(packet, packetId, keys) {
-  return hasExactKeys(packet, keys)
-    && packet.packetId === packetId
-    && isSafeMetadataText(packet.title, 240)
-    && isSafeReference(packet.currentStage)
-    && isSafeReference(packet.status)
-    && isSafeReference(packet.truthLabel)
-    && isSafePacketEvidence(packet.evidence);
+function isSafeCanonicalLanPresentation(presentation, packetId) {
+  if (!hasExactKeys(presentation, CANONICAL_LAN_PRESENTATION_KEYS)) return false;
+  return presentation.schemaVersion === "dashboard-canonical-lan-packet-presentation/v1"
+    && presentation.packetId === packetId
+    && isSafeMetadataText(presentation.title, 240)
+    && isSafeMetadataText(presentation.requestedOutcome, 500)
+    && ["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"].includes(presentation.currentStage)
+    && ["kendall", "operator", "blocked"].includes(presentation.currentOwner)
+    && ["active", "waiting", "blocked", "failed", "complete", "deferred"].includes(presentation.status)
+    && ["source_owned", "derived_projection", "operator_asserted"].includes(presentation.truthLabel)
+    && isSafeReference(presentation.currentEventId)
+    && parseCanonicalUtcTimestamp(presentation.createdAt) !== null
+    && parseCanonicalUtcTimestamp(presentation.updatedAt) !== null
+    && presentation.metadataOnly === true
+    && presentation.rawPayloadRetained === false;
 }
 
-function normalizeLegacyPacketDetailPayload(payload, packetId) {
-  if (
-    !hasExactKeys(payload, ["schemaVersion", "state", "packet"])
-    || payload.schemaVersion !== "kendall-authenticated-packet-detail/v1"
-    || payload.state !== "available"
-    || !isSafePacketDetailPacket(payload.packet, packetId, PACKET_DETAIL_LEGACY_PACKET_KEYS)
-  ) {
-    return payload;
-  }
-  return { ...payload, packet: { ...payload.packet, workGraph: unavailableWorkGraph(packetId) } };
+function isSafeCanonicalLanPacket(packet, packetId) {
+  return hasExactKeys(packet, CANONICAL_LAN_PACKET_KEYS)
+    && isSafeCanonicalLanPresentation(packet.presentation, packetId)
+    && isSafePacketEvidence(packet.evidence)
+    && isSafeWorkGraph(packet.workGraph, packetId, "dashboard-canonical-work-graph/v1");
 }
 
-function isSafeWorkGraph(graph, packetId) {
+function isSafeWorkGraph(graph, packetId, expectedSchemaVersion = "parallel-work-graph-evidence/v0") {
   if (!graph || typeof graph !== "object" || Object.keys(graph).length !== 18 || !isSafeReference(packetId)) return false;
   const unavailable = graph.availability === "unavailable";
   return (
-    graph.schemaVersion === "parallel-work-graph-evidence/v0" &&
+    graph.schemaVersion === expectedSchemaVersion &&
     graph.sourceSchemaVersion === "parallel-execution-graph-reservation/v1" &&
     ["available", "stale", "unavailable"].includes(graph.availability) &&
     graph.packetId === packetId &&
@@ -188,7 +168,7 @@ export function createPacketDetailMediator({ supervisorUdsPath, expectedHost, ex
     inFlight += 1;
     try {
       const result = await requestSupervisor(supervisorUdsPath, parsed.packetId, request.headers.cookie, timeoutMs);
-      const payload = normalizeLegacyPacketDetailPayload(result.payload, parsed.packetId);
+      const payload = result.payload;
       // The supervisor validates the cookie before the packet read. Confirm it
       // again immediately before returning data so a concurrent test-viewer
       // revocation wins over an in-flight mediated response.
@@ -200,14 +180,13 @@ export function createPacketDetailMediator({ supervisorUdsPath, expectedHost, ex
       } else if (
         result.statusCode !== 200
         || !payload
-        || payload.schemaVersion !== "kendall-authenticated-packet-detail/v1"
         || !["available", "unavailable"].includes(payload.state)
         || (payload.state === "unavailable" && Object.keys(payload).length !== 2)
-        || (payload.state === "available" && (
+        || (payload.schemaVersion === CANONICAL_LAN_PACKET_DETAIL_SCHEMA && payload.state === "available" && (
           !hasExactKeys(payload, ["schemaVersion", "state", "packet"])
-          || !isSafePacketDetailPacket(payload.packet, parsed.packetId, PACKET_DETAIL_CURRENT_PACKET_KEYS)
-          || !isSafeWorkGraph(payload.packet.workGraph, parsed.packetId)
+          || !isSafeCanonicalLanPacket(payload.packet, parsed.packetId)
         ))
+        || payload.schemaVersion !== CANONICAL_LAN_PACKET_DETAIL_SCHEMA
       ) {
         sendJson(response, 503, UNAVAILABLE_BODY);
       } else {

@@ -24,7 +24,7 @@ test.describe("Epic 26 real Next LAN pipeline path", () => {
     expect(supervisorRequests).toEqual(expect.arrayContaining(["/api/supervisor/pipeline-control-plane/projection", "/api/supervisor/pipeline-control-plane/work-packets"]));
 
     await page.goto(`${harness.origin}/pipeline/packets/packet-1`);
-    await expect(page.getByRole("heading", { name: "Packet 1 detail" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Packet detail: Packet 1 detail" })).toBeVisible();
     await expect(page.getByText("Authenticated Packet Detail")).toBeVisible();
     await expect(page.getByText("hold")).toBeVisible();
   });

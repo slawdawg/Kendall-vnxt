@@ -15,6 +15,37 @@ function lanAddress() {
   throw new Error("No non-loopback IPv4 address is available for the real LAN runtime harness.");
 }
 
+function canonicalPacketDetail(packetId) {
+  return {
+    schemaVersion: "dashboard-canonical-lan-packet-detail/v1",
+    state: "available",
+    packet: {
+      presentation: {
+        schemaVersion: "dashboard-canonical-lan-packet-presentation/v1",
+        packetId,
+        title: "Packet 1 detail",
+        requestedOutcome: "Read the authenticated packet detail.",
+        currentStage: "shape",
+        currentOwner: "kendall",
+        status: "active",
+        truthLabel: "source_owned",
+        currentEventId: `event:${packetId}`,
+        createdAt: "2026-07-22T12:00:00.000Z",
+        updatedAt: "2026-07-22T12:00:00.000Z",
+        metadataOnly: true,
+        rawPayloadRetained: false,
+      },
+      evidence: { schemaVersion: "pipeline-epic-25-evidence-chain/v1", evidenceClass: "source_owned", checkedAt: "2026-07-22T12:00:00.000Z", expiresAt: "2026-07-22T12:05:00.000Z", freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] },
+      workGraph: {
+        schemaVersion: "dashboard-canonical-work-graph/v1", sourceSchemaVersion: "parallel-execution-graph-reservation/v1", availability: "unavailable", packetId,
+        executionJobId: null, reportIdentity: null, generatedAt: null, freshnessState: "unavailable", waveMembership: "unavailable", dependencyState: "unavailable",
+        reservation: { status: "unavailable", owner: null, reasonCode: "parallel_report_unavailable" }, capacity: { posture: "unavailable", reasonCode: "parallel_capacity_unavailable" },
+        reason: "Parallel work graph evidence is unavailable.", nextSafeAction: "Inspect the authoritative packet lifecycle before relying on work graph evidence.", evidenceRefs: [], metadataOnly: true, rawPayloadRetained: false, retention: "metadata_only_evidence_references",
+      },
+    },
+  };
+}
+
 export async function startEpic26NextLanHarness(port = 3103) {
   const host = lanAddress();
   const directory = mkdtempSync(join(tmpdir(), "kendall-epic26-next-lan-"));
@@ -57,7 +88,7 @@ export async function startEpic26NextLanHarness(port = 3103) {
     if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session") return json(401, { detail: "Sign-in required." });
     if (request.url === "/pipeline-control-plane/projection") return json(200, { data: {} });
     if (request.url === "/pipeline-control-plane/work-packets") return json(200, { data: [] });
-    if (request.url === "/internal/dashboard/packet-detail/packet-1") return json(200, { schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId: "packet-1", title: "Packet 1 detail", currentStage: "shaping", status: "ready", truthLabel: "integrated_local", evidence: { schemaVersion: "pipeline-epic-25-evidence-chain/v1", evidenceClass: "source_owned", checkedAt: "2026-07-22T12:00:00.000Z", expiresAt: "2026-07-22T12:05:00.000Z", freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] } } });
+    if (request.url === "/internal/dashboard/packet-detail/packet-1") return json(200, canonicalPacketDetail("packet-1"));
     return json(404, { detail: "Not found." });
   });
   await new Promise((resolve) => supervisor.listen(socketPath, resolve));
