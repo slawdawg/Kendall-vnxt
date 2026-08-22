@@ -347,8 +347,10 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         promoted_response = client.post(f"/candidate-work/{candidate_id}/promote")
         assert promoted_response.status_code == 200
         promoted = promoted_response.json()["data"]
-        work_item = promoted["workItem"]
         work_item_id = promoted["workItem"]["id"]
+        persisted_work_item_response = client.get(f"/work-items/{work_item_id}")
+        assert persisted_work_item_response.status_code == 200
+        work_item = persisted_work_item_response.json()["data"]
         persisted_refs_by_id = {ref["refId"]: ref for ref in work_item["metadata"]["workPacketSourceRefs"]}
         assert persisted_refs_by_id["source:malformed"]["accessState"] == "blocked"
         assert persisted_refs_by_id["source:malformed"]["summaryOnly"] is True
@@ -613,8 +615,10 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
             },
         )
         assert import_response.status_code == 200
-        candidate = import_response.json()["data"]
-        candidate_id = candidate["id"]
+        candidate_id = import_response.json()["data"]["id"]
+        listed_response = client.get("/candidate-work")
+        assert listed_response.status_code == 200
+        candidate = next(item for item in listed_response.json()["data"] if item["id"] == candidate_id)
         assert candidate["source"] == "obsidian"
         assert candidate["sourceArtifactPath"] == "00 Inbox/source-reconciliation.md"
         assert candidate["sourceArtifactType"] == "obsidian_metadata"
@@ -749,7 +753,10 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
         assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
         promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
         assert promote_response.status_code == 200
-        work_item = promote_response.json()["data"]["workItem"]
+        work_item_id = promote_response.json()["data"]["workItem"]["id"]
+        persisted_work_item_response = client.get(f"/work-items/{work_item_id}")
+        assert persisted_work_item_response.status_code == 200
+        work_item = persisted_work_item_response.json()["data"]
         assert work_item["source"] == f"candidate_work:{candidate_id}"
         assert work_item["metadata"]["source"] == "obsidian"
         assert work_item["metadata"]["sourceArtifactType"] == "obsidian_metadata"
