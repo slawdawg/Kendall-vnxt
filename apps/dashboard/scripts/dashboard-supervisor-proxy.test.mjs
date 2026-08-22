@@ -37,6 +37,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
       if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1" || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1" } })); return; }
       if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1", revision: 3 } })); return; }
       if (request.url === "/pipeline-control-plane/projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
+      if (request.url === "/pipeline-control-plane/canonical-operational-projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
       if (request.url === "/operator-views?scope=queue") { forwarded.push(request.url); response.end(JSON.stringify({ data: [] })); return; }
@@ -66,12 +67,20 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     assert.equal(projection.body.data.selectedPacketDetails[0].canonicalContract, null);
     assert.equal(projection.body.data.selectedPacketDetails[0].productModeMapping, null);
     assert.doesNotMatch(JSON.stringify(projection.body), /python-only extension/i);
+    const canonicalOperationalProjection = await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { headers: { cookie: "session=ok" } });
+    assert.equal(canonicalOperationalProjection.status, 200);
+    assert.equal(canonicalOperationalProjection.body.data.workPackets[0].canonicalContract, null);
+    assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body), /python-only extension/i);
+    assert.equal(canonicalOperationalProjection.body.data.selectedPacketDetails[0].actionResultsV1, undefined);
+    assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body), /raw action result history/i);
     const malformedCanonicalLookup = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet/extra", { headers: { cookie: "session=ok" } });
     assert.equal(malformedCanonicalLookup.status, 404);
     const canonicalMutation = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
     assert.equal(canonicalMutation.status, 405);
     const projectionMutation = await request(port, "/api/supervisor/pipeline-control-plane/projection", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
     assert.equal(projectionMutation.status, 405);
+    const canonicalProjectionMutation = await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(canonicalProjectionMutation.status, 405);
     const legacy = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok" } });
     assert.equal(legacy.status, 200);
     assert.deepEqual(legacy.body.data, [{ packetId: "legacy-packet-1" }]);
@@ -226,6 +235,7 @@ function projectionWithRawCanonicalExtensions() {
       canonicalContract: { extra: "python-only extension" },
       productModeMapping: { extra: "python-only extension" },
       rawProviderResponse: "python-only extension",
+      actionResultsV1: [{ summary: "raw action result history" }],
       sourceRef: { refId: "doc:packet", sourceType: "workflow", pathOrUrl: null, title: "Packet", contentSha256: null, rawProviderResponse: "python-only extension" },
     }],
     selectedPacketDetails: [{
@@ -310,6 +320,7 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     const port = dashboard.address().port;
     const headers = { cookie: "viewer=ok" };
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/memory-review", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", { headers })).status, 404);
@@ -322,6 +333,7 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", headers: { ...headers, origin: "https://dashboard.test" } })).status, 405);
     assert.deepEqual(forwarded, [
       { method: "GET", url: "/pipeline-control-plane/projection" },
+      { method: "GET", url: "/pipeline-control-plane/canonical-operational-projection" },
       { method: "GET", url: "/work-packets/packet-1" },
     ]);
   } finally {

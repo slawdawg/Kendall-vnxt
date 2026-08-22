@@ -75,6 +75,7 @@ from supervisor.api.schemas import (
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     PipelineDashboardProjectionApiEnvelope,
+    DashboardCanonicalOperationalProjectionApiEnvelope,
     PipelineEpic25EvidenceChainIngestRequest,
     RoutingPreviewApiEnvelope,
     TaskPacketPreviewApiEnvelope,
@@ -1441,6 +1442,19 @@ async def get_authoritative_work_packet_for_work_item(work_item_id: str, session
 async def get_pipeline_dashboard_projection(request: Request, session: AsyncSession = Depends(get_session)):
     return PipelineDashboardProjectionApiEnvelope(
         data=await service.get_pipeline_dashboard_projection(
+            session,
+            mutation_access=request_has_local_operational_transport(request),
+        )
+    )
+
+
+@app.get(
+    "/pipeline-control-plane/canonical-operational-projection",
+    response_model=DashboardCanonicalOperationalProjectionApiEnvelope,
+)
+async def get_dashboard_canonical_operational_projection(request: Request, session: AsyncSession = Depends(get_session)):
+    return DashboardCanonicalOperationalProjectionApiEnvelope(
+        data=await service.get_dashboard_canonical_operational_projection(
             session,
             mutation_access=request_has_local_operational_transport(request),
         )

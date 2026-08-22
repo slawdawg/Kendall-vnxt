@@ -14,6 +14,7 @@ import type {
   PipelineProductModeMappingV0,
   WorkPacketV0View,
 } from "@kendall/contracts";
+import type { DashboardCanonicalOperationalProjectionV1 } from "./pipeline/canonical-operational-projection";
 import {
   isPipelineDashboardProjection,
   normalizePipelineDashboardProjection,
@@ -698,4 +699,76 @@ export async function getPipelineDashboardProjection(): Promise<PipelineDashboar
     throw new Error("Invalid projection payload");
   }
   return projection;
+}
+
+/**
+ * The normal cockpit read uses this separately versioned supervisor boundary.
+ * The V0 endpoint remains available only for the explicitly inventoried
+ * compatibility consumers while their source-zero retirement proof is pending.
+ */
+export async function getDashboardCanonicalOperationalProjection(): Promise<DashboardCanonicalOperationalProjectionV1> {
+  const projection = await requestJson<unknown>("/pipeline-control-plane/canonical-operational-projection");
+  if (!isDashboardCanonicalOperationalProjection(projection)) {
+    throw new Error("Invalid canonical operational projection payload");
+  }
+  return projection;
+}
+
+function isDashboardCanonicalOperationalProjection(value: unknown): value is DashboardCanonicalOperationalProjectionV1 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const projection = value as Record<string, unknown>;
+  const allowed = new Set([
+    "schemaVersion", "projectionId", "generatedAt", "sourceUpdatedAt", "sourceLabel", "freshnessState", "staleAfterSeconds",
+    "backendReachability", "fixtureMode", "truthSummary", "stageSummaries", "sourceStates", "workPackets", "selectedPacketDetails",
+    "managerSummary", "activeManagerLaneClarity", "coordinationHealth", "workerSummary", "reliabilityProblems", "gatedControls",
+    "runtimeReadiness", "actionCapabilities", "actionCapabilitiesV1", "executeAdmission", "queueSummary", "evidenceRefs",
+  ]);
+  return projection.schemaVersion === "dashboard-canonical-operational-projection/v1"
+    && Object.keys(projection).every((key) => allowed.has(key))
+    && typeof projection.projectionId === "string"
+    && typeof projection.generatedAt === "string"
+    && typeof projection.sourceUpdatedAt === "string"
+    && Array.isArray(projection.workPackets)
+    && Array.isArray(projection.selectedPacketDetails)
+    && Array.isArray(projection.stageSummaries)
+    && Array.isArray(projection.sourceStates)
+    && Array.isArray(projection.evidenceRefs)
+    && projection.workPackets.every(isCanonicalOperationalWorkPacket)
+    && projection.selectedPacketDetails.every(isCanonicalOperationalSelectedDetail);
+}
+
+const CANONICAL_OPERATIONAL_WORK_PACKET_KEYS = new Set([
+  "packetId", "title", "currentStage", "status", "truthLabel", "sourceRef", "canonicalContract", "productModeMapping",
+  "blocker", "nextAction", "unblocker", "readyToTest", "evidenceRefs", "workItemId", "queueLease", "executionAttempts",
+  "correlationIds", "updatedAt", "metadataOnly",
+]);
+
+const CANONICAL_OPERATIONAL_SELECTED_DETAIL_KEYS = new Set([
+  "packetId", "sourceRefs", "canonicalContract", "productModeMapping", "evidenceRefs", "currentStage", "status", "truthLabel",
+  "blocker", "nextAction", "unblocker", "readyToTest", "latestTransitionEventRef", "recentTransitionEventRefs", "latestMovementSummary",
+  "canSatisfyLiveMovementProof", "parentPacketId", "lineageKind", "operatorTestState", "operatorTestNote", "actionCapabilities",
+  "actionCapabilitiesV1", "actionResults", "reviewRoute", "workGraph", "workItemId", "queueLease", "executionAttempts",
+  "correlationIds", "metadataOnly",
+]);
+
+function hasOnlyKeys(value: unknown, allowed: ReadonlySet<string>): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isCanonicalOperationalWorkPacket(value: unknown): boolean {
+  return hasOnlyKeys(value, CANONICAL_OPERATIONAL_WORK_PACKET_KEYS)
+    && typeof value.packetId === "string"
+    && value.canonicalContract === null
+    && value.productModeMapping === null
+    && Array.isArray(value.evidenceRefs);
+}
+
+function isCanonicalOperationalSelectedDetail(value: unknown): boolean {
+  return hasOnlyKeys(value, CANONICAL_OPERATIONAL_SELECTED_DETAIL_KEYS)
+    && typeof value.packetId === "string"
+    && value.canonicalContract === null
+    && value.productModeMapping === null
+    && Array.isArray(value.sourceRefs)
+    && Array.isArray(value.evidenceRefs);
 }

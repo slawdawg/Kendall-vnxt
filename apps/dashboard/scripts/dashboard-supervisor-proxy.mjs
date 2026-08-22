@@ -20,7 +20,7 @@ const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/projection$/,
   /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/revisions\/[1-9][0-9]*\/reader$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
+  /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
   LLM_WIKI_ARTIFACT_PATH,
 ];
 const CANONICAL_PACKET_READ_PATH = /^\/pipeline-control-plane\/(?:work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/;
@@ -36,7 +36,7 @@ const TEST_VIEWER_READ_PATHS = [
   // a second decoder in an upstream library can never reinterpret a permitted
   // viewer packet ID as a path separator or dot segment.
   /^\/work-packets(?:\/[A-Za-z0-9._:-]+)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:-]+)?|work-items\/[A-Za-z0-9._:-]+\/packet)$/,
+  /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:-]+)?|work-items\/[A-Za-z0-9._:-]+\/packet)$/,
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
@@ -50,7 +50,7 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
 export const MEMORY_INBOX_MUTATION_PATHS = new Set([
@@ -261,8 +261,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
       const browserSafeBody = request.method === "GET"
         ? CANONICAL_PACKET_READ_PATH.test(targetPath)
           ? redactCanonicalPacketResponse(upstream.body)
-          : targetPath === "/pipeline-control-plane/projection"
-            ? redactPipelineProjectionResponse(upstream.body)
+          : targetPath === "/pipeline-control-plane/canonical-operational-projection"
+            ? redactCanonicalOperationalProjectionResponse(upstream.body)
+            : targetPath === "/pipeline-control-plane/projection"
+              ? redactPipelineProjectionResponse(upstream.body)
             : upstream.body
         : upstream.body;
       const headers = { "cache-control": "no-store", "content-type": upstream.contentType || "application/json; charset=utf-8" };
@@ -295,7 +297,12 @@ function redactCanonicalPacketResponse(body) {
   return Buffer.from(JSON.stringify(safePayload));
 }
 
-function redactPipelineProjectionResponse(body) {
+/** The V1 board-read contract deliberately omits browser action-result history. */
+function redactCanonicalOperationalProjectionResponse(body) {
+  return redactPipelineProjectionResponse(body, { includeActionResultsV1: false });
+}
+
+function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true } = {}) {
   let payload;
   try {
     payload = JSON.parse(body.toString("utf8"));
@@ -350,7 +357,7 @@ function redactPipelineProjectionResponse(body) {
         actionCapabilities: detail.actionCapabilities,
         actionCapabilitiesV1: detail.actionCapabilitiesV1,
         actionResults: detail.actionResults,
-        actionResultsV1: detail.actionResultsV1,
+        ...(includeActionResultsV1 ? { actionResultsV1: detail.actionResultsV1 } : {}),
         workItemId: detail.workItemId,
         queueLease: detail.queueLease,
         executionAttempts: detail.executionAttempts,

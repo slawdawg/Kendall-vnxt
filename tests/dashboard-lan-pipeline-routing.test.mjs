@@ -34,6 +34,8 @@ test("normal and LAN cockpit callers carry canonical packets and the dashboard-o
   assert.match(loaderSource, /canonicalPackets: DashboardCanonicalWorkPacketClientV1\[\]/);
   assert.match(loaderSource, /canonicalPackets: canonicalPackets\.map\(projectDashboardCanonicalPacketForClient\)/);
   assert.match(loaderSource, /function clientSafeOperationalProjection/);
+  assert.match(loaderSource, /getDashboardCanonicalOperationalProjection/);
+  assert.doesNotMatch(loaderSource, /getPipelineDashboardProjection/);
   assert.match(loaderSource, /operationalProjection: DashboardCanonicalOperationalProjectionV1 \| null/);
   assert.match(loaderSource, /canonicalContract: null/);
   assert.match(loaderSource, /productModeMapping: null/);
@@ -64,6 +66,7 @@ test("LAN pipeline browser reads stay out of the Node UDS module and use the aut
   assert.match(runtimeSource, /requestSupervisorJson/);
   assert.match(transportSource, /\$\{window\.location\.origin\}\/api\/supervisor/);
   assert.match(proxySource, /READ_ONLY_SUPERVISOR_PATHS/);
+  assert.match(proxySource, /canonical-operational-projection/);
   assert.match(proxySource, /redactPipelineProjectionResponse/);
   assert.match(proxySource, /projection\|work-packets.*work-items/);
   assert.match(proxySource, /\/work-packets/);

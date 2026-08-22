@@ -1939,7 +1939,8 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.match(cockpitSource, /activeBoardCard/);
   assert.match(cockpitSource, /!currentProjection\?\.workPackets\.some/);
   assert.match(cockpitSource, /!currentProjection\?\.selectedPacketDetails\.some/);
-  assert.match(pipelinePacketLoaderSource, /getPipelineDashboardProjection/);
+  assert.match(pipelinePacketLoaderSource, /getDashboardCanonicalOperationalProjection/);
+  assert.doesNotMatch(pipelinePacketLoaderSource, /getPipelineDashboardProjection/);
   assert.match(pipelinePacketLoaderSource, /projectionError: projectionResult\.error/);
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
@@ -3260,6 +3261,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts": [
       'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
       'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+      'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
       'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
       'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
       'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3333,6 +3335,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3354,6 +3357,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3395,6 +3399,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3413,6 +3418,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3431,6 +3437,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store", ["method"]: "POST" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3448,6 +3455,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store", ...{} }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3465,6 +3473,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
@@ -3481,6 +3490,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
         '}',
         'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPackets() { return requestJson("/pipeline-control-plane/work-packets"); }',
         "",
