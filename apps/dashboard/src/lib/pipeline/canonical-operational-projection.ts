@@ -112,6 +112,8 @@ export type DashboardCanonicalActiveBoardProjectionV1 = {
   workPackets: DashboardCanonicalActiveBoardWorkPacketV1[];
   selectedPacketDetails: DashboardCanonicalActiveBoardPacketDetailV1[];
   managerSummary: DashboardCanonicalActiveBoardManagerSummaryV1;
+  /** Strict compact dashboard-owned manager posture, safe for cockpit rendering. */
+  activeManagerLaneClarity: DashboardCanonicalManagerLaneClarityV1 | null;
   workerSummary: DashboardCanonicalActiveBoardWorkerSummaryV1;
   reliabilityProblems: DashboardCanonicalActiveBoardReliabilityProblemV1[];
   gatedControls: DashboardCanonicalActiveBoardGatedControlV1[];
