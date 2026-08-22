@@ -577,6 +577,53 @@ async def _ensure_sqlite_memory_proposals_schema(connection) -> None:
         )
 
 
+async def ensure_memory_proposal_revision_schema(connection) -> None:
+    """Add and backfill the review-plane fence in its own ordered revision.
+
+    Revision is deliberately absent from the 0001 snapshot and 0002
+    compatibility contract. Databases which already recorded 0002 must see
+    this upgrade instead of silently retaining the old table shape.
+    """
+
+    if connection.dialect.name == "postgresql":
+        await connection.execute(
+            text("ALTER TABLE memory_proposals ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 1")
+        )
+        await connection.execute(
+            text("UPDATE memory_proposals SET revision = 1 WHERE revision IS NULL OR revision < 1")
+        )
+        return
+    if connection.dialect.name == "sqlite":
+        await _sqlite_add_columns(connection, "memory_proposals", (("revision", "INTEGER DEFAULT 1"),))
+        await connection.execute(
+            text("UPDATE memory_proposals SET revision = 1 WHERE revision IS NULL OR revision < 1")
+        )
+        return
+    raise RuntimeError(f"Unsupported database dialect for memory proposal revision migration: {connection.dialect.name}")
+
+
+async def ensure_memory_proposal_write_reservation_schema(connection) -> None:
+    """Install the durable, short-transaction fence for vault write actions."""
+    if connection.dialect.name == "postgresql":
+        await connection.execute(text("ALTER TABLE memory_proposals ADD COLUMN IF NOT EXISTS write_action_token VARCHAR(36)"))
+        return
+    if connection.dialect.name == "sqlite":
+        await _sqlite_add_columns(connection, "memory_proposals", (("write_action_token", "VARCHAR(36)"),))
+        return
+    raise RuntimeError(f"Unsupported database dialect for memory proposal write reservation migration: {connection.dialect.name}")
+
+
+async def ensure_memory_proposal_write_intent_schema(connection) -> None:
+    """Persist the bounded artifact/backup identity before filesystem work."""
+    if connection.dialect.name == "postgresql":
+        await connection.execute(text("ALTER TABLE memory_proposals ADD COLUMN IF NOT EXISTS write_action_intent_json JSON"))
+        return
+    if connection.dialect.name == "sqlite":
+        await _sqlite_add_columns(connection, "memory_proposals", (("write_action_intent_json", "JSON"),))
+        return
+    raise RuntimeError(f"Unsupported database dialect for memory proposal write intent migration: {connection.dialect.name}")
+
+
 async def _apply_legacy_schema_compatibility(connection) -> None:
     """Apply the historical compatibility baseline as migration revision 0002."""
 

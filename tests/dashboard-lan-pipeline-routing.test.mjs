@@ -67,8 +67,9 @@ test("LAN pipeline browser reads stay out of the Node UDS module and use the aut
   assert.match(proxySource, /redactPipelineProjectionResponse/);
   assert.match(proxySource, /projection\|work-packets.*work-items/);
   assert.match(proxySource, /\/work-packets/);
-  assert.match(proxySource, /work-items\\\/\[A-Za-z0-9\._:%-\]\+\\\/packet/);
+  assert.match(proxySource, /work-items\\\/\[A-Za-z0-9\._:%-\]\+\\\/\(\?:packet\|memory-review\)/);
   assert.match(udsSource, /CANONICAL_WORK_ITEM_PACKET_PATH/);
+  assert.match(udsSource, /CANONICAL_WORK_ITEM_MEMORY_REVIEW_PATH/);
   assert.match(udsSource, /\^\\\/pipeline-control-plane\\\/work-items\\\//);
   assert.doesNotMatch(udsSource, /work-items.*\(\.\*\|\.\+\)/);
   assert.match(proxySource, /requestSupervisor\(supervisorUdsPath, "\/auth\/session"/);

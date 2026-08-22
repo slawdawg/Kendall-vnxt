@@ -1576,6 +1576,7 @@ class MemoryProposalCreateRequest(BaseModel):
 class MemoryProposalUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: PositiveInt
     status: MemoryProposalStatusV0 | None = None
     operatorAction: MemoryProposalOperatorActionV0 | None = None
     actorId: str | None = None
@@ -1589,13 +1590,33 @@ class MemoryProposalUpdateRequest(BaseModel):
 class MemoryProposalAiDraftWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: PositiveInt
     actorId: str | None = None
     actorLabel: str | None = None
+
+
+class MemoryProposalWriteRecoveryRequest(BaseModel):
+    """Explicit operator-only recovery of a reservation left by a dead writer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expectedRevision: PositiveInt
+    recoveryRef: str = Field(min_length=8, max_length=240)
+
+    @field_validator("recoveryRef")
+    @classmethod
+    def require_meaningful_recovery_ref(cls, value: str) -> str:
+        """Keep recovery evidence human-meaningful after request normalization."""
+        normalized = value.strip()
+        if len(normalized) < 8:
+            raise ValueError("recoveryRef must contain at least eight non-whitespace characters")
+        return normalized
 
 
 class LlmWikiDisposableRebuildWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: PositiveInt
     approvalRef: str
     actorId: str | None = None
     actorLabel: str | None = None
@@ -1646,6 +1667,93 @@ class MemoryProposalV0View(BaseModel):
     backupRecoveryPath: str
     writeBackStatus: MemoryProposalWriteBackStatusV0
     writeBackAllowed: Literal[False] = False
+
+
+# This is intentionally work-item scoped rather than a projection of the
+# retired WorkPacketV0 aggregate.  The dashboard memory-review UI needs only
+# persisted proposal metadata and its derived, no-write LLM-Wiki readiness.
+class WorkItemMemoryReviewProposalV1View(BaseModel):
+    # `proposalRouteId` is the persisted opaque row identifier. It is the
+    # only proposal value that the dashboard puts in a path segment, so legacy
+    # proposal labels/IDs cannot alter route parsing.
+    proposalRouteId: str
+    proposalId: str
+    revision: PositiveInt
+    label: str
+    status: MemoryProposalStatusV0
+    summary: str
+    # Persisted rows predate the write-time reference requirement. The
+    # read-only review surfaces them as blocked instead of losing the entire
+    # WorkItem response; write schemas continue to require references.
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    targetVaultPath: str | None = None
+    targetVaultFolder: str
+    proposalType: MemoryProposalTypeV0
+    suggestedContentSummary: str
+    patchSummary: str | None = None
+    sensitivity: MemoryProposalSensitivityV0
+    freshness: MemoryProposalFreshnessV0
+    contradictionStatus: MemoryProposalContradictionStatusV0
+    confidence: MemoryProposalConfidenceV0
+    operatorAction: MemoryProposalOperatorActionV0
+    decisionNeededContext: str | None = None
+    backupRecoveryPath: str
+    writeBackStatus: MemoryProposalWriteBackStatusV0
+    writeBackAllowed: Literal[False] = False
+    aiDraftEligible: bool = False
+    llmWikiArtifactSearchEligible: bool = False
+
+
+class WorkItemMemoryReviewLlmWikiPreviewV1View(BaseModel):
+    previewId: str
+    inputRefs: list[str] = Field(default_factory=list)
+    memoryProposalRefs: list[str] = Field(default_factory=list)
+    plannedOutputScope: str
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    stopLine: str
+
+
+class WorkItemMemoryReviewLlmWikiDryRunV1View(BaseModel):
+    planId: str
+    inputRefs: list[str] = Field(default_factory=list)
+    plannedDerivedSections: list[str] = Field(default_factory=list)
+    disposableTargetNamespace: str
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    stopLines: list[str] = Field(default_factory=list)
+    discardRecoveryPath: str
+    writePerformed: Literal[False] = False
+
+
+class WorkItemMemoryReviewLlmWikiReadinessV1View(BaseModel):
+    decisionState: Literal["ready", "blocked", "not_configured"]
+    canonicality: Literal["derived_disposable_rebuildable"] = "derived_disposable_rebuildable"
+    allowedInputs: list[str] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    nextActions: list[str] = Field(default_factory=list)
+    boundarySummary: str
+    rebuildPreview: WorkItemMemoryReviewLlmWikiPreviewV1View | None = None
+    rebuildDryRunPlan: WorkItemMemoryReviewLlmWikiDryRunV1View | None = None
+    durableWriteAllowed: Literal[False] = False
+
+
+class WorkItemMemoryReviewV1View(BaseModel):
+    schemaVersion: Literal["work-item-memory-review/v1"] = "work-item-memory-review/v1"
+    workItemId: str
+    authoritativePacketId: str | None = None
+    proposals: list[WorkItemMemoryReviewProposalV1View] = Field(default_factory=list)
+    llmWikiReadiness: WorkItemMemoryReviewLlmWikiReadinessV1View | None = None
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+
+
+class WorkItemMemoryReviewApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    data: WorkItemMemoryReviewV1View
+    meta: dict[str, Any] | None = None
 
 
 class WorkPacketLearnDecisionRecordV0View(BaseModel):

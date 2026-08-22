@@ -54,6 +54,27 @@ export type DashboardCanonicalWorkPacketV1 = {
   presentation: DashboardCanonicalPresentationV1;
 };
 
+export type DashboardCanonicalMemoryProposalV1 = {
+  proposalRouteId: string; proposalId: string; revision: number; label: string; status: string; summary: string; sourceRefs: string[]; evidenceRefs: string[];
+  targetVaultPath: string | null; targetVaultFolder: string; proposalType: string; suggestedContentSummary: string; aiDraftEligible: boolean; llmWikiArtifactSearchEligible: boolean;
+  patchSummary: string | null; sensitivity: string; freshness: string; contradictionStatus: string; confidence: string;
+  operatorAction: string; decisionNeededContext: string | null; backupRecoveryPath: string; writeBackStatus: string;
+  writeBackAllowed: false;
+};
+
+export type DashboardCanonicalWorkItemMemoryReviewV1 = {
+  schemaVersion: "work-item-memory-review/v1"; workItemId: string; authoritativePacketId: string | null;
+  proposals: DashboardCanonicalMemoryProposalV1[];
+  llmWikiReadiness: {
+    decisionState: "ready" | "blocked" | "not_configured"; canonicality: "derived_disposable_rebuildable";
+    allowedInputs: string[]; blockedReasons: string[]; nextActions: string[]; boundarySummary: string;
+    durableWriteAllowed: false;
+    rebuildPreview: { previewId: string; inputRefs: string[]; memoryProposalRefs: string[]; plannedOutputScope: string; retentionClass: "metadata_only"; stopLine: string } | null;
+    rebuildDryRunPlan: { planId: string; inputRefs: string[]; plannedDerivedSections: string[]; disposableTargetNamespace: string; retentionClass: "metadata_only"; stopLines: string[]; discardRecoveryPath: string; writePerformed: false } | null;
+  } | null;
+  metadataOnly: true; rawPayloadRetained: false; canonicalMutationAllowed: false; sourceMutationAllowed: false;
+};
+
 /**
  * Versioned dashboard presentation assembled only from the authoritative
  * lifecycle response. The property set intentionally mirrors the current
@@ -459,7 +480,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isOptionalString(value: unknown): boolean {
+function isOptionalString(value: unknown): value is string | null | undefined {
   return value == null || typeof value === "string";
 }
 
@@ -502,6 +523,145 @@ export async function getWorkPacketForWorkItem(workItemId: string, options?: Sup
   }
 }
 
+export async function getWorkItemMemoryReview(workItemId: string, options?: SupervisorReadOptions): Promise<DashboardCanonicalWorkItemMemoryReviewV1 | null> {
+  const path = `/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`;
+  try {
+    const review = canonicalWorkItemMemoryReview(await requestJson<unknown>(path, options));
+    if (review.workItemId !== workItemId) throw new Error("WorkItem memory review identity does not bind its requested WorkItem.");
+    return review;
+  } catch (error) {
+    if (isCanonicalWorkItemMemoryReviewUnavailable(error)) return null;
+    throw error;
+  }
+}
+
+function canonicalWorkItemMemoryReview(value: unknown): DashboardCanonicalWorkItemMemoryReviewV1 {
+  const review = canonicalMemoryReviewRecord(value, [
+    "schemaVersion", "workItemId", "authoritativePacketId", "proposals", "llmWikiReadiness",
+    "metadataOnly", "rawPayloadRetained", "canonicalMutationAllowed", "sourceMutationAllowed",
+  ]);
+  if (review.schemaVersion !== "work-item-memory-review/v1" || !isNonEmptyString(review.workItemId) ||
+    !isOptionalString(review.authoritativePacketId) || !Array.isArray(review.proposals) ||
+    review.metadataOnly !== true || review.rawPayloadRetained !== false ||
+    review.canonicalMutationAllowed !== false || review.sourceMutationAllowed !== false) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  return {
+    schemaVersion: review.schemaVersion,
+    workItemId: review.workItemId,
+    authoritativePacketId: review.authoritativePacketId ?? null,
+    proposals: review.proposals.map(canonicalMemoryProposal),
+    llmWikiReadiness: review.llmWikiReadiness == null ? null : canonicalMemoryReadiness(review.llmWikiReadiness),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+  };
+}
+
+function canonicalMemoryReviewRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Canonical WorkItem memory review is malformed.");
+  const record = value as Record<string, unknown>;
+  const actualKeys = Object.keys(record);
+  if (actualKeys.length !== keys.length || actualKeys.some((key) => !keys.includes(key))) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  return record;
+}
+
+function canonicalMemoryStringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) throw new Error("Canonical WorkItem memory review is malformed.");
+  return [...value];
+}
+
+const MEMORY_PROPOSAL_ENUMS = {
+  status: new Set(["not_applicable", "proposed", "pending_human_approval", "approved", "rejected", "deferred", "edit_needed", "blocked", "stale", "contradictory"]),
+  proposalType: new Set(["new_note", "append_note", "link_notes", "tag_update", "decision_record", "error_book_entry", "user_facing_documentation"]),
+  sensitivity: new Set(["low", "medium", "high"]),
+  freshness: new Set(["fresh", "stale", "conflicting", "unknown"]),
+  contradictionStatus: new Set(["none", "possible", "confirmed"]),
+  confidence: new Set(["low", "medium", "high"]),
+  operatorAction: new Set(["approve", "edit", "reject", "defer", "blocked"]),
+  writeBackStatus: new Set(["not_started", "blocked", "review_gated", "approved_for_future", "deferred"]),
+} as const;
+
+function canonicalMemoryProposal(value: unknown): DashboardCanonicalMemoryProposalV1 {
+  const proposal = canonicalMemoryReviewRecord(value, [
+    "proposalRouteId", "proposalId", "revision", "label", "status", "summary", "sourceRefs", "evidenceRefs", "targetVaultPath",
+    "targetVaultFolder", "proposalType", "suggestedContentSummary", "patchSummary", "sensitivity", "aiDraftEligible", "llmWikiArtifactSearchEligible",
+    "freshness", "contradictionStatus", "confidence", "operatorAction", "decisionNeededContext",
+    "backupRecoveryPath", "writeBackStatus", "writeBackAllowed",
+  ]);
+  const requiredStrings = [
+    "proposalRouteId", "proposalId", "label", "status", "summary", "targetVaultFolder", "proposalType",
+    "suggestedContentSummary", "sensitivity", "freshness", "contradictionStatus", "confidence",
+    "operatorAction", "backupRecoveryPath", "writeBackStatus",
+  ];
+  if (!requiredStrings.every((key) => typeof proposal[key] === "string") || !/^[A-Za-z0-9_-]+$/.test(proposal.proposalRouteId as string) || !Number.isSafeInteger(proposal.revision) || (proposal.revision as number) < 1 ||
+    !isOptionalString(proposal.targetVaultPath) || !isOptionalString(proposal.patchSummary) ||
+    !isOptionalString(proposal.decisionNeededContext) || (proposal.aiDraftEligible !== undefined && typeof proposal.aiDraftEligible !== "boolean") ||
+    (proposal.llmWikiArtifactSearchEligible !== undefined && typeof proposal.llmWikiArtifactSearchEligible !== "boolean") || proposal.writeBackAllowed !== false) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  if (!Object.entries(MEMORY_PROPOSAL_ENUMS).every(([key, values]) => isSetValue(proposal[key], values))) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  return {
+    proposalRouteId: proposal.proposalRouteId as string, proposalId: proposal.proposalId as string, revision: proposal.revision as number, label: proposal.label as string, status: proposal.status as string,
+    summary: proposal.summary as string, sourceRefs: canonicalMemoryStringArray(proposal.sourceRefs),
+    evidenceRefs: canonicalMemoryStringArray(proposal.evidenceRefs), targetVaultPath: proposal.targetVaultPath ?? null,
+    targetVaultFolder: proposal.targetVaultFolder as string, proposalType: proposal.proposalType as string, aiDraftEligible: proposal.aiDraftEligible === true,
+    llmWikiArtifactSearchEligible: proposal.llmWikiArtifactSearchEligible === true,
+    suggestedContentSummary: proposal.suggestedContentSummary as string, patchSummary: proposal.patchSummary ?? null,
+    sensitivity: proposal.sensitivity as string, freshness: proposal.freshness as string,
+    contradictionStatus: proposal.contradictionStatus as string, confidence: proposal.confidence as string,
+    operatorAction: proposal.operatorAction as string, decisionNeededContext: proposal.decisionNeededContext ?? null,
+    backupRecoveryPath: proposal.backupRecoveryPath as string, writeBackStatus: proposal.writeBackStatus as string,
+    writeBackAllowed: false,
+  };
+}
+
+function canonicalMemoryReadiness(value: unknown): DashboardCanonicalWorkItemMemoryReviewV1["llmWikiReadiness"] {
+  const readiness = canonicalMemoryReviewRecord(value, [
+    "decisionState", "canonicality", "allowedInputs", "blockedReasons", "nextActions", "boundarySummary",
+    "rebuildPreview", "rebuildDryRunPlan", "durableWriteAllowed",
+  ]);
+  if (!isSetValue(readiness.decisionState, new Set(["ready", "blocked", "not_configured"])) ||
+    readiness.canonicality !== "derived_disposable_rebuildable" || !isNonEmptyString(readiness.boundarySummary) ||
+    readiness.durableWriteAllowed !== false) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  return {
+    decisionState: readiness.decisionState as "ready" | "blocked" | "not_configured",
+    canonicality: "derived_disposable_rebuildable",
+    allowedInputs: canonicalMemoryStringArray(readiness.allowedInputs),
+    blockedReasons: canonicalMemoryStringArray(readiness.blockedReasons),
+    nextActions: canonicalMemoryStringArray(readiness.nextActions),
+    boundarySummary: readiness.boundarySummary as string,
+    rebuildPreview: readiness.rebuildPreview == null ? null : canonicalMemoryPreview(readiness.rebuildPreview),
+    rebuildDryRunPlan: readiness.rebuildDryRunPlan == null ? null : canonicalMemoryDryRunPlan(readiness.rebuildDryRunPlan),
+    durableWriteAllowed: false,
+  };
+}
+
+function canonicalMemoryPreview(value: unknown): NonNullable<DashboardCanonicalWorkItemMemoryReviewV1["llmWikiReadiness"]>["rebuildPreview"] {
+  const preview = canonicalMemoryReviewRecord(value, ["previewId", "inputRefs", "memoryProposalRefs", "plannedOutputScope", "retentionClass", "stopLine"]);
+  if (!isNonEmptyString(preview.previewId) || !isNonEmptyString(preview.plannedOutputScope) ||
+    !isNonEmptyString(preview.stopLine) || preview.retentionClass !== "metadata_only") {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  return { previewId: preview.previewId, inputRefs: canonicalMemoryStringArray(preview.inputRefs), memoryProposalRefs: canonicalMemoryStringArray(preview.memoryProposalRefs), plannedOutputScope: preview.plannedOutputScope, retentionClass: "metadata_only", stopLine: preview.stopLine };
+}
+
+function canonicalMemoryDryRunPlan(value: unknown): NonNullable<DashboardCanonicalWorkItemMemoryReviewV1["llmWikiReadiness"]>["rebuildDryRunPlan"] {
+  const plan = canonicalMemoryReviewRecord(value, ["planId", "inputRefs", "plannedDerivedSections", "disposableTargetNamespace", "retentionClass", "stopLines", "discardRecoveryPath", "writePerformed"]);
+  if (!isNonEmptyString(plan.planId) || !isNonEmptyString(plan.disposableTargetNamespace) ||
+    !isNonEmptyString(plan.discardRecoveryPath) || plan.retentionClass !== "metadata_only" || plan.writePerformed !== false) {
+    throw new Error("Canonical WorkItem memory review is malformed.");
+  }
+  return { planId: plan.planId, inputRefs: canonicalMemoryStringArray(plan.inputRefs), plannedDerivedSections: canonicalMemoryStringArray(plan.plannedDerivedSections), disposableTargetNamespace: plan.disposableTargetNamespace, retentionClass: "metadata_only", stopLines: canonicalMemoryStringArray(plan.stopLines), discardRecoveryPath: plan.discardRecoveryPath, writePerformed: false };
+}
+
 export async function getWorkPackets(): Promise<DashboardCanonicalWorkPacketV1[]> {
   return canonicalPackets(await requestJson<unknown>("/pipeline-control-plane/work-packets"));
 }
@@ -513,8 +673,20 @@ function isCanonicalWorkItemPacketUnavailable(error: unknown): boolean {
       ? (error as { message: string }).message
       : null;
   return message !== null && (
-    /\/pipeline-control-plane\/work-items\/[^/]+\/packet \(404\)$/.test(message) ||
+    /\/pipeline-control-plane\/work-items\/[^/]+\/(?:packet|memory-review) \(404\)$/.test(message) ||
     message.startsWith("Canonical WorkPacket")
+  );
+}
+
+function isCanonicalWorkItemMemoryReviewUnavailable(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : null;
+  return message !== null && (
+    /\/pipeline-control-plane\/work-items\/[^/]+\/memory-review \(404\)$/.test(message) ||
+    message === "Canonical WorkItem memory review is malformed."
   );
 }
 

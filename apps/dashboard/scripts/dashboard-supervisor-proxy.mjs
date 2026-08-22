@@ -5,14 +5,23 @@ const DISABLED_MEMORY_INBOX_UPLOAD_PATH = `${PREFIX}memory-inbox/upload`;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTROLS_RESPONSE_BYTES = 1024 * 1024;
 const PROXY_TIMEOUT_MS = 2000;
+// AI-draft and LLM-Wiki writes copy and fsync a complete configured vault.
+// Keep their UDS response deadline distinct from the short dashboard-read
+// deadline so an honest completed write is never reported as an unconfirmed
+// 503 solely because backup durability exceeded two seconds.
+const MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS = 15 * 60 * 1000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const MEMORY_INBOX_PROPOSAL_DECISION_PATH = /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/(?:return|deny|approve)$/;
+const LLM_WIKI_ARTIFACT_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/llm-wiki-artifact$/;
+const MEMORY_PROPOSAL_MUTATION_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+(?:\/(?:ai-draft|llm-wiki-rebuild))?$/;
+const MEMORY_PROPOSAL_WRITE_RECOVERY_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/recover-abandoned-write$/;
 const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
   /^\/memory-inbox\/projection$/,
   /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/revisions\/[1-9][0-9]*\/reader$/,
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
+  LLM_WIKI_ARTIFACT_PATH,
 ];
 const CANONICAL_PACKET_READ_PATH = /^\/pipeline-control-plane\/(?:work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/;
 const CLIENT_SAFE_PROJECTION_METADATA_KEYS = new Set(`schemaVersion projectionId generatedAt sourceUpdatedAt sourceLabel freshnessState staleAfterSeconds backendReachability fixtureMode truthSummary stageSummaries sourceStates workPackets selectedPacketDetails managerSummary activeManagerLaneClarity coordinationHealth workerSummary reliabilityProblems gatedControls runtimeReadiness actionCapabilities actionCapabilitiesV1 executeAdmission queueSummary evidenceRefs packetId title currentStage status truthLabel sourceRef canonicalContract productModeMapping blocker nextAction unblocker readyToTest workItemId queueLease executionAttempts correlationIds updatedAt metadataOnly sourceRefs latestTransitionEventRef recentTransitionEventRefs latestMovementSummary canSatisfyLiveMovementProof parentPacketId lineageKind operatorTestState operatorTestNote actionResults actionResultsV1 reviewRoute workGraph refId sourceType pathOrUrl contentSha256 readyId userFacingSummary testableSurface verificationRefs rawPayloadRetained leaseId attemptCount heartbeatAt leaseExpiresAt fencingToken active state attemptId routeDecisionId workerId lane eventRefs availability routeState reasonCode reason safeFallback exactIdentity issuanceState findingSummary count highestSeverity dataClass execution deliveryEvidenceEligible retention sourceSchemaVersion executionJobId reportIdentity waveMembership dependencyState reservation capacity posture owner nextSafeAction label emptyReason backendEmpty backendUnavailable fixtureBacked stale summary stage packetCount sourceId sourceKind runId observedAt source freshness activeWorkCount staleOwnerTargetCount staleOwnerProjectedCount dirtyPreserveCount missingWorktreeJournalHold reliabilityState checkedAt enabled allowedForEnvironment visibleLabelRequired canSatisfyLiveProof activeLeaseCount activeWorkerCount warmWorkerCount blockedQueueCount dispatchableQueueCount closedQueueCount healthySourceCount exhaustedSourceCount blockedSourceCount gatedSourceCount staleSourceCount unavailableSourceCount refillingSourceCount unknownSourceCount sourceExhausted inactivityReason warmCount waitingCount stalledCount failedCount drainingCount killedCount completeCount unavailableCount unknownCount workerRefs problemId kind severity likelyIssue controlId operation authorityFamily stopLine blockedCount gatedCount limits observed blockingDimensions policyVersion capacityAvailable actionId targetType targetId capabilityState authorityState riskTier typedReason expectedResultSummary correlationRequired idempotencyRequired actionContext actionContextDigestSha256 sourceMode serverBound expectedRuntimeMode expectedRuntimeRevision expectedActiveWorkCount expectedActiveLeaseCount expectedRunningAttemptCount expectedPacketCurrentEventId expectedCurrentOwnerId newOwnerId expectedWorkItemState expectedWorkItemUpdatedAt expectedActiveLeaseId expectedRunningAttemptId expectedOriginalAttemptId expectedRetryIntentId expectedLinkedWorkItemId expectedLinkedPacketId outcome resultingStage resultingStatus actionRecordId approvalId childPacketId idempotencyKey successEvidence replayed originalAttemptId retryIntentId linkedWorkItemId linkedPacketId resultingPacketCurrentEventId originalAttemptPreserved providerOrWorkerLaunched resultingRuntimeMode resultingRuntimeRevision runningAttemptCount intakeStopped activeWorkPreserved activeWorkAllowedToConverge workersKilled intakeResumed previousOwnerId activeLeaseTransferred workerLaunched`.split(" "));
@@ -41,7 +50,7 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
-  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
+  /^\/pipeline-control-plane\/(?:projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
 export const MEMORY_INBOX_MUTATION_PATHS = new Set([
@@ -60,17 +69,20 @@ export const CONTROLS_MUTATION_PATHS = new Set([
   "/pipeline-control-plane/actions/v1",
 ]);
 const SAVED_VIEW_SCOPES = new Set(["active-work", "attention", "queue", "audit"]);
+const LLM_WIKI_ARTIFACT_QUERY_PATH = new RegExp(`^${PREFIX}work-items/[A-Za-z0-9._:%-]+/memory-proposals/[A-Za-z0-9._:%-]+/llm-wiki-artifact$`);
 
 function allowedReadQuery(url, method) {
   if (!url.search) return true;
   // Saved-view scopes are the only authenticated dashboard reads that need a
   // query. Preserve a one-key, one-value contract instead of allowing a
   // generic query pass-through to the private supervisor.
-  return method === "GET"
-    && url.pathname === `${PREFIX}operator-views`
-    && [...url.searchParams].length === 1
-    && url.searchParams.getAll("scope").length === 1
-    && SAVED_VIEW_SCOPES.has(url.searchParams.get("scope"));
+  if (method !== "GET" || [...url.searchParams].length !== 1) return false;
+  if (url.pathname === `${PREFIX}operator-views`) {
+    return url.searchParams.getAll("scope").length === 1 && SAVED_VIEW_SCOPES.has(url.searchParams.get("scope"));
+  }
+  return LLM_WIKI_ARTIFACT_QUERY_PATH.test(url.pathname)
+    && url.searchParams.getAll("query").length === 1
+    && url.searchParams.get("query").length <= 120;
 }
 
 function sendJson(response, statusCode, payload) {
@@ -130,8 +142,22 @@ function cookieValue(cookie, name) {
   return (cookie || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
 }
 
-export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS }) {
+function encodedSupervisorPath(targetPath) {
+  // Validate decoded path segments, then encode each segment exactly once for
+  // the UDS request.  This preserves a canonical opaque ID containing a
+  // literal percent without permitting the proxy to pass a second-decoded
+  // separator or dot segment upstream.
+  return targetPath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeoutMs = PROXY_TIMEOUT_MS, memoryProposalArtifactWriteTimeoutMs = MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS }) {
   if (typeof supervisorUdsPath !== "string" || !supervisorUdsPath.startsWith("/")) throw new Error("Supervisor proxy requires a fixed absolute UDS path.");
+  if (
+    !Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS
+    || !Number.isInteger(memoryProposalArtifactWriteTimeoutMs) || memoryProposalArtifactWriteTimeoutMs < timeoutMs || memoryProposalArtifactWriteTimeoutMs > MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS
+  ) {
+    throw new Error("Supervisor proxy timeouts must be positive bounded integers.");
+  }
   return async function proxy(request, response) {
     let url;
     try { url = new URL(request.url || "/", "https://dashboard.invalid"); } catch { return false; }
@@ -142,11 +168,21 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     if (!url.pathname.startsWith(PREFIX) || !allowedReadQuery(url, request.method)) return false;
     let targetPath;
     try { targetPath = `/${decodeURIComponent(url.pathname.slice(PREFIX.length))}`; } catch { sendJson(response, 400, { state: "unavailable" }); return true; }
-    if (!targetPath.startsWith("/") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+    if (!targetPath.startsWith("/") || targetPath.includes("?") || targetPath.includes("#") || targetPath.includes("\\") || targetPath.includes("/../") || targetPath.includes("/./")) { sendJson(response, 400, { state: "unavailable" }); return true; }
+    // A once-decoded traversal escape must never reach a second parser. Other
+    // literal percent signs are valid in opaque canonical packet identifiers
+    // and are normalized by encodedSupervisorPath before forwarding.
+    if (/%(?:2f|5c|2e)/i.test(targetPath) || (MUTATING_METHODS.has(request.method) && targetPath.includes("%"))) { sendJson(response, 400, { state: "unavailable" }); return true; }
     if (!ALLOWED_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !CONTROLS_READ_PATHS.has(targetPath) && !CONTROLS_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_MUTATION_PATHS.has(targetPath) && !MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath)) { sendJson(response, 404, { state: "unavailable" }); return true; }
     const controlsRead = CONTROLS_READ_PATHS.has(targetPath);
     const controlsMutation = CONTROLS_MUTATION_PATHS.has(targetPath);
-    const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath);
+    const memoryInboxMutation = MEMORY_INBOX_MUTATION_PATHS.has(targetPath) || MEMORY_INBOX_LIFECYCLE_PATH.test(targetPath) || MEMORY_INBOX_PROPOSAL_DECISION_PATH.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
+    const memoryProposalMutation = MEMORY_PROPOSAL_MUTATION_PATH.test(targetPath);
+    // These operations may copy/fsync an entire configured vault. Recovery
+    // can also remove or reconcile a full interrupted backup, so it shares
+    // the write durability deadline rather than returning an ambiguous 503
+    // under the normal dashboard read deadline.
+    const memoryProposalArtifactWrite = /\/(?:ai-draft|llm-wiki-rebuild)$/.test(targetPath) || MEMORY_PROPOSAL_WRITE_RECOVERY_PATH.test(targetPath);
     if (controlsRead && (!['GET', 'HEAD'].includes(request.method) || url.search)) {
       sendJson(response, ['GET', 'HEAD'].includes(request.method) ? 404 : 405, { state: "unavailable" });
       return true;
@@ -157,6 +193,11 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
     }
     if (memoryInboxMutation && (request.method !== "POST" || url.search)) {
       sendJson(response, request.method === "POST" ? 404 : 405, { state: "unavailable" });
+      return true;
+    }
+    const expectedMemoryProposalMethod = targetPath.endsWith("/ai-draft") || targetPath.endsWith("/llm-wiki-rebuild") ? "POST" : "PATCH";
+    if (memoryProposalMutation && (request.method !== expectedMemoryProposalMethod || url.search)) {
+      sendJson(response, request.method === expectedMemoryProposalMethod ? 404 : 405, { state: "unavailable" });
       return true;
     }
     if (!request.headers.cookie) { sendJson(response, 401, { state: "sign_in_required" }); return true; }
@@ -174,7 +215,7 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }
-      if (role === "test_viewer" && (controlsRead || controlsMutation || memoryInboxMutation)) {
+      if (role === "test_viewer" && (controlsRead || controlsMutation || memoryInboxMutation || memoryProposalMutation)) {
         sendJson(response, 404, { state: "unavailable" });
         return true;
       }
@@ -190,6 +231,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         sendJson(response, 403, { state: "unavailable" });
         return true;
       }
+      if (memoryProposalMutation && (role !== "operator" || request.headers.origin !== expectedOrigin || !request.headers["x-csrf-token"] || request.headers["x-csrf-token"] !== cookieValue(request.headers.cookie, "kendall_operator_csrf"))) {
+        sendJson(response, 403, { state: "unavailable" });
+        return true;
+      }
       if (READ_ONLY_SUPERVISOR_PATHS.some((pattern) => pattern.test(targetPath)) && !["GET", "HEAD"].includes(request.method)) {
         sendJson(response, 405, { state: "unavailable" });
         return true;
@@ -200,8 +245,10 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
         await streamSupervisor(supervisorUdsPath, targetPath, request.headers, response, timeoutMs);
         return true;
       }
-      const upstreamPath = url.search ? `${targetPath}?${url.searchParams.toString()}` : targetPath;
-      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, timeoutMs, controlsRead ? MAX_CONTROLS_RESPONSE_BYTES : Infinity);
+      const encodedTargetPath = encodedSupervisorPath(targetPath);
+      const upstreamPath = url.search ? `${encodedTargetPath}?${url.searchParams.toString()}` : encodedTargetPath;
+      const upstreamTimeoutMs = memoryProposalArtifactWrite ? memoryProposalArtifactWriteTimeoutMs : timeoutMs;
+      const upstream = await requestSupervisor(supervisorUdsPath, upstreamPath, request.method, request.headers, body, upstreamTimeoutMs, controlsRead ? MAX_CONTROLS_RESPONSE_BYTES : Infinity);
       // A viewer revocation concurrent with an in-flight read must win before
       // the browser receives data. Operator requests retain existing behavior.
       if (role === "test_viewer") {

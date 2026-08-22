@@ -32,6 +32,8 @@ test("LAN operator pages declare exact read contracts and do not replace the ser
   );
   assert.ok(controls.reads.every((read) => read.method === "GET" && !("query" in read)));
   assert.deepEqual(manifest.at(-1).roles, ["operator", "test_viewer"]);
+  const workItemDetail = manifest.find((entry) => entry.page === "work-item-detail");
+  assert.ok(workItemDetail.reads.some((read) => read.path === "/pipeline-control-plane/work-items/:id/memory-review"));
   const [boundary, state, transport] = await Promise.all([readFile(boundaryUrl, "utf8"), readFile(stateUrl, "utf8"), readFile(transportUrl, "utf8")]);
   assert.match(boundary, /8_000/);
   assert.match(boundary, /sign_in_required/);
@@ -69,7 +71,8 @@ test("named pages use the authenticated LAN client boundary rather than SSR supe
   assert.match(detailClient, /useAuthenticatedPageRead/);
   assert.match(detailClient, /AuthenticatedPageState/);
   assert.match(detailClient, /loadWorkItemDetail\(workItemId, signal\)/);
-  assert.match(detailClient, /getWorkPacketForWorkItem\(workItemId, options\)/);
+  assert.match(detailClient, /getWorkItemMemoryReview\(workItemId, options\)/);
+  assert.doesNotMatch(detailClient, /getWorkPacketForWorkItem\(workItemId, options\)/);
   assert.doesNotMatch(detailClient, /getWorkPacket\(`work_item:/);
 });
 

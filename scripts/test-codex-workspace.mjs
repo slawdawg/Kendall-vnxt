@@ -8132,7 +8132,7 @@ try {
       assert(Boolean(manifest.last_verified_at), "finish-pr did not record successful verification time");
       assert(manifest.status === "pr_open", `unexpected manifest status ${manifest.status}`);
       const source = readFileSync(scriptPath, "utf8");
-      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 900_000;"), "codex-workspace profile must retain its reviewed fixed 900s budget");
+      assert(source.includes("const codexWorkspaceVerificationTimeoutMs = 1_800_000;"), "codex-workspace profile must retain its reviewed fixed 1800s budget");
       assert(source.includes('if (profile === "codex-workspace") return codexWorkspaceVerificationTimeoutMs;'), "codex-workspace timeout selection must remain fixed in source");
       const boundedRunner = source.match(/function runBoundedVerification[\s\S]*?function verificationOutcome/);
       assert(boundedRunner, "bounded verification runner missing");
@@ -8236,7 +8236,7 @@ try {
       assert(diagnostic.schema_version === 2, JSON.stringify(diagnostic));
       assert(diagnostic.profile === "codex-workspace", JSON.stringify(diagnostic));
       assert(diagnostic.outcome === "nonzero-exit", JSON.stringify(diagnostic));
-      assert(diagnostic.execution?.timeout_ms === 900_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
+      assert(diagnostic.execution?.timeout_ms === 1_800_000 && diagnostic.execution?.timed_out === false, JSON.stringify(diagnostic));
       assert(diagnostic.child?.output === "sanitized-tail-v1", JSON.stringify(diagnostic));
       assert(diagnostic.child?.stdout_tail?.bytes > 2_048 && diagnostic.child.stdout_tail.truncated === true, JSON.stringify(diagnostic));
       assert(diagnostic.child.stdout_tail.retained_bytes <= 2_048, JSON.stringify(diagnostic));
@@ -8297,7 +8297,7 @@ try {
     }
   });
 
-  test("finish-pr check profile uses its fixed fifteen-minute budget and persists redacted failure diagnostics", () => {
+  test("finish-pr check profile records the actual bounded leaf budget and persists redacted failure diagnostics", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       installFixtureVerificationProfileCommand(fixture, "check", "secret-nonzero");
@@ -8310,7 +8310,13 @@ try {
 
       assert(result.code !== 0, "check verification unexpectedly passed");
       assert(result.stderr.includes("profile=check"), result.stderr || result.stdout);
-      assert(result.stderr.includes("timeout_ms=900000"), result.stderr || result.stdout);
+      const timeoutMatch = result.stderr.match(/timeout_ms=(\d+)/);
+      assert(timeoutMatch, result.stderr || result.stdout);
+      const recordedTimeoutMs = Number(timeoutMatch[1]);
+      assert(
+        Number.isInteger(recordedTimeoutMs) && recordedTimeoutMs > 0 && recordedTimeoutMs <= 180_000,
+        `check leaf timeout was outside its reviewed bound: ${recordedTimeoutMs}`,
+      );
       assert(result.stderr.includes("diagnostic=recorded"), result.stderr || result.stdout);
       assert(!result.stderr.includes("fixture-secret-token-123"), "check diagnostic leaked child output");
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "check failure reached git push");
@@ -8319,7 +8325,7 @@ try {
       assert(diagnosticNames.length === 1, "check failure did not persist exactly one bounded diagnostic");
       const diagnostic = readJson(join(diagnosticsDir, diagnosticNames[0]));
       assert(diagnostic.profile === "check", JSON.stringify(diagnostic));
-      assert(diagnostic.timeout_ms === 900_000, JSON.stringify(diagnostic));
+      assert(diagnostic.timeout_ms === recordedTimeoutMs, JSON.stringify(diagnostic));
       assert(diagnostic.child.output === "omitted", JSON.stringify(diagnostic));
       assert(diagnostic.check_projection?.stage === null, JSON.stringify(diagnostic));
       assert(diagnostic.check_projection?.raw_output === "omitted", JSON.stringify(diagnostic));
@@ -8379,7 +8385,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === "test:manager-control-plane", "long leaf did not execute");
-      assert(readFileSync(timeoutLog, "utf8").trim() === "test:manager-control-plane:900000", "long leaf did not receive its fixed budget");
+      assert(readFileSync(timeoutLog, "utf8").trim() === "test:manager-control-plane:1800000", "long leaf did not receive its fixed budget");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -8492,12 +8498,21 @@ try {
         "under-reserved supervisor leaf was launched or the packet reran an earlier stage",
       );
 
-      const second = runFixtureScript(
-        fixture,
-        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
-        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "0" } },
-      );
-      assert(second.code === 0, second.stderr || second.stdout);
+      // A CI runner can spend the ordinary 180s invocation budget while it
+      // advances several mocked supervisor leaves.  Keep resuming the same
+      // packet until it settles, asserting the normal bounded pause rather
+      // than treating an additional healthy pause as a product failure.
+      let resumed = null;
+      for (let attempt = 0; attempt <= supervisorLeaves.length; attempt += 1) {
+        resumed = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE: "0" } },
+        );
+        if (resumed.code === 0) break;
+        assert(resumed.stderr.includes("packet paused before"), resumed.stderr || resumed.stdout);
+      }
+      assert(resumed?.code === 0, resumed?.stderr || resumed?.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "resumed supervisor packet reran a completed stage or skipped a fixed leaf");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
@@ -8747,6 +8762,10 @@ try {
   });
 
   test("finish-pr resumable check packet fails closed before execution on binding drift, expiry, or malformed state", () => {
+    assert(
+      readFileSync(scriptPath, "utf8").includes("function resumableCheckPacketLifetimeMs(plan)"),
+      "resumable check packet lifetime must derive from its complete bounded stage plan",
+    );
     for (const scenario of [
       { name: "task", mutate: (packet) => ({ ...packet, task_id: "other-task" }) },
       { name: "owner", mutate: (packet) => ({ ...packet, owner: "other-runner" }) },
@@ -8754,6 +8773,8 @@ try {
       { name: "plan digest", mutate: (packet) => ({ ...packet, plan_digest: "f".repeat(64) }) },
       { name: "expiry", mutate: (packet) => ({ ...packet, expires_at: "2026-07-25T00:00:00.000Z" }) },
       { name: "future timestamp", mutate: (packet) => ({ ...packet, updated_at: "2099-01-01T00:00:00.000Z" }) },
+      { name: "malformed recorded lifetime", mutate: (packet) => ({ ...packet, packet_lifetime_ms: "forever" }) },
+      { name: "oversized recorded lifetime", mutate: (packet) => ({ ...packet, packet_lifetime_ms: Number.MAX_SAFE_INTEGER }) },
       { name: "unexpected retained data", mutate: (packet) => ({ ...packet, raw_output: "fixture-packet-secret" }) },
       { name: "malformed", mutate: () => ({ status: "partial", raw_output: "fixture-packet-secret" }) },
     ]) {
@@ -8780,6 +8801,105 @@ try {
       } finally {
         cleanupFinishPrExistingCommitFixture(fixture);
       }
+    }
+  });
+
+  test("finish-pr accepts a resumable packet whose complete bounded plan exceeds the retired three-hour aggregate", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = Array.from({ length: 91 }, (_, index) => `check:ttl-leaf-${index + 1}`);
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const createdAt = new Date(Date.now() - (3 * 60 * 60 * 1_000) - 60_000);
+      const lifetimeMs = stages.length * 180_000;
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        created_at: createdAt.toISOString(),
+        updated_at: createdAt.toISOString(),
+        expires_at: new Date(createdAt.getTime() + lifetimeMs).toISOString(),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "fixture pause unexpectedly completed the long packet");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "long packet ran a stage before the pause seam");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr retains bounded orchestration headroom for a healthy resumable packet", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const executionBudgetMs = stages.length * 180_000;
+      const lifetimeMs = executionBudgetMs + 2 * 60_000 + stages.length * 30_000;
+      const createdAt = new Date(Date.now() - executionBudgetMs - 30_000);
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        created_at: createdAt.toISOString(),
+        updated_at: createdAt.toISOString(),
+        expires_at: new Date(createdAt.getTime() + lifetimeMs).toISOString(),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "fixture pause unexpectedly completed the packet");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "packet ran a stage before the pause seam");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr can discard a long-plan packet using its persisted original lifetime", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const lifetimeMs = 3 * 60 * 60_000 + 30 * 60_000;
+      const createdAt = new Date(Date.now() - 4 * 60 * 60_000);
+      const updatedAt = new Date(createdAt.getTime() + 3 * 60 * 60_000);
+      const failedAt = new Date(updatedAt.getTime() - 1_000);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages, {
+        head: "f".repeat(40),
+        created_at: createdAt.toISOString(),
+        updated_at: updatedAt.toISOString(),
+        expires_at: new Date(createdAt.getTime() + lifetimeMs).toISOString(),
+        packet_lifetime_ms: lifetimeMs,
+        stages: [{ stage: stages[0], completed_at: failedAt.toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }],
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "discard recovery unexpectedly completed");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "discarded long-plan packet ran a stage before the pause seam");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "partial", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
     }
   });
 
@@ -9043,6 +9163,7 @@ try {
 
       assert(result.code !== 0, "timed-out supervisor leaf unexpectedly passed");
       assert(result.stderr.includes(`check stage=${timeoutStage}`), result.stderr || result.stdout);
+      assert(result.stderr.includes("timeout_ms=170000"), result.stderr || result.stdout);
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       const evidence = manifest.check_verification_packet?.stages?.at(-1);
       assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));
@@ -9093,9 +9214,13 @@ try {
       const stageLog = installFixtureResumableCheckPlan(fixture, stages);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
+      const createdAt = new Date(Date.now() - 5 * 60_000).toISOString();
+      const expiresAt = new Date(Date.now() - 1_000).toISOString();
       const completedAt = new Date(Date.now() - 500).toISOString();
       manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
         head: "f".repeat(40),
+        created_at: createdAt,
+        expires_at: expiresAt,
         stages: [{ stage: stages[0], completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }],
         next_stage: stages[1],
         updated_at: completedAt,
@@ -9551,17 +9676,49 @@ try {
     }
   });
 
+  test("finish-pr discards an exact self-describing passed packet from a retired plan", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const currentStages = ["check:packet-one"];
+      const retiredStages = ["check:packet-one", "check:packet-two", "check:packet-three"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, currentStages);
+      installFixtureResumableCheckPauseBeforeStageSeam(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixturePassedResumableCheckPacket(fixture, retiredStages, {
+        head: "f".repeat(40),
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "historical passed packet recovery unexpectedly completed");
+      assert(result.stderr.includes("packet paused"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "historical passed packet ran a stage before the pause seam");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "partial", JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr terminal packet recovery rejects implicit, nonterminal, mismatched-owner, and malformed resets", () => {
     for (const scenario of [
       { name: "implicit", args: [], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { head: "f".repeat(40) }), expected: "binding changed" },
       { name: "legacy missing staged snapshot implicit", args: [], packet: (fixture, stages) => { const packet = fixtureFailedResumableCheckPacket(fixture, stages); delete packet.staged_input_digest; return packet; }, expected: "staged input binding is malformed" },
       { name: "unrecognized historical plan", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64), head: "f".repeat(40) }), expected: "plan digest is not current or a recognized legacy plan" },
+      { name: "self-describing failed historical plan", args: ["--stage-all"], packet: (fixture) => { const failedAt = new Date(Date.now() - 500).toISOString(); const retiredStage = "check:retired-historical"; return fixtureFailedResumableCheckPacket(fixture, [retiredStage], { head: "f".repeat(40), plan_digest: createHash("sha256").update(retiredStage).digest("hex"), stages: [{ stage: retiredStage, completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }], next_stage: retiredStage, failed_stage: retiredStage, updated_at: failedAt }); }, expected: "plan digest is not current or a recognized legacy plan" },
       { name: "malformed partial", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureResumableCheckPacket(fixture, stages, { plan_digest: "f".repeat(64) }), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },
       { name: "owner", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { owner: "other-runner" }), expected: "binding changed" },
       { name: "malformed", args: ["--stage-all"], packet: (fixture, stages) => ({ ...fixtureFailedResumableCheckPacket(fixture, stages), raw_output: "fixture-packet-secret" }), expected: "contains unbounded fields" },
       { name: "failed history", args: ["--stage-all"], packet: (fixture, stages) => fixtureFailedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[0], completed_at: new Date(Date.now() - 800).toISOString(), status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }, { stage: stages[1], completed_at: new Date(Date.now() - 700).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }] }), expected: "failed packet stage is malformed" },
       { name: "passed duplicate history", args: ["--stage-all"], packet: (fixture, stages) => fixturePassedResumableCheckPacket(fixture, stages, { stages: [{ stage: stages[0], completed_at: new Date(Date.now() - 800).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }, { stage: stages[0], completed_at: new Date(Date.now() - 700).toISOString(), status: 0, signal: null, error_code: null, output: "omitted" }] }), expected: "stage evidence stage is malformed" },
       { name: "passed legacy timestamp", args: ["--stage-all"], packet: (fixture, stages) => fixtureLegacyPassedResumableCheckPacket(fixture, stages), expected: "stage evidence is malformed" },
+      { name: "legacy lifetime above retired ceiling", args: ["--stage-all"], packet: (fixture, stages) => { const packet = fixtureLegacyFailedResumableCheckPacket(fixture, stages); packet.expires_at = new Date(Date.parse(packet.created_at) + 3 * 60 * 60_000 + 31_000).toISOString(); return packet; }, expected: "timestamp ordering is invalid" },
       { name: "failure after expiry", args: ["--stage-all"], packet: (fixture, stages) => fixtureLegacyFailedResumableCheckPacket(fixture, stages, { expires_at: new Date(Date.now() - 26 * 60_000).toISOString() }), expected: "stage evidence is malformed" },
       { name: "intermediate legacy timestamp", args: ["--stage-all"], packet: (fixture, stages) => { const packet = fixtureLegacyFailedResumableCheckPacket(fixture, stages); packet.stages[0].completed_at = new Date(Date.parse(packet.updated_at) + 60_000).toISOString(); return packet; }, expected: "stage evidence is malformed" },
       { name: "unknown legacy stage", args: ["--stage-all"], packet: (fixture, stages) => { const failedAt = new Date(Date.now() - 500).toISOString(); return fixtureFailedResumableCheckPacket(fixture, stages, { stages: [{ stage: "check:unknown-legacy", completed_at: failedAt, status: null, signal: "SIGKILL", error_code: "ETIMEDOUT", output: "omitted" }], updated_at: failedAt, next_stage: "check:unknown-legacy", failed_stage: "check:unknown-legacy" }); }, expected: "stage evidence is not an ordered plan prefix" },
@@ -9655,12 +9812,18 @@ try {
     }
   });
 
-  test("external check stage handoff records the fixed leaf in the production-shaped plan and resumes every later stage before delivery", () => {
+  test("external check stage handoff records the fixed leaf for an exact-head open PR and resumes every later stage before delivery", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const { stages, stageLog } = installFixtureProductionShapeExternalCheckStageHandoffPlan(fixture);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
+      manifest.status = "pr_open";
+      manifest.pr_number = 456;
+      manifest.pr_url = "https://example.test/pull/456";
+      manifest.pr_delivery_branch = manifest.branch;
+      manifest.pr_delivery_base_branch = manifest.base_branch;
+      manifest.pr_delivery_head_sha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
       manifest.check_verification_packet = fixtureExternalCheckStageHandoffPacket(fixture, stages);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       installFixtureDeliveryProbes(fixture, { allowDelivery: true });
@@ -20149,7 +20312,7 @@ function activeFixtureTaskLock(taskId) {
 
 function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {
   const source = readFileSync(fixture.script, "utf8");
-  const original = "const codexWorkspaceVerificationTimeoutMs = 900_000;";
+  const original = "const codexWorkspaceVerificationTimeoutMs = 1_800_000;";
   assert(source.includes(original), "fixture did not contain the reviewed codex-workspace timeout literal");
   writeFileSync(fixture.script, source.replace(original, `const codexWorkspaceVerificationTimeoutMs = ${timeoutMs};`));
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);

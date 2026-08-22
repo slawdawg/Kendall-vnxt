@@ -282,7 +282,7 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
 
     active_migrations = _active_migrations_module()
     later_migration = active_migrations.SchemaMigration(
-        "0003_non_idempotent_model_table",
+        "0005_non_idempotent_model_table",
         non_idempotent_later_upgrade,
         clean_install=clean_install_future_table,
     )
@@ -377,6 +377,53 @@ async def test_migration_bookkeeping_rejects_non_prefix_history(tmp_path, monkey
                 f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
             ))).scalars())
         assert recorded == ("0002_legacy_compatibility",)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legacy_compatibility(tmp_path, monkeypatch) -> None:
+    """Recorded 0002 databases receive the later review-plane fence exactly once."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recorded-0002-memory-proposals.db'}")
+    monkeypatch.setattr(database, "engine", engine)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                "CREATE TABLE memory_proposals (id VARCHAR(36) PRIMARY KEY, work_item_id VARCHAR(36), proposal_id VARCHAR(120))"
+            ))
+            await connection.execute(text(
+                "INSERT INTO memory_proposals (id, work_item_id, proposal_id) VALUES ('legacy', 'work-item', 'proposal')"
+            ))
+            await connection.execute(text("CREATE TABLE admission_locks (scope VARCHAR(80) PRIMARY KEY, generation INTEGER)"))
+            await connection.execute(text(
+                f"CREATE TABLE {SCHEMA_MIGRATIONS_TABLE} (revision VARCHAR(80) PRIMARY KEY)"
+            ))
+            for revision in ("0001_model_baseline", "0002_legacy_compatibility"):
+                await connection.execute(
+                    text(f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES (:revision)"),
+                    {"revision": revision},
+                )
+
+        await database.init_db()
+
+        async with engine.begin() as connection:
+            columns = {
+                column[1]
+                for column in (await connection.execute(text("PRAGMA table_info(memory_proposals)"))).all()
+            }
+            assert "revision" in columns
+            assert await connection.scalar(text("SELECT revision FROM memory_proposals WHERE id = 'legacy'")) == 1
+            recorded = set((await connection.execute(
+                text(f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE}")
+            )).scalars())
+            assert recorded == {
+                "0001_model_baseline",
+                    "0002_legacy_compatibility",
+                    "0003_memory_proposal_revision",
+                    "0004_memory_proposal_write_reservation",
+                    "0005_memory_proposal_write_intent",
+                }
     finally:
         await engine.dispose()
 

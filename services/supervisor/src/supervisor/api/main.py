@@ -103,6 +103,8 @@ from supervisor.api.schemas import (
     SupervisorTerminalEventProjectionApiEnvelope,
     OperatorViewListApiEnvelope,
     MemoryProposalAiDraftWriteRequest,
+    MemoryProposalWriteRecoveryRequest,
+    WorkItemMemoryReviewApiEnvelope,
     MemoryInboxShellApiEnvelope,
     MemoryInboxLifecycleCommandApiEnvelope,
     MemoryInboxLifecycleCommandRequest,
@@ -191,7 +193,7 @@ from supervisor.application.operator_auth import (
     record_auth_audit,
     revoke_all_sessions,
 )
-from supervisor.application.service import SupervisorService
+from supervisor.application.service import MemoryProposalRevisionConflict, SupervisorService
 from supervisor.application.memory_inbox_lifecycle import MemoryInboxLifecycleCommand, apply_lifecycle_command
 from supervisor.application.memory_inbox_projection import read_memory_inbox_projection, read_review_ready_count
 from supervisor.application.memory_inbox_capture import capture_acknowledged_text
@@ -384,6 +386,23 @@ async def require_memory_inbox_command_operator(request: Request, session: Async
     if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
         raise HTTPException(status_code=403, detail="CSRF validation failed.")
     return operator
+
+
+async def require_memory_proposal_recovery_operator(
+    request: Request,
+    session: AsyncSession,
+) -> DashboardOperator | None:
+    """Fence abandoned-write recovery to a local authenticated operator.
+
+    Development instances without LAN authentication retain a loopback-only
+    maintenance path. A deployed LAN instance must also satisfy the same
+    session, Origin, and CSRF policy as every other operator mutation.
+    """
+
+    require_local_operational_boundary(request)
+    if not settings.lan_auth_enabled:
+        return None
+    return await require_memory_inbox_command_operator(request, session)
 
 
 def require_local_dogfood_attestation(request: Request) -> None:
@@ -1727,11 +1746,17 @@ async def update_work_item_memory_proposal(
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         proposal = await service.update_memory_proposal(session, work_item_id, proposal_id, payload)
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_review_rejected").model_dump()) from exc
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
-    return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
+    # PATCH is part of the WorkItem V1 review surface. Build the persisted row
+    # directly: a whole-review rebuild can include vault-backed eligibility
+    # probes and otherwise outlive the proxy's short mutation response budget
+    # after this update has already committed.
+    return ApiEnvelope(data=service._work_item_memory_review_proposal_view(proposal))
 
 
 @app.post("/work-items/{work_item_id}/memory-proposals/{proposal_id}/ai-draft", response_model=ApiEnvelope)
@@ -1746,8 +1771,48 @@ async def create_work_item_memory_proposal_ai_draft(
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         proposal = await service.create_memory_proposal_ai_draft(session, work_item_id, proposal_id, payload)
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_ai_draft_blocked").model_dump()) from exc
+    except asyncio.CancelledError:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
+    except Exception:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
+    if not proposal:
+        raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
+    return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
+
+
+@app.post("/work-items/{work_item_id}/memory-proposals/{proposal_id}/recover-abandoned-write", response_model=ApiEnvelope)
+async def recover_work_item_memory_proposal_write(
+    work_item_id: str,
+    proposal_id: str,
+    payload: MemoryProposalWriteRecoveryRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    operator = await require_memory_proposal_recovery_operator(request, session)
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        proposal = await service.recover_abandoned_memory_proposal_write(
+            session,
+            work_item_id,
+            proposal_id,
+            expected_revision=payload.expectedRevision,
+            recovery_ref=payload.recoveryRef,
+            actor_id=operator.id if operator else None,
+            actor_label="Dashboard operator" if operator else None,
+        )
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_recovery_blocked").model_dump()) from exc
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
@@ -1765,8 +1830,17 @@ async def create_work_item_llm_wiki_rebuild(
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     try:
         proposal = await service.create_llm_wiki_disposable_rebuild(session, work_item_id, proposal_id, payload)
+    except MemoryProposalRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "memory_proposal_revision_conflict").model_dump()) from exc
     except ValueError as exc:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
         raise HTTPException(status_code=400, detail=error_response(str(exc), "llm_wiki_rebuild_blocked").model_dump()) from exc
+    except asyncio.CancelledError:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
+    except Exception:
+        await service.release_failed_memory_proposal_write(session, work_item_id)
+        raise
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
@@ -1789,6 +1863,14 @@ async def get_work_item_llm_wiki_artifact(
     if not result:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return LlmWikiArtifactApiEnvelope(data=result)
+
+
+@app.get("/pipeline-control-plane/work-items/{work_item_id}/memory-review", response_model=WorkItemMemoryReviewApiEnvelope)
+async def get_canonical_work_item_memory_review(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    review = await service.get_work_item_memory_review(session, work_item_id)
+    if not review:
+        raise HTTPException(status_code=404, detail=error_response("Work item memory review not found.", "work_item_memory_review_not_found").model_dump())
+    return WorkItemMemoryReviewApiEnvelope(data=review)
 
 
 @app.get("/work-items/{work_item_id}/execution-attempts", response_model=ExecutionAttemptApiEnvelope)

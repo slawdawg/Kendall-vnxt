@@ -2,12 +2,15 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import socket
 import sqlite3
+import stat
 import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -39,6 +42,876 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     from supervisor.api.main import app
 
     return TestClient(app, client=("127.0.0.1", 50000))
+
+
+def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkeypatch) -> None:
+    from supervisor.application.service import (
+        MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
+        MAX_MEMORY_ARTIFACT_FILENAME_BYTES,
+        _atomic_write_memory_artifact,
+        _assert_llm_wiki_front_matter_within_read_limit,
+        _assert_memory_backup_matches_preliminary_artifact,
+        _canonical_memory_artifact_leaf,
+        _assert_directory_identity,
+        _directory_identity,
+        _fsync_memory_backup_tree,
+        _memory_artifact_lock,
+        _memory_artifact_filename,
+        _mkdir_memory_vault_directory,
+        _open_existing_non_symlink_directory,
+        _open_pinned_memory_vault_root_for_async_read,
+        _pinned_existing_memory_vault_root,
+        _pinned_new_memory_backup_directory,
+        _read_bounded_utf8_text,
+        _read_bounded_utf8_text_from_root_fd,
+        _read_strict_utf8_memory_artifact,
+        _restore_private_memory_backup_mode,
+        _restore_memory_artifact_after_lost_reservation,
+        _yaml_string,
+    )
+    import supervisor.application.service as service_module
+
+    artifact_path = tmp_path / "derived.md"
+    artifact_path.write_bytes(b"---\nstatus: llm-wiki-derived\n---\n" + b"x" * (MAX_LLM_WIKI_ARTIFACT_READ_BYTES + 4096))
+    assert len(_read_bounded_utf8_text(artifact_path).encode("utf-8")) == MAX_LLM_WIKI_ARTIFACT_READ_BYTES
+    _assert_llm_wiki_front_matter_within_read_limit("---\nstatus: ai-draft\n---\nbody\n")
+    with pytest.raises(ValueError, match="front matter exceeds"):
+        _assert_llm_wiki_front_matter_within_read_limit(
+            "---\nsource_refs: \"" + ("x" * MAX_LLM_WIKI_ARTIFACT_READ_BYTES) + "\"\n---\nbody\n"
+        )
+
+    legacy_artifact = tmp_path / "legacy-non-utf8.md"
+    legacy_artifact.write_bytes(b"---\nstatus: approved\n---\n\xff")
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        _read_strict_utf8_memory_artifact(legacy_artifact)
+    with pytest.raises(ValueError, match="single-line"):
+        _yaml_string('operator\nwork_item_id: forged')
+    assert _yaml_string('operator "quoted"') == 'operator \\"quoted\\"'
+
+    preliminary_backup = tmp_path / "preliminary-backup"
+    preliminary_backup.mkdir()
+    copied_legacy_artifact = preliminary_backup / "legacy.md"
+    copied_legacy_artifact.write_bytes(b"intermediate human bytes\n")
+    with pytest.raises(ValueError, match="backup changed while the source artifact was copied"):
+        _assert_memory_backup_matches_preliminary_artifact(
+            preliminary_backup,
+            Path("legacy.md"),
+            hashlib.sha256(b"original bytes\n").hexdigest(),
+        )
+    _assert_memory_backup_matches_preliminary_artifact(
+        preliminary_backup,
+        Path("legacy.md"),
+        hashlib.sha256(b"intermediate human bytes\n").hexdigest(),
+    )
+
+    vault_root = tmp_path / "vault"
+    queue = vault_root / "01 Dashboard Queue" / "AI Drafts"
+    queue.mkdir(parents=True)
+    external_artifact = tmp_path / "external-artifact.md"
+    external_artifact.write_text("human-owned artifact\n", encoding="utf-8")
+    substituted_leaf = queue / "proposal.md"
+    substituted_leaf.symlink_to(external_artifact)
+    # The immutable intent must retain the observed leaf.  Resolving it here
+    # would turn the later no-follow recovery fence into an operation on the
+    # external target instead of rejecting the substitution.
+    assert _canonical_memory_artifact_leaf(vault_root, substituted_leaf) == substituted_leaf
+    assert _canonical_memory_artifact_leaf(vault_root, substituted_leaf).is_symlink()
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        _read_strict_utf8_memory_artifact(substituted_leaf)
+
+    # Search opens the configured vault once, then walks the requested queue
+    # through that descriptor. Replacing the configured root after it opens
+    # must not make a search read an attacker-controlled replacement tree.
+    search_vault = tmp_path / "search-vault"
+    search_relative_path = Path("02 Reference Vault") / "LLM Wiki" / "proposal.md"
+    original_search_artifact = search_vault / search_relative_path
+    original_search_artifact.parent.mkdir(parents=True)
+    original_search_artifact.write_text("original descriptor-bound artifact\n", encoding="utf-8")
+    replacement_search_vault = tmp_path / "replacement-search-vault"
+    replacement_search_artifact = replacement_search_vault / search_relative_path
+    replacement_search_artifact.parent.mkdir(parents=True)
+    replacement_search_artifact.write_text("untrusted replacement artifact\n", encoding="utf-8")
+    search_vault_fd = _open_existing_non_symlink_directory(search_vault)
+    try:
+        parked_search_vault = tmp_path / "parked-search-vault"
+        search_vault.rename(parked_search_vault)
+        search_vault.symlink_to(replacement_search_vault, target_is_directory=True)
+        assert _read_bounded_utf8_text_from_root_fd(search_vault_fd, search_relative_path) == (
+            "original descriptor-bound artifact\n"
+        )
+    finally:
+        os.close(search_vault_fd)
+
+    cancellation_vault = tmp_path / "cancellation-vault"
+    cancellation_vault.mkdir()
+    original_open_directory = service_module._open_existing_non_symlink_directory
+    opened_directory = threading.Event()
+    release_directory = threading.Event()
+    opened_descriptors: list[int] = []
+
+    def delayed_open_directory(path: Path) -> int:
+        descriptor = original_open_directory(path)
+        opened_descriptors.append(descriptor)
+        opened_directory.set()
+        assert release_directory.wait(timeout=5)
+        return descriptor
+
+    monkeypatch.setattr(service_module, "_open_existing_non_symlink_directory", delayed_open_directory)
+
+    async def cancel_root_open() -> None:
+        root_open = asyncio.create_task(_open_pinned_memory_vault_root_for_async_read(cancellation_vault))
+        assert await asyncio.to_thread(opened_directory.wait, 5)
+        root_open.cancel()
+        await asyncio.sleep(0)
+        release_directory.set()
+        with pytest.raises(asyncio.CancelledError):
+            await root_open
+
+    asyncio.run(cancel_root_open())
+    assert len(opened_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened_descriptors[0])
+
+    source_vault = tmp_path / "mode-source-vault"
+    source_vault.mkdir(mode=0o755)
+    os.chmod(source_vault, 0o755)
+    private_backups = tmp_path / "private-backups"
+    with _pinned_new_memory_backup_directory(private_backups, "vault-backup-20260821T182900000000Z") as (
+        pinned_backup,
+        visible_backup,
+    ):
+        shutil.copytree(source_vault, pinned_backup, dirs_exist_ok=True)
+        assert stat.S_IMODE(visible_backup.stat().st_mode) == 0o755
+        _restore_private_memory_backup_mode(pinned_backup)
+        assert stat.S_IMODE(visible_backup.stat().st_mode) == 0o700
+
+    artifact_id = f"{'p' * 120}-{'a' * 36}"
+    filename = _memory_artifact_filename("llm-wiki-derived-", "L" * 80, artifact_id)
+    assert filename.startswith("llm-wiki-derived-")
+    assert filename.endswith(f"-{artifact_id}.md")
+    assert len(filename.encode("utf-8")) <= MAX_MEMORY_ARTIFACT_FILENAME_BYTES
+    # The final component budget reserves the in-place `.<uuid>.tmp` sibling
+    # used by the atomic writer, so this maximum-shaped artifact still writes
+    # on filesystems with a 255-byte component boundary.
+    _atomic_write_memory_artifact(tmp_path / filename, b"durable metadata-only artifact\n")
+    assert (tmp_path / filename).read_bytes() == b"durable metadata-only artifact\n"
+
+    replacement_path = tmp_path / "replacement.md"
+    replacement_path.write_bytes(b"old-bytes\n")
+    old_mtime_ns = time.time_ns() - 2_000_000_000
+    os.utime(replacement_path, ns=(old_mtime_ns, old_mtime_ns))
+    _atomic_write_memory_artifact(replacement_path, b"new-bytes\n")
+    assert replacement_path.stat().st_mtime_ns > old_mtime_ns
+
+    # Recovery supplies the durable interrupted-write digest to the atomic
+    # replacement fence. A later human edit must remain untouched rather than
+    # becoming the implicit source for a restore.
+    recovery_path = tmp_path / "recovery-reproof.md"
+    recovery_path.write_bytes(b"interrupted writer bytes\n")
+    recovery_path.write_bytes(b"human edit after recovery proof\n")
+    with pytest.raises(ValueError, match="changed after the abandoned write"):
+        _atomic_write_memory_artifact(
+            recovery_path,
+            b"backup bytes\n",
+            expected_existing_digest=hashlib.sha256(b"interrupted writer bytes\n").hexdigest(),
+        )
+    assert recovery_path.read_bytes() == b"human edit after recovery proof\n"
+
+    backup_tree = tmp_path / "backup-tree"
+    nested_tree = backup_tree / "nested"
+    nested_tree.mkdir(parents=True)
+    root_file = backup_tree / "root.txt"
+    nested_file = nested_tree / "nested.txt"
+    root_file.write_bytes(b"root")
+    nested_file.write_bytes(b"nested")
+    (backup_tree / "preserved-link").symlink_to("nested/nested.txt")
+    original_fsync = service_module.os.fsync
+    fsynced_inodes: set[int] = set()
+
+    def record_fsync(descriptor: int) -> None:
+        fsynced_inodes.add(os.fstat(descriptor).st_ino)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(service_module.os, "fsync", record_fsync)
+    _fsync_memory_backup_tree(backup_tree)
+    assert {
+        backup_tree.stat().st_ino,
+        nested_tree.stat().st_ino,
+        root_file.stat().st_ino,
+        nested_file.stat().st_ino,
+    } <= fsynced_inodes
+
+    shared_temp = tmp_path / "shared-temp"
+    shared_temp.mkdir()
+    monkeypatch.setattr(service_module.tempfile, "gettempdir", lambda: str(shared_temp))
+    private_lock_root = shared_temp / f"kendall-memory-artifact-locks-{os.geteuid()}"
+    redirected_locks = tmp_path / "redirected-locks"
+    redirected_locks.mkdir()
+    private_lock_root.symlink_to(redirected_locks, target_is_directory=True)
+    with pytest.raises(OSError):
+        with _memory_artifact_lock(tmp_path / "derived.md"):
+            pass
+    private_lock_root.unlink()
+    with _memory_artifact_lock(tmp_path / "derived.md"):
+        assert private_lock_root.is_dir()
+    assert not list(redirected_locks.iterdir())
+
+    approved_root = tmp_path / "approved-backups"
+    redirected_root = tmp_path / "redirected-backups"
+    approved_root.mkdir()
+    redirected_root.mkdir()
+    with _pinned_new_memory_backup_directory(approved_root, "vault-backup-20260818T230000000000Z") as (pinned_backup, recorded_backup):
+        parked_root = tmp_path / "parked-approved-backups"
+        approved_root.rename(parked_root)
+        approved_root.symlink_to(redirected_root, target_is_directory=True)
+        (pinned_backup / "snapshot-proof").write_text("pinned", encoding="utf-8")
+        _fsync_memory_backup_tree(pinned_backup)
+        assert recorded_backup == approved_root / "vault-backup-20260818T230000000000Z"
+    assert (parked_root / "vault-backup-20260818T230000000000Z" / "snapshot-proof").read_text(encoding="utf-8") == "pinned"
+    assert not (redirected_root / "vault-backup-20260818T230000000000Z").exists()
+
+    vault_source = tmp_path / "vault-source"
+    (vault_source / "nested").mkdir(parents=True)
+    (vault_source / "nested" / "original.txt").write_text("original", encoding="utf-8")
+    redirected_source = tmp_path / "redirected-source"
+    redirected_source.mkdir()
+    (redirected_source / "other.txt").write_text("untrusted", encoding="utf-8")
+    with _pinned_existing_memory_vault_root(vault_source) as (pinned_source, _):
+        parked_source = tmp_path / "parked-vault-source"
+        vault_source.rename(parked_source)
+        vault_source.symlink_to(redirected_source, target_is_directory=True)
+        copied = tmp_path / "copied-pinned-source"
+        shutil.copytree(pinned_source, copied, symlinks=True)
+    assert (copied / "nested" / "original.txt").read_text(encoding="utf-8") == "original"
+    assert not (copied / "other.txt").exists()
+
+    queue_vault = tmp_path / "queue-vault"
+    queue_vault.mkdir()
+    _mkdir_memory_vault_directory(queue_vault, Path("01 Dashboard Queue") / "AI Drafts")
+    assert (queue_vault / "01 Dashboard Queue" / "AI Drafts").is_dir()
+
+    identity_root = tmp_path / "identity-vault"
+    identity_root.mkdir()
+    identity = _directory_identity(identity_root)
+    parked_identity_root = tmp_path / "parked-identity-vault"
+    identity_root.rename(parked_identity_root)
+    identity_root.mkdir()
+    with pytest.raises(ValueError, match="changed after intent recording"):
+        _assert_directory_identity(identity_root, identity, label="vault")
+
+    # Compensation must not re-resolve a replaced vault path. A lost writer
+    # can only remove/restore bytes through the same vault inode recorded in
+    # its durable intent.
+    compensation_vault = tmp_path / "compensation-vault"
+    compensation_path = compensation_vault / "01 Dashboard Queue" / "AI Drafts" / "proposal.md"
+    compensation_path.parent.mkdir(parents=True)
+    compensation_path.write_bytes(b"writer bytes\n")
+    compensation_identity = _directory_identity(compensation_vault)
+    parked_compensation_vault = tmp_path / "parked-compensation-vault"
+    compensation_vault.rename(parked_compensation_vault)
+    compensation_path.parent.mkdir(parents=True)
+    compensation_path.write_bytes(b"writer bytes\n")
+    _restore_memory_artifact_after_lost_reservation(
+        compensation_path,
+        b"writer bytes\n",
+        None,
+        vault_root=compensation_vault,
+        vault_identity=compensation_identity,
+    )
+    assert compensation_path.read_bytes() == b"writer bytes\n"
+
+    source = Path(service_module.__file__).read_text(encoding="utf-8")
+    atomic_write = source[source.index("def _atomic_write_memory_artifact"):source.index("def _revalidate_memory_artifact_bytes")]
+    assert "if parent_fd != root_fd:\n                os.close(parent_fd)\n            os.close(root_fd)" in atomic_write
+
+
+def test_atomic_memory_artifact_closes_intermediate_parent_on_traversal_failure(tmp_path, monkeypatch) -> None:
+    """A failed nested queue open must not leak the already-open parent FD."""
+    from supervisor.application.service import _atomic_write_memory_artifact, _directory_identity
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    (vault_root / "queue").mkdir(parents=True)
+    target = vault_root / "queue" / "missing" / "proposal.md"
+    original_open = service_module.os.open
+    original_close = service_module.os.close
+    opened: set[int] = set()
+
+    def tracked_open(path, flags, *args, **kwargs):
+        if path == "missing":
+            raise FileNotFoundError("injected nested queue removal")
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened.add(descriptor)
+        return descriptor
+
+    def tracked_close(descriptor: int) -> None:
+        opened.discard(descriptor)
+        original_close(descriptor)
+
+    monkeypatch.setattr(service_module.os, "open", tracked_open)
+    monkeypatch.setattr(service_module.os, "close", tracked_close)
+    with pytest.raises(FileNotFoundError, match="injected nested queue removal"):
+        _atomic_write_memory_artifact(
+            target,
+            b"metadata-only artifact\n",
+            vault_root=vault_root,
+            vault_identity=_directory_identity(vault_root),
+        )
+    assert not opened
+
+
+def test_memory_artifact_prepared_backup_intent_recovers_only_unchanged_source(tmp_path) -> None:
+    """A pre-copy durable intent may remove only its own partial backup."""
+    from supervisor.application.service import (
+        _memory_artifact_intent_paths,
+        _reconcile_memory_artifact_intent_unlocked,
+    )
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    original_bytes = b"existing operator draft\n"
+    artifact_path.write_bytes(original_bytes)
+    backup_path = tmp_path / "backups" / "partial-copy"
+    backup_path.mkdir(parents=True)
+    (backup_path / "partial-entry").write_bytes(b"partial vault copy")
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1",
+        "vaultRoot": str(vault_root),
+        "artifactPath": str(artifact_path),
+        "backupPath": str(backup_path),
+        "writtenSha256": hashlib.sha256(b"new writer bytes\n").hexdigest(),
+        "backupArtifactSha256": None,
+        "backupPrepared": False,
+        "priorArtifactSha256": hashlib.sha256(original_bytes).hexdigest(),
+    }
+
+    _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert artifact_path.read_bytes() == original_bytes
+    assert not backup_path.exists()
+    # A cancelled recovery can remove the partial backup before its event/DB
+    # commit. Its retry still owns the same preliminary intent and must finish
+    # once it reproves the untouched artifact and canonical backup parent.
+    _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert artifact_path.read_bytes() == original_bytes
+
+    backup_path.mkdir(parents=True)
+    artifact_path.write_bytes(b"external concurrent edit\n")
+    with pytest.raises(ValueError, match="changed before backup completion"):
+        _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert backup_path.exists()
+
+
+def test_memory_artifact_partial_backup_deletion_binds_the_recorded_directory(tmp_path) -> None:
+    """A replaced partial-backup leaf is never deleted through its old pathname."""
+    from supervisor.application.service import _directory_identity, _remove_verified_backup_directory
+
+    backup_root = tmp_path / "backups"
+    backup_path = backup_root / "partial-copy"
+    backup_path.mkdir(parents=True)
+    (backup_path / "recorded").write_text("recorded", encoding="utf-8")
+    identity = _directory_identity(backup_path)
+    parked = backup_root / "parked-partial-copy"
+    backup_path.rename(parked)
+    backup_path.mkdir()
+    (backup_path / "replacement").write_text("untrusted", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed after intent recording"):
+        _remove_verified_backup_directory(backup_path, identity)
+    assert (parked / "recorded").read_text(encoding="utf-8") == "recorded"
+    assert (backup_path / "replacement").read_text(encoding="utf-8") == "untrusted"
+
+
+def test_async_memory_artifact_lock_retries_nonblocking_flock_without_executor_wait(tmp_path, monkeypatch) -> None:
+    """Contention yields the loop instead of occupying a shared executor thread."""
+    from supervisor.application.service import _async_memory_artifact_lock
+    import supervisor.application.service as service_module
+
+    original_flock = service_module.fcntl.flock
+    attempts = 0
+
+    def busy_once(descriptor: int, operation: int) -> None:
+        nonlocal attempts
+        if operation & service_module.fcntl.LOCK_NB and attempts == 0:
+            attempts += 1
+            raise BlockingIOError()
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(service_module.fcntl, "flock", busy_once)
+
+    async def acquire() -> None:
+        async with _async_memory_artifact_lock(tmp_path / "artifact.md"):
+            assert attempts == 1
+
+    asyncio.run(acquire())
+    source = Path(service_module.__file__).read_text(encoding="utf-8")
+    lock_section = source[source.index("async def _async_memory_artifact_lock"):source.index("def _fsync_memory_backup_tree")]
+    assert "fcntl.LOCK_EX | fcntl.LOCK_NB" in lock_section
+    assert "asyncio.to_thread(fcntl.flock" not in lock_section
+
+
+def test_memory_review_ai_draft_eligibility_uses_shared_state_and_bounded_concurrency(monkeypatch) -> None:
+    """A many-proposal read cannot serially consume the dashboard proxy deadline."""
+    from supervisor.application.service import (
+        MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY,
+        SupervisorService,
+    )
+
+    service = object.__new__(SupervisorService)
+    config_loads = 0
+    active = 0
+    maximum_active = 0
+    probe_threads: set[int] = set()
+    counter_lock = threading.Lock()
+    main_thread_id = threading.get_ident()
+
+    def load_config() -> dict[str, object]:
+        nonlocal config_loads
+        config_loads += 1
+        return {"draft_folder": "01 Dashboard Queue/AI Drafts", "vault_root": "/unused"}
+
+    class EmptyDuplicateRowsSession:
+        async def execute(self, *_args, **_kwargs):
+            return []
+
+    def bounded_probe(*_args, **_kwargs) -> tuple[bool, None]:
+        nonlocal active, maximum_active
+        with counter_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            probe_threads.add(threading.get_ident())
+        try:
+            time.sleep(0.01)
+            return True, None
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(service, "_load_obsidian_memory_draft_config", load_config)
+    monkeypatch.setattr(service, "_memory_proposal_ai_draft_artifact_probe", bounded_probe)
+    monkeypatch.setattr(service, "_llm_wiki_readiness", lambda *_args: SimpleNamespace(decisionState="blocked"))
+    proposals = [
+        SimpleNamespace(
+            id=f"route-{index}",
+            proposal_id=f"proposal-{index}",
+            label=f"Proposal {index}",
+            write_action_token=None,
+            target_vault_path=None,
+        )
+        for index in range(MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY + 2)
+    ]
+    proposal_views = [
+        SimpleNamespace(
+            proposalId=f"proposal-{index}",
+            targetVaultFolder="01 Dashboard Queue/AI Drafts",
+            sourceRefs=[],
+            status="approved",
+            operatorAction="approve",
+            writeBackStatus="approved_for_future",
+            writeBackAllowed=False,
+            freshness="fresh",
+            contradictionStatus="none",
+        )
+        for index, _ in enumerate(proposals)
+    ]
+
+    eligible = asyncio.run(service._memory_proposal_ai_draft_eligibility_for_review(
+        EmptyDuplicateRowsSession(),
+        proposals,
+        proposal_views,
+        [],
+        [],
+        "work-item-1",
+    ))
+
+    assert eligible == [False] * len(proposals)
+    assert config_loads == 1
+    assert maximum_active == MEMORY_REVIEW_ARTIFACT_ELIGIBILITY_CONCURRENCY
+    assert probe_threads and main_thread_id not in probe_threads
+
+
+def test_async_memory_artifact_lock_closes_descriptors_after_cancelled_open(tmp_path, monkeypatch) -> None:
+    """Cancellation joins a completed open worker and closes its descriptors."""
+    from supervisor.application.service import _async_memory_artifact_lock
+    import supervisor.application.service as service_module
+
+    original_open = service_module._open_memory_artifact_lock
+    opened = threading.Event()
+    release = threading.Event()
+    descriptors: list[tuple[int, int]] = []
+
+    def delayed_open(path: Path) -> tuple[int, int]:
+        result = original_open(path)
+        descriptors.append(result)
+        opened.set()
+        assert release.wait(timeout=2), "test failed to release lock opener"
+        return result
+
+    monkeypatch.setattr(service_module, "_open_memory_artifact_lock", delayed_open)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(_async_memory_artifact_lock(tmp_path / "artifact.md").__aenter__())
+        assert await asyncio.to_thread(opened.wait, 2), "lock opener did not start"
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio_run(scenario())
+    assert descriptors
+    for directory_fd, lock_fd in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(lock_fd)
+        with pytest.raises(OSError):
+            os.fstat(directory_fd)
+
+
+def test_memory_proposal_write_reservation_is_registered_before_commit_cancellation() -> None:
+    """A durable reservation remains releasable if commit raises cancellation."""
+    from supervisor.application.service import SupervisorService
+
+    class CommitThenCancelledSession:
+        def __init__(self) -> None:
+            self.info: dict[str, object] = {}
+
+        async def execute(self, _statement):
+            return SimpleNamespace(rowcount=1)
+
+        async def refresh(self, _proposal) -> None:
+            return None
+
+        async def commit(self) -> None:
+            # Model a durable database commit followed by disconnect
+            # cancellation before the awaiting coroutine can resume.
+            raise asyncio.CancelledError()
+
+    async def scenario() -> None:
+        session = CommitThenCancelledSession()
+        proposal = SimpleNamespace(id="memory-proposal-row")
+        with pytest.raises(asyncio.CancelledError):
+            await object.__new__(SupervisorService)._reserve_memory_proposal_write(
+                session,
+                proposal,
+                work_item_id="work-item-row",
+                expected_revision=1,
+            )
+        reservation = session.info.get("memory_proposal_write_reservation")
+        assert isinstance(reservation, tuple)
+        assert reservation[0] == proposal.id
+        assert isinstance(reservation[1], str) and reservation[1]
+
+    asyncio_run(scenario())
+
+
+def test_memory_artifact_recovery_rejects_symlinked_restored_digest(tmp_path) -> None:
+    """A link to snapshot bytes is never accepted as an idempotent recovery."""
+    from supervisor.application.service import (
+        _reconcile_memory_artifact_intent_unlocked,
+    )
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    snapshot_bytes = b"operator snapshot bytes\n"
+    written_bytes = b"interrupted writer bytes\n"
+    backup_path = tmp_path / "backups" / "snapshot"
+    backup_artifact = backup_path / artifact_path.relative_to(vault_root)
+    backup_artifact.parent.mkdir(parents=True)
+    backup_artifact.write_bytes(snapshot_bytes)
+    outside_target = tmp_path / "outside-snapshot.md"
+    outside_target.write_bytes(snapshot_bytes)
+    artifact_path.symlink_to(outside_target)
+    with pytest.raises(ValueError, match="artifact is not a regular file"):
+        _reconcile_memory_artifact_intent_unlocked(
+            vault_root,
+            artifact_path,
+            backup_path,
+            hashlib.sha256(written_bytes).hexdigest(),
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+            artifact_path.relative_to(vault_root),
+            True,
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+        )
+    assert artifact_path.is_symlink()
+    assert outside_target.read_bytes() == snapshot_bytes
+
+
+def test_memory_artifact_empty_snapshot_deletion_fsyncs_parent(tmp_path, monkeypatch) -> None:
+    """A durable recovery keeps its intent until an unlinked artifact is persisted."""
+    from supervisor.application.service import _memory_artifact_intent_paths, _reconcile_memory_artifact_intent_unlocked
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "queue" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    written = b"provisional durable artifact\n"
+    artifact_path.write_bytes(written)
+    backup_path = tmp_path / "backups" / "empty-snapshot"
+    backup_path.mkdir(parents=True)
+    fsynced: set[int] = set()
+    original_fsync = service_module.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        fsynced.add(os.fstat(descriptor).st_ino)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(service_module.os, "fsync", record_fsync)
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1", "vaultRoot": str(vault_root),
+        "artifactPath": str(artifact_path), "backupPath": str(backup_path),
+        "writtenSha256": hashlib.sha256(written).hexdigest(), "backupArtifactSha256": None,
+        "backupPrepared": True, "priorArtifactSha256": None,
+    }
+    _reconcile_memory_artifact_intent_unlocked(*_memory_artifact_intent_paths(intent))
+    assert not artifact_path.exists()
+    assert artifact_path.parent.stat().st_ino in fsynced
+
+
+def test_memory_artifact_intent_rejects_symlinked_backup_hierarchy(tmp_path) -> None:
+    """Recovery never resolves a recorded backup through an attacker-controlled link."""
+    from supervisor.application.service import _memory_artifact_intent_paths
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("existing draft\n", encoding="utf-8")
+    protected = tmp_path / "unrelated-protected-backup"
+    protected.mkdir()
+    marker = protected / "marker"
+    marker.write_text("must survive\n", encoding="utf-8")
+    linked_parent = tmp_path / "linked-backups"
+    linked_parent.symlink_to(protected, target_is_directory=True)
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1",
+        "vaultRoot": str(vault_root),
+        "artifactPath": str(artifact_path),
+        "backupPath": str(linked_parent / "pending-copy"),
+        "writtenSha256": hashlib.sha256(b"new bytes\n").hexdigest(),
+        "backupArtifactSha256": None,
+        "backupPrepared": False,
+        "priorArtifactSha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+    }
+
+    with pytest.raises(ValueError, match="not safely reconcilable"):
+        _memory_artifact_intent_paths(intent)
+    assert marker.read_text(encoding="utf-8") == "must survive\n"
+
+
+def test_memory_artifact_recovery_retains_the_verified_vault_descriptor(tmp_path, monkeypatch) -> None:
+    """A vault swap after intent validation cannot redirect recovery cleanup."""
+    from supervisor.application.service import _directory_identity, _reconcile_memory_artifact_intent
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "queue" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    written_bytes = b"interrupted writer bytes\n"
+    artifact_path.write_bytes(written_bytes)
+    backup_path = tmp_path / "backups" / "empty-snapshot"
+    backup_path.mkdir(parents=True)
+    intent = {
+        "schemaVersion": "memory-proposal-write-intent/v1",
+        "vaultRoot": str(vault_root),
+        "vaultIdentity": _directory_identity(vault_root),
+        "artifactPath": str(artifact_path),
+        "backupPath": str(backup_path),
+        "writtenSha256": hashlib.sha256(written_bytes).hexdigest(),
+        "backupArtifactSha256": None,
+        "backupPrepared": True,
+        "priorArtifactSha256": None,
+    }
+    original_lock = service_module._memory_artifact_lock
+    parked_vault = tmp_path / "parked-vault"
+    replacement_artifact = vault_root / "queue" / "draft.md"
+
+    @contextmanager
+    def swap_after_validation(path):
+        vault_root.rename(parked_vault)
+        replacement_artifact.parent.mkdir(parents=True)
+        replacement_artifact.write_bytes(b"replacement vault artifact\n")
+        with original_lock(path):
+            yield
+
+    monkeypatch.setattr(service_module, "_memory_artifact_lock", swap_after_validation)
+    with pytest.raises(ValueError, match="vault changed after intent recording"):
+        _reconcile_memory_artifact_intent(intent)
+    assert (parked_vault / "queue" / "draft.md").read_bytes() == written_bytes
+    assert replacement_artifact.read_bytes() == b"replacement vault artifact\n"
+
+
+def test_memory_artifact_recovery_keeps_parent_validation_and_restore_on_one_descriptor(tmp_path, monkeypatch) -> None:
+    """A replaced artifact parent cannot redirect recovery after it is pinned."""
+    from supervisor.application.service import (
+        _open_existing_non_symlink_directory,
+        _reconcile_memory_artifact_intent_unlocked,
+    )
+    import supervisor.application.service as service_module
+
+    vault_root = tmp_path / "vault"
+    artifact_path = vault_root / "queue" / "draft.md"
+    artifact_path.parent.mkdir(parents=True)
+    written_bytes = b"interrupted writer bytes\n"
+    snapshot_bytes = b"durable snapshot bytes\n"
+    artifact_path.write_bytes(written_bytes)
+    backup_path = tmp_path / "backups" / "snapshot"
+    backup_artifact = backup_path / artifact_path.relative_to(vault_root)
+    backup_artifact.parent.mkdir(parents=True)
+    backup_artifact.write_bytes(snapshot_bytes)
+    parked_parent = tmp_path / "parked-queue"
+    replacement_artifact = artifact_path
+    original_stat = service_module._memory_artifact_leaf_stat_from_parent_fd
+    swapped = False
+
+    def replace_lexical_parent(parent_fd: int, leaf_name: str):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            artifact_path.parent.rename(parked_parent)
+            replacement_artifact.parent.mkdir(parents=True)
+            replacement_artifact.write_bytes(written_bytes)
+        return original_stat(parent_fd, leaf_name)
+
+    monkeypatch.setattr(service_module, "_memory_artifact_leaf_stat_from_parent_fd", replace_lexical_parent)
+    root_fd = _open_existing_non_symlink_directory(vault_root)
+    try:
+        _reconcile_memory_artifact_intent_unlocked(
+            vault_root,
+            artifact_path,
+            backup_path,
+            hashlib.sha256(written_bytes).hexdigest(),
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+            artifact_path.relative_to(vault_root),
+            True,
+            hashlib.sha256(snapshot_bytes).hexdigest(),
+            vault_root_fd=root_fd,
+        )
+    finally:
+        os.close(root_fd)
+
+    assert swapped
+    assert (parked_parent / "draft.md").read_bytes() == snapshot_bytes
+    assert replacement_artifact.read_bytes() == written_bytes
+
+
+def test_atomic_memory_artifact_write_preserves_prior_bytes_on_replace_failure(tmp_path, monkeypatch) -> None:
+    """A failed writer leaves the durable artifact untouched, never truncated."""
+    import supervisor.application.service as service_module
+
+    artifact_path = tmp_path / "vault" / "artifact.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_bytes(b"prior complete artifact\n")
+
+    def fail_replace(*_args, **_kwargs) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(service_module.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        service_module._atomic_write_memory_artifact(artifact_path, b"new artifact bytes\n")
+    assert artifact_path.read_bytes() == b"prior complete artifact\n"
+    assert not list(artifact_path.parent.glob(f".{artifact_path.name}.*"))
+
+
+def test_legacy_memory_artifact_reproof_rejects_changed_bytes(tmp_path) -> None:
+    """Legacy rebinding must not overwrite a human edit made during backup."""
+    from supervisor.application.service import _revalidate_memory_artifact_bytes
+
+    artifact_path = tmp_path / "legacy-artifact.md"
+    original = b"---\nstatus: ai-draft\n---\noperator draft\n"
+    artifact_path.write_bytes(original)
+    artifact_path.write_bytes(b"---\nstatus: ai-draft\n---\nhuman edit after backup\n")
+    with pytest.raises(ValueError, match="changed before legacy rebinding"):
+        _revalidate_memory_artifact_bytes(artifact_path, original)
+
+
+def test_legacy_snapshot_change_is_rejected_before_backup_copy(tmp_path) -> None:
+    """The bytes parsed for a legacy rebind are the bytes backup must pin."""
+    from supervisor.application.service import _revalidate_memory_artifact_bytes
+
+    artifact_path = tmp_path / "legacy-artifact.md"
+    parsed_snapshot = b"---\nstatus: ai-draft\n---\nA\n"
+    artifact_path.write_bytes(parsed_snapshot)
+    # Model A→B before `_prepare_memory_proposal_backup` records/copies its
+    # durable intent; the prep lock must reject B rather than snapshot it.
+    artifact_path.write_bytes(b"---\nstatus: ai-draft\n---\nB\n")
+    with pytest.raises(ValueError, match="changed before legacy rebinding"):
+        _revalidate_memory_artifact_bytes(artifact_path, parsed_snapshot)
+
+
+def test_memory_proposal_write_intent_uses_sql_null_fence_not_json_equality() -> None:
+    """PostgreSQL JSON intent records must not rely on unsupported equality."""
+    service_path = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
+    source = service_path.read_text(encoding="utf-8")
+    intent_section = source[source.index("async def _record_memory_proposal_write_intent"):source.index("async def _prepare_memory_proposal_backup")]
+    assert "write_action_intent_json.is_(None) if not backup_prepared else True" in intent_section
+    assert "write_action_intent_json ==" not in intent_section
+
+
+def test_new_memory_artifact_backup_rechecks_absence_under_the_first_held_lock() -> None:
+    """A late foreign file is fenced before backup evidence or writes begin."""
+    service_path = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
+    source = service_path.read_text(encoding="utf-8")
+    preparation = source[source.index("async def _prepare_memory_proposal_backup"):source.index("async def _finalize_memory_proposal_artifact_write")]
+    assert "expected_absent: bool = False" in preparation
+    assert "async with _async_memory_artifact_lock(artifact_path):" in preparation
+    assert "prior_artifact_bytes: bytes | None = None" in preparation
+    assert "_revalidate_memory_artifact_bytes, artifact_path, prior_artifact_bytes" in preparation
+    assert preparation.index("pinned_prior_artifact_digest") < preparation.index("if expected_absent:")
+    assert "Memory proposal artifact appeared before backup preparation." in preparation
+    finalization = source[source.index("async def _write_and_finalize_memory_proposal_artifact"):source.index("async def recover_abandoned_memory_proposal_write")]
+    assert "expected_absent: bool = False" in finalization
+    assert "Memory proposal artifact appeared before finalization." in finalization
+    ai_section = source[source.index("async def create_memory_proposal_ai_draft"):source.index("async def create_llm_wiki_disposable_rebuild")]
+    llm_section = source[source.index("async def create_llm_wiki_disposable_rebuild"):source.index("async def search_llm_wiki_artifact")]
+    assert "backup_path=backup_path, written_bytes=written_bytes, expected_absent=True" in ai_section
+    assert "expected_absent=True," in ai_section
+    assert "backup_path=backup_path, written_bytes=written_bytes, expected_absent=True" in llm_section
+    assert "expected_absent=True," in llm_section
+
+
+def test_llm_wiki_artifact_requires_closed_front_matter_within_bound() -> None:
+    """A bounded prefix cannot mistake unfinished YAML for artifact body text."""
+    from supervisor.application.service import MAX_LLM_WIKI_ARTIFACT_READ_BYTES, SupervisorService
+
+    unterminated = "---\nstatus: llm-wiki-derived\n" + "x" * MAX_LLM_WIKI_ARTIFACT_READ_BYTES
+    with pytest.raises(ValueError, match="closed YAML front matter"):
+        SupervisorService._parse_llm_wiki_artifact(object(), unterminated)
+    metadata, body = SupervisorService._parse_llm_wiki_artifact(
+        object(), "---\nstatus: llm-wiki-derived\n---\n# Verified body"
+    )
+    assert metadata == {"status": "llm-wiki-derived"}
+    assert body == ["# Verified body"]
+
+
+def test_threaded_artifact_reconciliation_joins_before_cancellation(monkeypatch) -> None:
+    """Cancellation must not unlock an artifact while its executor work runs."""
+    import supervisor.application.service as service_module
+
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    def slow_reconcile(*_args) -> None:
+        started.set()
+        assert release.wait(timeout=2), "test failed to release reconciliation worker"
+        completed.set()
+
+    monkeypatch.setattr(service_module, "_reconcile_memory_artifact_intent_unlocked", slow_reconcile)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(service_module._complete_threaded_artifact_reconciliation("intent"))
+        assert await asyncio.to_thread(started.wait, 2), "reconciliation worker did not start"
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation released the artifact lock before reconciliation joined"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    try:
+        asyncio_run(scenario())
+    finally:
+        release.set()
+    assert completed.is_set()
 
 
 def _attempt_transition_fence(attempt: dict[str, object]) -> dict[str, object]:
@@ -123,10 +996,14 @@ def _running_private_uds_supervisor(tmp_path, monkeypatch, db_name: str):
         server = uvicorn.Server(uvicorn.Config(main.app, uds=str(socket_path), log_level="error", access_log=False, lifespan="on"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
-        deadline = time.monotonic() + 10
+        # The suite starts several private UDS lifespans in one process.  A
+        # loaded hosted runner can take longer than the normal 10-second
+        # startup budget while a previous SQLite/UDS teardown settles; this is
+        # still bounded and does not relax any product-side readiness check.
+        deadline = time.monotonic() + 30
         while not server.started and thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert server.started, "private UDS supervisor failed to start within 10 seconds"
+        assert server.started, "private UDS supervisor failed to start within 30 seconds"
         yield main, socket_path
     finally:
         try:
@@ -409,7 +1286,7 @@ def _create_candidate(client: TestClient, *, title: str = "Capture cockpit packe
     return response.json()["data"]
 
 
-def _create_work_item(client: TestClient, *, title: str = "Direct active packet") -> dict:
+def _create_work_item(client: TestClient, *, title: str = "Direct active packet", metadata: dict | None = None) -> dict:
     response = client.post(
         "/work-items",
         json={
@@ -421,6 +1298,7 @@ def _create_work_item(client: TestClient, *, title: str = "Direct active packet"
                 "sourceArtifactPath": "docs/direct-work.md",
                 "candidatePriority": "urgent",
                 "verificationSummary": "pytest fixture evidence only",
+                **(metadata or {}),
             },
         },
     )
@@ -981,6 +1859,10 @@ def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_cont
             "refId": "repo_doc:docs/workflows/current-session-runbook.md",
             "sourceType": "repo_doc",
             "pathOrUrl": "docs/workflows/current-session-runbook.md",
+            "environment": "local_dogfood",
+            "sourceRevision": "a" * 40,
+            "sourceRefs": ["repo_doc:docs/workflows/current-session-runbook.md"],
+            "evidenceRefs": ["manager-candidate:canonical-concurrent"],
         },
         "actor": {
             "actorType": "manager",
@@ -996,9 +1878,7 @@ def test_concurrent_initial_manager_source_intake_reuses_the_winning_server_cont
     with _running_private_uds_supervisor(tmp_path, monkeypatch, db_name) as (_main, socket_path):
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(lambda _index: _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=payload), range(2)))
-        assert [response.status_code for response in responses] == [200, 200], [
-            response.text for response in responses
-        ]
+        assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
         contracts = [response.json()["data"]["canonicalContract"] for response in responses]
         assert contracts[0] == contracts[1]
         assert contracts[0]["canonicalSource"]["sourceId"] == "supervisor-manager-source-intake"
@@ -4146,6 +5026,74 @@ def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(
         assert client.get("/work-items").json()["data"] == before_work_items
 
 
+def test_memory_review_keeps_later_artifact_eligibility_visible(tmp_path, monkeypatch) -> None:
+    """Every persisted proposal remains eligible for its own safe artifact read."""
+    with _client(tmp_path, monkeypatch, "bounded-memory-review-probes.db") as client:
+        work_item = _create_work_item(client, title="Bounded memory-review artifact probes")
+        proposal_ids = [f"mp-bounded-probe-{index}" for index in range(10)]
+        for proposal_id in proposal_ids:
+            created = client.post(
+                f"/work-items/{work_item['id']}/memory-proposals",
+                json={
+                    "proposalId": proposal_id,
+                    "label": f"Bounded artifact probe {proposal_id}",
+                    "summary": "Metadata-only fixture proposal.",
+                    "sourceRefs": ["obsidian:00 Inbox/bounded-probe.md"],
+                    "evidenceRefs": ["evidence:bounded-probe"],
+                    "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                    "proposalType": "new_note",
+                    "suggestedContentSummary": "Do not write during this read fixture.",
+                    "sensitivity": "low",
+                    "freshness": "fresh",
+                    "contradictionStatus": "none",
+                    "confidence": "low",
+                    "operatorAction": "defer",
+                    "backupRecoveryPath": "No mutation performed.",
+                    "writeBackStatus": "review_gated",
+                    "writeBackAllowed": False,
+                },
+            )
+            assert created.status_code == 200, created.text
+
+        from supervisor.api.main import service
+
+        probed: list[str] = []
+        active_probes = 0
+        max_active_probes = 0
+
+        async def eligible(_session, proposal, _work_item_id: str, **_kwargs) -> bool:
+            nonlocal active_probes, max_active_probes
+            probed.append(proposal.proposal_id)
+            active_probes += 1
+            max_active_probes = max(max_active_probes, active_probes)
+            await asyncio.sleep(0.01)
+            active_probes -= 1
+            return True
+
+        monkeypatch.setattr(
+            service,
+            "_load_obsidian_memory_draft_config",
+            lambda: {
+                "vault_root": str(tmp_path),
+                "draft_folder": "different-draft-folder",
+                "llm_wiki_folder": "different-llm-wiki-folder",
+            },
+        )
+        monkeypatch.setattr(service, "_memory_proposal_llm_wiki_artifact_search_eligible", eligible)
+        review_response = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+
+        assert review_response.status_code == 200, review_response.text
+        assert set(probed) == set(proposal_ids)
+        assert 1 < max_active_probes <= 4
+        eligibility = {
+            proposal["proposalId"]: proposal["llmWikiArtifactSearchEligible"]
+            for proposal in review_response.json()["data"]["proposals"]
+        }
+        assert all(eligibility[proposal_id] is True for proposal_id in proposal_ids)
+
+
 def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposals.db") as client:
         work_item = _create_work_item(client, title="Obsidian memory review")
@@ -4153,7 +5101,7 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
-                "proposalId": "mp-20260625T000000Z",
+                "proposalId": "mp/20260625T000000Z",
                 "label": "Memory proposal pending review",
                 "summary": "Example Co repeatedly asks for a one-page implementation checklist.",
                 "sourceRefs": ["obsidian:00-inbox-new-customer-insight"],
@@ -4176,11 +5124,32 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
 
         assert create_response.status_code == 200
         created = create_response.json()["data"]
-        assert created["proposalId"] == "mp-20260625T000000Z"
+        assert created["proposalId"] == "mp/20260625T000000Z"
         assert created["writeBackAllowed"] is False
         assert created["sourceRefs"] == ["obsidian:00-inbox-new-customer-insight"]
         assert created["evidenceRefs"] == ["evidence:read-only-proof"]
         assert "rawContent" not in created
+
+        canonical_review_response = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert canonical_review_response.status_code == 200
+        canonical_review = canonical_review_response.json()["data"]
+        assert canonical_review["schemaVersion"] == "work-item-memory-review/v1"
+        assert canonical_review["workItemId"] == work_item["id"]
+        assert canonical_review["rawPayloadRetained"] is False
+        assert canonical_review["canonicalMutationAllowed"] is False
+        assert canonical_review["sourceMutationAllowed"] is False
+        review_proposal = canonical_review["proposals"][0]
+        assert review_proposal == {
+            **{key: value for key, value in created.items() if key not in {"packetId", "targetRef"}},
+            "proposalRouteId": review_proposal["proposalRouteId"],
+            "revision": 1,
+            "aiDraftEligible": False,
+            "llmWikiArtifactSearchEligible": False,
+        }
+        assert "/" not in review_proposal["proposalRouteId"]
+        assert client.get("/pipeline-control-plane/work-items/missing/memory-review").status_code == 404
 
         packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
         assert packet_response.status_code == 200
@@ -4190,14 +5159,15 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert packet["status"] == "waiting"
         assert len(packet["memoryProposals"]) == 1
         proposal = packet["memoryProposals"][0]
-        assert proposal["proposalId"] == "mp-20260625T000000Z"
+        assert proposal["proposalId"] == "mp/20260625T000000Z"
         assert proposal["targetVaultFolder"] == "01 Dashboard Queue/AI Drafts"
         assert proposal["writeBackAllowed"] is False
         assert proposal["writeBackStatus"] == "review_gated"
 
         update_response = client.patch(
-            f"/work-items/{work_item['id']}/memory-proposals/mp-20260625T000000Z",
+            f"/work-items/{work_item['id']}/memory-proposals/{review_proposal['proposalRouteId']}",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "decisionNeededContext": "Approved for a future gated draft preview only.",
@@ -4211,16 +5181,127 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert updated["writeBackAllowed"] is False
         assert updated["writeBackStatus"] == "approved_for_future"
 
+        review_after_update = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]
+        assert review_after_update["proposals"][0]["status"] == "approved"
+        assert review_after_update["proposals"][0]["operatorAction"] == "approve"
+        assert review_after_update["proposals"][0]["revision"] == 2
+
+        stale_update = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/{review_proposal['proposalRouteId']}",
+            json={"expectedRevision": 1, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert stale_update.status_code == 409
+        assert stale_update.json()["detail"]["error"]["code"] == "memory_proposal_revision_conflict"
+
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"
         assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
 
 
+def test_migrated_memory_proposal_update_returns_the_v1_review_shape(tmp_path, monkeypatch) -> None:
+    """PATCH must keep legacy empty-reference rows visible after mutation."""
+    db_name = "work-packet-memory-proposal-migrated-update.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Migrated memory proposal review")
+        created = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-migrated-empty-refs",
+                "label": "Migrated proposal",
+                "summary": "This row predates required memory provenance arrays.",
+                "sourceRefs": ["obsidian:migrated-source"],
+                "evidenceRefs": ["evidence:migrated-proof"],
+                "targetVaultPath": "01 Dashboard Queue/AI Drafts/migrated.md",
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Retain the review row without a legacy V0 serialization failure.",
+                "sensitivity": "low",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "medium",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No write has occurred.",
+                "writeBackStatus": "review_gated",
+            },
+        )
+        assert created.status_code == 200, created.text
+        route_id = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["proposalRouteId"]
+
+        database = sqlite3.connect(tmp_path / db_name)
+        try:
+            database.execute(
+                "UPDATE memory_proposals SET source_refs_json = ?, evidence_refs_json = ? WHERE id = ?",
+                ("[]", "[]", route_id),
+            )
+            database.commit()
+        finally:
+            database.close()
+
+        import supervisor.api.main as main_module
+
+        async def _unexpected_full_review(*_args, **_kwargs):
+            raise AssertionError("PATCH must not rebuild the full memory review after commit")
+
+        monkeypatch.setattr(main_module.service, "get_work_item_memory_review", _unexpected_full_review)
+        updated = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/{route_id}",
+            json={"expectedRevision": 1, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert updated.status_code == 200, updated.text
+        data = updated.json()["data"]
+        assert data["proposalRouteId"] == route_id
+        assert data["revision"] == 2
+        assert data["sourceRefs"] == []
+        assert data["evidenceRefs"] == []
+        assert "packetId" not in data
+
+
 def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, monkeypatch) -> None:
     config_path, vault_root, backup_root = _write_obsidian_memory_config(tmp_path)
+    # copytree normally copies this source-root mode onto the already-created
+    # backup destination. The writer must restore the destination to 0700.
+    os.chmod(vault_root, 0o755)
     monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
+    service_source = Path(__file__).parents[2] / "src" / "supervisor" / "application" / "service.py"
+    eligibility_section = service_source.read_text(encoding="utf-8")
+    eligibility_section = eligibility_section[
+        eligibility_section.index("async def _memory_proposal_ai_draft_eligible"):
+        eligibility_section.index("async def _memory_proposal_llm_wiki_artifact_search_eligible")
+    ]
+    assert "await asyncio.to_thread(" in eligibility_section
+    assert "self._memory_proposal_ai_draft_artifact_probe" in eligibility_section
+    assert "def _memory_proposal_ai_draft_artifact_probe" in eligibility_section
+    assert "_read_strict_utf8_memory_artifact, draft_path" not in eligibility_section
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft.db") as client:
-        work_item = _create_work_item(client, title="Obsidian AI draft write")
+        work_item = _create_work_item(
+            client,
+            title="Obsidian AI draft write",
+            metadata={
+                "workPacketSourceRefs": [{
+                    "refId": "obsidian:00 Inbox/new-customer-insight.md",
+                    "sourceType": "obsidian",
+                    "label": "Approved customer insight",
+                    "pathOrUrl": "00 Inbox/new-customer-insight.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "canonical": True,
+                    "summaryOnly": True,
+                }, {
+                    "refId": "llm_wiki:derived-stale-sibling",
+                    "sourceType": "llm_wiki",
+                    "label": "Unrelated stale derived sibling source",
+                    "freshness": "stale",
+                    "accessState": "allowed",
+                    "canonical": False,
+                    "summaryOnly": True,
+                }],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+            },
+        )
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
@@ -4249,6 +5330,7 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "decisionNeededContext": "Approved for a future gated draft preview only.",
@@ -4258,20 +5340,114 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert approve_response.status_code == 200
 
+        before_artifact_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert before_artifact_review.status_code == 200
+        assert before_artifact_review.json()["data"]["proposals"][0]["aiDraftEligible"] is True
+        assert before_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+
+        # Eligibility must not advertise a write that the deterministic target
+        # fence will reject. Exercise both an unsafe leaf and an occupied but
+        # unrelated regular artifact before any writer reservation is made.
+        proposal_route_id = before_artifact_review.json()["data"]["proposals"][0]["proposalRouteId"]
+        deterministic_draft = (
+            vault_root
+            / "01 Dashboard Queue"
+            / "AI Drafts"
+            / f"memory-proposal-ai-draft-mp-ai-draft-{proposal_route_id}.md"
+        )
+        outside_draft = tmp_path / "outside-ai-draft.md"
+        outside_draft.write_text("untrusted draft", encoding="utf-8")
+        deterministic_draft.symlink_to(outside_draft)
+        symlink_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert symlink_review.status_code == 200
+        assert symlink_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        deterministic_draft.unlink()
+        deterministic_draft.write_text(
+            "---\nstatus: ai-draft\nproposal_id: other\nwork_item_id: other\n---\nunrelated draft\n",
+            encoding="utf-8",
+        )
+        mismatched_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert mismatched_review.status_code == 200
+        assert mismatched_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        deterministic_draft.unlink()
+
+        # Memory-review is a read surface: a temporarily unreadable config
+        # must make its action ineligible, not make the whole WorkItem page
+        # unavailable.
+        config_bytes = Path(config_path).read_bytes()
+        Path(config_path).write_bytes(b"\xff")
+        invalid_config_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert invalid_config_review.status_code == 200
+        assert invalid_config_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        assert invalid_config_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+        Path(config_path).write_bytes(config_bytes)
+
+        # A sibling proposal can remain pending or stale without revoking this
+        # independently approved proposal's bounded provenance eligibility.
+        sibling_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-ai-draft-stale-sibling",
+                "label": "Stale sibling memory proposal",
+                "summary": "Sibling remains visible for later operator review.",
+                "sourceRefs": ["llm_wiki:derived-stale-sibling"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultPath": "Other Queue/LLM Wiki Derived/stale-sibling.md",
+                "targetVaultFolder": "Other Queue/LLM Wiki Derived",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Do not write this stale sibling.",
+                "sensitivity": "medium",
+                "freshness": "stale",
+                "contradictionStatus": "none",
+                "confidence": "low",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "deferred",
+                "writeBackAllowed": False,
+            },
+        )
+        assert sibling_response.status_code == 200
+        aggregate_readiness = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]
+        assert next(
+            proposal for proposal in aggregate_readiness["proposals"]
+            if proposal["proposalId"] == "mp-ai-draft-stale-sibling"
+        )["llmWikiArtifactSearchEligible"] is False
+        aggregate_readiness = aggregate_readiness["llmWikiReadiness"]
+        assert aggregate_readiness["decisionState"] == "blocked"
+
         draft_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 1, "actorLabel": "Operator"},
+        )
+
+        assert draft_response.status_code == 409
+        assert not list((vault_root / "01 Dashboard Queue" / "AI Drafts").glob("*.md"))
+
+        draft_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 2, "actorLabel": "Operator"},
         )
 
         assert draft_response.status_code == 200
         proposal = draft_response.json()["data"]
         assert proposal["writeBackAllowed"] is False
-        assert proposal["targetVaultPath"] == "01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md"
-        assert "AI draft written to 01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md" in proposal["patchSummary"]
+        assert proposal["targetVaultPath"].startswith("01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft-")
+        assert proposal["targetVaultPath"].endswith(".md")
+        assert f"AI draft written to {proposal['targetVaultPath']}" in proposal["patchSummary"]
         assert "canonical notes remain human-owned" in proposal["decisionNeededContext"]
         assert "restore from" in proposal["backupRecoveryPath"]
 
-        draft_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "memory-proposal-ai-draft-mp-ai-draft.md"
+        draft_path = vault_root / proposal["targetVaultPath"]
         assert draft_path.exists()
         draft_text = draft_path.read_text(encoding="utf-8")
         assert "proposal_id: mp-ai-draft" in draft_text
@@ -4282,6 +5458,15 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         assert "Create a Kendall-authored draft for operator review." in draft_text
         assert not (vault_root / "00 Inbox" / "memory-proposal-ai-draft-mp-ai-draft.md").exists()
         assert any(backup_root.iterdir())
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in backup_root.iterdir())
+
+        # An action-side mutation also advances the review fence, so an open
+        # tab loaded before the draft write cannot overwrite its current state.
+        stale_review = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
+            json={"expectedRevision": 2, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert stale_review.status_code == 409
 
         packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         packet_proposal = packet["memoryProposals"][0]
@@ -4290,15 +5475,254 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
 
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 3, "actorLabel": "Operator"},
         )
         assert duplicate_response.status_code == 200
         assert "AI draft already exists" in duplicate_response.json()["data"]["patchSummary"]
 
+        # The write reservation is committed before filesystem work. A later
+        # event failure must roll back pending proposal state and release only
+        # this request's token, so the exact next revision can retry.
+        from supervisor.api.main import service
+
+        original_record_event = service._record_event
+
+        async def fail_after_reservation(*args, **kwargs):
+            raise RuntimeError("injected post-reservation event failure")
+
+        monkeypatch.setattr(service, "_record_event", fail_after_reservation)
+        with pytest.raises(RuntimeError, match="injected post-reservation event failure"):
+            client.post(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+                json={"expectedRevision": 4, "actorLabel": "Operator"},
+            )
+        monkeypatch.setattr(service, "_record_event", original_record_event)
+        recovered_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 5, "actorLabel": "Operator"},
+        )
+        assert recovered_response.status_code == 200
+
+        # A process can die immediately after the reservation commit, before
+        # the writer records a durable artifact intent.  Recovery must reload
+        # the expired ORM state after releasing its initial row lock and settle
+        # this reservation-only state without an implicit async lazy load.
+        reservation_only_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
+        try:
+            reservation_only_db.execute(
+                "UPDATE memory_proposals SET revision = ?, write_action_token = ?, write_action_intent_json = NULL "
+                "WHERE work_item_id = ? AND proposal_id = ?",
+                (6, "dead-before-intent-token", work_item["id"], "mp-ai-draft"),
+            )
+            reservation_only_db.commit()
+        finally:
+            reservation_only_db.close()
+        reservation_only_recovery = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={"expectedRevision": 6, "recoveryRef": "operator:reservation-only:pytest"},
+        )
+        assert reservation_only_recovery.status_code == 200
+        assert client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"] == 7
+
+        # A process death after the short reservation commit cannot run the
+        # request-local cleanup. It must fence review updates until an explicit
+        # operator recovery records why the abandoned reservation is safe to
+        # release.
+        pre_crash_draft_bytes = draft_path.read_bytes()
+        crashed_backup_path = backup_root / "vault-backup-crashed-writer"
+        shutil.copytree(vault_root, crashed_backup_path, symlinks=True)
+        abandoned_draft_bytes = b"unrecorded abandoned writer bytes\n"
+        draft_path.write_bytes(abandoned_draft_bytes)
+        abandoned_intent = {
+            "schemaVersion": "memory-proposal-write-intent/v1",
+            "vaultRoot": str(vault_root),
+            "vaultIdentity": {
+                "device": vault_root.stat().st_dev,
+                "inode": vault_root.stat().st_ino,
+            },
+            "artifactPath": str(draft_path),
+            "backupPath": str(crashed_backup_path),
+            "writtenSha256": hashlib.sha256(abandoned_draft_bytes).hexdigest(),
+            "backupArtifactSha256": hashlib.sha256(
+                (crashed_backup_path / proposal["targetVaultPath"]).read_bytes()
+            ).hexdigest(),
+        }
+        proposal_db = sqlite3.connect(tmp_path / "work-packet-memory-proposal-ai-draft.db")
+        try:
+            proposal_db.execute(
+                "UPDATE memory_proposals SET revision = ?, write_action_token = ?, write_action_intent_json = ? "
+                "WHERE work_item_id = ? AND proposal_id = ?",
+                (7, "dead-supervisor-write-token", json.dumps(abandoned_intent), work_item["id"], "mp-ai-draft"),
+            )
+            proposal_db.commit()
+        finally:
+            proposal_db.close()
+        active_write_patch = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
+            json={"expectedRevision": 7, "status": "rejected", "operatorAction": "reject"},
+        )
+        assert active_write_patch.status_code == 409
+        active_write_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert active_write_review.status_code == 200
+        assert active_write_review.json()["data"]["proposals"][0]["aiDraftEligible"] is False
+        meaningless_recovery = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={"expectedRevision": 7, "recoveryRef": "        "},
+        )
+        assert meaningless_recovery.status_code == 422
+        original_recovery_event = service._record_event
+
+        async def fail_recovery_event(*args, **kwargs):
+            raise RuntimeError("injected recovery-event failure")
+
+        monkeypatch.setattr(service, "_record_event", fail_recovery_event)
+        with pytest.raises(RuntimeError, match="injected recovery-event failure"):
+            client.post(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+                json={
+                    "expectedRevision": 7,
+                    "recoveryRef": "operator:failed-recovery-event:pytest",
+                },
+            )
+        monkeypatch.setattr(service, "_record_event", original_recovery_event)
+        # The retry sees the snapshot state restored by the failed attempt and
+        # finishes the same durable recovery rather than stranding its intent.
+        assert draft_path.read_bytes() == pre_crash_draft_bytes
+        crashed_backup_artifact = crashed_backup_path / proposal["targetVaultPath"]
+        crashed_backup_artifact.write_bytes(b"tampered recovery backup\n")
+        blocked_recovery = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={
+                "expectedRevision": 7,
+                "recoveryRef": "operator:tampered-backup:pytest",
+            },
+        )
+        assert blocked_recovery.status_code == 409
+        assert blocked_recovery.json()["detail"]["error"]["code"] == "memory_proposal_recovery_blocked"
+        crashed_backup_artifact.write_bytes(pre_crash_draft_bytes)
+        recovered_reservation = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/recover-abandoned-write",
+            json={
+                "expectedRevision": 7,
+                "recoveryRef": "operator:confirmed-dead-supervisor:pytest",
+            },
+        )
+        assert recovered_reservation.status_code == 200
+        recovered_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert recovered_review.status_code == 200
+        assert recovered_review.json()["data"]["proposals"][0]["revision"] == 8
+        assert draft_path.read_bytes() == pre_crash_draft_bytes
+
+        # A pre-WorkItem legacy draft must be copied to recovery storage before
+        # its front matter is rebound to this proposal's immutable identity.
+        draft_path.write_text(
+            draft_path.read_text(encoding="utf-8").replace(
+                f"work_item_id: {work_item['id']}\n", ""
+            ),
+            encoding="utf-8",
+        )
+        backups_before_legacy_rebind = {path.name for path in backup_root.iterdir()}
+        legacy_rebind_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 8, "actorLabel": "Operator"},
+        )
+        assert legacy_rebind_response.status_code == 200
+        assert f"work_item_id: {work_item['id']}" in draft_path.read_text(encoding="utf-8")
+        legacy_backup_paths = [path for path in backup_root.iterdir() if path.name not in backups_before_legacy_rebind]
+        assert len(legacy_backup_paths) == 1
+        assert f"work_item_id: {work_item['id']}" not in (
+            legacy_backup_paths[0] / proposal["targetVaultPath"]
+        ).read_text(encoding="utf-8")
+
+        # Make the delayed writer take the fresh-write branch.  If recovery
+        # wins its final database fence, the exact unrecorded file must be
+        # removed rather than remaining as an orphaned draft.
+        draft_path.unlink()
+        assert not draft_path.exists()
+
+        # Model a crash after the lock-protected backup intent/copy completes
+        # but before the writer acquires its final artifact-write lock. The
+        # governed recovery reconciles that exact intent, advances the revision,
+        # and prevents the stale request from writing any artifact.
+        original_prepare_backup = service._prepare_memory_proposal_backup
+
+        async def recover_after_backup(session, proposal, **kwargs):
+            result = await original_prepare_backup(session, proposal, **kwargs)
+            await session.refresh(proposal)
+            await service.recover_abandoned_memory_proposal_write(
+                session,
+                work_item["id"],
+                "mp-ai-draft",
+                expected_revision=kwargs["expected_revision"] + 1,
+                recovery_ref="operator:recovered-intent:pytest",
+                actor_id=None,
+                actor_label="Operator",
+            )
+            return result
+
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", recover_after_backup)
+        superseded_writer = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 9, "actorLabel": "Operator"},
+        )
+        assert superseded_writer.status_code == 409
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", original_prepare_backup)
+        assert not draft_path.exists()
+        assert client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"] == 11
+
+        # A human edit that lands while the legacy vault backup is copying
+        # must win over the server's pending front-matter rebind. The final
+        # artifact lock re-reads exactly those original bytes before replace.
+        legacy_draft_bytes = pre_crash_draft_bytes.replace(
+            f"work_item_id: {work_item['id']}\n".encode("utf-8"), b""
+        )
+        draft_path.write_bytes(legacy_draft_bytes)
+
+        async def human_edit_after_backup(session, proposal, **kwargs):
+            result = await original_prepare_backup(session, proposal, **kwargs)
+            draft_path.write_bytes(legacy_draft_bytes + b"\noperator edit after backup\n")
+            return result
+
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", human_edit_after_backup)
+        changed_legacy_rebind = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"expectedRevision": 11, "actorLabel": "Operator"},
+        )
+        assert changed_legacy_rebind.status_code == 400
+        assert draft_path.read_bytes().endswith(b"operator edit after backup\n")
+        monkeypatch.setattr(service, "_prepare_memory_proposal_backup", original_prepare_backup)
+
+
 
 def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft-blocked.db") as client:
-        work_item = _create_work_item(client, title="Blocked Obsidian AI draft write")
+        # Keep the proposal provenance valid so this test reaches its intended
+        # missing-configuration fence rather than the earlier readiness gate.
+        work_item = _create_work_item(
+            client,
+            title="Blocked Obsidian AI draft write",
+            metadata={
+                "workPacketSourceRefs": [{
+                    "refId": "obsidian:00 Inbox/new-customer-insight.md",
+                    "sourceType": "obsidian",
+                    "label": "Approved customer insight",
+                    "pathOrUrl": "00 Inbox/new-customer-insight.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "canonical": True,
+                    "summaryOnly": True,
+                }],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+            },
+        )
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
@@ -4324,7 +5748,7 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
         unapproved_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 1, "actorLabel": "Operator"},
         )
         assert unapproved_response.status_code == 400
         assert "missing_approved_status" in unapproved_response.json()["detail"]["error"]["message"]
@@ -4332,6 +5756,7 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "writeBackStatus": "approved_for_future",
@@ -4342,14 +5767,16 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
         missing_config_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked/ai-draft",
-            json={"actorLabel": "Operator"},
+            json={"expectedRevision": 2, "actorLabel": "Operator"},
         )
         assert missing_config_response.status_code == 400
         assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
 
 
 def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-readiness.db") as client:
+    db_name = "work-packet-llm-wiki-readiness.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
         work_item_response = client.post(
             "/work-items",
             json={
@@ -4367,20 +5794,29 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
                             "freshness": "fresh",
                             "accessState": "allowed",
                         }
-                    ]
+                    ],
+                    "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md", "event:forged-metadata-ref"],
                 },
             },
         )
         assert work_item_response.status_code == 200
         work_item = work_item_response.json()["data"]
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="memory-review-evidence",
+            event_type="memory_proposal.provenance_recorded",
+            summary="Bounded proposal evidence fixture.",
+            payload={"metadataOnly": True},
+        )
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
             json={
                 "proposalId": "mp-llm-wiki-ready",
                 "label": "LLM-Wiki ready proposal",
                 "summary": "Metadata-only summary for derived index readiness.",
-                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
-                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "sourceRefs": ["source:obsidian-approved"],
+                "evidenceRefs": ["event:memory-review-evidence"],
                 "targetVaultPath": "01 Dashboard Queue/AI Drafts/llm-wiki-ready-proposal-mp-llm-wiki-ready.md",
                 "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
                 "proposalType": "new_note",
@@ -4399,6 +5835,7 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-ready",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "writeBackStatus": "approved_for_future",
@@ -4426,8 +5863,8 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert preview["retentionClass"] == "metadata_only"
         assert preview["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
-        assert "obsidian:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
-        assert "evidence:read-only-proof:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
+        assert "source:obsidian-approved" in preview["inputRefs"]
+        assert "event:memory-review-evidence" in preview["inputRefs"]
         assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
         assert "do not write LLM-Wiki index" in preview["stopLine"]
         assert preview["canonicalMutationAllowed"] is False
@@ -4456,6 +5893,82 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert plan["durableWriteAllowed"] is False
         assert plan["writePerformed"] is False
         assert plan["backupCreated"] is False
+
+        # The direct memory-review read resolves only proposal-referenced
+        # attempts, so canonical attempt evidence remains eligible without
+        # reading unrelated execution history.
+        attempt_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts",
+            json={"taskKind": "path_scope_check", "actorLabel": "Operator"},
+        )
+        assert attempt_response.status_code == 200
+        attempt_id = attempt_response.json()["data"]["attemptId"]
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps([f"attempt:{attempt_id}"]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        attempt_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert attempt_review.status_code == 200
+        attempt_readiness = attempt_review.json()["data"]["llmWikiReadiness"]
+        assert attempt_readiness["decisionState"] == "ready"
+        assert f"attempt:{attempt_id}" in attempt_readiness["rebuildPreview"]["inputRefs"]
+
+        # Nonempty references still need to bind to the exact supplied
+        # source/evidence inventory before the readiness view can be ready.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set source_refs_json = ?, evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps(["source:unknown"]), json.dumps(["evidence:unknown"]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        unbound_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert unbound_review.status_code == 200
+        unbound_readiness = unbound_review.json()["data"]["llmWikiReadiness"]
+        assert unbound_readiness["decisionState"] == "blocked"
+        assert "memory_proposal.unsafe_or_unknown_source_ref.mp-llm-wiki-ready.source:unknown" in unbound_readiness["blockedReasons"]
+        assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-ready.evidence:unknown" in unbound_readiness["blockedReasons"]
+
+        # Metadata may name ordinary evidence, but it cannot manufacture a
+        # reserved canonical event/attempt reference that has no WorkItem row.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set source_refs_json = ?, evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps(["source:obsidian-approved"]), json.dumps(["event:forged-metadata-ref"]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        forged_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert forged_review.status_code == 200
+        forged_readiness = forged_review.json()["data"]["llmWikiReadiness"]
+        assert forged_readiness["decisionState"] == "blocked"
+        assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-ready.event:forged-metadata-ref" in forged_readiness["blockedReasons"]
+
+        # A compatibility-migrated proposal may have blank persisted refs.
+        # It remains visible as a blocked read model; it must not turn a
+        # WorkItem detail request into a 500 or a ready rebuild plan.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update memory_proposals set source_refs_json = ?, evidence_refs_json = ? where work_item_id = ? and proposal_id = ?",
+                (json.dumps([]), json.dumps([]), work_item["id"], "mp-llm-wiki-ready"),
+            )
+            connection.commit()
+        migrated_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert migrated_review.status_code == 200
+        migrated_payload = migrated_review.json()["data"]
+        assert migrated_payload["proposals"][0]["sourceRefs"] == []
+        assert migrated_payload["proposals"][0]["evidenceRefs"] == []
+        assert migrated_payload["llmWikiReadiness"]["decisionState"] == "blocked"
+        assert "memory_proposal.missing_source_refs.mp-llm-wiki-ready" in migrated_payload["llmWikiReadiness"]["blockedReasons"]
+        assert "memory_proposal.missing_evidence_refs.mp-llm-wiki-ready" in migrated_payload["llmWikiReadiness"]["blockedReasons"]
 
 
 def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, monkeypatch) -> None:
@@ -4545,7 +6058,8 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
                             "freshness": "fresh",
                             "accessState": "allowed",
                         }
-                    ]
+                    ],
+                    "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
                 },
             },
         )
@@ -4578,6 +6092,7 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write",
             json={
+                "expectedRevision": 1,
                 "status": "approved",
                 "operatorAction": "approve",
                 "decisionNeededContext": "Approved for disposable LLM-Wiki rebuild artifact only.",
@@ -4587,25 +6102,41 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
         assert approve_response.status_code == 200
 
+        before_artifact_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert before_artifact_review.status_code == 200
+        assert before_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+
         write_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+        )
+
+        assert write_response.status_code == 409
+        assert not list((vault_root / "01 Dashboard Queue" / "LLM Wiki Derived").glob("*.md"))
+
+        write_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={"expectedRevision": 2, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
         )
 
         assert write_response.status_code == 200
         proposal = write_response.json()["data"]
         assert proposal["writeBackAllowed"] is False
         assert proposal["targetVaultFolder"] == "01 Dashboard Queue/LLM Wiki Derived"
-        assert proposal["targetVaultPath"] == "01 Dashboard Queue/LLM Wiki Derived/llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md"
+        assert proposal["targetVaultPath"].startswith("01 Dashboard Queue/LLM Wiki Derived/llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write-")
+        assert proposal["targetVaultPath"].endswith(".md")
         assert "LLM-Wiki derived artifact written" in proposal["patchSummary"]
         assert "Obsidian remains canonical" in proposal["decisionNeededContext"]
         assert "restore from" in proposal["backupRecoveryPath"]
 
-        artifact_path = vault_root / "01 Dashboard Queue" / "LLM Wiki Derived" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md"
+        artifact_path = vault_root / proposal["targetVaultPath"]
         assert artifact_path.exists()
         artifact_text = artifact_path.read_text(encoding="utf-8")
         assert "status: llm-wiki-derived" in artifact_text
         assert "proposal_id: mp-llm-wiki-write" in artifact_text
+        assert f"work_item_id: {work_item['id']}" in artifact_text
         assert 'approval_ref: "approval:operator:llm-wiki-rebuild-2026-06-26"' in artifact_text
         assert "canonicality: derived_disposable_rebuildable" in artifact_text
         assert "raw_payload_retained: false" in artifact_text
@@ -4616,12 +6147,98 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert not (vault_root / "00 Inbox" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md").exists()
         assert any(backup_root.iterdir())
 
+        after_artifact_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert after_artifact_review.status_code == 200
+        assert after_artifact_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is True
+
+        # Eligibility must use the same no-follow leaf boundary as the search
+        # route.  A symlink to an otherwise matching artifact is not readable
+        # through that route and must not advertise a deterministic failure.
+        matching_target = artifact_path.with_name(f"{artifact_path.stem}-matching-target.md")
+        artifact_path.rename(matching_target)
+        artifact_path.symlink_to(matching_target.name)
+        symlink_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert symlink_review.status_code == 200
+        assert symlink_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+        symlink_search = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert symlink_search.status_code == 400
+        assert "verified regular vault file" in symlink_search.json()["detail"]["error"]["message"]
+        artifact_path.unlink()
+        matching_target.rename(artifact_path)
+
+        # An unfinished writer may have produced or rebound this path but has
+        # not finalized its durable proposal state. Neither the review read nor
+        # the artifact reader may expose those provisional bytes.
+        review_db = sqlite3.connect(tmp_path / "work-packet-llm-wiki-rebuild-write.db")
+        try:
+            review_db.execute(
+                "UPDATE memory_proposals SET write_action_token = ? WHERE work_item_id = ? AND proposal_id = ?",
+                ("active-artifact-writer", work_item["id"], "mp-llm-wiki-write"),
+            )
+            review_db.commit()
+        finally:
+            review_db.close()
+        active_write_review = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert active_write_review.status_code == 200
+        assert active_write_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+        active_write_search = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert active_write_search.status_code == 400
+        assert "write is still active" in active_write_search.json()["detail"]["error"]["message"]
+        review_db = sqlite3.connect(tmp_path / "work-packet-llm-wiki-rebuild-write.db")
+        try:
+            review_db.execute(
+                "UPDATE memory_proposals SET write_action_token = NULL WHERE work_item_id = ? AND proposal_id = ?",
+                (work_item["id"], "mp-llm-wiki-write"),
+            )
+            review_db.commit()
+        finally:
+            review_db.close()
+
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+            json={"expectedRevision": 3, "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
         )
         assert duplicate_response.status_code == 200
         assert "already exists" in duplicate_response.json()["data"]["patchSummary"]
+
+        # Existing artifacts must prove their identity in front matter.  Body
+        # tokens alone cannot turn an unrelated pre-existing file into a
+        # valid idempotent rebuild target.
+        artifact_path.write_text(
+            "# Untrusted body text\n\n"
+            "proposal_id: mp-llm-wiki-write\n"
+            f"work_item_id: {work_item['id']}\n"
+            "status: llm-wiki-derived\n",
+            encoding="utf-8",
+        )
+        canonical_review_response = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert canonical_review_response.status_code == 200
+        current_revision = canonical_review_response.json()["data"]["proposals"][0]["revision"]
+        body_token_forgery_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={
+                "expectedRevision": current_revision,
+                "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26",
+                "actorLabel": "Operator",
+            },
+        )
+        assert body_token_forgery_response.status_code == 400
+        assert "does not match this proposal" in body_token_forgery_response.json()["detail"]["error"]["message"]
+        artifact_path.write_text(artifact_text, encoding="utf-8")
 
         search_response = client.get(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
@@ -4639,6 +6256,136 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert search_result["sourceMutationAllowed"] is False
         assert search_result["metadata"]["status"] == "llm-wiki-derived"
         assert any("Derived Index" in excerpt or "derived index" in excerpt.lower() for excerpt in search_result["excerpts"])
+
+        # The search path must retain the vault descriptor it opened before
+        # reading. Swap the configured vault only after that descriptor exists;
+        # an unsafe pathname reopen would return this still-valid attacker copy.
+        import supervisor.application.service as service_module
+
+        attacker_vault = tmp_path / "attacker-llm-wiki-vault"
+        attacker_artifact = attacker_vault / proposal["targetVaultPath"]
+        attacker_artifact.parent.mkdir(parents=True)
+        attacker_artifact.write_text(
+            artifact_text.replace("Derived Index", "Attacker Descriptor Index"),
+            encoding="utf-8",
+        )
+        original_pinned_reader = service_module._read_bounded_utf8_text_from_root_fd
+        parked_vault = tmp_path / "parked-search-vault"
+
+        def swap_vault_after_descriptor_open(root_fd: int, relative_path: Path) -> str:
+            vault_root.rename(parked_vault)
+            vault_root.symlink_to(attacker_vault, target_is_directory=True)
+            return original_pinned_reader(root_fd, relative_path)
+
+        monkeypatch.setattr(service_module, "_read_bounded_utf8_text_from_root_fd", swap_vault_after_descriptor_open)
+        try:
+            pinned_search_response = client.get(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+                params={"query": "attacker descriptor"},
+            )
+            assert pinned_search_response.status_code == 200
+            pinned_search_result = pinned_search_response.json()["data"]
+            assert pinned_search_result["matched"] is False
+            assert all("Attacker Descriptor" not in excerpt for excerpt in pinned_search_result["excerpts"])
+        finally:
+            monkeypatch.setattr(service_module, "_read_bounded_utf8_text_from_root_fd", original_pinned_reader)
+            if vault_root.is_symlink():
+                vault_root.unlink()
+            parked_vault.rename(vault_root)
+
+        # Pre-upgrade artifacts did not record a WorkItem ID. A globally
+        # unambiguous legacy proposal remains readable, then an approved
+        # rebuild upgrades its front matter to the immutable WorkItem fence.
+        artifact_path.write_text(
+            artifact_text.replace(f"work_item_id: {work_item['id']}\n", ""),
+            encoding="utf-8",
+        )
+        legacy_search_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert legacy_search_response.status_code == 200
+        assert "work_item_id" not in legacy_search_response.json()["data"]["metadata"]
+        current_revision = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        ).json()["data"]["proposals"][0]["revision"]
+        backups_before_legacy_rebind = {path.name for path in backup_root.iterdir()}
+        legacy_rebuild_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={
+                "expectedRevision": current_revision,
+                "approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26",
+                "actorLabel": "Operator",
+            },
+        )
+        assert legacy_rebuild_response.status_code == 200
+        artifact_text = artifact_path.read_text(encoding="utf-8")
+        assert f"work_item_id: {work_item['id']}" in artifact_text
+        legacy_backup_paths = [path for path in backup_root.iterdir() if path.name not in backups_before_legacy_rebind]
+        assert len(legacy_backup_paths) == 1
+        assert "work_item_id" not in (legacy_backup_paths[0] / proposal["targetVaultPath"]).read_text(encoding="utf-8")
+
+        # A legacy display ID cannot carry a WorkItem identity when another
+        # persisted proposal uses the same ID. Leave it unreadable rather than
+        # guessing which WorkItem owns the unbound artifact.
+        competing_work_item = _create_work_item(client, title="Competing legacy LLM-Wiki proposal")
+        competing_proposal_response = client.post(
+            f"/work-items/{competing_work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-write",
+                "label": "Competing legacy LLM-Wiki proposal",
+                "summary": "Metadata-only competing legacy proposal.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Metadata-only legacy compatibility fixture.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert competing_proposal_response.status_code == 200
+        artifact_path.write_text(
+            artifact_text.replace(f"work_item_id: {work_item['id']}\n", ""),
+            encoding="utf-8",
+        )
+        ambiguous_legacy_search_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert ambiguous_legacy_search_response.status_code == 400
+        assert "not bound to this proposal" in ambiguous_legacy_search_response.json()["detail"]["error"]["message"]
+        artifact_path.write_text(artifact_text, encoding="utf-8")
+
+        # A stored target path is not enough: the artifact must attest to the
+        # same proposal before its content can be shown to an operator.
+        artifact_path.write_text(
+            artifact_text.replace("proposal_id: mp-llm-wiki-write", "proposal_id: different-proposal"),
+            encoding="utf-8",
+        )
+        mismatched_artifact_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert mismatched_artifact_response.status_code == 400
+        assert "not bound to this proposal" in mismatched_artifact_response.json()["detail"]["error"]["message"]
+
+        artifact_path.write_text(
+            artifact_text.replace(f"work_item_id: {work_item['id']}", "work_item_id: different-work-item"),
+            encoding="utf-8",
+        )
+        cross_work_item_artifact_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert cross_work_item_artifact_response.status_code == 400
+        assert "not bound to this proposal" in cross_work_item_artifact_response.json()["detail"]["error"]["message"]
 
 
 def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness(tmp_path, monkeypatch) -> None:
@@ -4659,7 +6406,11 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
                             "freshness": "fresh",
                             "accessState": "allowed",
                         }
-                    ]
+                    ],
+                    "evidenceRefs": [
+                        "evidence:read-only-proof:00 Inbox/new-customer-insight.md",
+                        "event:forged-memory-review-evidence",
+                    ],
                 },
             },
         )
@@ -4690,7 +6441,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
 
         missing_approval_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
-            json={"approvalRef": "", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "", "actorLabel": "Operator"},
         )
         assert missing_approval_response.status_code == 400
         assert "explicit operator approval ref" in missing_approval_response.json()["detail"]["error"]["message"]
@@ -4704,22 +6455,56 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
 
         unapproved_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "approval:operator:test", "actorLabel": "Operator"},
         )
         assert unapproved_response.status_code == 400
         assert "missing_approved_status" in unapproved_response.json()["detail"]["error"]["message"]
 
         approve_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write",
-            json={"status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future", "writeBackAllowed": False},
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future", "writeBackAllowed": False},
         )
         assert approve_response.status_code == 200
         missing_config_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+            json={"expectedRevision": 2, "approvalRef": "approval:operator:test", "actorLabel": "Operator"},
         )
         assert missing_config_response.status_code == 400
         assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
+
+        forged_create = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-forged-evidence",
+                "label": "Forged evidence must not rebuild",
+                "summary": "Metadata-only summary.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["event:forged-memory-review-evidence"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Do not create an artifact.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert forged_create.status_code == 200
+        forged_approve = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-forged-evidence",
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+        )
+        assert forged_approve.status_code == 200
+        forged_rebuild = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-forged-evidence/llm-wiki-rebuild",
+            json={"expectedRevision": 2, "approvalRef": "approval:operator:forged-evidence", "actorLabel": "Operator"},
+        )
+        assert forged_rebuild.status_code == 400
+        assert "memory_proposal.unknown_evidence_ref.mp-llm-wiki-forged-evidence.event:forged-memory-review-evidence" in forged_rebuild.json()["detail"]["error"]["message"]
 
     config_path, _vault_root, _backup_root = _write_obsidian_memory_config(tmp_path)
     monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
@@ -4771,7 +6556,7 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
         assert create_response.status_code == 200
         blocked_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-derived-blocked/llm-wiki-rebuild",
-            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+            json={"expectedRevision": 1, "approvalRef": "approval:operator:test", "actorLabel": "Operator"},
         )
         assert blocked_response.status_code == 400
         assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in blocked_response.json()["detail"]["error"]["message"]
@@ -4927,10 +6712,11 @@ def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_pat
 
 
 def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-duplicates.db") as client:
+    db_name = "work-packet-memory-proposal-duplicates.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
         work_item = _create_work_item(client, title="Duplicate Obsidian memory review")
         payload = {
-            "proposalId": "mp-duplicate",
+            "proposalId": "memory.v1:source",
             "label": "Memory proposal pending review",
             "summary": "Metadata-only summary.",
             "sourceRefs": ["obsidian:source"],
@@ -4955,10 +6741,36 @@ def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monk
         assert duplicate_response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
 
         update_response = client.patch(
-            f"/work-items/{work_item['id']}/memory-proposals/mp-duplicate",
-            json={"status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+            # The temporary display-ID compatibility path permits every
+            # proxy-safe non-separator character, including `.` and `:`.
+            f"/work-items/{work_item['id']}/memory-proposals/memory.v1:source",
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
         )
         assert update_response.status_code == 200
+
+        second_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={**payload, "proposalId": "separate-proposal"},
+        )
+        assert second_response.status_code == 200
+        route_ids = {
+            proposal["proposalId"]: proposal["proposalRouteId"]
+            for proposal in client.get(
+                f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+            ).json()["data"]["proposals"]
+        }
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as conn:
+            conn.execute(
+                "UPDATE memory_proposals SET proposal_id = ? WHERE proposal_id = ?",
+                (route_ids["separate-proposal"], "memory.v1:source"),
+            )
+
+        opaque_route_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/{route_ids['separate-proposal']}",
+            json={"expectedRevision": 1, "status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+        )
+        assert opaque_route_response.status_code == 200
+        assert opaque_route_response.json()["data"]["proposalId"] == "separate-proposal"
 
 
 def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkeypatch) -> None:
@@ -4995,6 +6807,7 @@ def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkey
             update_response = client.patch(
                 f"/work-items/{work_item['id']}/memory-proposals/{proposal_id}",
                 json={
+                    "expectedRevision": 1,
                     "status": "approved",
                     "operatorAction": "approve",
                     "writeBackStatus": "approved_for_future",

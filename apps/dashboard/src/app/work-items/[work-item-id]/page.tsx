@@ -12,9 +12,8 @@ import {
   getWorkItemLowRiskDeliveryPlan,
   getWorkItemTrustedDeliveryEligibilityReport,
   getWorkItems,
-  getWorkPacketForWorkItem,
+  getWorkItemMemoryReview,
 } from "../../../lib/supervisor";
-import { projectDashboardCanonicalPresentationForWorkItemHold } from "../../../lib/pipeline-supervisor-projector";
 
 export default async function WorkItemDetailRoute({ params }: { params: Promise<{ "work-item-id": string }> }) {
   const { "work-item-id": workItemId } = await params;
@@ -22,14 +21,14 @@ export default async function WorkItemDetailRoute({ params }: { params: Promise<
     return <WorkItemDetailPage workItemId={workItemId} lanAuthEnabled />;
   }
 
-  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket] = await Promise.all([
+  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, memoryReview] = await Promise.all([
     getWorkItem(workItemId), getWorkItemEvents(workItemId), getWorkItems(), getRoutingPreview(workItemId), getExecutionAttempts(workItemId),
     getRuntimeEvidenceExport(workItemId), getRuntimeEvidenceReviewReport(), getWorkItemTrustedDeliveryEligibilityReport(workItemId),
-    getWorkItemLowRiskDeliveryPlan(workItemId), getWorkItemCleanupPlan(workItemId), getWorkPacketForWorkItem(workItemId).then((packet) => packet ? projectDashboardCanonicalPresentationForWorkItemHold(packet.presentation) : null),
+    getWorkItemLowRiskDeliveryPlan(workItemId), getWorkItemCleanupPlan(workItemId), getWorkItemMemoryReview(workItemId),
   ]);
   const [recipeGateAudit, localWorktreePlan] = await Promise.all([
     item.executionRecipe ? getRecipeGateAudit(workItemId) : null,
     item.executionRecipe ? getLocalWorktreePlan(workItemId) : null,
   ]);
-  return <WorkItemDetailPage workItemId={workItemId} lanAuthEnabled={false} initialData={{ item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket, recipeGateAudit, localWorktreePlan }} />;
+  return <WorkItemDetailPage workItemId={workItemId} lanAuthEnabled={false} initialData={{ item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, memoryReview, recipeGateAudit, localWorktreePlan }} />;
 }

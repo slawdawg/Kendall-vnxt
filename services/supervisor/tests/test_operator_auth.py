@@ -15,7 +15,7 @@ def _reset_supervisor_modules():
             sys.modules.pop(module_name, None)
 
 
-async def _asgi_request(app, method, path, *, body=None, headers=None, cookie=None):
+async def _asgi_request(app, method, path, *, body=None, headers=None, cookie=None, client=None):
     payload = json.dumps(body).encode("utf-8") if body is not None else b""
     request_headers = [(key.lower().encode(), value.encode()) for key, value in (headers or {}).items()]
     if cookie:
@@ -30,7 +30,7 @@ async def _asgi_request(app, method, path, *, body=None, headers=None, cookie=No
         "raw_path": path.encode(),
         "query_string": b"",
         "headers": request_headers,
-        "client": None,
+        "client": client,
         "server": None,
     }
     messages = []
@@ -113,6 +113,77 @@ def test_login_logout_cookie_csrf_origin_and_redacted_audit(tmp_path, monkeypatc
             assert events
             serialized = " ".join(f"{event.event_type} {event.outcome} {event.correlation_id}" for event in events)
             assert "operator-password" not in serialized and session_cookie not in serialized and csrf not in serialized
+
+    asyncio.run(run())
+
+
+def test_memory_proposal_write_recovery_requires_local_authenticated_operator(tmp_path, monkeypatch):
+    db_path = tmp_path / "write-recovery-auth.db"
+    private = tmp_path / "private"
+    private.mkdir()
+    private.chmod(0o700)
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("KENDALL_LAN_AUTH_ENABLED", "true")
+    monkeypatch.setenv("KENDALL_SUPERVISOR_TRANSPORT", "private_uds")
+    monkeypatch.setenv("KENDALL_SUPERVISOR_UDS_PATH", str(private / "supervisor.sock"))
+    monkeypatch.setenv("SUPERVISOR_CORS_ORIGINS", "https://dashboard.test")
+    _reset_supervisor_modules()
+
+    async def login(main, account: str, password: str, origin: dict[str, str]) -> tuple[str, str]:
+        _, _, challenge_body = await _asgi_request(main.app, "GET", "/auth/login-csrf", headers=origin)
+        csrf = json.loads(challenge_body)["csrfToken"]
+        status, headers, body = await _asgi_request(
+            main.app,
+            "POST",
+            "/auth/login",
+            body={"account": account, "password": password},
+            headers={**origin, "x-csrf-token": csrf},
+        )
+        assert status == 200
+        return f"kendall_operator_session={_cookie_value(headers, 'kendall_operator_session')}", json.loads(body)["csrfToken"]
+
+    async def run():
+        from supervisor.api import main
+        from supervisor.application.lan_auth_bootstrap import enable_or_rotate_test_viewer, ensure_bootstrap_operator
+        from supervisor.infrastructure.db.database import SessionLocal, init_db
+
+        await init_db()
+        async with SessionLocal.begin() as session:
+            await ensure_bootstrap_operator(session, b"operator-password")
+            await enable_or_rotate_test_viewer(session, b"viewer-password", rotate=False)
+
+        origin = {"origin": "https://dashboard.test", "content-type": "application/json"}
+        path = "/work-items/missing/memory-proposals/missing/recover-abandoned-write"
+        payload = {"expectedRevision": 1, "recoveryRef": "operator:confirmed-dead-supervisor"}
+
+        status, _, _ = await _asgi_request(main.app, "POST", path, body=payload, headers=origin)
+        assert status == 401
+
+        viewer_cookie, viewer_csrf = await login(main, "test_viewer", "viewer-password", origin)
+        status, _, _ = await _asgi_request(
+            main.app, "POST", path, body=payload,
+            headers={**origin, "x-csrf-token": viewer_csrf}, cookie=viewer_cookie,
+        )
+        assert status == 401
+
+        operator_cookie, operator_csrf = await login(main, "operator", "operator-password", origin)
+        status, _, _ = await _asgi_request(
+            main.app, "POST", path, body=payload, headers=origin, cookie=operator_cookie,
+        )
+        assert status == 403
+        status, _, _ = await _asgi_request(
+            main.app, "POST", path, body=payload,
+            headers={**origin, "x-csrf-token": operator_csrf}, cookie=operator_cookie,
+        )
+        assert status == 404
+
+        status, _, _ = await _asgi_request(
+            main.app, "POST", path, body=payload,
+            headers={**origin, "x-csrf-token": operator_csrf}, cookie=operator_cookie,
+            client=("192.0.2.10", 50001),
+        )
+        assert status == 503
 
     asyncio.run(run())
 

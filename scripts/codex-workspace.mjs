@@ -40,7 +40,10 @@ const defaultBaseBranch = "dev";
 const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
-const codexWorkspaceVerificationTimeoutMs = 900_000;
+// The complete governed workspace suite exercises delivery, review, merge,
+// and cleanup fixtures end-to-end.  It has a distinct bounded allowance from
+// ordinary profiles: on a healthy workspace it can exceed fifteen minutes.
+const codexWorkspaceVerificationTimeoutMs = 1_800_000;
 const dashboardVerificationTimeoutMs = 600_000;
 const checkVerificationTimeoutMs = 900_000;
 const verificationDiagnosticSchemaVersion = 2;
@@ -64,7 +67,27 @@ const resumableCheckDefaultLeafExecutionReserveMs = 30_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
 const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
-const resumableCheckPacketTtlMs = 30 * 60 * 1000;
+// Packets need enough lifetime for every leaf in their exact immutable plan.
+// The plan has grown beyond the old three-hour aggregate assumption, so new
+// packets derive their bounded lifetime from each leaf's reviewed budget.
+// Keep a small minimum for ordinary resume/preflight overhead on short plans.
+const resumableCheckPacketMinimumLifetimeMs = 20 * 60 * 1000;
+// A packet can be resumed between bounded leaves. Reserve a small fixed
+// admission/write allowance plus a bounded per-leaf allowance for process
+// startup and manifest durability, so a healthy interrupted plan does not
+// expire solely between successful leaves.
+const resumableCheckPacketResumeOverheadMs = 2 * 60 * 1000;
+const resumableCheckPacketStageOrchestrationReserveMs = 30 * 1000;
+// Schema-v1 packets did not record their per-plan budget.  Their former
+// three-hour ceiling remains accepted only by the discard-only validators so
+// a stale terminal packet can be proven safe and replaced; it can never be
+// resumed or used to run a new verification stage.
+const resumableCheckLegacyPacketMaximumLifetimeMs = 3 * 60 * 60 * 1000;
+// Newly-created packets record their own bounded plan lifetime.  A discard
+// validator may see a later, smaller plan, so it must validate that old
+// packet against the budget it was actually issued with rather than the
+// current plan's budget.  This schema-wide ceiling keeps that persisted value
+// bounded even when the original plan is no longer available locally.
 const resumableCheckPacketFutureSkewMs = 30_000;
 // Retry history is audit evidence, not a scheduler. Thirty seconds tolerates
 // ordinary local clock skew while rejecting timestamps projected far enough
@@ -149,6 +172,15 @@ const resumableCheckLongLeafStages = new Set([
   externalCheckStageEvidenceStage,
   "test:manager-control-plane",
 ]);
+
+function resumableCheckPacketMaximumLifetimeMs() {
+  return Math.max(
+    resumableCheckPacketMinimumLifetimeMs,
+    256 * Math.max(resumableCheckInvocationBudgetMs, resumableCheckSupervisorLeafExecutionReserveMs, resumableCheckLongLeafBudgetMs)
+      + resumableCheckPacketResumeOverheadMs
+      + 256 * resumableCheckPacketStageOrchestrationReserveMs,
+  );
+}
 const taskLockSchemaVersion = 1;
 const taskLeaseSchemaVersion = 1;
 const legacyRecoveryAdoptionTaskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
@@ -3275,8 +3307,15 @@ function assertExternalCheckStageEvidenceManifest(manifest, runnerIdentity) {
   if (manifest.owner !== runnerIdentity) {
     throw new Error("record-check-stage-evidence requires the exact recorded lane owner.");
   }
-  if (manifest.status !== "active") {
-    throw new Error("record-check-stage-evidence requires an active lane.");
+  const prOpenExactHead = manifest.status === "pr_open"
+    && Number.isInteger(manifest.pr_number)
+    && typeof manifest.pr_url === "string"
+    && manifest.pr_url.length > 0
+    && manifest.pr_delivery_branch === manifest.branch
+    && manifest.pr_delivery_base_branch === manifest.base_branch
+    && manifest.pr_delivery_head_sha === branchSha("HEAD", manifest.worktree_path);
+  if (manifest.status !== "active" && !prOpenExactHead) {
+    throw new Error("record-check-stage-evidence requires an active lane or an exact-head open PR lane.");
   }
   assertSafeBranch(manifest.branch);
   assertWorktreeExists(manifest);
@@ -15108,6 +15147,35 @@ function resumableCheckPlanDigest(stages) {
   return createHash("sha256").update(stages.join("\n")).digest("hex");
 }
 
+function resumableCheckPacketLifetimeMs(plan) {
+  const stages = Array.isArray(plan) ? plan : plan?.stages;
+  if (!Array.isArray(stages) || stages.length === 0 || stages.length > 256) {
+    throw new Error("resumable check packet lifetime requires a bounded stage plan.");
+  }
+  const executionBudgetMs = stages.reduce((total, stage) => {
+    if (resumableCheckLongLeafStages.has(stage)) return total + resumableCheckLongLeafBudgetMs;
+    if (resumableCheckSupervisorLeafSet.has(stage)) return total + resumableCheckSupervisorLeafExecutionReserveMs;
+    return total + resumableCheckInvocationBudgetMs;
+  }, 0);
+  const orchestrationReserveMs = resumableCheckPacketResumeOverheadMs + stages.length * resumableCheckPacketStageOrchestrationReserveMs;
+  return Math.max(resumableCheckPacketMinimumLifetimeMs, executionBudgetMs + orchestrationReserveMs);
+}
+
+function resumableCheckDiscardPacketMaximumLifetimeMs(plan) {
+  return Math.max(resumableCheckPacketLifetimeMs(plan), resumableCheckLegacyPacketMaximumLifetimeMs);
+}
+
+function resumableCheckDiscardPacketLifetimeMs(packet, expectedPlan, invalid) {
+  if (!Object.hasOwn(packet, "packet_lifetime_ms")) {
+    return resumableCheckDiscardPacketMaximumLifetimeMs(expectedPlan);
+  }
+  const lifetimeMs = packet.packet_lifetime_ms;
+  if (!Number.isSafeInteger(lifetimeMs) || lifetimeMs < resumableCheckPacketMinimumLifetimeMs || lifetimeMs > resumableCheckPacketMaximumLifetimeMs()) {
+    invalid("recorded packet lifetime is invalid");
+  }
+  return lifetimeMs;
+}
+
 function resumableCheckObsoleteSupervisorAggregatePlan(plan) {
   const firstLeaf = plan.stages.indexOf(resumableCheckSupervisorLeaves[0]);
   const lastLeaf = plan.stages.lastIndexOf(resumableCheckSupervisorLeaves.at(-1));
@@ -15177,7 +15245,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     }
   }
   if (!packet) {
-    packet = createResumableCheckPacket({ taskId: manifest.task_id, owner: options.owner, head, planDigest: plan.digest, stagedInputDigest, nextStage: plan.stages[0] });
+    packet = createResumableCheckPacket({ taskId: manifest.task_id, owner: options.owner, head, planDigest: plan.digest, stagedInputDigest, nextStage: plan.stages[0], packetLifetimeMs: resumableCheckPacketLifetimeMs(plan) });
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
   }
@@ -15189,7 +15257,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     const stage = plan.stages[index];
     const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
     // A long leaf has its own reviewed budget. Subtracting the elapsed packet
-    // time here gave test:codex-workspace less than its 900s allowance merely
+    // time here gave test:codex-workspace less than its dedicated allowance merely
     // because earlier bounded leaves had already produced evidence. Ordinary
     // leaves retain the packet-level 180s pause/resume behavior below.
     const elapsedMs = Date.now() - started;
@@ -15207,7 +15275,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     const timeout = needsSupervisorLeafReserve ? resumableCheckSupervisorLeafExecutionReserveMs : remainingMs;
     const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL" });
     const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
-    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: checkVerificationTimeoutMs, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${checkVerificationTimeoutMs}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
+    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: timeout, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
     packet.stages.push(evidence);
     packet.updated_at = new Date().toISOString();
     if (index + 1 === plan.stages.length) {
@@ -15466,7 +15534,7 @@ function discardRecoverableStalePartialCheckPacket(manifest, manifestPath, packe
 function validateStalePartialCheckPacketForDiscard(packet, expected) {
   const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
-  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at"];
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "packet_lifetime_ms"];
   if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
   if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
   if (packet.task_id !== expected.taskId || packet.owner !== expected.owner) invalid("binding changed");
@@ -15484,7 +15552,8 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at");
-  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  const discardLifetimeMs = resumableCheckDiscardPacketLifetimeMs(packet, expected.plan, invalid);
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > discardLifetimeMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   let previousCompletedAt = createdAt;
@@ -15495,7 +15564,12 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
     if (typeof evidence.stage !== "string" || !/^[A-Za-z0-9:_-]{1,120}$/.test(evidence.stage) || seenStages.has(evidence.stage)) invalid("stage evidence stage is malformed");
     seenStages.add(evidence.stage);
     const completedAt = timestamp(evidence.completed_at, "stage completed_at");
-    if (completedAt < previousCompletedAt || completedAt > updatedAt || completedAt > expiresAt) invalid("stage evidence is malformed");
+    // This validator is used only to discard a stale partial packet after its
+    // immutable source binding changed.  A previous runner may have reached
+    // the former packet lifetime while a bounded leaf was still completing;
+    // retain the strict ordering/metadata checks but allow that expired
+    // evidence to be safely discarded rather than stranding the lane.
+    if (completedAt < previousCompletedAt || completedAt > updatedAt) invalid("stage evidence is malformed");
     if (evidence.status !== 0 || evidence.signal !== null || evidence.error_code !== null || evidence.output !== "omitted") invalid("stage evidence is not a successful metadata-only result");
     previousCompletedAt = completedAt;
   }
@@ -15504,7 +15578,7 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
 function validateTerminalCheckPacketForDiscard(packet, expected) {
   const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
-  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage"];
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage", "packet_lifetime_ms"];
   if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
   if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
   if (packet.task_id !== expected.taskId || packet.owner !== expected.owner) invalid("binding changed");
@@ -15521,7 +15595,8 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
-  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  const discardLifetimeMs = resumableCheckDiscardPacketLifetimeMs(packet, expected.plan, invalid);
+  if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > discardLifetimeMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   const history = [];
@@ -15544,7 +15619,20 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
     .filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
   const candidatePlans = [...baseCandidatePlans, ...baseCandidatePlans.map((stages) => resumableCheckObsoleteSupervisorAggregatePlan({ stages }))]
     .filter((plan, index, all) => Array.isArray(plan) && plan.length > 0 && all.findIndex((other) => sameStringList(other, plan)) === index);
-  const digestMatchedPlans = candidatePlans.filter((plan) => resumableCheckPlanDigest(plan) === packet.plan_digest);
+  // An explicitly discarded, already-passed historical packet cannot resume
+  // work.  If its complete ordered metadata-only history hashes to its own
+  // stored digest, that immutable history is enough to prove its former plan
+  // without pretending the current runner still recognizes every retired
+  // profile. Partial and failed unknown plans remain fail-closed.
+  const selfDescribingPassedPlan = packet.status === "passed"
+    && history.length > 0
+    && resumableCheckPlanDigest(history) === packet.plan_digest
+    ? history
+    : null;
+  const digestMatchedPlans = [
+    ...candidatePlans.filter((plan) => resumableCheckPlanDigest(plan) === packet.plan_digest),
+    ...(selfDescribingPassedPlan ? [selfDescribingPassedPlan] : []),
+  ].filter((plan, index, all) => all.findIndex((other) => sameStringList(other, plan)) === index);
   if (digestMatchedPlans.length === 0) invalid("plan digest is not current or a recognized legacy plan");
   const matchingPlans = digestMatchedPlans.filter((plan) => history.every((stage, index) => plan[index] === stage));
   if (matchingPlans.length === 0) invalid("stage evidence is not an ordered plan prefix");
@@ -15565,7 +15653,10 @@ function stagedInputDigestForWorktree(cwd) {
   return createHash("sha256").update(`index-tree:${tree}`).digest("hex");
 }
 
-function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInputDigest, nextStage }) {
+function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInputDigest, nextStage, packetLifetimeMs }) {
+  if (!Number.isSafeInteger(packetLifetimeMs) || packetLifetimeMs < resumableCheckPacketMinimumLifetimeMs || packetLifetimeMs > resumableCheckPacketMaximumLifetimeMs()) {
+    throw new Error("resumable check packet lifetime is invalid.");
+  }
   const createdAt = new Date();
   return {
     schema_version: resumableCheckPacketSchemaVersion,
@@ -15579,14 +15670,15 @@ function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInp
     next_stage: nextStage,
     created_at: createdAt.toISOString(),
     updated_at: createdAt.toISOString(),
-    expires_at: new Date(createdAt.getTime() + resumableCheckPacketTtlMs).toISOString(),
+    expires_at: new Date(createdAt.getTime() + packetLifetimeMs).toISOString(),
+    packet_lifetime_ms: packetLifetimeMs,
   };
 }
 
 function validateResumableCheckPacket(packet, expected) {
   const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
-  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage"];
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage", "packet_lifetime_ms"];
   if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
   if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
   if (typeof packet.staged_input_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.staged_input_digest)) invalid("staged input binding is malformed");
@@ -15609,9 +15701,15 @@ function validateResumableCheckPacket(packet, expected) {
   const createdAt = timestamp(packet.created_at, "created_at");
   const updatedAt = timestamp(packet.updated_at, "updated_at");
   const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
+  if (Object.hasOwn(packet, "packet_lifetime_ms")) {
+    const lifetimeMs = packet.packet_lifetime_ms;
+    if (!Number.isSafeInteger(lifetimeMs) || lifetimeMs < resumableCheckPacketMinimumLifetimeMs || lifetimeMs > resumableCheckPacketMaximumLifetimeMs()) {
+      invalid("recorded packet lifetime is invalid");
+    }
+  }
   if (updatedAt < createdAt || expiresAt <= createdAt) invalid("timestamp ordering is invalid");
   if (expiresAt <= now) invalid("packet expired");
-  if (expiresAt - createdAt > resumableCheckPacketTtlMs + resumableCheckPacketFutureSkewMs) invalid("expiry exceeds packet lifetime");
+  if (expiresAt - createdAt > resumableCheckPacketLifetimeMs(expected.plan) + resumableCheckPacketFutureSkewMs) invalid("expiry exceeds packet lifetime");
 
   for (let index = 0; index < packet.stages.length; index += 1) {
     const evidence = packet.stages[index];

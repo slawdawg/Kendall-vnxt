@@ -235,6 +235,44 @@ password, cookies, CSRF token, or supervisor TCP port to diagnose the problem.
 The normal non-LAN dashboard retains server-side supervisor reads through
 `SUPERVISOR_INTERNAL_URL`.
 
+### WorkItem memory review
+
+An `operator` viewing `/work-items/:id` may see persisted proposal metadata and
+the derived LLM-Wiki readiness from the canonical, read-only
+`/pipeline-control-plane/work-items/:id/memory-review` endpoint. The read is
+metadata-only and exposes an opaque `proposalRouteId` plus a persisted
+`revision` for each proposal. Operator review actions send both values; a 409
+means another operator or an approved draft/rebuild changed the proposal, so
+refresh before deciding again. The server admits only WorkItem-scoped canonical
+event/attempt evidence; a metadata string cannot authorize a draft or derived
+artifact. `test_viewer` cannot request this operator-only read or its action
+routes. A missing or temporarily version-skewed endpoint simply omits the
+panel; verify that the supervisor and dashboard are on the same revision, then
+use the page retry after restarting the supervisor first. Do not paste vault
+content, bootstrap passwords, cookies, or UDS paths into a proposal or
+troubleshooting record.
+
+An AI-draft or rebuild reserves the proposal revision before vault I/O, so a
+review PATCH is deliberately rejected while that durable write is active. If
+the supervisor process is confirmed dead after that reservation, an operator
+may use the local recovery route
+`POST /work-items/:id/memory-proposals/:proposalRouteId/recover-abandoned-write`
+with the refreshed `expectedRevision` and an auditable `recoveryRef`. It records
+the recovery, reconciles the server-recorded artifact/backup intent under the
+same per-artifact lock used by the writer, clears only the matching reservation,
+and advances the revision again; a failed recovery can be retried only against
+that exact backup state. Refresh before retrying. Never use this recovery route
+to interrupt a live write. In a LAN deployment it requires the authenticated operator session,
+exact dashboard Origin, and CSRF token; development mode still requires the
+private-UDS or loopback operational boundary. Legacy artifact rebinding snapshots the vault before adding its
+missing WorkItem fence, so the backup path remains the recovery source if that
+compatibility write fails. The writer records a pending backup intent before it
+starts that snapshot copy and holds the same per-artifact lock through the
+copy: if it is interrupted during preparation, recovery first proves the target
+artifact is unchanged and removes only the recorded partial backup rather than
+treating it as a completed snapshot. Artifact replacement itself is atomic, so
+a failed write does not leave a truncated draft or derived artifact visible.
+
 ## Independently revocable dashboard verification credential
 
 After the reviewed source contract is installed and the existing private-UDS

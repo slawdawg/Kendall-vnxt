@@ -2,10 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { MemoryProposalV0, WorkPacketV0View } from "@kendall/contracts";
+import type { DashboardCanonicalMemoryProposalV1, DashboardCanonicalWorkItemMemoryReviewV1 } from "../lib/pipeline-supervisor-runtime";
 
 import { useOperatorProfile } from "../lib/operator-profile";
 import { invalidateAuthenticatedPageData } from "../lib/authenticated-page-read";
+import { requestSupervisorMutation } from "../lib/dashboard-supervisor-transport";
 import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 type ReviewAction = "approve_future_draft" | "edit_needed" | "reject" | "defer";
@@ -26,9 +27,9 @@ type LlmWikiArtifactSearchResult = {
 const reviewActions: Array<{
   action: ReviewAction;
   label: string;
-  status: MemoryProposalV0["status"];
-  operatorAction: MemoryProposalV0["operatorAction"];
-  writeBackStatus: MemoryProposalV0["writeBackStatus"];
+  status: DashboardCanonicalMemoryProposalV1["status"];
+  operatorAction: DashboardCanonicalMemoryProposalV1["operatorAction"];
+  writeBackStatus: DashboardCanonicalMemoryProposalV1["writeBackStatus"];
   decisionNeededContext: string;
 }> = [
   {
@@ -69,7 +70,7 @@ function statusLabel(value: string): string {
   return value.replaceAll("_", " ");
 }
 
-function proposalBoundaryLabel(proposal: MemoryProposalV0): string {
+function proposalBoundaryLabel(proposal: DashboardCanonicalMemoryProposalV1): string {
   if (proposal.contradictionStatus === "confirmed") {
     return "Confirmed contradiction; Obsidian remains human-owned.";
   }
@@ -79,15 +80,15 @@ function proposalBoundaryLabel(proposal: MemoryProposalV0): string {
   return "Proposal-only boundary; no source mutation.";
 }
 
-function canApproveFutureDraft(proposal: MemoryProposalV0): boolean {
+function canApproveFutureDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return proposal.freshness === "fresh" && proposal.contradictionStatus === "none" && !["blocked", "stale", "contradictory", "rejected"].includes(proposal.status);
 }
 
-function aiDraftQueued(proposal: MemoryProposalV0): boolean {
+function aiDraftQueued(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return /AI draft (written|already exists)/.test(proposal.patchSummary ?? "");
 }
 
-function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
+function canCreateAiDraft(proposal: DashboardCanonicalMemoryProposalV1): boolean {
   return (
     proposal.status === "approved" &&
     proposal.operatorAction === "approve" &&
@@ -95,19 +96,20 @@ function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
     proposal.writeBackAllowed === false &&
     proposal.freshness === "fresh" &&
     proposal.contradictionStatus === "none" &&
+    proposal.aiDraftEligible &&
     !aiDraftQueued(proposal)
   );
 }
 
-function hasLlmWikiArtifact(proposal: MemoryProposalV0): boolean {
-  return (proposal.targetVaultPath ?? "").includes("01 Dashboard Queue/LLM Wiki Derived/");
+function hasLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1): boolean {
+  return proposal.llmWikiArtifactSearchEligible;
 }
 
 export function MemoryProposalReviewPanel({
-  packet,
+  review,
   workItemId,
 }: {
-  packet: WorkPacketV0View;
+  review: DashboardCanonicalWorkItemMemoryReviewV1;
   workItemId: string;
 }) {
   const router = useRouter();
@@ -117,101 +119,129 @@ export function MemoryProposalReviewPanel({
   const [llmWikiQuery, setLlmWikiQuery] = useState("metadata");
   const [llmWikiResults, setLlmWikiResults] = useState<Record<string, LlmWikiArtifactSearchResult>>({});
   const [pending, startTransition] = useTransition();
-  const proposals = packet.memoryProposals;
-  const llmWikiReadiness = packet.alphaMemorySourceStatus?.llmWikiReadiness;
+  const proposals = review.proposals;
+  const llmWikiReadiness = review.llmWikiReadiness;
 
-  function submit(proposal: MemoryProposalV0, action: (typeof reviewActions)[number]) {
+  function submit(proposal: DashboardCanonicalMemoryProposalV1, action: (typeof reviewActions)[number]) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Updating ${proposal.proposalId}...`);
-      const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            status: action.status,
-            operatorAction: action.operatorAction,
-            writeBackStatus: action.writeBackStatus,
-            decisionNeededContext: `${action.decisionNeededContext} Reviewed by ${profile.actorLabel}.`,
-            writeBackAllowed: false,
-          }),
-        },
-      );
+      try {
+        const response = await requestSupervisorMutation(
+          `/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              expectedRevision: proposal.revision,
+              status: action.status,
+              operatorAction: action.operatorAction,
+              writeBackStatus: action.writeBackStatus,
+              decisionNeededContext: `${action.decisionNeededContext} Reviewed by ${profile.actorLabel}.`,
+              writeBackAllowed: false,
+            }),
+          },
+        );
 
-      if (!response.ok) {
+        if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor rejected that memory proposal update.");
-        setPendingProposalId(null);
+        // A conflicting PATCH is normally an optimistic-concurrency signal.
+        // Re-read the review before allowing another action so this panel does
+        // not keep resubmitting the stale proposal revision.
+        router.refresh();
+        invalidateAuthenticatedPageData();
         return;
-      }
+        }
 
-      setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
-      setPendingProposalId(null);
-      router.refresh();
-      invalidateAuthenticatedPageData();
+        setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
+        router.refresh();
+        invalidateAuthenticatedPageData();
+      } catch {
+        setMessage("The supervisor request was interrupted; no memory proposal change was confirmed.");
+      } finally {
+        setPendingProposalId(null);
+      }
     });
   }
 
-  function searchLlmWikiArtifact(proposal: MemoryProposalV0) {
+  function searchLlmWikiArtifact(proposal: DashboardCanonicalMemoryProposalV1) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
+      // A new query must never continue to display excerpts from a prior
+      // search if the next read is rejected or interrupted.
+      setLlmWikiResults(({ [proposal.proposalId]: _previous, ...remaining }) => remaining);
       setMessage(`Searching derived LLM-Wiki artifact for ${proposal.proposalId}...`);
-      const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/llm-wiki-artifact?query=${encodeURIComponent(llmWikiQuery)}`,
+      try {
+        const query = llmWikiQuery.trim().slice(0, 120);
+        const response = await fetch(
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}/llm-wiki-artifact?query=${encodeURIComponent(query)}`,
         { method: "GET" },
       );
 
-      if (!response.ok) {
+        if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the LLM-Wiki artifact read.");
-        setPendingProposalId(null);
-        return;
-      }
+          return;
+        }
 
-      const payload = (await response.json()) as { data?: LlmWikiArtifactSearchResult };
-      if (payload.data) {
-        setLlmWikiResults((current) => ({ ...current, [proposal.proposalId]: payload.data as LlmWikiArtifactSearchResult }));
+        const payload = (await response.json()) as { data?: LlmWikiArtifactSearchResult };
+        if (payload.data) {
+          setLlmWikiResults((current) => ({ ...current, [proposal.proposalId]: payload.data as LlmWikiArtifactSearchResult }));
+        }
+        setMessage(`${proposal.proposalId} LLM-Wiki search returned ${payload.data?.excerpts.length ?? 0} snippet${payload.data?.excerpts.length === 1 ? "" : "s"}.`);
+      } catch {
+        setMessage("The LLM-Wiki artifact read was interrupted; no result was retained.");
+      } finally {
+        setPendingProposalId(null);
       }
-      setMessage(`${proposal.proposalId} LLM-Wiki search returned ${payload.data?.excerpts.length ?? 0} snippet${payload.data?.excerpts.length === 1 ? "" : "s"}.`);
-      setPendingProposalId(null);
     });
   }
 
-  function createAiDraft(proposal: MemoryProposalV0) {
+  function createAiDraft(proposal: DashboardCanonicalMemoryProposalV1) {
     startTransition(async () => {
       setPendingProposalId(proposal.proposalId);
       setMessage(`Creating AI draft for ${proposal.proposalId}...`);
-      const response = await fetch(
-        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/ai-draft`,
+      try {
+        const response = await requestSupervisorMutation(
+        `/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalRouteId)}/ai-draft`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            expectedRevision: proposal.revision,
             actorId: profile.actorId,
             actorLabel: profile.actorLabel,
           }),
         },
       );
 
-      if (!response.ok) {
+        if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { detail?: { error?: { message?: string } } }
           | null;
         setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the AI draft write-back.");
-        setPendingProposalId(null);
-        return;
-      }
+        // A rejected server write may have released a durable reservation
+        // after advancing its revision. Refresh before a retry so this panel
+        // never resubmits the stale optimistic-concurrency token.
+        router.refresh();
+        invalidateAuthenticatedPageData();
+          return;
+        }
 
-      const payload = (await response.json()) as { data?: MemoryProposalV0 };
-      setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
-      setPendingProposalId(null);
-      router.refresh();
-      invalidateAuthenticatedPageData();
+        const payload = (await response.json()) as { data?: { targetVaultPath?: string | null } };
+        setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
+        router.refresh();
+        invalidateAuthenticatedPageData();
+      } catch {
+        setMessage("The AI draft request was interrupted; no draft write was confirmed.");
+      } finally {
+        setPendingProposalId(null);
+      }
     });
   }
 
@@ -364,6 +394,7 @@ export function MemoryProposalReviewPanel({
                       <input
                         type="search"
                         value={llmWikiQuery}
+                        maxLength={120}
                         onChange={(event) => setLlmWikiQuery(event.target.value)}
                         className="mt-2 w-full rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-sm font-normal outline-none focus:border-[var(--accent)]"
                       />

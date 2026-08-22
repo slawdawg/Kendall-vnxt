@@ -1337,6 +1337,88 @@ test("dedicated runtime fails closed on canonical 404 for authoritative identity
   assert.deepEqual(calls, ["/pipeline-control-plane/work-packets/packet-1"]);
 });
 
+test("dashboard WorkItem memory review binds its requested identity and rejects malformed client DTOs", async () => {
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const review = {
+    schemaVersion: "work-item-memory-review/v1",
+    workItemId: "work-item-a",
+    authoritativePacketId: "packet-a",
+    proposals: [{
+      proposalRouteId: "cbf78f6d-fb76-4913-a80b-da1692dd9bbd", proposalId: "proposal-a", revision: 1, label: "Review proposal", status: "proposed", summary: "Metadata only.",
+      sourceRefs: ["source:work-item-a"], evidenceRefs: ["event:packet-a"], targetVaultPath: null,
+      targetVaultFolder: "memory/review", proposalType: "new_note", suggestedContentSummary: "Review summary.",
+      patchSummary: null, sensitivity: "low", freshness: "fresh", contradictionStatus: "none",
+      confidence: "high", operatorAction: "blocked", decisionNeededContext: null,
+      backupRecoveryPath: "memory/recovery/proposal-a", writeBackStatus: "review_gated", writeBackAllowed: false, aiDraftEligible: false, llmWikiArtifactSearchEligible: false,
+    }],
+    llmWikiReadiness: null,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+  };
+  const context = {
+    exports: {}, module: { exports: {} }, process: { env: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
+      if (specifier === "./dashboard-supervisor-transport") return {
+        requestSupervisorJson: async (path) => {
+          if (path.endsWith("work-item-a/memory-review")) return review;
+          if (path.endsWith("work-item-b/memory-review")) return { ...review, workItemId: "work-item-a" };
+          if (path.endsWith("work-item-invalid/memory-review")) return {
+            ...review,
+            proposals: [{ ...review.proposals[0], targetVaultPath: 42, untrustedNestedPayload: "must not cross the DTO boundary" }],
+          };
+          if (path.endsWith("work-item-missing/memory-review")) {
+            throw new Error(`Request failed for ${path} (404)`);
+          }
+          if (path.endsWith("work-item-blank/memory-review")) return {
+            ...review,
+            workItemId: "work-item-blank",
+            proposals: [{
+              ...review.proposals[0], proposalId: "", label: "", summary: "", sourceRefs: [""], evidenceRefs: [""],
+              targetVaultFolder: "", suggestedContentSummary: "", backupRecoveryPath: "",
+            }],
+          };
+          if (path.endsWith("work-item-enum/memory-review")) return {
+            ...review,
+            workItemId: "work-item-enum",
+            proposals: [{ ...review.proposals[0], status: "future_unreviewed_status" }],
+          };
+          if (path.endsWith("work-item-unsafe-route/memory-review")) return {
+            ...review,
+            workItemId: "work-item-unsafe-route",
+            proposals: [{ ...review.proposals[0], proposalRouteId: "proposal/unsafe" }],
+          };
+          throw new Error(`Unexpected request ${path}`);
+        },
+      };
+      throw new Error(`Unexpected runtime import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+
+  const valid = JSON.parse(JSON.stringify(await context.module.exports.getWorkItemMemoryReview("work-item-a")));
+  assert.equal(valid.workItemId, "work-item-a");
+  assert.equal(valid.proposals[0].targetVaultPath, null);
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-missing"), null);
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-invalid"), null);
+  const persistedBlank = JSON.parse(JSON.stringify(await context.module.exports.getWorkItemMemoryReview("work-item-blank")));
+  assert.equal(persistedBlank.proposals[0].sourceRefs[0], "");
+  await assert.rejects(
+    () => context.module.exports.getWorkItemMemoryReview("work-item-b"),
+    /identity does not bind its requested WorkItem/,
+  );
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-enum"), null);
+  assert.equal(await context.module.exports.getWorkItemMemoryReview("work-item-unsafe-route"), null);
+});
+
 test("dedicated runtime projects consistent authoritative list and detail without legacy requests", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");

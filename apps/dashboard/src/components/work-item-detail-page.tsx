@@ -35,12 +35,11 @@ import {
   getRuntimeEvidenceReviewReport,
   getWorkItemLowRiskDeliveryPlan,
   getWorkItemTrustedDeliveryEligibilityReport,
-  getWorkPacketForWorkItem,
+  getWorkItemMemoryReview,
   getWorkItem,
   getWorkItemEvents,
   getWorkItems,
 } from "../lib/supervisor";
-import { projectDashboardCanonicalPresentationForWorkItemHold } from "../lib/pipeline-supervisor-projector";
 import { formatLane, formatWorkflowState } from "../lib/workflow-display";
 
 export type WorkItemDetailData = Awaited<ReturnType<typeof loadWorkItemDetail>>;
@@ -58,17 +57,17 @@ export async function loadWorkItemDetail(workItemId: string, signal?: AbortSigna
     trustedDeliveryReport,
     lowRiskDeliveryPlan,
     cleanupPlan,
-    workPacket,
+    memoryReview,
   ] = await Promise.all([
     getWorkItem(workItemId, options), getWorkItemEvents(workItemId, options), getWorkItems(options), getRoutingPreview(workItemId, options),
     getExecutionAttempts(workItemId, options), getRuntimeEvidenceExport(workItemId, options), getRuntimeEvidenceReviewReport(options),
-    getWorkItemTrustedDeliveryEligibilityReport(workItemId, options), getWorkItemLowRiskDeliveryPlan(workItemId, options), getWorkItemCleanupPlan(workItemId, options), getWorkPacketForWorkItem(workItemId, options).then((packet) => packet ? projectDashboardCanonicalPresentationForWorkItemHold(packet.presentation) : null),
+    getWorkItemTrustedDeliveryEligibilityReport(workItemId, options), getWorkItemLowRiskDeliveryPlan(workItemId, options), getWorkItemCleanupPlan(workItemId, options), getWorkItemMemoryReview(workItemId, options),
   ]);
   const [recipeGateAudit, localWorktreePlan] = await Promise.all([
     item.executionRecipe ? getRecipeGateAudit(workItemId, options) : null,
     item.executionRecipe ? getLocalWorktreePlan(workItemId, options) : null,
   ]);
-  return { item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket, recipeGateAudit, localWorktreePlan };
+  return { item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, memoryReview, recipeGateAudit, localWorktreePlan };
 }
 
 export function WorkItemDetailPage({
@@ -86,7 +85,7 @@ export function WorkItemDetailPage({
   if (state.kind !== "ready" && state.kind !== "empty") {
     return <AuthenticatedPageState title="work item detail" state={state.kind} onRetry={retry} />;
   }
-  const { item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, workPacket, recipeGateAudit, localWorktreePlan } = state.data;
+  const { item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport, lowRiskDeliveryPlan, cleanupPlan, memoryReview, recipeGateAudit, localWorktreePlan } = state.data;
   const metadata = item.metadata ?? {};
   const navStats = buildNavStats(items);
   const retryCount = Math.max(0, events.filter((event) => event.eventType === "work_item.implementing").length - 1);
@@ -251,7 +250,7 @@ export function WorkItemDetailPage({
           <GreenGateReadinessPanel report={trustedDeliveryReport} attempts={executionAttempts} />
           <DeliveryCleanupPlanPanel deliveryPlan={lowRiskDeliveryPlan} cleanupPlan={cleanupPlan} />
           <SubscriptionLaunchReadinessPanel events={events} runtimeEvidenceExport={runtimeEvidenceExport} />
-              {workPacket ? <MemoryProposalReviewPanel packet={workPacket} workItemId={item.id} /> : null}
+              {memoryReview ? <MemoryProposalReviewPanel review={memoryReview} workItemId={item.id} /> : null}
           <RoutingPreviewPanel preview={routingPreview} />
           <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />

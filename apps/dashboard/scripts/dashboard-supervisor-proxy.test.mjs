@@ -30,9 +30,12 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
   let dashboard;
   try {
     supervisor = http.createServer((request, response) => {
-      if (request.url === "/auth/session") { response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
+      if (request.url === "/auth/session") { response.writeHead(request.headers.cookie?.includes("session=ok") ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
       if (request.url === "/pipeline-control-plane/work-packets") { response.end(JSON.stringify({ data: [canonicalPacketWithRawBrowserUnsafeFields()] })); return; }
       if (request.url === "/pipeline-control-plane/work-items/work-item-1/packet") { response.end(JSON.stringify({ data: canonicalPacketWithRawBrowserUnsafeFields() })); return; }
+      if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata") { forwarded.push(request.url); response.end(JSON.stringify({ data: { matched: false } })); return; }
+      if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1" || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1" } })); return; }
+      if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1", revision: 3 } })); return; }
       if (request.url === "/pipeline-control-plane/projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
@@ -77,9 +80,32 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     const savedViews = await request(port, "/api/supervisor/operator-views?scope=queue", { headers: { cookie: "session=ok" } });
     assert.equal(savedViews.status, 200);
     assert.deepEqual(forwarded, ["/operator-views?scope=queue"]);
+    const artifactSearch = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", { headers: { cookie: "session=ok" } });
+    assert.equal(artifactSearch.status, 200);
+    assert.deepEqual(forwarded, ["/operator-views?scope=queue", "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata"]);
+    const artifactMutation = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(artifactMutation.status, 405);
+    const recoveryPath = "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write";
+    const proposalPatchPath = "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1";
+    const proposalDraftPath = `${proposalPatchPath}/ai-draft`;
+    const proposalPatchMissingCsrf = await request(port, proposalPatchPath, { method: "PATCH", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(proposalPatchMissingCsrf.status, 403);
+    const proposalPatch = await request(port, proposalPatchPath, { method: "PATCH", headers: { cookie: "session=ok; kendall_operator_csrf=csrf-ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok" } });
+    assert.equal(proposalPatch.status, 200);
+    const proposalDraft = await request(port, proposalDraftPath, { method: "POST", headers: { cookie: "session=ok; kendall_operator_csrf=csrf-ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok" } });
+    assert.equal(proposalDraft.status, 200);
+    const proposalPatchWrongMethod = await request(port, proposalPatchPath, { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
+    assert.equal(proposalPatchWrongMethod.status, 405);
+    const recoveryMissingCsrf = await request(port, recoveryPath, { method: "POST", body: JSON.stringify({ expectedRevision: 2, recoveryRef: "operator:dead-supervisor" }), headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}`, "content-type": "application/json" } });
+    assert.equal(recoveryMissingCsrf.status, 403);
+    const recovery = await request(port, recoveryPath, { method: "POST", body: JSON.stringify({ expectedRevision: 2, recoveryRef: "operator:dead-supervisor" }), headers: { cookie: "session=ok; kendall_operator_csrf=csrf-ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok", "content-type": "application/json" } });
+    assert.equal(recovery.status, 200);
+    assert.deepEqual(recovery.body.data, { proposalId: "proposal-1", revision: 3 });
+    const artifactSearchExtra = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata&extra=1", { headers: { cookie: "session=ok" } });
+    assert.equal(artifactSearchExtra.status, 404);
     const savedViewsExtra = await request(port, "/api/supervisor/operator-views?scope=queue&extra=1", { headers: { cookie: "session=ok" } });
     assert.equal(savedViewsExtra.status, 404);
-    assert.deepEqual(forwarded, ["/operator-views?scope=queue"]);
+    assert.deepEqual(forwarded, ["/operator-views?scope=queue", "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", "/work-items/work-item-1/memory-proposals/proposal-1", "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft", "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write"]);
     const legacyMutation = await request(port, "/api/supervisor/work-packets/legacy-packet-1", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
     assert.equal(legacyMutation.status, 405);
     const denied = await request(port, "/api/supervisor/pipeline-control-plane/work-packets");
@@ -88,6 +114,73 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     assert.equal(forwardedRequest.status, 400);
     const unknown = await request(port, "/api/supervisor/private-admin", { headers: { cookie: "session=ok" } });
     assert.equal(unknown.status, 404);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("artifact writes use their dedicated vault-durability deadline", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-supervisor-proxy-timeout-"));
+  const socketPath = join(directory, "supervisor.sock");
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") { response.end(JSON.stringify({ authenticated: true, role: "operator" })); return; }
+      if (
+        request.url === "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft"
+        || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-rebuild"
+        || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write"
+      ) {
+        setTimeout(() => response.end(JSON.stringify({ data: { proposalId: "proposal-1" } })), 40);
+        return;
+      }
+      response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+    });
+    await listen(supervisor, socketPath);
+    dashboard = http.createServer(async (request, response) => {
+      const proxy = createSupervisorProxy({
+        supervisorUdsPath: socketPath,
+        expectedOrigin: `https://127.0.0.1:${dashboard.address().port}`,
+        timeoutMs: 10,
+        memoryProposalArtifactWriteTimeoutMs: 100,
+      });
+      if (await proxy(request, response)) return;
+      response.writeHead(404).end(JSON.stringify({ state: "not_found" }));
+    });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+    const response = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/ai-draft", {
+      method: "POST",
+      headers: {
+        cookie: "session=ok; kendall_operator_csrf=csrf-ok",
+        origin: `https://127.0.0.1:${port}`,
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data, { proposalId: "proposal-1" });
+    const rebuild = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-rebuild", {
+      method: "POST",
+      headers: {
+        cookie: "session=ok; kendall_operator_csrf=csrf-ok",
+        origin: `https://127.0.0.1:${port}`,
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    assert.equal(rebuild.status, 200);
+    assert.deepEqual(rebuild.body.data, { proposalId: "proposal-1" });
+    const recovery = await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write", {
+      method: "POST",
+      headers: {
+        cookie: "session=ok; kendall_operator_csrf=csrf-ok",
+        origin: `https://127.0.0.1:${port}`,
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    assert.equal(recovery.status, 200);
+    assert.deepEqual(recovery.body.data, { proposalId: "proposal-1" });
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);
@@ -218,14 +311,56 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     const headers = { cookie: "viewer=ok" };
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/memory-review", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write", { method: "POST", headers: { ...headers, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" }, body: JSON.stringify({ expectedRevision: 2, recoveryRef: "operator:dead-supervisor" }) })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1", { method: "PATCH", headers: { ...headers, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 404);
     assert.equal((await request(port, "/api/supervisor/audit-events", { headers })).status, 404);
-    assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 404);
-    assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 400);
+    assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 400);
+    assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/%2561i-draft", { method: "POST", headers: { cookie: "session=ok", origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 400);
     assert.equal((await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", headers: { ...headers, origin: "https://dashboard.test" } })).status, 405);
     assert.deepEqual(forwarded, [
       { method: "GET", url: "/pipeline-control-plane/projection" },
       { method: "GET", url: "/work-packets/packet-1" },
     ]);
+  } finally {
+    if (dashboard?.listening) await close(dashboard);
+    if (supervisor?.listening) await close(supervisor);
+  }
+});
+
+test("operator canonical packet reads preserve a literal percent ID without double-decoding", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kendall-percent-packet-proxy-"));
+  const socketPath = join(directory, "supervisor.sock");
+  const forwarded = [];
+  let supervisor;
+  let dashboard;
+  try {
+    supervisor = http.createServer((request, response) => {
+      if (request.url === "/auth/session") {
+        response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" }));
+        return;
+      }
+      forwarded.push(request.url);
+      if (request.url === "/pipeline-control-plane/work-packets/release%25candidate") {
+        response.end(JSON.stringify({ data: canonicalPacketWithRawBrowserUnsafeFields() }));
+        return;
+      }
+      response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
+    });
+    await listen(supervisor, socketPath);
+    const proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: "https://dashboard.test" });
+    dashboard = http.createServer(async (request, response) => { if (await proxy(request, response)) return; response.writeHead(404).end(JSON.stringify({ state: "not_found" })); });
+    await listen(dashboard, 0);
+    const port = dashboard.address().port;
+
+    const response = await request(port, "/api/supervisor/pipeline-control-plane/work-packets/release%25candidate", { headers: { cookie: "session=ok" } });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.packetId, "packet-1");
+    assert.deepEqual(forwarded, ["/pipeline-control-plane/work-packets/release%25candidate"]);
+    assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-packets/%252e%252e", { headers: { cookie: "session=ok" } })).status, 400);
+    assert.deepEqual(forwarded, ["/pipeline-control-plane/work-packets/release%25candidate"]);
   } finally {
     if (dashboard?.listening) await close(dashboard);
     if (supervisor?.listening) await close(supervisor);
