@@ -114,6 +114,7 @@ export type DashboardCanonicalActiveBoardProjectionV1 = {
   managerSummary: DashboardCanonicalActiveBoardManagerSummaryV1;
   /** Strict compact dashboard-owned manager posture, safe for cockpit rendering. */
   activeManagerLaneClarity: DashboardCanonicalManagerLaneClarityV1 | null;
+  coordinationHealth: DashboardCanonicalCoordinationHealthV1 | null;
   workerSummary: DashboardCanonicalActiveBoardWorkerSummaryV1;
   reliabilityProblems: DashboardCanonicalActiveBoardReliabilityProblemV1[];
   gatedControls: DashboardCanonicalActiveBoardGatedControlV1[];
@@ -367,7 +368,8 @@ export type DashboardCanonicalOperationalProjectionV1 = {
   selectedPacketDetails: DashboardCanonicalOperationalSelectedPacketDetailV1[];
   managerSummary: PipelineManagerSummaryV0;
   activeManagerLaneClarity?: DashboardCanonicalManagerLaneClarityV1 | null;
-  coordinationHealth?: PipelineCoordinationHealthV0 | null;
+  /** Source input; client props use the compact active-board form below. */
+  coordinationHealth?: PipelineCoordinationHealthV0 | DashboardCanonicalCoordinationHealthV1 | null;
   workerSummary: PipelineWorkerSummaryV0;
   reliabilityProblems: PipelineReliabilityProblemV0[];
   gatedControls: PipelineGatedControlV0[];
@@ -397,6 +399,20 @@ export type DashboardCanonicalManagerLaneClarityV1 = {
     disposition: string;
     evidenceRefs: readonly string[];
   }>;
+};
+
+export type DashboardCanonicalCoordinationHealthV1 = {
+  observedAt: string;
+  source: "manager_workspace_inventory";
+  freshness: "fresh" | "unavailable";
+  availability: "available" | "incomplete" | "unavailable";
+  activeWorkCount: number;
+  staleOwnerTargetCount: number;
+  staleOwnerProjectedCount: number;
+  dirtyPreserveCount: number;
+  missingWorktreeJournalHold: boolean;
+  nextSafeAction: string;
+  metadataOnly: true;
 };
 
 export type DashboardCanonicalOperationalWorkPacketV1 = {

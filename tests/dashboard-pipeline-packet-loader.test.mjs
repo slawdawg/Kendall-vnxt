@@ -160,6 +160,60 @@ test("pipeline loader reconstructs client-safe Lane Clarity rather than applying
   }
 });
 
+test("pipeline loader carries Coordination Health only in the client-safe active-board DTO", async () => {
+  const packet = authoritativeWorkPacket();
+  const projection = runtimeProjection([packet.packetId], {
+    coordinationHealth: {
+      schemaVersion: "manager-coordination-health/v0",
+      runId: "run:coordination-health",
+      observedAt: "2026-08-22T00:00:00.000Z",
+      source: "manager_workspace_inventory",
+      freshness: "fresh",
+      availability: "incomplete",
+      activeWorkCount: 2,
+      staleOwnerTargetCount: 17,
+      staleOwnerProjectedCount: 12,
+      dirtyPreserveCount: 3,
+      missingWorktreeJournalHold: true,
+      nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+      evidenceRefs: ["manager:assignment-report"],
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    },
+  });
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getDashboardCanonicalOperationalProjection: async () => projection,
+    getWorkPackets: async () => [packet],
+  });
+
+  const result = await loader.__canonicalListForTest();
+
+  assert.equal(result.operationalProjection?.coordinationHealth, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.activeBoardProjection?.coordinationHealth)), {
+    observedAt: "2026-08-22T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    metadataOnly: true,
+  });
+  assert.equal(Object.hasOwn(result.activeBoardProjection?.coordinationHealth ?? {}, "runId"), false);
+  assert.equal(Object.hasOwn(result.activeBoardProjection?.coordinationHealth ?? {}, "evidenceRefs"), false);
+
+  const malformedLoader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getDashboardCanonicalOperationalProjection: async () => projection,
+    getWorkPackets: async () => [packet],
+    isDashboardCoordinationHealthInput: () => false,
+  });
+  const malformed = await malformedLoader.__canonicalListForTest();
+  assert.equal(malformed.activeBoardProjection?.coordinationHealth, null);
+});
+
 test("normal loader and packet-detail route keep the canonical DTO until their named compatibility boundaries", async () => {
   const [loaderSource, detailRouteSource, detailComponentSource] = await Promise.all([
     readFile(loaderPath, "utf8"),
@@ -1315,7 +1369,15 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
     exports: {}, module: { exports: {} }, process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
-      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (value) => value, isPipelineDashboardProjection: () => true };
+      if (specifier === "./pipeline-supervisor-projection") return {
+        normalizePipelineDashboardProjection: (value) => value,
+        isPipelineDashboardProjection: () => true,
+        isPipelineCoordinationHealth: (value) => value?.schemaVersion === "manager-coordination-health/v0",
+        isDashboardCoordinationHealthInput: (value) => value?.schemaVersion === "manager-coordination-health/v0"
+          || (value?.source === "manager_workspace_inventory"
+            && value?.availability !== "impossible"
+            && value?.metadataOnly === true),
+      };
       if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
         requestSupervisorJson: async (path, options) => {
@@ -1372,6 +1434,26 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
     /Invalid canonical operational projection payload/,
   );
   projection.activeManagerLaneClarity.canonicalState.freshness = "fresh";
+  projection.coordinationHealth = {
+    observedAt: "2026-08-22T00:00:00.000Z",
+    source: "manager_workspace_inventory",
+    freshness: "fresh",
+    availability: "incomplete",
+    activeWorkCount: 2,
+    staleOwnerTargetCount: 17,
+    staleOwnerProjectedCount: 12,
+    dirtyPreserveCount: 3,
+    missingWorktreeJournalHold: true,
+    nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+    metadataOnly: true,
+  };
+  await assert.doesNotReject(() => context.module.exports.getDashboardCanonicalOperationalProjection());
+  projection.coordinationHealth.availability = "impossible";
+  await assert.rejects(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    /Invalid canonical operational projection payload/,
+  );
+  projection.coordinationHealth = null;
   for (const [label, value] of [
     ["raw payload text", "rawPayload: must not cross the canonical board boundary"],
     ["token-like text", "sk-proj-abcdefghi0123456789"],
@@ -3334,6 +3416,7 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
   const supervisor = {
     applyPipelineOperationalAction: async () => { throw new Error("operational actions are outside this proof"); },
     issuePipelineOperationalApproval: async () => { throw new Error("operational approvals are outside this proof"); },
+    isDashboardCoordinationHealthInput: () => true,
     isDashboardCanonicalManagerLaneClarity: () => true,
     ...supervisorOverrides,
   };
@@ -3359,6 +3442,9 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
         return projectorModule;
       }
       if (specifier === "./pipeline-supervisor-runtime") return supervisor;
+      if (specifier === "./pipeline-supervisor-projection") return {
+        isDashboardCoordinationHealthInput: supervisor.isDashboardCoordinationHealthInput,
+      };
       if (specifier === "./pipeline-supervisor-uds") return {
         requestPipelineSupervisorViaUds: requestPipelineSupervisorViaUds ?? (async () => { throw new Error("UDS should be unused when LAN auth is disabled"); }),
       };

@@ -135,11 +135,11 @@ client DTO reconstructed field-by-field by `pipeline-packet-loader`. It carries
 the bounded stage, source-state, manager, worker, queue, admission, control,
 and V1-action fields the active-board view model reads; it omits raw lifecycle
 extensions and incomplete selected-detail evidence. Its compact, strictly
-reconstructed manager Lane Clarity field now drives the cockpit's Lane Clarity
-panel. The older `DashboardCanonicalOperationalProjectionV1` remains a named
-temporary hold for direct-detail inspection, coordination panels, diagnostics,
-and legacy V0 action compatibility. It must not be used to reintroduce
-active-board, Lane Clarity, or runtime-action rendering.
+reconstructed manager Lane Clarity and Coordination Health fields now drive
+their cockpit panels. The older `DashboardCanonicalOperationalProjectionV1`
+remains a named temporary hold for direct-detail inspection, diagnostics, and
+legacy V0 action compatibility. It must not be used to reintroduce active-board,
+Lane Clarity, Coordination Health, or runtime-action rendering.
 
 ## File and test map
 

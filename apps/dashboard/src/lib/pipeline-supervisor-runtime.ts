@@ -19,6 +19,7 @@ import type {
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
 import {
+  isDashboardCoordinationHealthInput,
   isPipelineDashboardProjection,
   normalizePipelineDashboardProjection,
 } from "./pipeline-supervisor-projection";
@@ -750,7 +751,10 @@ function isDashboardCanonicalOperationalProjection(value: unknown): value is Das
     && projection.selectedPacketDetails.every(isCanonicalOperationalSelectedDetail)
     && (projection.activeManagerLaneClarity === undefined
       || projection.activeManagerLaneClarity === null
-      || isDashboardCanonicalManagerLaneClarity(projection.activeManagerLaneClarity));
+      || isDashboardCanonicalManagerLaneClarity(projection.activeManagerLaneClarity))
+    && (projection.coordinationHealth === undefined
+      || projection.coordinationHealth === null
+      || isDashboardCoordinationHealthInput(projection.coordinationHealth));
 }
 
 const CANONICAL_LANE_CLARITY_KEYS = new Set(["goal", "posture", "canonicalState", "nextGate", "criteria"]);

@@ -1380,6 +1380,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   const clarityActiveBoardProjection = {
     ...clarityProjection,
     schemaVersion: "dashboard-canonical-active-board/v1",
+    coordinationHealth: null,
   };
   const clarityHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
@@ -1433,6 +1434,21 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
         evidenceRefs: ["manager:assignment-report", "manager:stale-owner-inspection"],
         metadataOnly: true,
         rawPayloadRetained: false,
+      },
+    }, activeBoardProjection: {
+      ...clarityActiveBoardProjection,
+      coordinationHealth: {
+        observedAt: "2026-07-30T00:00:00.000Z",
+        source: "manager_workspace_inventory",
+        freshness: "fresh",
+        availability: "incomplete",
+        activeWorkCount: 2,
+        staleOwnerTargetCount: 17,
+        staleOwnerProjectedCount: 12,
+        dirtyPreserveCount: 3,
+        missingWorktreeJournalHold: true,
+        nextSafeAction: "Preserve dirty worktrees and refresh canonical stale-owner evidence.",
+        metadataOnly: true,
       },
     }, projectionError: null, selectedPacket: null,
   }));

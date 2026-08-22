@@ -11,6 +11,9 @@ const PROXY_TIMEOUT_MS = 2000;
 // 503 solely because backup durability exceeded two seconds.
 const MEMORY_PROPOSAL_ARTIFACT_WRITE_TIMEOUT_MS = 15 * 60 * 1000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const UNSAFE_CANONICAL_METADATA_TEXT_RE = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const TOKEN_LIKE_CANONICAL_METADATA_RE = /(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])/i;
+const EXECUTABLE_CANONICAL_METADATA_TEXT_RE = /\b(tmux\s+(kill|send|capture|new|attach)|git(hub)?\s+(push|merge|checkout|reset|clean|branch|pr)|gh\s+(pr|repo|api)|curl\s+|bash\s+|sh\s+|python\s+|node\s+|pnpm\s+|uv\s+run|provider\s+(call|request|payload))\b/i;
 const MEMORY_INBOX_PROPOSAL_DECISION_PATH = /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/(?:return|deny|approve)$/;
 const LLM_WIKI_ARTIFACT_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+\/llm-wiki-artifact$/;
 const MEMORY_PROPOSAL_MUTATION_PATH = /^\/work-items\/[A-Za-z0-9._:%-]+\/memory-proposals\/[A-Za-z0-9._:%-]+(?:\/(?:ai-draft|llm-wiki-rebuild))?$/;
@@ -348,6 +351,52 @@ function redactCanonicalManagerLaneClarity(clarity) {
   };
 }
 
+/** Rebuild the compact dashboard Coordination Health DTO; never forward the V0 receipt. */
+function redactCanonicalCoordinationHealth(health) {
+  const record = health && typeof health === "object" && !Array.isArray(health) ? health : null;
+  const safeText = (value) => typeof value === "string"
+    && value.trim() === value
+    && value.length > 0
+    && value.length <= 500
+    && !/[\x00-\x1f\x7f]/.test(value)
+    && !UNSAFE_CANONICAL_METADATA_TEXT_RE.test(value)
+    && !TOKEN_LIKE_CANONICAL_METADATA_RE.test(value)
+    && !EXECUTABLE_CANONICAL_METADATA_TEXT_RE.test(value);
+  const safeRef = (value) => typeof value === "string"
+    && value.trim() === value
+    && value.length > 0
+    && value.length <= 255
+    && !/[\x00-\x1f\x7f]/.test(value)
+    && !UNSAFE_CANONICAL_METADATA_TEXT_RE.test(value)
+    && !TOKEN_LIKE_CANONICAL_METADATA_RE.test(value);
+  if (!record || record.schemaVersion !== "manager-coordination-health/v0"
+    || !safeRef(record.runId) || typeof record.observedAt !== "string" || !Number.isFinite(Date.parse(record.observedAt))
+    || record.source !== "manager_workspace_inventory"
+    || !(record.freshness === "fresh" || record.freshness === "unavailable")
+    || !(record.availability === "available" || record.availability === "incomplete" || record.availability === "unavailable")
+    || ![record.activeWorkCount, record.staleOwnerTargetCount, record.staleOwnerProjectedCount, record.dirtyPreserveCount]
+      .every((count) => Number.isSafeInteger(count) && count >= 0)
+    || record.staleOwnerProjectedCount > record.staleOwnerTargetCount
+    || (record.staleOwnerProjectedCount !== record.staleOwnerTargetCount && record.availability !== "incomplete")
+    || typeof record.missingWorktreeJournalHold !== "boolean"
+    || !safeText(record.nextSafeAction)
+    || !Array.isArray(record.evidenceRefs) || record.evidenceRefs.length > 8 || !record.evidenceRefs.every(safeRef)
+    || record.metadataOnly !== true || record.rawPayloadRetained !== false) return null;
+  return {
+    observedAt: record.observedAt,
+    source: "manager_workspace_inventory",
+    freshness: record.freshness,
+    availability: record.availability,
+    activeWorkCount: record.activeWorkCount,
+    staleOwnerTargetCount: record.staleOwnerTargetCount,
+    staleOwnerProjectedCount: record.staleOwnerProjectedCount,
+    dirtyPreserveCount: record.dirtyPreserveCount,
+    missingWorktreeJournalHold: record.missingWorktreeJournalHold,
+    nextSafeAction: record.nextSafeAction,
+    metadataOnly: true,
+  };
+}
+
 function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true } = {}) {
   let payload;
   try {
@@ -433,7 +482,8 @@ function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true 
       managerSummary: projection.managerSummary,
       // Reinserted below by the dedicated strict V1 DTO reconstruction.
       activeManagerLaneClarity: null,
-      coordinationHealth: projection.coordinationHealth,
+      // Reinserted below by the dedicated strict V1 DTO reconstruction.
+      coordinationHealth: null,
       workerSummary: projection.workerSummary,
       reliabilityProblems: projection.reliabilityProblems,
       gatedControls: projection.gatedControls,
@@ -447,6 +497,7 @@ function redactPipelineProjectionResponse(body, { includeActionResultsV1 = true 
     return {
       ...safeProjection,
       activeManagerLaneClarity: redactCanonicalManagerLaneClarity(projection.activeManagerLaneClarity),
+      coordinationHealth: redactCanonicalCoordinationHealth(projection.coordinationHealth),
     };
   };
   const safePayload = payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
