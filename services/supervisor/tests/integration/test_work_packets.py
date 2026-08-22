@@ -5079,7 +5079,7 @@ def test_memory_review_keeps_later_artifact_eligibility_visible(tmp_path, monkey
         assert all(eligibility[proposal_id] is True for proposal_id in proposal_ids)
 
 
-def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(tmp_path, monkeypatch) -> None:
+def test_work_item_memory_proposal_persists_review_state_in_native_review(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-memory-proposals.db") as client:
         work_item = _create_work_item(client, title="Obsidian memory review")
 
@@ -5136,18 +5136,10 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert "/" not in review_proposal["proposalRouteId"]
         assert client.get("/pipeline-control-plane/work-items/missing/memory-review").status_code == 404
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        assert packet["currentStage"] == "learn"
-        assert packet["currentOwner"] == "memory_review"
-        assert packet["status"] == "waiting"
-        assert len(packet["memoryProposals"]) == 1
-        proposal = packet["memoryProposals"][0]
-        assert proposal["proposalId"] == "mp/20260625T000000Z"
-        assert proposal["targetVaultFolder"] == "01 Dashboard Queue/AI Drafts"
-        assert proposal["writeBackAllowed"] is False
-        assert proposal["writeBackStatus"] == "review_gated"
+        assert review_proposal["proposalId"] == "mp/20260625T000000Z"
+        assert review_proposal["targetVaultFolder"] == "01 Dashboard Queue/AI Drafts"
+        assert review_proposal["writeBackAllowed"] is False
+        assert review_proposal["writeBackStatus"] == "review_gated"
 
         update_response = client.patch(
             f"/work-items/{work_item['id']}/memory-proposals/{review_proposal['proposalRouteId']}",
@@ -5180,9 +5172,7 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         assert stale_update.status_code == 409
         assert stale_update.json()["detail"]["error"]["code"] == "memory_proposal_revision_conflict"
 
-        packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet_after_update["memoryProposals"][0]["status"] == "approved"
-        assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
+        assert review_after_update["proposals"][0]["writeBackStatus"] == "approved_for_future"
 
 
 def test_migrated_memory_proposal_update_returns_the_v1_review_shape(tmp_path, monkeypatch) -> None:
@@ -5453,10 +5443,13 @@ def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, 
         )
         assert stale_review.status_code == 409
 
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        packet_proposal = packet["memoryProposals"][0]
-        assert packet_proposal["targetVaultPath"] == proposal["targetVaultPath"]
-        assert packet_proposal["writeBackAllowed"] is False
+        review_after_draft = client.get(
+            f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review"
+        )
+        assert review_after_draft.status_code == 200
+        review_proposal = review_after_draft.json()["data"]["proposals"][0]
+        assert review_proposal["targetVaultPath"] == proposal["targetVaultPath"]
+        assert review_proposal["writeBackAllowed"] is False
 
         duplicate_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
@@ -5829,22 +5822,25 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         )
         assert approve_response.status_code == 200
 
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        readiness = packet["alphaMemorySourceStatus"]["llmWikiReadiness"]
+        review = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review.status_code == 200
+        review_payload = review.json()["data"]
+        assert review_payload["schemaVersion"] == "work-item-memory-review/v1"
+        assert review_payload["workItemId"] == work_item["id"]
+        assert review_payload["metadataOnly"] is True
+        assert review_payload["rawPayloadRetained"] is False
+        assert review_payload["canonicalMutationAllowed"] is False
+        assert review_payload["sourceMutationAllowed"] is False
+        assert [proposal["proposalId"] for proposal in review_payload["proposals"]] == ["mp-llm-wiki-ready"]
+        readiness = review_payload["llmWikiReadiness"]
         assert readiness["decisionState"] == "ready"
         assert readiness["canonicality"] == "derived_disposable_rebuildable"
-        assert readiness["retentionClass"] == "metadata_only"
-        assert readiness["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert readiness["allowedInputs"] == ["memory_proposal:mp-llm-wiki-ready"]
         assert readiness["blockedReasons"] == []
-        assert readiness["canonicalMutationAllowed"] is False
-        assert readiness["sourceMutationAllowed"] is False
-        assert readiness["providerCallsAllowed"] is False
         assert readiness["durableWriteAllowed"] is False
         assert "never overrides Obsidian" in readiness["boundarySummary"]
         preview = readiness["rebuildPreview"]
         assert preview["previewId"] == f"llm-wiki-rebuild-preview:work_item:{work_item['id']}"
-        assert preview["operationMode"] == "read_only"
         assert preview["retentionClass"] == "metadata_only"
         assert preview["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
@@ -5852,32 +5848,15 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert "event:memory-review-evidence" in preview["inputRefs"]
         assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
         assert "do not write LLM-Wiki index" in preview["stopLine"]
-        assert preview["canonicalMutationAllowed"] is False
-        assert preview["sourceMutationAllowed"] is False
-        assert preview["providerCallsAllowed"] is False
-        assert preview["workerLaunchAllowed"] is False
-        assert preview["githubCallsAllowed"] is False
-        assert preview["networkEgressAllowed"] is False
-        assert preview["durableWriteAllowed"] is False
         plan = readiness["rebuildDryRunPlan"]
         assert plan["planId"] == f"llm-wiki-rebuild-dry-run-plan:work_item:{work_item['id']}"
-        assert plan["operationMode"] == "dry_run"
         assert plan["retentionClass"] == "metadata_only"
-        assert plan["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in plan["inputRefs"]
         assert "approved-memory-proposals" in plan["plannedDerivedSections"]
         assert plan["disposableTargetNamespace"] == f"derived://llm-wiki/dry-run/work_item:{work_item['id']}"
         assert any("do not write LLM-Wiki index" in stop_line for stop_line in plan["stopLines"])
         assert "regenerate" in plan["discardRecoveryPath"]
-        assert plan["canonicalMutationAllowed"] is False
-        assert plan["sourceMutationAllowed"] is False
-        assert plan["providerCallsAllowed"] is False
-        assert plan["workerLaunchAllowed"] is False
-        assert plan["githubCallsAllowed"] is False
-        assert plan["networkEgressAllowed"] is False
-        assert plan["durableWriteAllowed"] is False
         assert plan["writePerformed"] is False
-        assert plan["backupCreated"] is False
 
         # The direct memory-review read resolves only proposal-referenced
         # attempts, so canonical attempt evidence remains eligible without
@@ -5981,8 +5960,9 @@ def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, 
         assert work_item_response.status_code == 200
         work_item = work_item_response.json()["data"]
 
-        packet_without_proposals = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        not_configured = packet_without_proposals["alphaMemorySourceStatus"]["llmWikiReadiness"]
+        review_without_proposals = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review_without_proposals.status_code == 200
+        not_configured = review_without_proposals.json()["data"]["llmWikiReadiness"]
         assert not_configured["decisionState"] == "blocked"
         assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in not_configured["blockedReasons"]
         assert "llm_wiki.no_memory_proposal_metadata" in not_configured["blockedReasons"]
@@ -6013,12 +5993,13 @@ def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, 
         )
         assert create_response.status_code == 200
 
-        packet_with_pending = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        blocked = packet_with_pending["alphaMemorySourceStatus"]["llmWikiReadiness"]
+        review_with_pending = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review_with_pending.status_code == 200
+        blocked = review_with_pending.json()["data"]["llmWikiReadiness"]
         assert blocked["decisionState"] == "blocked"
         assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in blocked["blockedReasons"]
         assert "memory_proposal.not_approved.mp-llm-wiki-blocked" in blocked["blockedReasons"]
-        assert blocked["canonicalMutationAllowed"] is False
+        assert review_with_pending.json()["data"]["canonicalMutationAllowed"] is False
         assert blocked["rebuildPreview"] is None
         assert blocked["rebuildDryRunPlan"] is None
 
