@@ -214,7 +214,7 @@
     "test:gate4-bmad-dashboard-contract": "node --test tests/gate4-bmad-dashboard-e2e.test.mjs",
     "test:gate4-bmad-dashboard-e2e": "node ./scripts/gate4-bmad-dashboard-e2e.mjs",
     "test:dashboard-pipeline-loader": "node --test tests/dashboard-pipeline-packet-loader.test.mjs",
-    "test:dashboard-pipeline-fixtures": "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+    "test:dashboard-pipeline-fixtures": "node --test tests/dashboard-pipeline-fixtures.test.mjs tests/dashboard-legacy-workpacket-retirement.test.mjs",
     "test:dashboard-memory-proposals": "node --test tests/dashboard-memory-proposal-review-panel.test.mjs",
     "test:pipeline-implementation-readiness": "node --test tests/pipeline-implementation-readiness.test.mjs",
     "test:live-memory-source-enforcement": "node --test tests/live-memory-source-enforcement.test.mjs",

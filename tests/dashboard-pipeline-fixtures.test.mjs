@@ -640,7 +640,10 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   const globalsSource = await readFile(globalsPath, "utf8");
   const setupE2eSource = await readFile(setupE2ePath, "utf8");
 
-  assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
+  assert.equal(
+    packageJson.scripts["test:dashboard-pipeline-fixtures"],
+    "node --test tests/dashboard-pipeline-fixtures.test.mjs tests/dashboard-legacy-workpacket-retirement.test.mjs",
+  );
   assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens isolated demo pipeline cockpit without live execution framing/);
