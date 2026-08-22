@@ -58,9 +58,12 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
         _memory_artifact_lock,
         _memory_artifact_filename,
         _mkdir_memory_vault_directory,
+        _open_existing_non_symlink_directory,
+        _open_pinned_memory_vault_root_for_async_read,
         _pinned_existing_memory_vault_root,
         _pinned_new_memory_backup_directory,
         _read_bounded_utf8_text,
+        _read_bounded_utf8_text_from_root_fd,
         _read_strict_utf8_memory_artifact,
         _restore_private_memory_backup_mode,
         _restore_memory_artifact_after_lost_reservation,
@@ -115,6 +118,59 @@ def test_llm_wiki_artifact_helpers_bound_read_and_filename_size(tmp_path, monkey
     assert _canonical_memory_artifact_leaf(vault_root, substituted_leaf).is_symlink()
     with pytest.raises(ValueError, match="regular non-symlink"):
         _read_strict_utf8_memory_artifact(substituted_leaf)
+
+    # Search opens the configured vault once, then walks the requested queue
+    # through that descriptor. Replacing the configured root after it opens
+    # must not make a search read an attacker-controlled replacement tree.
+    search_vault = tmp_path / "search-vault"
+    search_relative_path = Path("02 Reference Vault") / "LLM Wiki" / "proposal.md"
+    original_search_artifact = search_vault / search_relative_path
+    original_search_artifact.parent.mkdir(parents=True)
+    original_search_artifact.write_text("original descriptor-bound artifact\n", encoding="utf-8")
+    replacement_search_vault = tmp_path / "replacement-search-vault"
+    replacement_search_artifact = replacement_search_vault / search_relative_path
+    replacement_search_artifact.parent.mkdir(parents=True)
+    replacement_search_artifact.write_text("untrusted replacement artifact\n", encoding="utf-8")
+    search_vault_fd = _open_existing_non_symlink_directory(search_vault)
+    try:
+        parked_search_vault = tmp_path / "parked-search-vault"
+        search_vault.rename(parked_search_vault)
+        search_vault.symlink_to(replacement_search_vault, target_is_directory=True)
+        assert _read_bounded_utf8_text_from_root_fd(search_vault_fd, search_relative_path) == (
+            "original descriptor-bound artifact\n"
+        )
+    finally:
+        os.close(search_vault_fd)
+
+    cancellation_vault = tmp_path / "cancellation-vault"
+    cancellation_vault.mkdir()
+    original_open_directory = service_module._open_existing_non_symlink_directory
+    opened_directory = threading.Event()
+    release_directory = threading.Event()
+    opened_descriptors: list[int] = []
+
+    def delayed_open_directory(path: Path) -> int:
+        descriptor = original_open_directory(path)
+        opened_descriptors.append(descriptor)
+        opened_directory.set()
+        assert release_directory.wait(timeout=5)
+        return descriptor
+
+    monkeypatch.setattr(service_module, "_open_existing_non_symlink_directory", delayed_open_directory)
+
+    async def cancel_root_open() -> None:
+        root_open = asyncio.create_task(_open_pinned_memory_vault_root_for_async_read(cancellation_vault))
+        assert await asyncio.to_thread(opened_directory.wait, 5)
+        root_open.cancel()
+        await asyncio.sleep(0)
+        release_directory.set()
+        with pytest.raises(asyncio.CancelledError):
+            await root_open
+
+    asyncio.run(cancel_root_open())
+    assert len(opened_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened_descriptors[0])
 
     source_vault = tmp_path / "mode-source-vault"
     source_vault.mkdir(mode=0o755)
@@ -6108,6 +6164,12 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         )
         assert symlink_review.status_code == 200
         assert symlink_review.json()["data"]["proposals"][0]["llmWikiArtifactSearchEligible"] is False
+        symlink_search = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert symlink_search.status_code == 400
+        assert "verified regular vault file" in symlink_search.json()["detail"]["error"]["message"]
         artifact_path.unlink()
         matching_target.rename(artifact_path)
 
@@ -6194,6 +6256,42 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert search_result["sourceMutationAllowed"] is False
         assert search_result["metadata"]["status"] == "llm-wiki-derived"
         assert any("Derived Index" in excerpt or "derived index" in excerpt.lower() for excerpt in search_result["excerpts"])
+
+        # The search path must retain the vault descriptor it opened before
+        # reading. Swap the configured vault only after that descriptor exists;
+        # an unsafe pathname reopen would return this still-valid attacker copy.
+        import supervisor.application.service as service_module
+
+        attacker_vault = tmp_path / "attacker-llm-wiki-vault"
+        attacker_artifact = attacker_vault / proposal["targetVaultPath"]
+        attacker_artifact.parent.mkdir(parents=True)
+        attacker_artifact.write_text(
+            artifact_text.replace("Derived Index", "Attacker Descriptor Index"),
+            encoding="utf-8",
+        )
+        original_pinned_reader = service_module._read_bounded_utf8_text_from_root_fd
+        parked_vault = tmp_path / "parked-search-vault"
+
+        def swap_vault_after_descriptor_open(root_fd: int, relative_path: Path) -> str:
+            vault_root.rename(parked_vault)
+            vault_root.symlink_to(attacker_vault, target_is_directory=True)
+            return original_pinned_reader(root_fd, relative_path)
+
+        monkeypatch.setattr(service_module, "_read_bounded_utf8_text_from_root_fd", swap_vault_after_descriptor_open)
+        try:
+            pinned_search_response = client.get(
+                f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+                params={"query": "attacker descriptor"},
+            )
+            assert pinned_search_response.status_code == 200
+            pinned_search_result = pinned_search_response.json()["data"]
+            assert pinned_search_result["matched"] is False
+            assert all("Attacker Descriptor" not in excerpt for excerpt in pinned_search_result["excerpts"])
+        finally:
+            monkeypatch.setattr(service_module, "_read_bounded_utf8_text_from_root_fd", original_pinned_reader)
+            if vault_root.is_symlink():
+                vault_root.unlink()
+            parked_vault.rename(vault_root)
 
         # Pre-upgrade artifacts did not record a WorkItem ID. A globally
         # unambiguous legacy proposal remains readable, then an approved

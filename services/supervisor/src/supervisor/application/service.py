@@ -1179,7 +1179,12 @@ def _memory_artifact_leaf_stat_from_parent_fd(parent_fd: int, leaf_name: str) ->
         return None
 
 
-def _read_memory_artifact_bytes_from_parent_fd(parent_fd: int, leaf_name: str) -> bytes:
+def _read_memory_artifact_bytes_from_parent_fd(
+    parent_fd: int,
+    leaf_name: str,
+    *,
+    limit: int | None = None,
+) -> bytes:
     descriptor: int | None = None
     try:
         descriptor = os.open(leaf_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
@@ -1188,7 +1193,9 @@ def _read_memory_artifact_bytes_from_parent_fd(parent_fd: int, leaf_name: str) -
             raise ValueError("Memory proposal recovery artifact is not a regular file.")
         with os.fdopen(descriptor, "rb") as artifact:
             descriptor = None
-            return artifact.read()
+            return artifact.read() if limit is None else artifact.read(limit)
+    except OSError as exc:
+        raise ValueError("Memory proposal artifact must be a regular non-symlink file.") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -1200,11 +1207,44 @@ def _memory_artifact_leaf_stat_from_root_fd(root_fd: int, relative_path: Path) -
         return _memory_artifact_leaf_stat_from_parent_fd(parent_fd, relative_path.name)
 
 
-def _read_memory_artifact_bytes_from_root_fd(root_fd: int, relative_path: Path) -> bytes:
+def _read_memory_artifact_bytes_from_root_fd(
+    root_fd: int,
+    relative_path: Path,
+    *,
+    limit: int | None = None,
+) -> bytes:
     """Read one regular artifact from the exact descriptor-bound vault."""
     descriptor: int | None = None
     with _memory_artifact_parent_from_root_fd(root_fd, relative_path) as parent_fd:
-        return _read_memory_artifact_bytes_from_parent_fd(parent_fd, relative_path.name)
+        return _read_memory_artifact_bytes_from_parent_fd(parent_fd, relative_path.name, limit=limit)
+
+
+def _read_bounded_utf8_text_from_root_fd(root_fd: int, relative_path: Path) -> str:
+    """Read a bounded search prefix through one already-pinned vault root."""
+    return _read_memory_artifact_bytes_from_root_fd(
+        root_fd,
+        relative_path,
+        limit=MAX_LLM_WIKI_ARTIFACT_READ_BYTES,
+    ).decode("utf-8", errors="replace")
+
+
+async def _open_pinned_memory_vault_root_for_async_read(vault_root: Path) -> int:
+    """Open a vault descriptor without leaking it if an async reader cancels."""
+    root_open_task = asyncio.create_task(
+        asyncio.to_thread(_open_existing_non_symlink_directory, vault_root)
+    )
+    try:
+        return await asyncio.shield(root_open_task)
+    except asyncio.CancelledError:
+        # `to_thread` continues after cancellation. Join it so an FD opened by
+        # the worker cannot be leaked when a client aborts during setup.
+        try:
+            root_fd = await asyncio.shield(root_open_task)
+        except Exception:
+            pass
+        else:
+            await asyncio.to_thread(os.close, root_fd)
+        raise
 
 
 def _atomic_write_memory_artifact_from_root_fd(
@@ -8402,41 +8442,61 @@ class SupervisorService:
         target_path_value = (proposal.target_vault_path or "").strip().strip("/")
         if not target_path_value:
             raise ValueError("LLM-Wiki artifact read blocked: proposal has no derived artifact target.")
-        if Path(target_path_value).is_absolute() or ".." in Path(target_path_value).parts:
+        relative_artifact_path = Path(target_path_value)
+        queue_relative_path = Path(llm_wiki_folder)
+        if relative_artifact_path.is_absolute() or ".." in relative_artifact_path.parts:
             raise ValueError("LLM-Wiki artifact read blocked: target path must be a safe relative vault path.")
-        if not target_path_value.startswith(f"{llm_wiki_folder}/"):
+        if relative_artifact_path.parent != queue_relative_path:
             raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.")
 
-        artifact_path = _canonical_memory_artifact_leaf(vault_root, vault_root / target_path_value)
-        if artifact_path.parent != _existing_non_symlink_directory(vault_root / llm_wiki_folder):
-            raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.")
+        # The advisory lock is keyed by the configured lexical target.  The
+        # artifact bytes below are deliberately not reopened through that path:
+        # retain a descriptor for the vault and walk every queue component
+        # beneath it with O_NOFOLLOW so a concurrent rename/symlink swap cannot
+        # redirect this operator read outside the verified vault.
+        artifact_path = vault_root / relative_artifact_path
         async with _async_memory_artifact_lock(artifact_path):
+            try:
+                root_fd = await _open_pinned_memory_vault_root_for_async_read(vault_root)
+            except OSError as exc:
+                raise ValueError("LLM-Wiki artifact read blocked: configured vault is unavailable.") from exc
             # A writer/recovery owns this same lock. Re-read its durable token
             # inside the lock so a search cannot expose provisional bytes.
-            await session.refresh(proposal)
-            if proposal.write_action_token is not None:
-                raise ValueError("LLM-Wiki artifact read blocked: proposal write is still active or requires recovery.")
             try:
-                text = await asyncio.to_thread(_read_bounded_utf8_text, artifact_path)
-            except FileNotFoundError as exc:
-                raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.") from exc
-            metadata, body_lines = self._parse_llm_wiki_artifact(text)
-            expected_artifact_proposal_id = (
-                _safe_memory_proposal_id(proposal.proposal_id)
-                if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
-                else proposal.id
-            )
-            if not await self._llm_wiki_artifact_matches_proposal(
-                session,
-                proposal=proposal,
-                work_item_id=work_item_id,
-                expected_proposal_id=expected_artifact_proposal_id,
-                expected_status="llm-wiki-derived",
-                metadata=metadata,
-            ):
-                raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
-            normalized_query = query.strip()[:120]
-            excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)
+                await session.refresh(proposal)
+                if proposal.write_action_token is not None:
+                    raise ValueError("LLM-Wiki artifact read blocked: proposal write is still active or requires recovery.")
+                try:
+                    text = await asyncio.to_thread(
+                        _read_bounded_utf8_text_from_root_fd,
+                        root_fd,
+                        relative_artifact_path,
+                    )
+                except FileNotFoundError as exc:
+                    raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.") from exc
+                except (OSError, ValueError) as exc:
+                    raise ValueError(
+                        "LLM-Wiki artifact read blocked: derived artifact is not a verified regular vault file."
+                    ) from exc
+                metadata, body_lines = self._parse_llm_wiki_artifact(text)
+                expected_artifact_proposal_id = (
+                    _safe_memory_proposal_id(proposal.proposal_id)
+                    if re.fullmatch(r"[A-Za-z0-9_-]+", proposal.proposal_id)
+                    else proposal.id
+                )
+                if not await self._llm_wiki_artifact_matches_proposal(
+                    session,
+                    proposal=proposal,
+                    work_item_id=work_item_id,
+                    expected_proposal_id=expected_artifact_proposal_id,
+                    expected_status="llm-wiki-derived",
+                    metadata=metadata,
+                ):
+                    raise ValueError("LLM-Wiki artifact read blocked: derived artifact is not bound to this proposal.")
+                normalized_query = query.strip()[:120]
+                excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)
+            finally:
+                await asyncio.to_thread(os.close, root_fd)
         return LlmWikiArtifactSearchResultView(
             targetVaultPath=target_path_value,
             query=normalized_query,
