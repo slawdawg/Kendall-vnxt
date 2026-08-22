@@ -169,7 +169,8 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
       { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["getWorkPackets", "Persisted supervisor canonical packet rows only", "no demo packets are substituted"] },
       { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
-      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Gate, memory, recovery"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Authoritative lifecycle", "Canonical boundary"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx", tokens: ["Gate, memory, recovery"] },
       { file: "tests/dashboard-pipeline-packet-loader.test.mjs", tokens: ["explicit demo route is the only fixture catalog boundary", "pipeline-fixtures"] },
     ],
     summary: "The normal dashboard exposes only persisted supervisor canonical packet rows; static fixtures remain available through an explicit isolated demo route without provider, worker, GitHub, or Obsidian calls.",
@@ -235,7 +236,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: ["apps/dashboard/src/lib/pipeline-fixtures.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["HermesJobPacketV0", "real worker launch", "Hermes Worker Mock", "Mocked Hermes containment"] },
-      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Workers and review", "Hermes:"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx", tokens: ["Workers and review", "Hermes:"] },
     ],
     summary: "Hermes remains mocked and blocked from worker launch, Docker execution, source mutation, and network egress.",
   },
@@ -251,7 +252,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: ["apps/dashboard/src/lib/pipeline-fixtures.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["ClaudeReviewPacketV0", "codex_worker", "claude_reviewer", "Codex Worker Card", "Claude Reviewer Card"] },
-      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Workers and review", "Codex:", "Claude:"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx", tokens: ["Workers and review", "Codex:", "Claude:"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["claude implementation", "Codex Worker Card"] },
     ],
     summary: "Codex is implementation-worker state and Claude is scarce independent review state; neither is launched by the dashboard.",
@@ -269,7 +270,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     requiredTokens: [
       { file: "packages/contracts/src/work-packet.ts", tokens: ["MemoryProposalV0", "writeBackAllowed"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["writeBackAllowed", "review_gated", "memory proposals should cover every review state"] },
-      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Gate, memory, recovery", "Memory proposals"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx", tokens: ["Gate, memory, recovery", "Memory proposals"] },
     ],
     summary: "Memory proposals are review-gated metadata and never automatic canonical Obsidian writes.",
   },
@@ -365,6 +366,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: [
       "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
       "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
+      "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx",
       "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
       "tests/dashboard-pipeline-fixtures.test.mjs",
       "tests/e2e/dashboard.spec.ts",
@@ -376,7 +378,11 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       },
       {
         file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
-        tokens: ["Packet detail:", "Packet 5 Whys", "Source Boundary Checklist", "Gate, memory, recovery"],
+        tokens: ["Packet detail:", "Packet 5 Whys", "Authoritative lifecycle", "Lifecycle history", "Canonical boundary"],
+      },
+      {
+        file: "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx",
+        tokens: ["Source Boundary Checklist", "Gate, memory, recovery"],
       },
       {
         file: "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",

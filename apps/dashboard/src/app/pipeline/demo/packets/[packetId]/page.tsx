@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { ServerShell as Shell } from "../../../../../components/server-shell";
-import { PacketDetailPage } from "../../../../../components/pipeline/packet-detail-page";
+import { PacketDetailFixturePage } from "../../../../../components/pipeline/packet-detail-fixture-page";
 import {
   pipelineCockpitPackets,
   pipelineGoldenPathSnapshots,
@@ -45,7 +45,7 @@ export default async function PipelineDemoPacketPage({
 
   return (
     <Shell compactHeader realtimeRefresh={false} wide>
-      <PacketDetailPage
+      <PacketDetailFixturePage
         packet={packet}
         snapshot={snapshot}
         sourceBoundaries={pipelineSourceBoundaryChecklist}

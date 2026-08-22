@@ -20,7 +20,8 @@ const settingsUsageVisibilityPath = new URL("../apps/dashboard/src/components/se
 const layoutPath = new URL("../apps/dashboard/src/app/layout.tsx", import.meta.url);
 const pipelineComponentsPath = new URL("../apps/dashboard/src/components/pipeline/", import.meta.url);
 const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
-const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
+const packetDetailPath = new URL("packet-detail-fixture-page.tsx", pipelineComponentsPath);
+const canonicalPacketDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
 const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
 const pipelineSupervisorRuntimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
@@ -2866,9 +2867,11 @@ test("/pipeline route uses supervisor WorkPacketV0 projections and isolates expl
   );
   assert.match(cockpitSource, /import \{[\s\S]*projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
   assert.match(cockpitSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
-  assert.match(packetDetailSource, /projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*type PipelineDashboardPacket[\s\S]*from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
+  assert.match(packetDetailSource, /import type \{ PipelineDashboardPacket \} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
   assert.match(packetDetailSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
-  assert.match(packetDetailSource, /canonicalPacket\.presentation/);
+  const canonicalPacketDetailSource = await readFile(canonicalPacketDetailPath, "utf8");
+  assert.match(canonicalPacketDetailSource, /const \{ authoritativeLifecycle: lifecycle, presentation \} = canonicalPacket/);
+  assert.doesNotMatch(canonicalPacketDetailSource, /PipelineDashboardPacket|WorkPacketV0View|projectDashboardCanonicalPresentationsToCockpitPackets/);
   assert.match(fixtureSource, /type: "approve_execution"/);
   assert.match(fixtureSource, /type: "approve_delivery"/);
   assert.match(fixtureSource, /type: "request_clarification"/);

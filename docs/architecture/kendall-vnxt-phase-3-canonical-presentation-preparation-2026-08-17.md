@@ -25,9 +25,18 @@ allowlist. Source-zero and persisted-readback retirement remain later gates.
 The direct packet-detail work graph is now a separately reconstructed
 `DashboardCanonicalWorkGraphEvidenceV1`; it no longer passes a
 `PipelineDashboardProjectionV0` work-graph object into the detail component.
-The supervisor projection transport and its other explicitly inventoried V0
-board values remain compatibility surfaces until their own replacement and
-readback proofs land.
+Normal `/pipeline/packets/[packetId]` detail rendering now consumes the
+canonical presentation/lifecycle and that V1 work graph directly; its former
+V0 packet renderer is isolated to the explicit demo route as
+`PacketDetailFixturePage`. The supervisor projection transport and its other
+explicitly inventoried V0 board values remain compatibility surfaces until
+their own replacement and readback proofs land.
+Authenticated LAN packet detail remains a separately inventoried mediator path
+for a later canonical-component migration; it does not import the demo fixture
+renderer.
+The readiness inventory therefore validates canonical lifecycle/history and
+boundary content on the normal detail component, while fixture-only worker,
+gate, and legacy memory evidence remains attached to `PacketDetailFixturePage`.
 
 ## Starting point
 
@@ -84,8 +93,9 @@ even if their first field set is intentionally isomorphic.
    server-side transitional adapter while the two forms are compared in tests.
 3. Update `PipelineCockpit`, active-board view-model helpers, and
    `PacketDetailPage` to consume the new canonical presentation type. Preserve
-   explicit demo fixtures as a separate input; do not silently coerce a fixture
-   into a runtime row.
+   explicit demo fixtures as a separate input; normal direct detail must not
+   materialize a V0 packet, and the fixture-only renderer must not be imported
+   by the normal route.
 4. Remove the V0 transitional adapter from normal cockpit, direct packet detail,
    and LAN paths only when those paths have no `WorkPacketV0View`,
    `PipelineDashboardPacket`, or `PipelineDashboardProjectionV0` import. The

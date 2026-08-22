@@ -131,8 +131,8 @@ test("normal loader and packet-detail route keep the canonical DTO until their n
   assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
   assert.match(detailRouteSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
   assert.match(detailRouteSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);
-  assert.match(detailComponentSource, /canonicalPacket\.presentation/);
-  assert.match(detailComponentSource, /projectDashboardCanonicalPresentationsToCockpitPackets/);
+  assert.match(detailComponentSource, /const \{ authoritativeLifecycle: lifecycle, presentation \} = canonicalPacket/);
+  assert.doesNotMatch(detailComponentSource, /projectDashboardCanonicalPresentationsToCockpitPackets|PipelineDashboardPacket|WorkPacketV0View/);
   assert.match(loaderSource, /canonicalPackets: canonicalPackets\.map\(projectDashboardCanonicalPacketForClient\)/);
 });
 
@@ -1179,9 +1179,11 @@ test("pipeline detail route resolves decoded identity through the direct packet 
   assert.doesNotMatch(source, /generateStaticParams/);
 });
 
-test("packet detail exposes supervisor runtime provenance without fixture-only semantics", async () => {
+test("packet detail exposes canonical supervisor provenance without fixture-only semantics", async () => {
   const source = await readFile(detailComponentPath, "utf8");
-  assert.match(source, /packet\.sourceKind === "supervisor-runtime"/);
+  assert.match(source, /Source: Supervisor runtime/);
+  assert.match(source, /canonical presentation v1/);
+  assert.doesNotMatch(source, /PipelineDashboardPacket|WorkPacketV0View/);
 });
 
 test("explicit demo route is the only fixture catalog boundary", async () => {
