@@ -85,6 +85,10 @@ test("LAN Packet Detail uses the authenticated mediator with explicit expiry and
   assert.match(source, /KENDALL_LAN_AUTH_ENABLED/);
   assert.match(source, /LanPacketDetailPage/);
   assert.match(client, /\/api\/packet-detail\//);
+  assert.match(client, /DashboardCanonicalLanPacketDetailV1/);
+  assert.match(client, /dashboard-canonical-lan-packet-detail\/v1/);
+  assert.match(client, /payload\.packet\.presentation\.packetId !== packetId/);
+  assert.doesNotMatch(client, /type PacketDetail =/);
   assert.match(client, /setPacket\(null\)/);
   assert.match(client, /setState\("ready"\)/);
   assert.match(client, /let settled = false/);

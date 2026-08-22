@@ -4,12 +4,22 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Shell } from "../shell";
 
-type PacketDetail = {
-  packetId: string;
-  title: string;
-  currentStage: string;
-  status: string;
-  truthLabel: string;
+type DashboardCanonicalLanPacketDetailV1 = {
+  presentation: {
+    schemaVersion: "dashboard-canonical-lan-packet-presentation/v1";
+    packetId: string;
+    title: string;
+    requestedOutcome: string;
+    currentStage: "capture" | "classify" | "route" | "shape" | "human_gate" | "execute" | "review" | "promote" | "deliver" | "learn";
+    currentOwner: "kendall" | "operator" | "blocked";
+    status: "active" | "waiting" | "blocked" | "failed" | "complete" | "deferred";
+    truthLabel: "source_owned" | "derived_projection" | "operator_asserted";
+    currentEventId: string;
+    createdAt: string;
+    updatedAt: string;
+    metadataOnly: true;
+    rawPayloadRetained: false;
+  };
   evidence: {
     evidenceClass?: string;
     checkedAt?: string;
@@ -19,6 +29,7 @@ type PacketDetail = {
     typedBlockers?: string[];
   } | null;
   workGraph: {
+    schemaVersion: "dashboard-canonical-work-graph/v1";
     sourceSchemaVersion: "parallel-execution-graph-reservation/v1";
     availability: "available" | "stale" | "unavailable";
     waveMembership: "selected" | "deferred" | "blocked" | "unavailable";
@@ -34,7 +45,7 @@ type PacketDetail = {
 };
 
 export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabled: boolean; packetId: string }) {
-  const [packet, setPacket] = useState<PacketDetail | null>(null);
+  const [packet, setPacket] = useState<DashboardCanonicalLanPacketDetailV1 | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "unavailable" | "expired">("loading");
   const [attempt, setAttempt] = useState(0);
 
@@ -52,7 +63,7 @@ export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabl
     setState("loading");
     void fetch(`/api/packet-detail/${encodeURIComponent(packetId)}`, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then(async (response) => {
-        const payload = await response.json().catch(() => null) as { state?: string; packet?: PacketDetail } | null;
+        const payload = await response.json().catch(() => null) as { schemaVersion?: string; state?: string; packet?: DashboardCanonicalLanPacketDetailV1 } | null;
         if (!active || settled || controller.signal.aborted) return;
         settled = true;
         window.clearTimeout(timeout);
@@ -60,7 +71,7 @@ export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabl
           setState("expired");
           return;
         }
-        if (!response.ok || payload?.state !== "available" || !payload.packet || payload.packet.packetId !== packetId) {
+        if (!response.ok || payload?.schemaVersion !== "dashboard-canonical-lan-packet-detail/v1" || payload.state !== "available" || !payload.packet || payload.packet.presentation.packetId !== packetId) {
           setState("unavailable");
           return;
         }
@@ -96,12 +107,23 @@ export function LanPacketDetailPage({ lanAuthEnabled, packetId }: { lanAuthEnabl
         <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
           <Link className="rounded-[0.375rem] border bg-[var(--surface)] px-2 py-1 text-xs text-[var(--accent)]" href="/pipeline">Back to pipeline</Link>
           <p className="mt-4 text-xs uppercase tracking-[0.18em] text-[var(--accent)]">Authenticated Packet Detail</p>
-          <h1 className="mt-2 break-words text-2xl font-semibold">{packet.title}</h1>
+          <h1 className="mt-2 break-words text-2xl font-semibold">Packet detail: {packet.presentation.title}</h1>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <DetailField label="Packet" value={packet.packetId} />
-            <DetailField label="Stage" value={packet.currentStage} />
-            <DetailField label="Status" value={packet.status} />
-            <DetailField label="Truth" value={packet.truthLabel} />
+            <DetailField label="Packet" value={packet.presentation.packetId} />
+            <DetailField label="Stage" value={packet.presentation.currentStage} />
+            <DetailField label="Owner" value={packet.presentation.currentOwner} />
+            <DetailField label="Status" value={packet.presentation.status} />
+          </div>
+        </section>
+        <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4" aria-label="Canonical packet presentation">
+          <h2 className="text-lg font-semibold">Canonical packet presentation</h2>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <DetailField label="Requested outcome" value={packet.presentation.requestedOutcome} />
+            <DetailField label="Truth" value={packet.presentation.truthLabel} />
+            <DetailField label="Current event" value={packet.presentation.currentEventId} />
+            <DetailField label="Created" value={packet.presentation.createdAt} />
+            <DetailField label="Updated" value={packet.presentation.updatedAt} />
+            <DetailField label="Boundary" value="Metadata-only canonical presentation; raw lifecycle and provider payloads are not retained." />
           </div>
         </section>
         <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4" aria-label="Packet evidence">

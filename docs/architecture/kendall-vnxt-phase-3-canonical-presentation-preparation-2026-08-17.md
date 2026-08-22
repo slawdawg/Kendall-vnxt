@@ -31,9 +31,15 @@ V0 packet renderer is isolated to the explicit demo route as
 `PacketDetailFixturePage`. The supervisor projection transport and its other
 explicitly inventoried V0 board values remain compatibility surfaces until
 their own replacement and readback proofs land.
-Authenticated LAN packet detail remains a separately inventoried mediator path
-for a later canonical-component migration; it does not import the demo fixture
-renderer.
+Authenticated LAN packet detail now uses the same canonical-boundary posture:
+its private UDS mediator emits the fixed
+`dashboard-canonical-lan-packet-detail/v1` envelope, with a lifecycle-derived
+presentation, bounded evidence metadata, and the reconstructed
+`dashboard-canonical-work-graph/v1`. The browser validates the requested packet
+identity and renders no raw lifecycle, provider, or V0 packet fields. The
+private mediated route remains retained until the later source-zero and
+persisted-readback retirement gate, but it accepts and emits only the canonical
+v2 envelope; it does not import the demo fixture renderer.
 The readiness inventory therefore validates canonical lifecycle/history and
 boundary content on the normal detail component, while fixture-only worker,
 gate, and legacy memory evidence remains attached to `PacketDetailFixturePage`.

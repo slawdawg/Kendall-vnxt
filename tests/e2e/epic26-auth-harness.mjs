@@ -9,6 +9,27 @@ import { createAuthProxy, supervisorSessionIsValid } from "../../apps/dashboard/
 import { createPacketDetailMediator } from "../../apps/dashboard/scripts/packet-detail-mediator.mjs";
 import { signInPageSafe } from "../../apps/dashboard/scripts/secure-dashboard-runtime.mjs";
 
+function canonicalPacketDetail(packetId) {
+  return {
+    schemaVersion: "dashboard-canonical-lan-packet-detail/v1",
+    state: "available",
+    packet: {
+      presentation: {
+        schemaVersion: "dashboard-canonical-lan-packet-presentation/v1", packetId, title: "Packet 1 detail", requestedOutcome: "Read the authenticated packet detail.",
+        currentStage: "shape", currentOwner: "kendall", status: "active", truthLabel: "source_owned", currentEventId: `event:${packetId}`,
+        createdAt: "2026-07-22T12:00:00.000Z", updatedAt: "2026-07-22T12:00:00.000Z", metadataOnly: true, rawPayloadRetained: false,
+      },
+      evidence: { schemaVersion: "pipeline-epic-25-evidence-chain/v1", evidenceClass: "source_owned", checkedAt: "2026-07-22T12:00:00.000Z", expiresAt: "2026-07-22T12:05:00.000Z", freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] },
+      workGraph: {
+        schemaVersion: "dashboard-canonical-work-graph/v1", sourceSchemaVersion: "parallel-execution-graph-reservation/v1", availability: "unavailable", packetId,
+        executionJobId: null, reportIdentity: null, generatedAt: null, freshnessState: "unavailable", waveMembership: "unavailable", dependencyState: "unavailable",
+        reservation: { status: "unavailable", owner: null, reasonCode: "parallel_report_unavailable" }, capacity: { posture: "unavailable", reasonCode: "parallel_capacity_unavailable" },
+        reason: "Parallel work graph evidence is unavailable.", nextSafeAction: "Inspect the authoritative packet lifecycle before relying on work graph evidence.", evidenceRefs: [], metadataOnly: true, rawPayloadRetained: false, retention: "metadata_only_evidence_references",
+      },
+    },
+  };
+}
+
 export async function startEpic26AuthHarness(port = 3102) {
   const directory = mkdtempSync(join(tmpdir(), "kendall-epic26-auth-harness-"));
   chmodSync(directory, 0o700);
@@ -65,7 +86,7 @@ export async function startEpic26AuthHarness(port = 3102) {
     }
     if (request.url === "/internal/dashboard/packet-detail/packet-1") {
       if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session") { response.writeHead(401); response.end(JSON.stringify({ detail: "Sign-in required." })); return; }
-      response.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "available", packet: { packetId: "packet-1", title: "Packet 1 detail", currentStage: "shaping", status: "ready", truthLabel: "integrated_local", evidence: { schemaVersion: "pipeline-epic-25-evidence-chain/v1", evidenceClass: "source_owned", checkedAt: "2026-07-22T12:00:00.000Z", expiresAt: "2026-07-22T12:05:00.000Z", freshnessState: "fresh", effectiveDecision: "hold", typedBlockers: [] } } }));
+      response.end(JSON.stringify(canonicalPacketDetail("packet-1")));
       return;
     }
     response.writeHead(404).end();
@@ -82,7 +103,7 @@ export async function startEpic26AuthHarness(port = 3102) {
         response.end(signInPageSafe(request.url));
         return;
       }
-      response.end(`<!doctype html><html><body><main><h1>Kendall Supervisor</h1><article><h2>Packet 1</h2><p>Status: ready</p><button id="detail">Open Packet Detail</button><section id="detail-view" hidden></section><button id="logout">Sign out</button></article></main><script>document.getElementById("detail").onclick=async()=>{const response=await fetch("/api/packet-detail/packet-1",{credentials:"same-origin"});const body=await response.json();if(body.state==="available"){const view=document.getElementById("detail-view");view.hidden=false;view.textContent=body.packet.title+" "+body.packet.evidence.effectiveDecision}};document.getElementById("logout").onclick=async()=>{await fetch("/auth/logout",{method:"POST",credentials:"same-origin",headers:{origin:location.origin,"x-csrf-token":"harness-session-csrf"}});location.assign("/")}</script></body></html>`);
+      response.end(`<!doctype html><html><body><main><h1>Kendall Supervisor</h1><article><h2>Packet 1</h2><p>Status: ready</p><button id="detail">Open Packet Detail</button><section id="detail-view" hidden></section><button id="logout">Sign out</button></article></main><script>document.getElementById("detail").onclick=async()=>{const response=await fetch("/api/packet-detail/packet-1",{credentials:"same-origin"});const body=await response.json();if(body.state==="available"){const view=document.getElementById("detail-view");view.hidden=false;view.textContent=body.packet.presentation.title+" "+body.packet.evidence.effectiveDecision}};document.getElementById("logout").onclick=async()=>{await fetch("/auth/logout",{method:"POST",credentials:"same-origin",headers:{origin:location.origin,"x-csrf-token":"harness-session-csrf"}});location.assign("/")}</script></body></html>`);
       return;
     }
     response.writeHead(404).end();

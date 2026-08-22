@@ -87,6 +87,22 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
       res.end(JSON.stringify({ schemaVersion: "kendall-authenticated-packet-detail/v1", state: "unavailable", packet: { rawPayload: "forbidden" } }));
       return;
     }
+    if (packetId === "canonical-presentation-extra") {
+      const canonicalGraph = { ...workGraph, schemaVersion: "dashboard-canonical-work-graph/v1" };
+      res.end(JSON.stringify({
+        schemaVersion: "dashboard-canonical-lan-packet-detail/v1",
+        state: "available",
+        packet: {
+          presentation: {
+            schemaVersion: "dashboard-canonical-lan-packet-presentation/v1", packetId, title: "Safe title", requestedOutcome: "Safe outcome.", currentStage: "shape", currentOwner: "kendall", status: "active", truthLabel: "source_owned", currentEventId: `event:${packetId}`, createdAt: "2026-07-22T12:00:00.000Z", updatedAt: "2026-07-22T12:00:00.000Z", metadataOnly: true, rawPayloadRetained: false,
+            rawProviderResponse: "forbidden",
+          },
+          evidence: null,
+          workGraph: canonicalGraph,
+        },
+      }));
+      return;
+    }
     if (packetId === "legacy") {
       res.end(JSON.stringify({
         schemaVersion: "kendall-authenticated-packet-detail/v1",
@@ -185,10 +201,29 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
       }));
       return;
     }
+    workGraph.schemaVersion = "dashboard-canonical-work-graph/v1";
     res.end(JSON.stringify({
-      schemaVersion: "kendall-authenticated-packet-detail/v1",
+      schemaVersion: "dashboard-canonical-lan-packet-detail/v1",
       state: "available",
-      packet: { packetId, title: "Safe title", status: "shaping", currentStage: "shaping", truthLabel: "source_owned", evidence: null, workGraph },
+      packet: {
+        presentation: {
+          schemaVersion: "dashboard-canonical-lan-packet-presentation/v1",
+          packetId,
+          title: "Safe title",
+          requestedOutcome: "Safe metadata-only outcome.",
+          currentStage: "shape",
+          currentOwner: "kendall",
+          status: "active",
+          truthLabel: "source_owned",
+          currentEventId: `event:${packetId}`,
+          createdAt: "2026-07-22T12:00:00.000Z",
+          updatedAt: "2026-07-22T12:00:00.000Z",
+          metadataOnly: true,
+          rawPayloadRetained: false,
+        },
+        evidence: null,
+        workGraph,
+      },
     }));
   });
   await listen(supervisor, socketPath);
@@ -205,7 +240,9 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   const allowed = await request(port, "/api/packet-detail/packet-1", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(allowed.status, 200);
   assert.equal(allowed.headers["cache-control"], "no-store");
-  assert.equal(allowed.body.packet.packetId, "packet-1");
+  assert.equal(allowed.body.schemaVersion, "dashboard-canonical-lan-packet-detail/v1");
+  assert.equal(allowed.body.packet.presentation.packetId, "packet-1");
+  assert.equal(allowed.body.packet.presentation.rawPayloadRetained, false);
   assert.deepEqual(observed, [
     { method: "GET", url: "/internal/dashboard/packet-detail/packet-1", cookie: "kendall_operator_session=opaque", mediator: "packet-detail/v1" },
     { method: "GET", url: "/auth/session", cookie: "kendall_operator_session=opaque", mediator: undefined },
@@ -213,7 +250,7 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
 
   const colonId = await request(port, "/api/packet-detail/packet%3A1", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(colonId.status, 200);
-  assert.equal(colonId.body.packet.packetId, "packet:1");
+  assert.equal(colonId.body.packet.presentation.packetId, "packet:1");
   assert.equal(observed.length, 4);
 
   const revokedDuringRead = await request(port, "/api/packet-detail/revoked-after-read", { headers: { cookie: "kendall_operator_session=opaque" } });
@@ -222,10 +259,8 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   sessionRevokedAfterRead = false;
 
   const legacy = await request(port, "/api/packet-detail/legacy", { headers: { cookie: "kendall_operator_session=opaque" } });
-  assert.equal(legacy.status, 200);
-  assert.equal(legacy.body.packet.workGraph.availability, "unavailable");
-  assert.equal(legacy.body.packet.workGraph.packetId, "legacy");
-  assert.equal(legacy.body.packet.workGraph.rawPayloadRetained, false);
+  assert.equal(legacy.status, 503);
+  assert.deepEqual(legacy.body, { state: "unavailable", message: "Attestation readback unavailable" });
 
   const legacyExtra = await request(port, "/api/packet-detail/legacy-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(legacyExtra.status, 503);
@@ -250,8 +285,8 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   }
 
   const legacyMicrosecondEvidence = await request(port, "/api/packet-detail/legacy-microsecond-evidence", { headers: { cookie: "kendall_operator_session=opaque" } });
-  assert.equal(legacyMicrosecondEvidence.status, 200);
-  assert.equal(legacyMicrosecondEvidence.body.packet.workGraph.availability, "unavailable");
+  assert.equal(legacyMicrosecondEvidence.status, 503);
+  assert.deepEqual(legacyMicrosecondEvidence.body, { state: "unavailable", message: "Attestation readback unavailable" });
 
   const malformed = await request(port, "/api/packet-detail/malformed", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(malformed.status, 503);
@@ -271,17 +306,20 @@ test("mediates one fixed authenticated UDS GET with no-store and stable denial",
   const unavailableExtra = await request(port, "/api/packet-detail/unavailable-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
   assert.equal(unavailableExtra.status, 503);
   assert.deepEqual(unavailableExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
+  const canonicalPresentationExtra = await request(port, "/api/packet-detail/canonical-presentation-extra", { headers: { cookie: "kendall_operator_session=opaque" } });
+  assert.equal(canonicalPresentationExtra.status, 503);
+  assert.deepEqual(canonicalPresentationExtra.body, { state: "unavailable", message: "Attestation readback unavailable" });
 
   const denied = await request(port, "/api/packet-detail/does-not-exist");
   assert.equal(denied.status, 401);
   assert.deepEqual(denied.body, { state: "sign_in_required" });
-  assert.equal(observed.length, 36);
+  assert.equal(observed.length, 38);
 
   const mutation = await request(port, "/api/packet-detail/packet-1", { method: "POST" });
   assert.equal(mutation.status, 405);
   const forwarded = await request(port, "/api/packet-detail/packet-1", { headers: { "x-forwarded-for": "127.0.0.1" } });
   assert.equal(forwarded.status, 400);
-  assert.equal(observed.length, 36);
+  assert.equal(observed.length, 38);
 
   await close(dashboard);
   await close(supervisor);

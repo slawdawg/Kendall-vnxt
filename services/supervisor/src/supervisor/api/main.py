@@ -627,7 +627,60 @@ def _canonical_packet_detail_timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _lan_detail_stage(stage: str) -> str:
+    """Project the one authoritative spelling that differs in dashboard presentation."""
+
+    return "human_gate" if stage == "needs_approval" else stage
+
+
+def _lan_detail_owner(stage: str, status: str) -> str:
+    if status in {"blocked", "failed"}:
+        return "blocked"
+    return "operator" if stage == "needs_approval" else "kendall"
+
+
+def _canonical_lan_work_graph_view(work_graph) -> dict[str, object]:
+    """Reconstruct the browser DTO; never relabel the V0 projection record."""
+
+    return {
+        "schemaVersion": "dashboard-canonical-work-graph/v1",
+        "sourceSchemaVersion": "parallel-execution-graph-reservation/v1",
+        "availability": work_graph.availability,
+        "packetId": work_graph.packetId,
+        "executionJobId": work_graph.executionJobId,
+        "reportIdentity": work_graph.reportIdentity,
+        "generatedAt": _canonical_packet_detail_timestamp(work_graph.generatedAt) if work_graph.generatedAt else None,
+        "freshnessState": work_graph.freshnessState,
+        "waveMembership": work_graph.waveMembership,
+        "dependencyState": work_graph.dependencyState,
+        "reservation": {
+            "status": work_graph.reservation.status,
+            "owner": work_graph.reservation.owner,
+            "reasonCode": work_graph.reservation.reasonCode,
+        },
+        "capacity": {
+            "posture": work_graph.capacity.posture,
+            "reasonCode": work_graph.capacity.reasonCode,
+        },
+        "reason": work_graph.reason,
+        "nextSafeAction": work_graph.nextSafeAction,
+        "evidenceRefs": list(work_graph.evidenceRefs),
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+        "retention": "metadata_only_evidence_references",
+    }
+
+
 def _packet_detail_view(packet, work_graph=None) -> dict[str, object]:
+    """Return the browser-safe canonical detail model for the LAN mediator.
+
+    This is deliberately not an ``AuthoritativeWorkPacketLifecycleView`` dump:
+    the authenticated browser receives only a fixed presentation projection, not
+    raw lifecycle/event/provider fields. The private route is retained during
+    the wider legacy-route retirement, but this mediated read is v2-only so a
+    browser never receives a partially compatible legacy packet shape.
+    """
+
     evidence = packet.evidenceChain
     evidence_view = None
     if evidence is not None:
@@ -640,17 +693,31 @@ def _packet_detail_view(packet, work_graph=None) -> dict[str, object]:
             "effectiveDecision": evidence.effectiveDecision,
             "typedBlockers": list(evidence.typedBlockers),
         }
+    current_event = next((event for event in packet.history if event.eventId == packet.currentEventId), None)
+    if current_event is None:
+        raise ValueError("Authoritative packet has no current lifecycle event.")
+    graph_view = _canonical_lan_work_graph_view(work_graph) if work_graph is not None else None
     return {
-        "schemaVersion": "kendall-authenticated-packet-detail/v1",
+        "schemaVersion": "dashboard-canonical-lan-packet-detail/v1",
         "state": "available",
         "packet": {
-            "packetId": packet.packetId,
-            "title": packet.title,
-            "currentStage": packet.currentStage,
-            "status": packet.status,
-            "truthLabel": packet.truthLabel,
+            "presentation": {
+                "schemaVersion": "dashboard-canonical-lan-packet-presentation/v1",
+                "packetId": packet.packetId,
+                "title": packet.title,
+                "requestedOutcome": current_event.payloadSummary,
+                "currentStage": _lan_detail_stage(packet.currentStage),
+                "currentOwner": _lan_detail_owner(packet.currentStage, packet.status),
+                "status": packet.status,
+                "truthLabel": packet.truthLabel,
+                "currentEventId": packet.currentEventId,
+                "createdAt": _canonical_packet_detail_timestamp(packet.createdAt),
+                "updatedAt": _canonical_packet_detail_timestamp(packet.updatedAt),
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            },
             "evidence": evidence_view,
-            "workGraph": work_graph.model_dump(mode="json") if work_graph is not None else None,
+            "workGraph": graph_view,
         },
     }
 
@@ -797,7 +864,7 @@ async def authenticated_packet_detail(
         return _packet_detail_error(503, "Packet detail is unavailable.")
     if packet is None:
         await record_auth_audit(session, "packet_detail_read", "unavailable")
-        return {"schemaVersion": "kendall-authenticated-packet-detail/v1", "state": "unavailable"}
+        return {"schemaVersion": "dashboard-canonical-lan-packet-detail/v1", "state": "unavailable"}
     try:
         projection = await service.get_pipeline_dashboard_projection(session, mutation_access=False)
     except Exception:
@@ -806,7 +873,7 @@ async def authenticated_packet_detail(
     detail = next((item for item in projection.selectedPacketDetails if item.packetId == packet.packetId), None)
     if detail is None or detail.workGraph.packetId != packet.packetId:
         await record_auth_audit(session, "packet_detail_read", "unavailable")
-        return {"schemaVersion": "kendall-authenticated-packet-detail/v1", "state": "unavailable"}
+        return {"schemaVersion": "dashboard-canonical-lan-packet-detail/v1", "state": "unavailable"}
     await record_auth_audit(session, "packet_detail_read", "allowed", target_ref=packet.packetId)
     return _packet_detail_view(packet, detail.workGraph)
 

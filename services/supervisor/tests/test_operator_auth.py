@@ -386,6 +386,10 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             effectiveDecision="hold",
             typedBlockers=["quality_gate_not_passed"],
         )
+        current_event = SimpleNamespace(
+            eventId="event:packet-1-created",
+            payloadSummary="Approved metadata-only packet outcome.",
+        )
         packet = SimpleNamespace(
             packetId="packet-1",
             title="Approved packet title",
@@ -393,6 +397,10 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             status="active",
             truthLabel="source_owned",
             evidenceChain=evidence,
+            currentEventId="event:packet-1-created",
+            createdAt=checked_at,
+            updatedAt=checked_at,
+            history=[current_event],
         )
         work_graph_payload = {
             "schemaVersion": "parallel-work-graph-evidence/v0",
@@ -400,6 +408,7 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             "availability": "unavailable",
             "packetId": "packet-1",
             "executionJobId": None,
+            "reportIdentity": None,
             "generatedAt": None,
             "freshnessState": "unavailable",
             "waveMembership": "unavailable",
@@ -413,7 +422,21 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             "rawPayloadRetained": False,
             "retention": "metadata_only_evidence_references",
         }
-        work_graph = SimpleNamespace(packetId="packet-1", model_dump=lambda **_kwargs: work_graph_payload)
+        work_graph = SimpleNamespace(
+            availability=work_graph_payload["availability"],
+            packetId="packet-1",
+            executionJobId=None,
+            reportIdentity=None,
+            generatedAt=None,
+            freshnessState=work_graph_payload["freshnessState"],
+            waveMembership=work_graph_payload["waveMembership"],
+            dependencyState=work_graph_payload["dependencyState"],
+            reservation=SimpleNamespace(**work_graph_payload["reservation"]),
+            capacity=SimpleNamespace(**work_graph_payload["capacity"]),
+            reason=work_graph_payload["reason"],
+            nextSafeAction=work_graph_payload["nextSafeAction"],
+            evidenceRefs=[],
+        )
         projection = SimpleNamespace(selectedPacketDetails=[SimpleNamespace(packetId="packet-1", workGraph=work_graph)])
         original = main.service.get_authoritative_work_packet
         original_projection = main.service.get_pipeline_dashboard_projection
@@ -433,9 +456,24 @@ def test_packet_detail_mediator_requires_operator_and_returns_minimal_audited_vi
             assert status == 200
             assert response_headers.get(b"cache-control") == b"no-store"
             payload = json.loads(body)
-            assert payload["packet"]["packetId"] == "packet-1"
-            assert set(payload["packet"]) == {"packetId", "title", "currentStage", "status", "truthLabel", "evidence", "workGraph"}
-            assert payload["packet"]["workGraph"] == work_graph_payload
+            assert payload["schemaVersion"] == "dashboard-canonical-lan-packet-detail/v1"
+            assert set(payload["packet"]) == {"presentation", "evidence", "workGraph"}
+            assert payload["packet"]["presentation"] == {
+                "schemaVersion": "dashboard-canonical-lan-packet-presentation/v1",
+                "packetId": "packet-1",
+                "title": "Approved packet title",
+                "requestedOutcome": "Approved metadata-only packet outcome.",
+                "currentStage": "shaping",
+                "currentOwner": "kendall",
+                "status": "active",
+                "truthLabel": "source_owned",
+                "currentEventId": "event:packet-1-created",
+                "createdAt": "2026-07-22T12:00:00.123456Z",
+                "updatedAt": "2026-07-22T12:00:00.123456Z",
+                "metadataOnly": True,
+                "rawPayloadRetained": False,
+            }
+            assert payload["packet"]["workGraph"] == {**work_graph_payload, "schemaVersion": "dashboard-canonical-work-graph/v1"}
             assert payload["packet"]["evidence"]["checkedAt"] == "2026-07-22T12:00:00.123456Z"
             assert payload["packet"]["evidence"]["expiresAt"] == "2026-07-22T12:05:00.123456Z"
             assert "authorization" not in body.decode().lower()
