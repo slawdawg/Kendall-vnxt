@@ -1377,9 +1377,13 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
       rawPayloadRetained: false,
     },
   });
+  const clarityActiveBoardProjection = {
+    ...clarityProjection,
+    schemaVersion: "dashboard-canonical-active-board/v1",
+  };
   const clarityHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], operationalProjection: clarityProjection, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: clarityProjection, activeBoardProjection: clarityActiveBoardProjection, projectionError: null, selectedPacket: null,
   }));
   assert.match(clarityHtml, /Manager Execution Lane/);
   assert.match(clarityHtml, /Lane Clarity/);
@@ -1390,7 +1394,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(clarityHtml, /Next safe gate/);
   const pivotHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], operationalProjection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, posture: { state: "pivot_required", reason: "Review the recorded drift decision.", nextSafeAction: "review_scope_pivot", decisionRef: "decision:pivot", qualification: "operator_drift_concern" } } }, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: clarityProjection, activeBoardProjection: { ...clarityActiveBoardProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, posture: { state: "pivot_required", reason: "Review the recorded drift decision.", nextSafeAction: "review_scope_pivot", decisionRef: "decision:pivot", qualification: "operator_drift_concern" } } }, projectionError: null, selectedPacket: null,
   }));
   assert.match(pivotHtml, /Pivot required/);
   assert.match(pivotHtml, /Review the recorded drift decision\./);
@@ -1398,13 +1402,13 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   assert.match(pivotHtml, /decision:pivot; operator_drift_concern/);
   const notAssessedHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], operationalProjection: { ...clarityProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, criteria: [], posture: { state: "not_assessed", reason: "Source criterion evidence is unavailable.", nextSafeAction: "record_current_lane_evidence", decisionRef: null, qualification: null } } }, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: clarityProjection, activeBoardProjection: { ...clarityActiveBoardProjection, activeManagerLaneClarity: { ...clarityProjection.activeManagerLaneClarity, criteria: [], posture: { state: "not_assessed", reason: "Source criterion evidence is unavailable.", nextSafeAction: "record_current_lane_evidence", decisionRef: null, qualification: null } } }, projectionError: null, selectedPacket: null,
   }));
   assert.match(notAssessedHtml, /Not assessed/);
   assert.match(notAssessedHtml, /Source criterion evidence is unavailable\./);
   const absentHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
     fixtureMode: { kind: "runtime", label: "Supervisor runtime", summary: "Production projection.", matrixRows: 1, fixtureCatalogEntries: 0, canSatisfyLiveProof: false },
-    packets: [], operationalProjection: { ...clarityProjection, activeManagerLaneClarity: null }, projectionError: null, selectedPacket: null,
+    packets: [], operationalProjection: clarityProjection, activeBoardProjection: { ...clarityActiveBoardProjection, activeManagerLaneClarity: null }, projectionError: null, selectedPacket: null,
   }));
   assert.doesNotMatch(absentHtml, /Lane Clarity/);
   assert.match(absentHtml, /Coordination Health/);
@@ -1950,6 +1954,8 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets\(currentActiveBoardProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
   assert.doesNotMatch(cockpitSource, /projectionToCockpitPackets\(currentProjection,/);
+  assert.match(cockpitSource, /activeManagerLaneClarity = currentActiveBoardProjection\?\.activeManagerLaneClarity \?\? null/);
+  assert.doesNotMatch(cockpitSource, /activeManagerLaneClarity = currentProjection\?\.activeManagerLaneClarity/);
   assert.match(cockpitSource, /runtimePacketIds = new Set\(runtimePackets\.map/);
   assert.match(cockpitSource, /!runtimePacketIds\.has\(card\.packetId\)/);
   assert.match(cockpitSource, /selectedDetailByPacketId = new Map<string, ActiveBoardSelectedPacketDetail>\(projection\.selectedPacketDetails\.map/);

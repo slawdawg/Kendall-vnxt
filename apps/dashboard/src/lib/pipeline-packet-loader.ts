@@ -1,6 +1,7 @@
 import type { PipelineOperationalActionResultV0 } from "@kendall/contracts";
 import type {
   DashboardCanonicalActiveBoardProjectionV1,
+  DashboardCanonicalManagerLaneClarityV1,
   DashboardCanonicalOperationalProjectionTruthV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
@@ -349,6 +350,7 @@ function clientSafeActiveBoardProjection(
       summary: projection.managerSummary.summary,
       metadataOnly: true,
     },
+    activeManagerLaneClarity: clientSafeActiveManagerLaneClarity(projection.activeManagerLaneClarity) ?? null,
     workerSummary: {
       freshnessState: projection.workerSummary.freshnessState,
       activeCount: projection.workerSummary.activeCount,
@@ -644,7 +646,8 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
   });
   return {
     ...clientSafeProjection,
-    activeManagerLaneClarity: clientSafeActiveManagerLaneClarity(projection.activeManagerLaneClarity),
+    // Lane Clarity now crosses only in the dashboard-owned active-board DTO.
+    activeManagerLaneClarity: null,
   };
 }
 
@@ -655,7 +658,7 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
  */
 function clientSafeActiveManagerLaneClarity(
   clarity: DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"],
-): DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"] {
+): DashboardCanonicalManagerLaneClarityV1 | null {
   if (!clarity || !isDashboardCanonicalManagerLaneClarity(clarity)) return null;
   return {
     goal: {

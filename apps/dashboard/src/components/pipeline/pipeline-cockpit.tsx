@@ -147,7 +147,7 @@ type CockpitStageSummary = {
 
 type ProjectionSelectedPacketDetail = DashboardCanonicalOperationalProjectionV1["selectedPacketDetails"][number];
 type ActiveBoardSelectedPacketDetail = DashboardCanonicalActiveBoardProjectionV1["selectedPacketDetails"][number];
-type ActiveManagerLaneClarity = NonNullable<DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"]>;
+type ActiveManagerLaneClarity = NonNullable<DashboardCanonicalActiveBoardProjectionV1["activeManagerLaneClarity"]>;
 type PipelineCoordinationHealth = NonNullable<DashboardCanonicalOperationalProjectionV1["coordinationHealth"]>;
 type ActiveBoardCockpitPacket = PipelineCockpitPacket;
 
@@ -201,7 +201,7 @@ export function PipelineCockpit({
   const currentProjection = operationalProjection ?? null;
   const currentActiveBoardProjection = activeBoardProjection ?? null;
   const currentOperationalTruth = operationalTruth ?? null;
-  const activeManagerLaneClarity = currentProjection?.activeManagerLaneClarity ?? null;
+  const activeManagerLaneClarity = currentActiveBoardProjection?.activeManagerLaneClarity ?? null;
   const currentProjectionError = projectionError ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
   const routeMapRef = useRef<HTMLElement | null>(null);

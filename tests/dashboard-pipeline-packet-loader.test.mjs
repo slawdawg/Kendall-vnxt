@@ -135,7 +135,8 @@ test("pipeline loader reconstructs client-safe Lane Clarity rather than applying
   });
 
   const result = await loader.__canonicalListForTest();
-  const clarity = result.operationalProjection?.activeManagerLaneClarity;
+  const clarity = result.activeBoardProjection?.activeManagerLaneClarity;
+  assert.equal(result.operationalProjection?.activeManagerLaneClarity, null);
   assert.deepEqual(JSON.parse(JSON.stringify(clarity)), {
     goal: { summary: "Render the canonical Lane Clarity card.", sourceRef: "requirement:lane-clarity" },
     posture: { state: "on_scope", reason: "Current manager receipt is coherent.", nextSafeAction: "verify_pipeline_render", decisionRef: null, qualification: null },
@@ -155,7 +156,7 @@ test("pipeline loader reconstructs client-safe Lane Clarity rather than applying
       isDashboardCanonicalManagerLaneClarity: () => false,
     });
     const malformed = await malformedLoader.__canonicalListForTest();
-    assert.equal(malformed.operationalProjection?.activeManagerLaneClarity, null, label);
+    assert.equal(malformed.activeBoardProjection?.activeManagerLaneClarity, null, label);
   }
 });
 
