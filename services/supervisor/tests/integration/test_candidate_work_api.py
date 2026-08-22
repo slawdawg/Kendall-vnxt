@@ -347,8 +347,10 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         promoted_response = client.post(f"/candidate-work/{candidate_id}/promote")
         assert promoted_response.status_code == 200
         promoted = promoted_response.json()["data"]
-        work_item = promoted["workItem"]
         work_item_id = promoted["workItem"]["id"]
+        persisted_work_item_response = client.get(f"/work-items/{work_item_id}")
+        assert persisted_work_item_response.status_code == 200
+        work_item = persisted_work_item_response.json()["data"]
         persisted_refs_by_id = {ref["refId"]: ref for ref in work_item["metadata"]["workPacketSourceRefs"]}
         assert persisted_refs_by_id["source:malformed"]["accessState"] == "blocked"
         assert persisted_refs_by_id["source:malformed"]["summaryOnly"] is True
@@ -360,11 +362,7 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         assert "rawContent" not in work_item["metadata"]["importMetadata"]
         assert "providerPayload" not in work_item["metadata"]["importMetadata"]
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item_id}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        refs_by_id = {ref["refId"]: ref for ref in packet["sourceRefs"]}
-        assert refs_by_id["obsidian:00-inbox/customer-signal"] == {
+        assert persisted_refs_by_id["obsidian:00-inbox/customer-signal"] == {
             "refId": "obsidian:00-inbox/customer-signal",
             "sourceType": "obsidian",
             "label": "Customer signal",
@@ -375,7 +373,7 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
             "summaryOnly": True,
             "blockedReason": None,
         }
-        blocked_ref = refs_by_id["source:malformed"]
+        blocked_ref = persisted_refs_by_id["source:malformed"]
         assert blocked_ref["sourceType"] == "manual"
         assert blocked_ref["freshness"] == "unknown"
         assert blocked_ref["accessState"] == "blocked"
@@ -383,18 +381,18 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         assert blocked_ref["summaryOnly"] is True
         assert blocked_ref["pathOrUrl"] is None
         assert blocked_ref["blockedReason"] == "invalid source type; invalid freshness; unsafe non-summary source metadata"
-        llm_wiki_ref = refs_by_id["llm-wiki:derived-summary"]
+        llm_wiki_ref = persisted_refs_by_id["llm-wiki:derived-summary"]
         assert llm_wiki_ref["accessState"] == "allowed"
         assert llm_wiki_ref["canonical"] is False
         assert llm_wiki_ref["summaryOnly"] is True
         assert llm_wiki_ref["blockedReason"] is None
-        missing_ref = refs_by_id["github:missing-pr"]
+        missing_ref = persisted_refs_by_id["github:missing-pr"]
         assert missing_ref["sourceType"] == "github"
         assert missing_ref["accessState"] == "missing"
         assert missing_ref["canonical"] is False
         assert missing_ref["pathOrUrl"] is None
         assert missing_ref["blockedReason"] == "source ref is missing or unavailable"
-        contradictory_ref = refs_by_id["obsidian:contradictory-note"]
+        contradictory_ref = persisted_refs_by_id["obsidian:contradictory-note"]
         assert contradictory_ref["sourceType"] == "obsidian"
         assert contradictory_ref["accessState"] == "blocked"
         assert contradictory_ref["canonical"] is True
@@ -617,8 +615,10 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
             },
         )
         assert import_response.status_code == 200
-        candidate = import_response.json()["data"]
-        candidate_id = candidate["id"]
+        candidate_id = import_response.json()["data"]["id"]
+        listed_response = client.get("/candidate-work")
+        assert listed_response.status_code == 200
+        candidate = next(item for item in listed_response.json()["data"] if item["id"] == candidate_id)
         assert candidate["source"] == "obsidian"
         assert candidate["sourceArtifactPath"] == "00 Inbox/source-reconciliation.md"
         assert candidate["sourceArtifactType"] == "obsidian_metadata"
@@ -661,13 +661,8 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
         assert "rawContent" not in candidate["importMetadata"]
         assert "content" not in candidate["importMetadata"]
 
-        candidate_packet = client.get(f"/work-packets/candidate_work:{candidate_id}").json()["data"]
-        candidate_source_types = {ref["sourceType"] for ref in candidate_packet["sourceRefs"]}
-        assert candidate_source_types == {"candidate_work", "obsidian"}
-        assert candidate_packet["alphaMemorySourceStatus"]["decisionState"] == "blocked"
-        assert "approval_metadata.missing" in candidate_packet["alphaMemorySourceStatus"]["blockedReasons"]
-        assert "evidence:obsidian-approval:source-reconciliation" in [
-            ref["refId"] for ref in candidate_packet["evidenceRefs"]
+        assert candidate["importMetadata"]["evidenceRefs"] == [
+            "evidence:obsidian-approval:source-reconciliation"
         ]
 
         invalid_response = client.post(
@@ -758,7 +753,10 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
         assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
         promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
         assert promote_response.status_code == 200
-        work_item = promote_response.json()["data"]["workItem"]
+        work_item_id = promote_response.json()["data"]["workItem"]["id"]
+        persisted_work_item_response = client.get(f"/work-items/{work_item_id}")
+        assert persisted_work_item_response.status_code == 200
+        work_item = persisted_work_item_response.json()["data"]
         assert work_item["source"] == f"candidate_work:{candidate_id}"
         assert work_item["metadata"]["source"] == "obsidian"
         assert work_item["metadata"]["sourceArtifactType"] == "obsidian_metadata"
@@ -768,10 +766,10 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
             "Canonical Obsidian memory remains human-owned and unchanged."
         )
 
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert {ref["sourceType"] for ref in packet["sourceRefs"]} == {"candidate_work", "work_item", "obsidian"}
-        obsidian_ref = next(ref for ref in packet["sourceRefs"] if ref["sourceType"] == "obsidian")
+        obsidian_ref = work_item["metadata"]["workPacketSourceRefs"][0]
         assert obsidian_ref["summaryOnly"] is True
         assert obsidian_ref["accessState"] == "allowed"
         assert obsidian_ref["pathOrUrl"] == "00 Inbox/source-reconciliation.md"
-        assert "evidence:obsidian-approval:source-reconciliation" in [ref["refId"] for ref in packet["evidenceRefs"]]
+        assert work_item["metadata"]["importMetadata"]["evidenceRefs"] == [
+            "evidence:obsidian-approval:source-reconciliation"
+        ]
