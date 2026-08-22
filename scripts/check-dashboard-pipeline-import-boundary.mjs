@@ -51,6 +51,13 @@ const readOnlyPipelineRuntimeFunctions = [
   "getWorkPackets",
 ];
 
+// Pure parsers may be shared with dashboard loaders, but they are never
+// transport capabilities and must not expand the runtime's read surface.
+const purePipelineRuntimeValidators = [
+  "isDashboardCanonicalManagerLaneClarity",
+];
+const pureValidatorTransportDependency = new RegExp(`\\b(?:${readOnlyPipelineRuntimeFunctions.join("|")})\\b`);
+
 const readOnlyPipelineRuntimeEndpoints = new Map([
   ["getDashboardCanonicalOperationalProjection", "/pipeline-control-plane/canonical-operational-projection"],
   ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
@@ -396,9 +403,9 @@ function checkDashboardSessionRole(displayPath, source) {
 
 function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
   const exportedFunctions = extractRuntimeExportNames(source);
-  const unexpectedExports = exportedFunctions.filter((exportName) => !readOnlyPipelineRuntimeFunctions.includes(exportName));
+  const permittedExports = new Set([...readOnlyPipelineRuntimeFunctions, ...purePipelineRuntimeValidators]);
+  const unexpectedExports = exportedFunctions.filter((exportName) => !permittedExports.has(exportName));
   if (
-    exportedFunctions.length !== readOnlyPipelineRuntimeFunctions.length ||
     unexpectedExports.length > 0 ||
     readOnlyPipelineRuntimeFunctions.some((functionName) => !exportedFunctions.includes(functionName))
   ) {
@@ -406,6 +413,15 @@ function checkReadOnlyPipelineRuntimeFunctions(displayPath, source) {
       `${displayPath}: only the approved read-only runtime functions may be exported` +
       (unexpectedExports.length > 0 ? ` (unapproved: ${unexpectedExports.join(", ")})` : ""),
     );
+  }
+
+  for (const functionName of purePipelineRuntimeValidators) {
+    if (!exportedFunctions.includes(functionName)) continue;
+    const validatorSource = extractFunctionSource(source, functionName);
+    if (!validatorSource || /\b(?:fetch|requestJson|requestSupervisorJson)\b/.test(stripCommentsAndStrings(validatorSource))
+      || pureValidatorTransportDependency.test(stripCommentsAndStrings(validatorSource))) {
+      failures.push(`${displayPath}: pure runtime validator ${functionName} must not perform I/O`);
+    }
   }
   const requestJsonSource = extractFunctionSource(source, "requestJson");
   if (!requestJsonSource) {

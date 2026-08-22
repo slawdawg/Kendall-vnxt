@@ -3364,6 +3364,25 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
         'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
         'export async function getWorkPackets() { return requestJson("/pipeline-control-plane/work-packets"); }',
+        'export function isDashboardCanonicalManagerLaneClarity() { return getWorkPackets?.(); }',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const impureValidatorRun = runChecker();
+    assert.equal(impureValidatorRun.status, 1);
+    assert.match(impureValidatorRun.stderr, /pure runtime validator isDashboardCanonicalManagerLaneClarity must not perform I\/O/);
+
+    await writeFile(
+      join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
+      [
+        'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
+        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
+        'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
+        'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
+        'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
+        'export async function getWorkItemMemoryReview(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review`); }',
+        'export async function getWorkPackets() { return requestJson("/pipeline-control-plane/work-packets"); }',
         "",
       ].join("\n"),
       "utf8",

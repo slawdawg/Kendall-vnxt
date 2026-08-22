@@ -4712,6 +4712,44 @@ class PipelineActiveManagerLaneClarityV0View(BaseModel):
         return self
 
 
+class DashboardCanonicalManagerLaneClarityV1View(BaseModel):
+    """Compact, metadata-only Lane Clarity projection for the canonical board read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal: PipelineActiveManagerLaneClarityGoalV0View
+    criteria: list[PipelineActiveManagerLaneClarityCriterionV0View] = Field(default_factory=list)
+    canonicalState: PipelineActiveManagerLaneClarityCanonicalStateV0View
+    nextGate: PipelineActiveManagerLaneClarityNextGateV0View
+    posture: PipelineActiveManagerLaneClarityPostureV0View
+
+    @field_validator("criteria")
+    @classmethod
+    def criteria_are_bounded(cls, criteria: list[PipelineActiveManagerLaneClarityCriterionV0View]) -> list[PipelineActiveManagerLaneClarityCriterionV0View]:
+        if len(criteria) > 24:
+            raise ValueError("Lane clarity criteria must be bounded.")
+        return criteria
+
+    @model_validator(mode="after")
+    def assessed_postures_require_criterion_evidence(self) -> "DashboardCanonicalManagerLaneClarityV1View":
+        if self.posture.state in {"on_scope", "pivot_required"} and not self.criteria:
+            raise ValueError("Assessed lane clarity postures require criterion evidence.")
+        if self.posture.state in {"on_scope", "pivot_required"} and (
+            self.canonicalState.freshness != "fresh"
+            or self.canonicalState.evidenceFreshness != "fresh"
+        ):
+            raise ValueError("Assessed lane clarity postures require fresh canonical evidence.")
+        if self.posture.state == "pivot_required" and (
+            self.posture.decisionRef is None or self.posture.qualification is None
+        ):
+            raise ValueError("Pivot-required lane clarity must retain bounded decision provenance.")
+        if self.posture.state != "pivot_required" and (
+            self.posture.decisionRef is not None or self.posture.qualification is not None
+        ):
+            raise ValueError("Only pivot-required lane clarity may retain decision provenance.")
+        return self
+
+
 class PipelineQueueSummaryV0View(BaseModel):
     activeCount: int | None = None
     dispatchableCount: int | None = None
@@ -5016,7 +5054,7 @@ class DashboardCanonicalOperationalProjectionV1View(BaseModel):
     workPackets: list[DashboardCanonicalOperationalWorkPacketV1View] = Field(default_factory=list)
     selectedPacketDetails: list[DashboardCanonicalOperationalSelectedPacketDetailV1View] = Field(default_factory=list)
     managerSummary: PipelineManagerSummaryV0View
-    activeManagerLaneClarity: PipelineActiveManagerLaneClarityV0View | None = None
+    activeManagerLaneClarity: DashboardCanonicalManagerLaneClarityV1View | None = None
     coordinationHealth: "PipelineCoordinationHealthV0View | None" = None
     workerSummary: PipelineWorkerSummaryV0View
     reliabilityProblems: list[PipelineReliabilityProblemV0View] = Field(default_factory=list)

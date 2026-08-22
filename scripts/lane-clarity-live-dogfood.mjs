@@ -46,7 +46,8 @@ try {
   const receipt = await jsonData(`${supervisorUrl}/manager-control-plane/lane-clarity-handoffs/${encodeURIComponent(handoffId)}`);
   assert.equal(receipt.handoffId, handoffId);
   assert.equal(receipt.laneClarity.goal.summary, coherentClarity().goal.summary);
-  const projection = await jsonData(`${supervisorUrl}/pipeline-control-plane/projection`);
+  const projection = await jsonData(`${supervisorUrl}/pipeline-control-plane/canonical-operational-projection`);
+  assert.equal(projection.schemaVersion, "dashboard-canonical-operational-projection/v1");
   assert.equal(projection.activeManagerLaneClarity?.goal?.summary, coherentClarity().goal.summary);
   assert.equal(projection.activeManagerLaneClarity?.posture?.state, "on_scope");
 
@@ -65,7 +66,8 @@ try {
   const unavailable = await runNormalManagerCycle({ stateRoot: join(tempRoot, "manager-stale"), supervisorUrl: staleSupervisorUrl, clarity: staleClarity(), observedAt: new Date().toISOString() });
   assert.equal(unavailable.summary.laneClarityHandoff.state, "unavailable");
   assert.equal(unavailable.summary.laneClarityHandoff.failureCode, "coherent_lane_clarity_unavailable");
-  const staleProjection = await jsonData(`${staleSupervisorUrl}/pipeline-control-plane/projection`);
+  const staleProjection = await jsonData(`${staleSupervisorUrl}/pipeline-control-plane/canonical-operational-projection`);
+  assert.equal(staleProjection.schemaVersion, "dashboard-canonical-operational-projection/v1");
   assert.equal(staleProjection.activeManagerLaneClarity, null);
 
   dashboard = startDashboard(staleSupervisorUrl, baseEnv, "dashboard-stale");

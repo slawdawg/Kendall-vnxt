@@ -9,6 +9,7 @@ import {
   getDashboardCanonicalOperationalProjection,
   getWorkPacket,
   getWorkPackets,
+  isDashboardCanonicalManagerLaneClarity,
   type DashboardCanonicalPresentationV1,
   type DashboardCanonicalWorkPacketV1,
 } from "./pipeline-supervisor-runtime";
@@ -561,7 +562,7 @@ function isCompleteActiveBoardV1ActionCapability(value: unknown): boolean {
  * keys) over this boundary.
  */
 function clientSafeOperationalProjection(projection: DashboardCanonicalOperationalProjectionV1): DashboardCanonicalOperationalProjectionV1 {
-  return clientSafeProjectionMetadata({
+  const clientSafeProjection = clientSafeProjectionMetadata<DashboardCanonicalOperationalProjectionV1>({
     schemaVersion: "dashboard-canonical-operational-projection/v1",
     projectionId: projection.projectionId,
     generatedAt: projection.generatedAt,
@@ -628,7 +629,8 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
       metadataOnly: detail.metadataOnly,
     })),
     managerSummary: projection.managerSummary,
-    activeManagerLaneClarity: projection.activeManagerLaneClarity,
+    // This nested schema has its own strict client projection below.
+    activeManagerLaneClarity: null,
     coordinationHealth: projection.coordinationHealth,
     workerSummary: projection.workerSummary,
     reliabilityProblems: projection.reliabilityProblems,
@@ -640,6 +642,49 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
     queueSummary: projection.queueSummary,
     evidenceRefs: projection.evidenceRefs,
   });
+  return {
+    ...clientSafeProjection,
+    activeManagerLaneClarity: clientSafeActiveManagerLaneClarity(projection.activeManagerLaneClarity),
+  };
+}
+
+/**
+ * Lane Clarity is rendered in the client cockpit, so reconstruct its compact
+ * display DTO rather than sending it through the projection-wide metadata
+ * scrubber. The latter intentionally has no knowledge of this nested schema.
+ */
+function clientSafeActiveManagerLaneClarity(
+  clarity: DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"],
+): DashboardCanonicalOperationalProjectionV1["activeManagerLaneClarity"] {
+  if (!clarity || !isDashboardCanonicalManagerLaneClarity(clarity)) return null;
+  return {
+    goal: {
+      summary: clarity.goal.summary,
+      sourceRef: clarity.goal.sourceRef,
+    },
+    posture: {
+      state: clarity.posture.state,
+      reason: clarity.posture.reason,
+      nextSafeAction: clarity.posture.nextSafeAction,
+      decisionRef: clarity.posture.decisionRef ?? null,
+      qualification: clarity.posture.qualification ?? null,
+    },
+    canonicalState: {
+      phase: clarity.canonicalState.phase,
+      freshness: clarity.canonicalState.freshness,
+      evidenceFreshness: clarity.canonicalState.evidenceFreshness,
+    },
+    nextGate: {
+      summary: clarity.nextGate.summary,
+      nextSafeAction: clarity.nextGate.nextSafeAction,
+    },
+    criteria: clarity.criteria.map((criterion) => ({
+      criterionId: criterion.criterionId,
+      summary: criterion.summary,
+      disposition: criterion.disposition,
+      evidenceRefs: [...criterion.evidenceRefs],
+    })),
+  };
 }
 
 /** Build the independent dashboard V1 graph shape; never pass the V0 object through. */
