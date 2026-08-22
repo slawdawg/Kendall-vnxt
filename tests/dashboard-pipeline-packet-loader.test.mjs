@@ -1790,6 +1790,26 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   projection.managerSummary = { stateSource: "supervisor_projection", activeLeaseCount: 2, freshnessState: "live" };
   projection.workerSummary = { stateSource: "supervisor_projection", workerRefs: ["worker:1"], freshnessState: "live" };
   projection.queueSummary = { activeCount: 1, dispatchableCount: 2, closedCount: 3, staleCount: 4, refillingCount: 5, unknownCount: 6, emptyReason: null };
+  const rawWorkGraph = {
+    schemaVersion: "parallel-work-graph-evidence/v0",
+    sourceSchemaVersion: "parallel-execution-graph-reservation/v1",
+    availability: "available",
+    packetId: lifecycle.packetId,
+    executionJobId: "execution-job:canonical-loader",
+    reportIdentity: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    generatedAt: "2026-08-17T00:00:00.000Z",
+    freshnessState: "live",
+    waveMembership: "selected",
+    dependencyState: "clear",
+    reservation: { status: "advisory_reserved", owner: "operator", reasonCode: "independent_surface" },
+    capacity: { posture: "normal", reasonCode: "capacity_normal" },
+    reason: "The packet is in the advisory wave.",
+    nextSafeAction: "Inspect the existing authority gates before any future action.",
+    evidenceRefs: ["evidence:parallel-wave"],
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  };
   projection.selectedPacketDetails = [{
     packetId: lifecycle.packetId,
     canonicalContract: { extra: "server-only extension" },
@@ -1809,6 +1829,7 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
       summary: "wrong-shape collision secret",
     }],
     actionResultsV1: [{ summary: "wrong-shape collision secret" }],
+    workGraph: { ...rawWorkGraph, rawProviderResponse: "wrong-shape work-graph secret" },
   }];
   const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
     getPipelineDashboardProjection: async () => projection,
@@ -1829,6 +1850,9 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   assert.equal(result.operationalProjection.selectedPacketDetails[0].actionCapabilities[0].summary, undefined);
   assert.equal(result.operationalProjection.selectedPacketDetails[0].actionResults[0].summary, undefined);
   assert.equal(result.operationalProjection.selectedPacketDetails[0].actionResultsV1, undefined);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].workGraph.schemaVersion, "dashboard-canonical-work-graph/v1");
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].workGraph.rawPayloadRetained, false);
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].workGraph.rawProviderResponse, undefined);
   assert.equal(result.operationalProjection.backendReachability.checkedAt, "2026-08-17T00:00:00.000Z");
   assert.equal(result.operationalProjection.managerSummary.activeLeaseCount, 2);
   assert.deepEqual(result.operationalProjection.workerSummary.workerRefs, ["worker:1"]);

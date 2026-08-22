@@ -38,7 +38,6 @@ import type {
   PipelineStageSummaryV0,
   PipelineTruthSummaryV0,
   PipelineWorkerSummaryV0,
-  PipelineWorkGraphEvidenceV0,
 } from "@kendall/contracts";
 
 export type DashboardCanonicalOperationalProjectionTruthV1 = {
@@ -183,12 +182,45 @@ export type DashboardCanonicalOperationalSelectedPacketDetailV1 = {
   actionCapabilitiesV1?: PipelineOperationalActionCapabilityV1[];
   actionResults?: PipelineOperationalActionResultV0[];
   reviewRoute: PipelineReviewRouteEvidenceV0;
-  workGraph: PipelineWorkGraphEvidenceV0;
+  workGraph: DashboardCanonicalWorkGraphEvidenceV1;
   workItemId?: string | null;
   queueLease?: DashboardCanonicalQueueLeaseV1 | null;
   executionAttempts?: DashboardCanonicalExecutionAttemptV1[];
   correlationIds?: string[];
   metadataOnly: true;
+};
+
+/**
+ * Dashboard-owned work-graph presentation. This is deliberately not an alias
+ * of `PipelineWorkGraphEvidenceV0`: normal packet-detail rendering receives
+ * only this explicit, metadata-only V1 shape.
+ */
+export type DashboardCanonicalWorkGraphEvidenceV1 = {
+  schemaVersion: "dashboard-canonical-work-graph/v1";
+  sourceSchemaVersion: "parallel-execution-graph-reservation/v1";
+  availability: "available" | "stale" | "unavailable";
+  packetId: string;
+  executionJobId: string | null;
+  reportIdentity: string | null;
+  generatedAt: string | null;
+  freshnessState: "live" | "stale" | "unavailable";
+  waveMembership: "selected" | "deferred" | "blocked" | "unavailable";
+  dependencyState: "clear" | "declared" | "blocked" | "unavailable";
+  reservation: {
+    status: "advisory_reserved" | "deferred" | "blocked" | "not_recommended" | "unavailable";
+    owner: string | null;
+    reasonCode: string;
+  };
+  capacity: {
+    posture: "normal" | "degraded" | "blocked" | "unavailable";
+    reasonCode: string;
+  };
+  reason: string;
+  nextSafeAction: string;
+  evidenceRefs: string[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
 };
 
 export type DashboardCanonicalReadyToTestV1 = {

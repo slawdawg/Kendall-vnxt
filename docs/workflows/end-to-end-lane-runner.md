@@ -371,6 +371,8 @@ the matching check name; every other skipped or neutral result blocks delivery.
 - `static`
 - `static_bundle`
 - `static_bundle_summary`
+- `workspace_behavior_shadow`
+- `supervisor_behavior_shadow`
 
 The `static` family is non-required only when the exact-head `changes` planner
 did not select static confidence. When that planner output selects static work,
@@ -378,7 +380,10 @@ each required static check must complete successfully; a skipped static check
 never bypasses the selected confidence path. `full` remains non-required for
 pull requests because it is integration-branch coverage, while `javascript`
 and `supervisor` remain non-required only when their changed-area selectors do
-not require them.
+not require them. Each behavior-shadow job is non-required only when its
+corresponding exact-head planner selection is empty; a nonempty workspace
+profile or supervisor-shard selection requires its corresponding shadow check
+to succeed.
 
 ### Exceptional Post-Merge Gate-Evidence Recovery
 

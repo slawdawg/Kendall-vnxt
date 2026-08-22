@@ -4973,6 +4973,7 @@ function currentThreadResolutionPreMutationBlockers(manifest, pr, headState, aud
   if (checks.failing.length) blockers.push(`Failed or ambiguous checks immediately before the thread mutation: ${checks.failing.map((check) => check.name).join(", ")}`);
   blockers.push(...(nonRequiredCheckPolicy?.blockers || []));
   if (JSON.stringify(nonRequiredCheckPolicy.staticPlanner) !== JSON.stringify(fresh.nonRequiredCheckPolicy?.staticPlanner)) blockers.push("Static skip planner evidence changed immediately before the thread mutation");
+  if (JSON.stringify(nonRequiredCheckPolicy.behaviorShadowPlanner) !== JSON.stringify(fresh.nonRequiredCheckPolicy?.behaviorShadowPlanner)) blockers.push("Behavior-shadow skip planner evidence changed immediately before the thread mutation");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Thread-aware audit is incomplete immediately before the thread mutation");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests immediately before the thread mutation: ${audit.pendingReviewRequestCount}`);
   if (audit?.auditFingerprint !== fresh.reviewThreads?.auditFingerprint) blockers.push("Thread-aware audit changed after the fresh adjudication and before the thread mutation");
@@ -5306,6 +5307,7 @@ function reviewThreadResolutionPreMutationBlockers(manifest, pr, headState, audi
   if (checks.failing.length) blockers.push(`Failed or ambiguous checks immediately before the thread mutation: ${checks.failing.map((check) => check.name).join(", ")}`);
   blockers.push(...(nonRequiredCheckPolicy?.blockers || []));
   if (JSON.stringify(nonRequiredCheckPolicy.staticPlanner) !== JSON.stringify(fresh.nonRequiredCheckPolicy?.staticPlanner)) blockers.push("Static skip planner evidence changed immediately before the thread mutation");
+  if (JSON.stringify(nonRequiredCheckPolicy.behaviorShadowPlanner) !== JSON.stringify(fresh.nonRequiredCheckPolicy?.behaviorShadowPlanner)) blockers.push("Behavior-shadow skip planner evidence changed immediately before the thread mutation");
   if (!audit?.querySucceeded || audit.errorCount || audit.hasNextPage || audit.reviewRequestHasNextPage) blockers.push("Thread-aware audit is incomplete immediately before the thread mutation");
   if (audit?.pendingReviewRequestCount) blockers.push(`Pending review requests immediately before the thread mutation: ${audit.pendingReviewRequestCount}`);
   if (audit?.unresolvedNonOutdatedCount) blockers.push(`Unresolved current review threads immediately before the thread mutation: ${audit.unresolvedNonOutdatedCount}`);
@@ -7554,9 +7556,11 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   const observedSkippedNames = observedTerminalSkippedCheckNames(context.statusCheckRollup);
   const allNamedChecksAreSkipped = names.every((name) => observedSkippedNames.has(name));
   const staticPlanner = staticSkipPlannerEvidence(names, context);
+  const behaviorShadowPlanner = behaviorShadowSkipPlannerEvidence(names, context);
   const valid = validateSourceOwnedSkipPolicy(policyRef, names, context.worktreePath, expectedHeadSha)
     && allNamedChecksAreSkipped
-    && staticPlanner.valid;
+    && staticPlanner.valid
+    && behaviorShadowPlanner.valid;
   const blockers = [];
   if (names.length > 0 && !policyRef) {
     blockers.push("Non-required skipped checks require a source-owned policy reference");
@@ -7573,6 +7577,9 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
   if (staticPlanner.required && !staticPlanner.valid) {
     blockers.push("Static-family skipped checks require exact-head changes planner evidence with static=false");
   }
+  if (behaviorShadowPlanner.required && !behaviorShadowPlanner.valid) {
+    blockers.push("Behavior-shadow skipped checks require exact-head changes planner evidence with the corresponding selection empty");
+  }
   return {
     schemaVersion: 1,
     names,
@@ -7582,6 +7589,7 @@ function shapeNonRequiredCheckPolicyEvidence(options = {}, context = {}) {
     valid,
     blockers,
     staticPlanner,
+    behaviorShadowPlanner,
     metadataOnly: true,
   };
 }
@@ -7607,6 +7615,7 @@ function observedTerminalSkippedCheckNames(rollup) {
 }
 
 var staticPlannerEvidenceCache;
+var behaviorShadowPlannerEvidenceCache;
 
 function staticSkipPlannerEvidence(names, context = {}) {
   const staticFamily = new Set(["static", "static_bundle", "static_bundle_summary"]);
@@ -7662,6 +7671,59 @@ function staticSkipPlannerEvidence(names, context = {}) {
   return evidence.find((candidate) => candidate.valid) || evidence[0];
 }
 
+function behaviorShadowSkipPlannerEvidence(names, context = {}) {
+  const shadowOutputKey = new Map([
+    ["workspace_behavior_shadow", "selectedWorkspaceProfiles"],
+    ["supervisor_behavior_shadow", "selectedSupervisorShards"],
+  ]);
+  const requiredNames = names.filter((name) => shadowOutputKey.has(name));
+  if (requiredNames.length === 0) {
+    return { required: false, valid: true, selections: {}, sources: [] };
+  }
+  const expectedHeadSha = exactGitObjectIdOrNull(context.expectedHeadSha || "");
+  const nodes = statusCheckNodes(context.statusCheckRollup);
+  const skippedByName = new Map(nodes
+    .filter((node) => shadowOutputKey.has(statusCheckName(node))
+      && terminalCheckStatus(String(node?.status || node?.state || "").toUpperCase())
+      && String(node?.conclusion || "").toUpperCase() === "SKIPPED")
+    .map((node) => [statusCheckName(node), node]));
+  if (!expectedHeadSha || !context.worktreePath || requiredNames.some((name) => !skippedByName.has(name))) {
+    return { required: true, valid: false, selections: {}, sources: [] };
+  }
+  const cache = behaviorShadowPlannerEvidenceCache ||= new Map();
+  const sources = [];
+  const selections = {};
+  for (const name of requiredNames) {
+    const shadow = skippedByName.get(name);
+    const shadowRunId = detailsRunId(shadow);
+    const planner = nodes.find((node) => statusCheckName(node) === "changes" && detailsRunId(node) === shadowRunId);
+    const match = /\/actions\/runs\/(\d+)\/job\/(\d+)(?:$|[?#])/.exec(String(planner?.detailsUrl || planner?.targetUrl || ""));
+    if (!shadowRunId || !match || String(planner?.conclusion || "").toUpperCase() !== "SUCCESS") {
+      return { required: true, valid: false, selections, sources };
+    }
+    const cacheKey = `${context.worktreePath}:${expectedHeadSha}:${match[1]}:${match[2]}`;
+    let output = cache.get(cacheKey);
+    if (!output) {
+      const result = run("gh", ["run", "view", match[1], "--log", "--job", match[2]], {
+        cwd: context.worktreePath,
+        preserveStdout: true,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      output = { code: result.code, stdout: result.stdout || "" };
+      cache.set(cacheKey, output);
+    }
+    const exactHeadPattern = new RegExp(`--head\\s+["']${escapeRegExp(expectedHeadSha)}["']`);
+    const outputKey = shadowOutputKey.get(name);
+    const emptySelection = new RegExp(`"${outputKey}"\\s*:\\s*\\[\\s*\\]`).test(output.stdout);
+    selections[name] = emptySelection ? [] : null;
+    sources.push({ name, runId: match[1], jobId: match[2], exactHeadObserved: exactHeadPattern.test(output.stdout) });
+    if (output.code !== 0 || !exactHeadPattern.test(output.stdout) || !emptySelection) {
+      return { required: true, valid: false, selections, sources };
+    }
+  }
+  return { required: true, valid: true, selections, sources };
+}
+
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -7693,6 +7755,8 @@ function validateSourceOwnedSkipPolicy(policyRef, names, worktreePath, expectedH
     "static",
     "static_bundle",
     "static_bundle_summary",
+    "workspace_behavior_shadow",
+    "supervisor_behavior_shadow",
   ]);
   return names.every((name) => permittedCheckNames.has(name) && visibleNames.has(name));
 }
