@@ -146,6 +146,20 @@ def test_projection_exposes_only_fresh_coherent_handoff(tmp_path, monkeypatch) -
         assert projection_status == 200, projection_text
         assert projection["data"]["activeManagerLaneClarity"] == fresh["laneClarity"]
 
+        canonical_status, canonical, canonical_text = _request(base_url, "/pipeline-control-plane/canonical-operational-projection", method="GET")
+        assert canonical_status == 200, canonical_text
+        canonical_clarity = canonical["data"]["activeManagerLaneClarity"]
+        assert canonical_clarity == {
+            "goal": fresh["laneClarity"]["goal"],
+            "criteria": fresh["laneClarity"]["criteria"],
+            "canonicalState": fresh["laneClarity"]["canonicalState"],
+            "nextGate": fresh["laneClarity"]["nextGate"],
+            "posture": fresh["laneClarity"]["posture"],
+        }
+        assert "schemaVersion" not in canonical_clarity
+        assert "runId" not in canonical_clarity
+        assert "rawPayloadRetained" not in canonical_clarity
+
 
 def test_handoff_rejects_non_loopback_transport(tmp_path, monkeypatch) -> None:
     with _running_supervisor(tmp_path, monkeypatch) as (main, _):

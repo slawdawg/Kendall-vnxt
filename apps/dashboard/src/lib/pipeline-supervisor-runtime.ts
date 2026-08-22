@@ -14,7 +14,10 @@ import type {
   PipelineProductModeMappingV0,
   WorkPacketV0View,
 } from "@kendall/contracts";
-import type { DashboardCanonicalOperationalProjectionV1 } from "./pipeline/canonical-operational-projection";
+import type {
+  DashboardCanonicalManagerLaneClarityV1,
+  DashboardCanonicalOperationalProjectionV1,
+} from "./pipeline/canonical-operational-projection";
 import {
   isPipelineDashboardProjection,
   normalizePipelineDashboardProjection,
@@ -36,6 +39,16 @@ const CURRENT_OPERATIONAL_ACTION_LOOP_PRD_PATH = "_bmad-output/planning-artifact
 const PLANNING_SOURCE_MARKER = "_bmad-output/planning-artifacts/prds/";
 const EVIDENCE_CHAIN_ALLOWED_FUTURE_SKEW_MS = 60_000;
 const UNSAFE_LIFECYCLE_TEXT_RE = /\b(raw[\s_-]*(prompts?|completions?|transcripts?)|reasoning[\s_-]*traces?|provider[\s_-]*payloads?|secrets?([\s_-]*(key|token|value|id))?|credentials?([\s_-]*(key|token|value|id))?|(terminal|tmux|pane)[\s_-]*(scrollbacks?|texts?|outputs?|stdouts?|stderrs?))\b/i;
+const UNSAFE_LANE_CLARITY_TEXT_RE = /\b(?:raw[_-]?payload|provider[_-]?payload|secret|token|credential|password|api[_-]?key|private[_-]?key)\b|\bbearer\s+|\bsk-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
+const TOKEN_LIKE_LANE_CLARITY_VALUE_RE = /(?<![A-Za-z0-9])(?:sk-(?:proj-)?[A-Za-z0-9][A-Za-z0-9_-]{7,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,}|AKIA[A-Z0-9]{8,}|ASIA[A-Z0-9]{8,}|glpat-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|eyJ[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])[A-Za-z]{2,12}[-_](?=(?:[A-Za-z0-9]*\d){2})[A-Za-z0-9]{20,}(?![A-Za-z0-9])|^(?=[A-Za-z0-9+/]{48,}={0,2}$)(?=.*[0-9+/=])[A-Za-z0-9+/]+={0,2}$|^(?=[a-f0-9]{40,}$)(?=.*[0-9])[a-f0-9]+$/i;
+const LANE_CLARITY_CONTROL_CHARACTER_RE = /[\x00-\x1f\x7f]/;
+const LANE_CLARITY_PEM_OR_HIGH_ENTROPY_RE = /-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----|(?<![A-Za-z0-9])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9])/i;
+const MANAGER_SOURCE_LANE_CLARITY_REF_RE = /^manager-source-[a-f0-9]{40}$/;
+const CANONICAL_LANE_CLARITY_PHASES = new Set(["queued", "leased", "running", "refilling", "completed", "failed", "expired", "blocked", "needs_review", "closed", "manager_only", "unknown", "no_safe_work", "authoritative_backlog_exhausted", "unverified", "simulated"]);
+const CANONICAL_LANE_CLARITY_FRESHNESS = new Set(["fresh", "stale", "unknown"]);
+const CANONICAL_LANE_CLARITY_EVIDENCE_FRESHNESS = new Set(["fresh", "stale", "missing", "unknown"]);
+const CANONICAL_LANE_CLARITY_DISPOSITIONS = new Set(["met", "in_progress", "blocked", "not_assessed"]);
+const CANONICAL_LANE_CLARITY_QUALIFICATIONS = new Set(["operator_drift_concern", "second_qualified_recovery_detour"]);
 
 type CanonicalSupervisorPacketPayload = AuthoritativeWorkPacketLifecycleView & {
   canonicalContract?: unknown;
@@ -734,7 +747,88 @@ function isDashboardCanonicalOperationalProjection(value: unknown): value is Das
     && Array.isArray(projection.sourceStates)
     && Array.isArray(projection.evidenceRefs)
     && projection.workPackets.every(isCanonicalOperationalWorkPacket)
-    && projection.selectedPacketDetails.every(isCanonicalOperationalSelectedDetail);
+    && projection.selectedPacketDetails.every(isCanonicalOperationalSelectedDetail)
+    && (projection.activeManagerLaneClarity === undefined
+      || projection.activeManagerLaneClarity === null
+      || isDashboardCanonicalManagerLaneClarity(projection.activeManagerLaneClarity));
+}
+
+const CANONICAL_LANE_CLARITY_KEYS = new Set(["goal", "posture", "canonicalState", "nextGate", "criteria"]);
+const CANONICAL_LANE_CLARITY_GOAL_KEYS = new Set(["summary", "sourceRef"]);
+const CANONICAL_LANE_CLARITY_POSTURE_KEYS = new Set(["state", "reason", "nextSafeAction", "decisionRef", "qualification"]);
+const CANONICAL_LANE_CLARITY_STATE_KEYS = new Set(["phase", "freshness", "evidenceFreshness"]);
+const CANONICAL_LANE_CLARITY_NEXT_GATE_KEYS = new Set(["summary", "nextSafeAction"]);
+const CANONICAL_LANE_CLARITY_CRITERION_KEYS = new Set(["criterionId", "summary", "disposition", "evidenceRefs"]);
+
+/** Validate the compact Lane Clarity client DTO independently from the V0 projection schema. */
+export function isDashboardCanonicalManagerLaneClarity(value: unknown): value is DashboardCanonicalManagerLaneClarityV1 {
+  if (!hasOnlyKeys(value, CANONICAL_LANE_CLARITY_KEYS)) return false;
+  const clarity = value as Record<string, unknown>;
+  if (!hasOnlyKeys(clarity.goal, CANONICAL_LANE_CLARITY_GOAL_KEYS) || !hasOnlyKeys(clarity.posture, CANONICAL_LANE_CLARITY_POSTURE_KEYS)
+    || !hasOnlyKeys(clarity.canonicalState, CANONICAL_LANE_CLARITY_STATE_KEYS) || !hasOnlyKeys(clarity.nextGate, CANONICAL_LANE_CLARITY_NEXT_GATE_KEYS)
+    || !Array.isArray(clarity.criteria) || clarity.criteria.length > 24) return false;
+  const goal = clarity.goal as Record<string, unknown>;
+  const posture = clarity.posture as Record<string, unknown>;
+  const canonicalState = clarity.canonicalState as Record<string, unknown>;
+  const nextGate = clarity.nextGate as Record<string, unknown>;
+  const assessed = posture.state === "on_scope" || posture.state === "pivot_required";
+  return isSafeCanonicalLaneClarityText(goal.summary)
+    && isSafeCanonicalLaneClarityRef(goal.sourceRef)
+    && (posture.state === "on_scope" || posture.state === "pivot_required" || posture.state === "not_assessed")
+    && isSafeCanonicalLaneClarityText(posture.reason)
+    && isSafeCanonicalLaneClarityText(posture.nextSafeAction)
+    && (posture.decisionRef === null || isSafeCanonicalLaneClarityRef(posture.decisionRef))
+    && (posture.qualification === null || (typeof posture.qualification === "string" && CANONICAL_LANE_CLARITY_QUALIFICATIONS.has(posture.qualification)))
+    && (assessed ? clarity.criteria.length > 0 : true)
+    && (!assessed || (canonicalState.freshness === "fresh" && canonicalState.evidenceFreshness === "fresh"))
+    && (posture.state === "pivot_required"
+      ? (typeof posture.decisionRef === "string" && typeof posture.qualification === "string")
+      : (posture.decisionRef === null && posture.qualification === null))
+    && typeof canonicalState.phase === "string" && CANONICAL_LANE_CLARITY_PHASES.has(canonicalState.phase)
+    && typeof canonicalState.freshness === "string" && CANONICAL_LANE_CLARITY_FRESHNESS.has(canonicalState.freshness)
+    && typeof canonicalState.evidenceFreshness === "string" && CANONICAL_LANE_CLARITY_EVIDENCE_FRESHNESS.has(canonicalState.evidenceFreshness)
+    && isSafeCanonicalLaneClarityText(nextGate.summary)
+    && isSafeCanonicalLaneClarityText(nextGate.nextSafeAction)
+    && clarity.criteria.every(isDashboardCanonicalLaneClarityCriterion);
+}
+
+function isDashboardCanonicalLaneClarityCriterion(value: unknown): boolean {
+  if (!hasOnlyKeys(value, CANONICAL_LANE_CLARITY_CRITERION_KEYS)) return false;
+  const criterion = value as Record<string, unknown>;
+  return isSafeCanonicalLaneClarityRef(criterion.criterionId)
+    && isSafeCanonicalLaneClarityText(criterion.summary)
+    && typeof criterion.disposition === "string" && CANONICAL_LANE_CLARITY_DISPOSITIONS.has(criterion.disposition)
+    && Array.isArray(criterion.evidenceRefs) && criterion.evidenceRefs.length > 0 && criterion.evidenceRefs.length <= 20
+    && criterion.evidenceRefs.every(isSafeCanonicalLaneClarityRef);
+}
+
+function isSafeCanonicalLaneClarityText(value: unknown): value is string {
+  return typeof value === "string"
+    && value.trim() === value
+    && value.length > 0
+    && value.length <= 500
+    && !LANE_CLARITY_CONTROL_CHARACTER_RE.test(value)
+    && !UNSAFE_LIFECYCLE_TEXT_RE.test(value)
+    && !UNSAFE_LANE_CLARITY_TEXT_RE.test(value)
+    && !TOKEN_LIKE_LANE_CLARITY_VALUE_RE.test(value)
+    && !LANE_CLARITY_PEM_OR_HIGH_ENTROPY_RE.test(value);
+}
+
+function isSafeCanonicalLaneClarityRef(value: unknown): value is string {
+  return typeof value === "string"
+    && value.trim() === value
+    && value.length > 0
+    && value.length <= 255
+    && !LANE_CLARITY_CONTROL_CHARACTER_RE.test(value)
+    && !UNSAFE_LIFECYCLE_TEXT_RE.test(value)
+    // References use the supervisor's metadata-reference contract, not the
+    // stricter free-text contract. For example, requirement:token-rotation is
+    // an opaque semantic ref, not credential material.
+    && (!TOKEN_LIKE_LANE_CLARITY_VALUE_RE.test(value) || MANAGER_SOURCE_LANE_CLARITY_REF_RE.test(value))
+    && !LANE_CLARITY_PEM_OR_HIGH_ENTROPY_RE.test(value)
+    && (!value.toLowerCase().startsWith("manager-source-") || MANAGER_SOURCE_LANE_CLARITY_REF_RE.test(value))
+    && !value.toLowerCase().startsWith("fixture:")
+    && !value.toLowerCase().startsWith("demo:");
 }
 
 const CANONICAL_OPERATIONAL_WORK_PACKET_KEYS = new Set([

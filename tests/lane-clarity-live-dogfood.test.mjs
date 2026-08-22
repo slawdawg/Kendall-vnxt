@@ -11,7 +11,7 @@ test("live Lane Clarity dogfood runner keeps one normal manager cycle and real c
     "runManagerRunLoop",
     "laneClaritySupervisorUrl",
     "lane-clarity-handoffs",
-    "/pipeline-control-plane/projection",
+    "/pipeline-control-plane/canonical-operational-projection",
     "activeManagerLaneClarity",
     "chromium",
     "webkit",
@@ -20,6 +20,9 @@ test("live Lane Clarity dogfood runner keeps one normal manager cycle and real c
   ]) {
     assert.match(source, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.doesNotMatch(source, /pipeline-control-plane\/projection/);
+  assert.match(source, /assert\.equal\(projection\.schemaVersion, "dashboard-canonical-operational-projection\/v1"\)/);
+  assert.match(source, /assert\.equal\(staleProjection\.schemaVersion, "dashboard-canonical-operational-projection\/v1"\)/);
   assert.match(source, /dashboardPort\s*=\s*3102/);
   assert.doesNotMatch(source, /localhost:3001|localhost:3002/);
   assert.doesNotMatch(source, /kendallLog/);

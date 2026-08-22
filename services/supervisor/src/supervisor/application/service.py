@@ -490,6 +490,7 @@ from supervisor.api.schemas import (
     PipelineEpic25EvidenceChainV1View,
     PipelineDashboardProjectionV0View,
     PipelineDashboardWorkPacketV0View,
+    DashboardCanonicalManagerLaneClarityV1View,
     DashboardCanonicalOperationalProjectionV1View,
     DashboardCanonicalOperationalWorkPacketV1View,
     DashboardCanonicalOperationalSelectedPacketDetailV1View,
@@ -9687,7 +9688,17 @@ class SupervisorService:
                 for detail in projection.selectedPacketDetails
             ],
             managerSummary=projection.managerSummary,
-            activeManagerLaneClarity=projection.activeManagerLaneClarity,
+            activeManagerLaneClarity=(
+                DashboardCanonicalManagerLaneClarityV1View(
+                    goal=projection.activeManagerLaneClarity.goal,
+                    criteria=list(projection.activeManagerLaneClarity.criteria),
+                    canonicalState=projection.activeManagerLaneClarity.canonicalState,
+                    nextGate=projection.activeManagerLaneClarity.nextGate,
+                    posture=projection.activeManagerLaneClarity.posture,
+                )
+                if projection.activeManagerLaneClarity is not None
+                else None
+            ),
             coordinationHealth=projection.coordinationHealth,
             workerSummary=projection.workerSummary,
             reliabilityProblems=list(projection.reliabilityProblems),

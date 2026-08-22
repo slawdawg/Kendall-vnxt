@@ -41,13 +41,14 @@ On success, the supervisor exact receipt and its active projection have one
 matching run, watermark, cursor, and Lane Clarity record. The rendered card
 shows **Lane Clarity**, the source goal, criterion evidence, and **On scope**.
 
-The harness also submits a stale summary to a fresh disposable supervisor. It
-must retain a local `coherent_lane_clarity_unavailable` receipt, return
+The harness reads the versioned canonical operational projection, then submits
+a stale summary to a fresh disposable supervisor. It must retain a local
+`coherent_lane_clarity_unavailable` receipt, return
 `activeManagerLaneClarity: null`, and render no Lane Clarity card. That absent
 card is fail-closed truth, never a browser reconstruction or fixture fallback.
 
 If the card is absent unexpectedly, inspect the manager cycle's bounded
-`laneClarityHandoff` receipt and the supervisor projection. Correct only the
+`laneClarityHandoff` receipt and the canonical supervisor projection. Correct only the
 explicit loopback configuration or the upstream current canonical summary, then
 run the next normal manager cycle. Do not edit the supervisor database, invoke
 a parallel runner, add a dashboard control, or use a provider.

@@ -26,6 +26,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
   const socketPath = join(directory, "supervisor.sock");
   let supervisor;
   const forwarded = [];
+  let canonicalProjectionOverrides = null;
   let proxy;
   let dashboard;
   try {
@@ -37,7 +38,7 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
       if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1" || request.url === "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1" } })); return; }
       if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1", revision: 3 } })); return; }
       if (request.url === "/pipeline-control-plane/projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
-      if (request.url === "/pipeline-control-plane/canonical-operational-projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
+      if (request.url === "/pipeline-control-plane/canonical-operational-projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions(canonicalProjectionOverrides || {}) })); return; }
       if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
       if (request.url === "/operator-views?scope=queue") { forwarded.push(request.url); response.end(JSON.stringify({ data: [] })); return; }
@@ -73,6 +74,27 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body), /python-only extension/i);
     assert.equal(canonicalOperationalProjection.body.data.selectedPacketDetails[0].actionResultsV1, undefined);
     assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body), /raw action result history/i);
+    assert.deepEqual(canonicalOperationalProjection.body.data.activeManagerLaneClarity, {
+      goal: { summary: "Keep the lane on scope.", sourceRef: "requirement:token-rotation" },
+      posture: { state: "on_scope", reason: "Fresh supervisor evidence is available.", nextSafeAction: "verify_pipeline_render", decisionRef: null, qualification: null },
+      canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh" },
+      nextGate: { summary: "Verify the canonical dashboard read.", nextSafeAction: "verify_pipeline_render" },
+      criteria: [{ criterionId: "criterion:token-rotation", summary: "Token rotation is tracked as a requirement.", disposition: "met", evidenceRefs: ["evidence:token-rotation"] }],
+    });
+    assert.doesNotMatch(JSON.stringify(canonicalOperationalProjection.body.data.activeManagerLaneClarity), /rawProviderResponse|python-only extension/i);
+    assert.equal(canonicalOperationalProjection.body.data.activeManagerLaneClarity.goal.sourceRef, "requirement:token-rotation");
+    for (const malformedClarity of [
+      ["raw provider payload must not cross"],
+      { goal: { summary: "Keep the lane on scope.", sourceRef: "requirement:lane-clarity" }, criteria: ["raw provider payload must not cross"] },
+      { goal: "raw provider payload must not cross", criteria: [] },
+    ]) {
+      canonicalProjectionOverrides = { activeManagerLaneClarity: malformedClarity };
+      const malformed = await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { headers: { cookie: "session=ok" } });
+      assert.equal(malformed.status, 200);
+      assert.equal(malformed.body.data.activeManagerLaneClarity, null);
+      assert.doesNotMatch(JSON.stringify(malformed.body), /raw provider payload must not cross/i);
+    }
+    canonicalProjectionOverrides = null;
     const malformedCanonicalLookup = await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/packet/extra", { headers: { cookie: "session=ok" } });
     assert.equal(malformedCanonicalLookup.status, 404);
     const canonicalMutation = await request(port, "/api/supervisor/pipeline-control-plane/work-packets", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
@@ -227,7 +249,7 @@ function canonicalPacketWithRawBrowserUnsafeFields() {
   };
 }
 
-function projectionWithRawCanonicalExtensions() {
+function projectionWithRawCanonicalExtensions(overrides = {}) {
   return {
     rawProviderResponse: "python-only extension",
     workPackets: [{
@@ -244,6 +266,15 @@ function projectionWithRawCanonicalExtensions() {
       productModeMapping: { extra: "python-only extension" },
       rawProviderResponse: "python-only extension",
     }],
+    activeManagerLaneClarity: {
+      goal: { summary: "Keep the lane on scope.", sourceRef: "requirement:token-rotation", rawProviderResponse: "python-only extension" },
+      posture: { state: "on_scope", reason: "Fresh supervisor evidence is available.", nextSafeAction: "verify_pipeline_render", decisionRef: null, qualification: null, rawProviderResponse: "python-only extension" },
+      canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh", rawProviderResponse: "python-only extension" },
+      nextGate: { summary: "Verify the canonical dashboard read.", nextSafeAction: "verify_pipeline_render", rawProviderResponse: "python-only extension" },
+      criteria: [{ criterionId: "criterion:token-rotation", summary: "Token rotation is tracked as a requirement.", disposition: "met", evidenceRefs: ["evidence:token-rotation"], rawProviderResponse: "python-only extension" }],
+      rawProviderResponse: "python-only extension",
+    },
+    ...overrides,
   };
 }
 

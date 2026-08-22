@@ -118,6 +118,47 @@ test("pipeline loader exposes only the client-safe canonical lifecycle while nam
   assert.equal(detailed.packet?.packetId, detailed.canonicalPacket?.presentation.packetId);
 });
 
+test("pipeline loader reconstructs client-safe Lane Clarity rather than applying the generic projection scrubber", async () => {
+  const packet = authoritativeWorkPacket();
+  const projection = runtimeProjection([packet.packetId], {
+    activeManagerLaneClarity: {
+      goal: { summary: "Render the canonical Lane Clarity card.", sourceRef: "requirement:lane-clarity" },
+      posture: { state: "on_scope", reason: "Current manager receipt is coherent.", nextSafeAction: "verify_pipeline_render", decisionRef: null, qualification: null },
+      canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh" },
+      nextGate: { summary: "Verify the pipeline card.", nextSafeAction: "verify_pipeline_render" },
+      criteria: [{ criterionId: "criterion:lane-clarity", summary: "Receipt is current.", disposition: "met", evidenceRefs: ["evidence:lane-clarity"] }],
+    },
+  });
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getDashboardCanonicalOperationalProjection: async () => projection,
+    getWorkPackets: async () => [packet],
+  });
+
+  const result = await loader.__canonicalListForTest();
+  const clarity = result.operationalProjection?.activeManagerLaneClarity;
+  assert.deepEqual(JSON.parse(JSON.stringify(clarity)), {
+    goal: { summary: "Render the canonical Lane Clarity card.", sourceRef: "requirement:lane-clarity" },
+    posture: { state: "on_scope", reason: "Current manager receipt is coherent.", nextSafeAction: "verify_pipeline_render", decisionRef: null, qualification: null },
+    canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh" },
+    nextGate: { summary: "Verify the pipeline card.", nextSafeAction: "verify_pipeline_render" },
+    criteria: [{ criterionId: "criterion:lane-clarity", summary: "Receipt is current.", disposition: "met", evidenceRefs: ["evidence:lane-clarity"] }],
+  });
+
+  for (const [label, malformedClarity] of [
+    ["unknown root field", { ...projection.activeManagerLaneClarity, rawProviderResponse: "must-not-reach-client" }],
+    ["structured known text field", { ...projection.activeManagerLaneClarity, goal: { ...projection.activeManagerLaneClarity.goal, summary: { rawProviderResponse: "must-not-reach-client" } } }],
+    ["stale assessed posture", { ...projection.activeManagerLaneClarity, canonicalState: { ...projection.activeManagerLaneClarity.canonicalState, freshness: "stale" } }],
+  ]) {
+    const malformedLoader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId], { activeManagerLaneClarity: malformedClarity }),
+      getWorkPackets: async () => [packet],
+      isDashboardCanonicalManagerLaneClarity: () => false,
+    });
+    const malformed = await malformedLoader.__canonicalListForTest();
+    assert.equal(malformed.operationalProjection?.activeManagerLaneClarity, null, label);
+  }
+});
+
 test("normal loader and packet-detail route keep the canonical DTO until their named compatibility boundaries", async () => {
   const [loaderSource, detailRouteSource, detailComponentSource] = await Promise.all([
     readFile(loaderPath, "utf8"),
@@ -1261,6 +1302,13 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
   const projection = runtimeProjection(["manager-source-authoritative-only"], {
     schemaVersion: "dashboard-canonical-operational-projection/v1",
   });
+  projection.activeManagerLaneClarity = {
+    goal: { summary: "Render the canonical Lane Clarity card.", sourceRef: "requirement:lane-clarity" },
+    posture: { state: "on_scope", reason: "Current manager receipt is coherent.", nextSafeAction: "verify_pipeline_render", decisionRef: null, qualification: null },
+    canonicalState: { phase: "running", freshness: "fresh", evidenceFreshness: "fresh" },
+    nextGate: { summary: "Verify the pipeline card.", nextSafeAction: "verify_pipeline_render" },
+    criteria: [{ criterionId: "criterion:lane-clarity", summary: "Receipt is current.", disposition: "met", evidenceRefs: ["evidence:lane-clarity"] }],
+  };
   const calls = [];
   const context = {
     exports: {}, module: { exports: {} }, process: { env: {} },
@@ -1286,6 +1334,19 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
   assert.equal(calls[0].options.timeoutMs, 10_000);
   assert.equal(calls[0].options.rejectServerLanAuth, true);
 
+  projection.activeManagerLaneClarity.goal.sourceRef = `manager-source-${"a".repeat(40)}`;
+  await assert.doesNotReject(() => context.module.exports.getDashboardCanonicalOperationalProjection());
+  projection.activeManagerLaneClarity.goal.sourceRef = `manager-source-${"A".repeat(40)}`;
+  await assert.rejects(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    /Invalid canonical operational projection payload/,
+  );
+  projection.activeManagerLaneClarity.goal.sourceRef = "requirement:lane-clarity";
+
+  projection.activeManagerLaneClarity.goal.sourceRef = "requirement:token-rotation";
+  await assert.doesNotReject(() => context.module.exports.getDashboardCanonicalOperationalProjection());
+  projection.activeManagerLaneClarity.goal.sourceRef = "requirement:lane-clarity";
+
   projection.workPackets[0].rawProviderResponse = "must not cross the canonical board boundary";
   await assert.rejects(
     () => context.module.exports.getDashboardCanonicalOperationalProjection(),
@@ -1297,6 +1358,32 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
     () => context.module.exports.getDashboardCanonicalOperationalProjection(),
     /Invalid canonical operational projection payload/,
   );
+  projection.workPackets[0].canonicalContract = null;
+  projection.activeManagerLaneClarity.goal.summary = { rawProviderResponse: "must not cross the canonical board boundary" };
+  await assert.rejects(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    /Invalid canonical operational projection payload/,
+  );
+  projection.activeManagerLaneClarity.goal.summary = "Render the canonical Lane Clarity card.";
+  projection.activeManagerLaneClarity.canonicalState.freshness = "stale";
+  await assert.rejects(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    /Invalid canonical operational projection payload/,
+  );
+  projection.activeManagerLaneClarity.canonicalState.freshness = "fresh";
+  for (const [label, value] of [
+    ["raw payload text", "rawPayload: must not cross the canonical board boundary"],
+    ["token-like text", "sk-proj-abcdefghi0123456789"],
+    ["whitespace", " Render the canonical Lane Clarity card."],
+    ["control character", "Render\ncanonical Lane Clarity card."],
+  ]) {
+    projection.activeManagerLaneClarity.goal.summary = value;
+    await assert.rejects(
+      () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+      /Invalid canonical operational projection payload/,
+      label,
+    );
+  }
 });
 
 test("dedicated runtime surfaces canonical list and detail 404s without legacy reads", async () => {
@@ -3246,6 +3333,7 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
   const supervisor = {
     applyPipelineOperationalAction: async () => { throw new Error("operational actions are outside this proof"); },
     issuePipelineOperationalApproval: async () => { throw new Error("operational approvals are outside this proof"); },
+    isDashboardCanonicalManagerLaneClarity: () => true,
     ...supervisorOverrides,
   };
   // Existing focused fixtures predate the canonical operational endpoint.

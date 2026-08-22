@@ -34,6 +34,14 @@ V0 packet renderer is isolated to the explicit demo route as
 `PacketDetailFixturePage`. The supervisor projection transport and its other
 explicitly inventoried V0 board values remain compatibility surfaces until
 their own replacement and readback proofs land.
+
+The disposable Lane Clarity dogfood proof now reads that same canonical
+operational boundary for its bounded `activeManagerLaneClarity` readback. It
+does not read `/pipeline-control-plane/projection`; its fresh/stale supervisor
+checks require the canonical V1 schema marker before accepting either the
+present or fail-closed-null clarity result. That canonical nested DTO carries
+only display-safe goal, criteria, state, gate, and posture fields—not the V0
+handoff envelope identities or raw-retention markers.
 Authenticated LAN packet detail now uses the same canonical-boundary posture:
 its private UDS mediator emits the fixed
 `dashboard-canonical-lan-packet-detail/v1` envelope, with a lifecycle-derived
