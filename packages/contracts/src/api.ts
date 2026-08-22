@@ -107,17 +107,6 @@ export interface CandidateWorkApiEnvelope {
   meta?: Record<string, string | number | boolean | null> | null;
 }
 
-export interface WorkPacketLearnFollowUpCandidateWorkPayload {
-  triggerKind: "completed_packet" | "failed_attempt" | "rejected_approval" | "quality_failure" | "operator_feedback";
-  title: string;
-  requestedOutcome: string;
-  evidenceRefs: NonEmptyArray<string>;
-  operatorFeedback?: string | null;
-  priority?: CandidateWorkPriority;
-  riskLevel?: RiskLevel;
-  sortOrder?: number;
-}
-
 export interface CandidateWorkPromotionView {
   candidateWork: CandidateWorkView;
   workItem: WorkItemView;

@@ -278,7 +278,7 @@ function projectionWithRawCanonicalExtensions(overrides = {}) {
   };
 }
 
-test("authenticated POST forwards the follow-up subresource exactly and rejects unknown targets", async () => {
+test("retired follow-up subresource is never forwarded", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kendall-supervisor-proxy-follow-up-"));
   const socketPath = join(directory, "supervisor.sock");
   const forwarded = [];
@@ -287,19 +287,13 @@ test("authenticated POST forwards the follow-up subresource exactly and rejects 
   let dashboard;
   try {
     supervisor = http.createServer((request, response) => {
-      const chunks = [];
-      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("data", () => {});
       request.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
         if (request.url === "/auth/session") {
           response.writeHead(request.headers.cookie === "session=ok" ? 200 : 401).end(JSON.stringify({ authenticated: true, role: "operator" }));
           return;
         }
-        forwarded.push({ method: request.method, url: request.url, body, origin: request.headers.origin || null, csrf: request.headers["x-csrf-token"] || null });
-        if (request.url === "/work-packets/packet-1/learn-follow-up-candidate-work") {
-          response.end(JSON.stringify({ data: { candidateWorkId: "candidate-1" } }));
-          return;
-        }
+        forwarded.push({ method: request.method, url: request.url });
         response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
       });
     });
@@ -310,18 +304,13 @@ test("authenticated POST forwards the follow-up subresource exactly and rejects 
     proxy = createSupervisorProxy({ supervisorUdsPath: socketPath, expectedOrigin: `https://127.0.0.1:${port}` });
     const postBody = JSON.stringify({ source: "dashboard" });
 
-    const unauthenticatedMutation = await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", body: postBody, headers: { origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok" } });
-    assert.equal(unauthenticatedMutation.status, 401);
-    assert.deepEqual(forwarded, []);
-
     const mutation = await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", body: postBody, headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok", "content-type": "application/json" } });
-    assert.equal(mutation.status, 200);
-    assert.deepEqual(mutation.body.data, { candidateWorkId: "candidate-1" });
-    assert.deepEqual(forwarded, [{ method: "POST", url: "/work-packets/packet-1/learn-follow-up-candidate-work", body: postBody, origin: `https://127.0.0.1:${port}`, csrf: "csrf-ok" }]);
+    assert.equal(mutation.status, 404);
+    assert.deepEqual(forwarded, []);
 
     const unknown = await request(port, "/api/supervisor/work-packets/packet-1/unknown", { method: "POST", body: postBody, headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}`, "x-csrf-token": "csrf-ok", "content-type": "application/json" } });
     assert.equal(unknown.status, 404);
-    assert.deepEqual(forwarded, [{ method: "POST", url: "/work-packets/packet-1/learn-follow-up-candidate-work", body: postBody, origin: `https://127.0.0.1:${port}`, csrf: "csrf-ok" }]);
+    assert.deepEqual(forwarded, []);
 
   } finally {
     if (dashboard?.listening) await close(dashboard);
@@ -361,7 +350,7 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     assert.equal((await request(port, "/api/supervisor/work-packets/packet%252Fescape", { headers })).status, 400);
     assert.equal((await request(port, "/api/supervisor/work-packets/%252e%252e", { headers })).status, 400);
     assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/%2561i-draft", { method: "POST", headers: { cookie: "session=ok", origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" } })).status, 400);
-    assert.equal((await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", headers: { ...headers, origin: "https://dashboard.test" } })).status, 405);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet-1/learn-follow-up-candidate-work", { method: "POST", headers: { ...headers, origin: "https://dashboard.test" } })).status, 404);
     assert.deepEqual(forwarded, [
       { method: "GET", url: "/pipeline-control-plane/projection" },
       { method: "GET", url: "/pipeline-control-plane/canonical-operational-projection" },

@@ -475,39 +475,6 @@ class CandidateWorkObsidianMetadataImportRequest(BaseModel):
     sortOrder: int = 0
 
 
-class WorkPacketLearnFollowUpCandidateWorkRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    triggerKind: Literal["completed_packet", "failed_attempt", "rejected_approval", "quality_failure", "operator_feedback"]
-    title: str = Field(min_length=1, max_length=200)
-    requestedOutcome: str = Field(min_length=1, max_length=1000)
-    evidenceRefs: list[str] = Field(min_length=1, max_length=20)
-    operatorFeedback: str | None = Field(default=None, max_length=2000)
-    priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
-    riskLevel: RiskLevel = RiskLevel.LOW
-    sortOrder: int = 0
-
-    @field_validator("title", "requestedOutcome", "operatorFeedback", mode="before")
-    @classmethod
-    def strip_optional_text(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip()
-        return value
-
-    @field_validator("evidenceRefs", mode="before")
-    @classmethod
-    def normalize_evidence_refs(cls, value: object) -> object:
-        if not isinstance(value, list):
-            return value
-        normalized: list[str] = []
-        for ref in value:
-            if isinstance(ref, str):
-                trimmed = ref.strip()
-                if trimmed and trimmed not in normalized:
-                    normalized.append(trimmed[:256])
-        return normalized
-
-
 class WorkItemActionRequest(BaseModel):
     action: WorkflowAction
     note: str | None = None

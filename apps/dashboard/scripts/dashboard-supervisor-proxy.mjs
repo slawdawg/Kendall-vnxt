@@ -47,7 +47,7 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/supervisor\/runtime-evidence-review-report$/,
   /^\/events$/,
   /^\/audit-events$/,
-  /^\/work-packets(?:\/[A-Za-z0-9._:%-]+(?:\/learn-follow-up-candidate-work)?)?$/,
+  /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
   /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,

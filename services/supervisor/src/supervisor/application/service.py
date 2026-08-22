@@ -637,7 +637,6 @@ from supervisor.api.schemas import (
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketLearnDecisionRecordV0View,
-    WorkPacketLearnFollowUpCandidateWorkRequest,
     WorkPacketLearnFollowUpCandidateV0View,
     WorkPacketLearnOutcomeV0View,
     WorkPacketLearnRefillHousekeepingV0View,
@@ -10013,123 +10012,6 @@ class SupervisorService:
                 f"Source is superseded by {planning_authority['superseded_by']}."
                 if superseded
                 else None
-            ),
-        )
-
-    async def create_work_packet_learn_follow_up_candidate_work(
-        self,
-        session: AsyncSession,
-        packet_id: str,
-        payload: WorkPacketLearnFollowUpCandidateWorkRequest,
-    ) -> CandidateWork | None:
-        authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
-        packet = None if authoritative_packet is not None else await self.get_work_packet(session, packet_id)
-        if packet is None and authoritative_packet is None:
-            return None
-
-        safe_evidence_refs = list(dict.fromkeys(ref.strip()[:256] for ref in payload.evidenceRefs if isinstance(ref, str) and ref.strip()))[:20]
-        if not safe_evidence_refs:
-            raise ValueError("At least one non-empty evidence ref is required for Learn follow-up Candidate Work.")
-
-        if packet is not None:
-            source_packet_ref = packet.packetId
-            source_packet_stage = packet.currentStage
-            source_packet_status = packet.status
-            source_packet_owner = packet.currentOwner
-            source_packet_title = packet.title
-            source_ref_type = "work_item" if source_packet_ref.startswith("work_item:") else "candidate_work"
-            source_path = None
-        else:
-            source_packet_ref = authoritative_packet.packetId
-            source_packet_stage = authoritative_packet.currentStage
-            source_packet_status = authoritative_packet.status
-            source_packet_owner = "kendall"
-            source_packet_title = authoritative_packet.title
-            source_ref_type = "manual"
-            source_ref = authoritative_packet.sourceRef
-            source_path = source_ref.pathOrUrl if isinstance(getattr(source_ref, "pathOrUrl", None), str) else None
-        source_freshness = "fresh"
-        source_access_state = "allowed"
-        source_blocked_reason = None
-        if source_path:
-            planning_authority = self._planning_source_authority(source_path)
-            if planning_authority["status"] == "superseded":
-                source_freshness = "stale"
-                source_access_state = "blocked"
-                source_blocked_reason = (
-                    f"Source PRD is superseded by {planning_authority['superseded_by']}; "
-                    "inspect source before creating downstream follow-up work."
-                )
-                source_path = None
-
-        work_packet_source_refs = [
-            {
-                "refId": source_packet_ref,
-                "sourceType": source_ref_type,
-                "label": source_packet_title,
-                "pathOrUrl": source_path,
-                "freshness": source_freshness,
-                "accessState": source_access_state,
-                "canonical": True,
-                "summaryOnly": True,
-                "blockedReason": source_blocked_reason,
-            }
-        ]
-        operator_feedback_length = len(payload.operatorFeedback) if payload.operatorFeedback else 0
-        operator_feedback_summary = (
-            "Operator feedback was provided and redacted before metadata retention."
-            if payload.operatorFeedback
-            else None
-        )
-        import_metadata = {
-            "learnTriggerKind": payload.triggerKind,
-            "sourcePacketId": source_packet_ref,
-            "sourcePacketStage": source_packet_stage,
-            "sourcePacketStatus": source_packet_status,
-            "sourcePacketOwner": source_packet_owner,
-            "sourcePacketTitle": source_packet_title,
-            "operatorFeedbackRetained": False,
-            "operatorFeedbackSummary": operator_feedback_summary,
-            "operatorFeedbackLength": operator_feedback_length,
-            "evidenceRefs": safe_evidence_refs,
-            "workPacketSourceRefs": work_packet_source_refs,
-            "retentionPolicy": "metadata_only_no_raw_packet_or_provider_payload",
-            "rawPayloadRetained": False,
-            "providerCallsAllowed": False,
-            "sourceMutationAllowed": False,
-            "canonicalMutationAllowed": False,
-            "notes": [
-                "Learn-stage follow-up created as proposed Candidate Work.",
-                "Review and approve before promotion into active work.",
-            ],
-            "userFacingSourceSummary": {
-                "label": "Learn-stage follow-up",
-                "summary": f"Follow-up Candidate Work created from {source_packet_ref} with metadata-only evidence.",
-                "sourceType": "supervisor",
-                "sourceRef": source_packet_ref,
-                "sourceArtifactPath": f"learn-follow-up:{source_packet_ref}",
-                "freshness": "fresh",
-                "accessState": "allowed",
-                "retentionPolicy": "metadata_only_no_raw_packet_or_provider_payload",
-                "boundarySummary": "No raw prompts, completions, provider payloads, secrets, or source copies retained.",
-                "evidenceRefs": safe_evidence_refs,
-                "approvalStatus": "proposed",
-                "approvedBy": "not_approved",
-                "approvedAt": "not_approved",
-            },
-        }
-        return await self.create_candidate_work(
-            session,
-            CandidateWorkCreate(
-                title=payload.title,
-                requestedOutcome=payload.requestedOutcome,
-                source=CandidateWorkSource.SUPERVISOR,
-                sourceArtifactPath=f"learn-follow-up:{source_packet_ref}",
-                sourceArtifactType=CandidateWorkArtifactType.MANUAL_NOTE,
-                riskLevel=payload.riskLevel,
-                priority=payload.priority,
-                sortOrder=payload.sortOrder,
-                importMetadata=import_metadata,
             ),
         )
 

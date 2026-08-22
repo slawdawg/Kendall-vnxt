@@ -717,219 +717,49 @@ def _create_routing_work_item(client: TestClient) -> str:
     return created.json()["data"]["id"]
 
 
-def test_learn_follow_up_creation_creates_traceable_candidate_work_without_source_mutation(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "learn-follow-up-candidate-work.db").as_posix()
+def test_retired_learn_follow_up_route_rejects_writes_and_preserves_legacy_candidate_metadata_after_restart(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "retired-learn-follow-up.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
 
     _reset_supervisor_modules()
-
     from supervisor.api.main import app
 
+    legacy_metadata = {
+        "learnTriggerKind": "quality_failure",
+        "sourcePacketId": "work_item:legacy-work-item",
+        "evidenceRefs": ["work_item:legacy-work-item", "quality-gate:unit-tests:failed"],
+        "retentionPolicy": "metadata_only_no_raw_packet_or_provider_payload",
+        "rawPayloadRetained": False,
+    }
+    payload = {
+        "title": "Historical Learn follow-up",
+        "requestedOutcome": "Retain the pre-retirement candidate for operator review.",
+        "source": "supervisor",
+        "sourceArtifactPath": "learn-follow-up:work_item:legacy-work-item",
+        "sourceArtifactType": "manual_note",
+        "riskLevel": "medium",
+        "priority": "normal",
+        "importMetadata": legacy_metadata,
+    }
     with TestClient(app) as client:
-        work_item_id = _create_routing_work_item(client)
-        before_packet = client.get(f"/work-packets/work_item:{work_item_id}").json()["data"]
-        response = client.post(
-            f"/work-packets/work_item:{work_item_id}/learn-follow-up-candidate-work",
-            json={
-                "triggerKind": "quality_failure",
-                "title": " Follow up failed quality gate ",
-                "requestedOutcome": " Create a small remediation story from failed quality gate evidence. ",
-                "evidenceRefs": [
-                    f" work_item:{work_item_id} ",
-                    "quality-gate:unit-tests:failed",
-                    "quality-gate:unit-tests:failed",
-                ],
-                "operatorFeedback": "Unit test failure should become future intake rather than chat-only context.",
-            },
-        )
-        after_packet = client.get(f"/work-packets/work_item:{work_item_id}").json()["data"]
-        candidates = client.get("/candidate-work").json()["data"]
+        created = client.post("/candidate-work", json=payload)
+        retired = client.post("/work-packets/work_item:legacy-work-item/learn-follow-up-candidate-work", json={})
 
-    assert response.status_code == 200
-    assert before_packet == after_packet
-    candidate = response.json()["data"]
-    assert candidate["status"] == "proposed"
-    assert candidate["source"] == "supervisor"
-    assert candidate["sourceArtifactType"] == "manual_note"
-    assert candidate["sourceArtifactPath"] == f"learn-follow-up:work_item:{work_item_id}"
-    assert candidate["importMetadata"]["learnTriggerKind"] == "quality_failure"
-    assert candidate["importMetadata"]["sourcePacketId"] == f"work_item:{work_item_id}"
-    assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_packet_or_provider_payload"
-    assert candidate["importMetadata"]["rawPayloadRetained"] is False
-    assert candidate["importMetadata"]["providerCallsAllowed"] is False
-    assert candidate["importMetadata"]["sourceMutationAllowed"] is False
-    assert candidate["importMetadata"]["canonicalMutationAllowed"] is False
-    assert "operatorFeedback" not in candidate["importMetadata"]
-    assert candidate["importMetadata"]["operatorFeedbackRetained"] is False
-    assert candidate["importMetadata"]["operatorFeedbackSummary"] == "Operator feedback was provided and redacted before metadata retention."
-    assert candidate["importMetadata"]["operatorFeedbackLength"] == len("Unit test failure should become future intake rather than chat-only context.")
-    assert candidate["importMetadata"]["evidenceRefs"] == [
-        f"work_item:{work_item_id}",
-        "quality-gate:unit-tests:failed",
-    ]
-    assert candidate["importMetadata"]["workPacketSourceRefs"][0]["refId"] == f"work_item:{work_item_id}"
-    assert candidate["sourceSummary"]["sourceRef"] == f"work_item:{work_item_id}"
-    assert candidate["sourceSummary"]["evidenceRefs"] == candidate["importMetadata"]["evidenceRefs"]
-    assert any(row["id"] == candidate["id"] for row in candidates)
-
-
-def test_learn_follow_up_creation_accepts_authoritative_work_packet_ids(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "learn-follow-up-authoritative-packet.db").as_posix()
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    assert created.status_code == 200
+    assert retired.status_code == 404
+    candidate_id = created.json()["data"]["id"]
 
     _reset_supervisor_modules()
+    from supervisor.api.main import app as restarted_app
 
-    from supervisor.api.main import app
+    with TestClient(restarted_app) as client:
+        candidates = client.get("/candidate-work")
 
-    with TestClient(app) as client:
-        create_packet_response = client.post(
-            "/pipeline-control-plane/work-packets",
-            json={
-                "packetId": "packet-authoritative-learn-follow-up",
-                "title": "Authoritative projection packet",
-                "initialStage": "learn",
-                "status": "complete",
-                "truthLabel": "source_owned",
-                "sourceRef": {
-                    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
-                    "sourceType": "prd",
-                    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
-                    "title": "Authoritative pipeline execution-loop PRD",
-                },
-                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
-                "idempotencyKey": "learn-follow-up-authoritative-create",
-                "payloadSummary": "Authoritative packet available for Learn follow-up.",
-                "evidenceRefs": ["packet-proof:authoritative"],
-            },
-        )
-        assert create_packet_response.status_code == 200
-
-        response = client.post(
-            "/work-packets/packet-authoritative-learn-follow-up/learn-follow-up-candidate-work",
-            json={
-                "triggerKind": "completed_packet",
-                "title": "Follow up authoritative packet",
-                "requestedOutcome": "Create follow-up work from an authoritative packet.",
-                "evidenceRefs": ["packet-proof:authoritative", "operator-note:follow-up"],
-            },
-        )
-
-    assert response.status_code == 200
-    candidate = response.json()["data"]
-    assert candidate["status"] == "proposed"
-    assert candidate["source"] == "supervisor"
-    assert candidate["sourceArtifactPath"] == "learn-follow-up:packet-authoritative-learn-follow-up"
-    assert candidate["importMetadata"]["sourcePacketId"] == "packet-authoritative-learn-follow-up"
-    assert candidate["importMetadata"]["sourcePacketStage"] == "learn"
-    assert candidate["importMetadata"]["sourcePacketStatus"] == "complete"
-    assert candidate["importMetadata"]["sourcePacketOwner"] == "kendall"
-    source_ref = candidate["importMetadata"]["workPacketSourceRefs"][0]
-    assert source_ref["refId"] == "packet-authoritative-learn-follow-up"
-    assert source_ref["sourceType"] == "manual"
-    assert source_ref["pathOrUrl"] == "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md"
-    assert source_ref["freshness"] == "fresh"
-    assert source_ref["accessState"] == "allowed"
-    assert candidate["sourceSummary"]["sourceRef"] == "packet-authoritative-learn-follow-up"
-
-
-def test_learn_follow_up_creation_marks_superseded_authoritative_packet_sources_stale(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "learn-follow-up-stale-authoritative-packet.db").as_posix()
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
-
-    _reset_supervisor_modules()
-
-    from supervisor.api.main import app
-
-    with TestClient(app) as client:
-        create_packet_response = client.post(
-            "/pipeline-control-plane/work-packets",
-            json={
-                "packetId": "packet-stale-authoritative-learn-follow-up",
-                "title": "Stale authoritative projection packet",
-                "initialStage": "learn",
-                "status": "complete",
-                "truthLabel": "source_owned",
-                "sourceRef": {
-                    "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
-                    "sourceType": "prd",
-                    "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-04-pipeline-execution-loop-reliability/prd.md",
-                    "title": "Authoritative pipeline execution-loop PRD",
-                },
-                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
-                "idempotencyKey": "learn-follow-up-stale-authoritative-create",
-                "payloadSummary": "Authoritative packet available for Learn follow-up.",
-                "evidenceRefs": ["packet-proof:authoritative"],
-            },
-        )
-        assert create_packet_response.status_code == 200
-
-        stale_source_ref = create_packet_response.json()["data"]["sourceRef"] | {
-            "refId": "prd:_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
-            "pathOrUrl": "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-07-01/prd.md",
-            "title": "Superseded PRD",
-        }
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                "update authoritative_work_packets set source_ref_json = ? where id = ?",
-                (json.dumps(stale_source_ref), "packet-stale-authoritative-learn-follow-up"),
-            )
-            conn.commit()
-
-        response = client.post(
-            "/work-packets/packet-stale-authoritative-learn-follow-up/learn-follow-up-candidate-work",
-            json={
-                "triggerKind": "completed_packet",
-                "title": "Follow up stale authoritative packet",
-                "requestedOutcome": "Create follow-up work with stale source metadata flagged.",
-                "evidenceRefs": ["packet-proof:authoritative", "operator-note:follow-up"],
-            },
-        )
-
-    assert response.status_code == 200
-    candidate = response.json()["data"]
-    source_ref = candidate["importMetadata"]["workPacketSourceRefs"][0]
-    assert source_ref["refId"] == "packet-stale-authoritative-learn-follow-up"
-    assert source_ref["freshness"] == "stale"
-    assert source_ref["accessState"] == "blocked"
-    assert source_ref["pathOrUrl"] is None
-    assert "superseded by" in source_ref["blockedReason"]
-
-
-def test_learn_follow_up_creation_rejects_blank_evidence_and_text(tmp_path, monkeypatch) -> None:
-    db_path = (tmp_path / "learn-follow-up-invalid.db").as_posix()
-    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
-
-    _reset_supervisor_modules()
-
-    from supervisor.api.main import app
-
-    with TestClient(app) as client:
-        work_item_id = _create_routing_work_item(client)
-        blank_evidence = client.post(
-            f"/work-packets/work_item:{work_item_id}/learn-follow-up-candidate-work",
-            json={
-                "triggerKind": "operator_feedback",
-                "title": "Follow up operator feedback",
-                "requestedOutcome": "Create a small follow-up from operator feedback.",
-                "evidenceRefs": ["  "],
-            },
-        )
-        blank_title = client.post(
-            f"/work-packets/work_item:{work_item_id}/learn-follow-up-candidate-work",
-            json={
-                "triggerKind": "operator_feedback",
-                "title": "   ",
-                "requestedOutcome": "Create a small follow-up from operator feedback.",
-                "evidenceRefs": [f"work_item:{work_item_id}"],
-            },
-        )
-
-    assert blank_evidence.status_code == 422
-    assert blank_title.status_code == 422
+    assert candidates.status_code == 200
+    restored = next(candidate for candidate in candidates.json()["data"] if candidate["id"] == candidate_id)
+    assert restored["sourceArtifactPath"] == "learn-follow-up:work_item:legacy-work-item"
+    assert restored["importMetadata"] == legacy_metadata
 
 
 def test_routing_preview_post_without_record_event_is_non_mutating(tmp_path, monkeypatch) -> None:

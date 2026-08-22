@@ -1,5 +1,5 @@
 from supervisor.api import main as main_module
-from supervisor.api.schemas import CandidateWorkApiEnvelope, CandidateWorkView, WorkItemApiEnvelope, WorkItemView
+from supervisor.api.schemas import WorkItemApiEnvelope, WorkItemView
 
 
 def _route(path: str):
@@ -13,8 +13,8 @@ def test_assignment_and_escalation_routes_use_work_item_envelope() -> None:
     assert WorkItemApiEnvelope.model_fields["data"].annotation is WorkItemView
 
 
-def test_follow_up_candidate_route_uses_candidate_work_envelope() -> None:
-    route = _route("/work-packets/{packet_id}/learn-follow-up-candidate-work")
-
-    assert route.response_model is CandidateWorkApiEnvelope
-    assert CandidateWorkApiEnvelope.model_fields["data"].annotation is CandidateWorkView
+def test_retired_follow_up_candidate_route_is_not_registered() -> None:
+    assert all(
+        getattr(route, "path", None) != "/work-packets/{packet_id}/learn-follow-up-candidate-work"
+        for route in main_module.app.routes
+    )
