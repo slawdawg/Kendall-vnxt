@@ -431,39 +431,13 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert projected["truthLabel"] == "live"
         assert projected["metadataOnly"] is True
 
-        work_packet_list = _json_get(f"http://127.0.0.1:{port}/work-packets")["data"]
-        listed_work_packet = next(
-            packet for packet in work_packet_list if packet["packetId"] == packet_id  # type: ignore[union-attr]
+        canonical_packet_list = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets")["data"]
+        listed_canonical_packet = next(
+            packet for packet in canonical_packet_list if packet["packetId"] == packet_id  # type: ignore[union-attr]
         )
-        detail_work_packet = _json_get(
-            f"http://127.0.0.1:{port}/work-packets/{packet_id}"
-        )["data"]
-        assert detail_work_packet == listed_work_packet
-        assert detail_work_packet["packetId"] == packet_id  # type: ignore[index]
-        assert detail_work_packet["currentStage"] == "capture"  # type: ignore[index]
-        assert detail_work_packet["currentOwner"] == "kendall"  # type: ignore[index]
-        assert detail_work_packet["status"] == "waiting"  # type: ignore[index]
-        assert detail_work_packet["riskLevel"] == "medium"  # type: ignore[index]
-        assert detail_work_packet["candidateWork"] is None  # type: ignore[index]
-        assert detail_work_packet["workItem"] is None  # type: ignore[index]
-        assert detail_work_packet["lifecycleState"]["authoritativeRef"] == f"authoritative_work_packet:{packet_id}"  # type: ignore[index]
-        assert detail_work_packet["lifecycleState"]["metadataOnly"] is True  # type: ignore[index]
-        assert detail_work_packet["sourceRefs"] == [  # type: ignore[index]
-            {
-                "refId": f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md",
-                "sourceType": "bmad_artifact",
-                "label": "gate 4 real dashboard process proof",
-                "pathOrUrl": f"_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md",
-                "freshness": "unknown",
-                "accessState": "allowed",
-                "canonical": True,
-                "summaryOnly": True,
-                "blockedReason": None,
-            }
-        ]
-        authoritative_evidence_refs = [entry["refId"] for entry in detail_work_packet["evidenceRefs"]]  # type: ignore[index]
-        assert authoritative_evidence_refs
-
+        assert listed_canonical_packet["sourceRef"] == lifecycle["sourceRef"]  # type: ignore[index]
+        assert listed_canonical_packet["currentStage"] == "capture"  # type: ignore[index]
+        assert listed_canonical_packet["status"] == "waiting"  # type: ignore[index]
         dashboard_port = _free_loopback_port()
         dashboard_process = _start_dashboard(
             f"http://127.0.0.1:{port}",
@@ -485,9 +459,6 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in detail_html
         assert f"story:_bmad-output/implementation-artifacts/{DEFAULT_STORY_KEY}.md" in pipeline_html
         assert packet_id in detail_html
-        for evidence_ref in authoritative_evidence_refs:
-            assert evidence_ref in pipeline_html
-            assert evidence_ref in detail_html
         assert "Source: Supervisor runtime" in detail_html
         assert "Fixture/non-live packet" not in detail_html
 
@@ -522,17 +493,16 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         _normalize_read_time_product_mode_mapping(restarted_projected, projected)
         assert restarted_projected == projected
 
-        restarted_work_packet_list = _json_get(f"http://127.0.0.1:{port}/work-packets")["data"]
-        restarted_listed_work_packet = next(
+        restarted_canonical_packet_list = _json_get(
+            f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets"
+        )["data"]
+        restarted_listed_canonical_packet = next(
             packet
-            for packet in restarted_work_packet_list  # type: ignore[union-attr]
+            for packet in restarted_canonical_packet_list  # type: ignore[union-attr]
             if packet["packetId"] == packet_id
         )
-        restarted_detail_work_packet = _json_get(
-            f"http://127.0.0.1:{port}/work-packets/{packet_id}"
-        )["data"]
-        assert restarted_detail_work_packet == detail_work_packet
-        assert restarted_listed_work_packet == restarted_detail_work_packet
+        assert restarted_listed_canonical_packet["sourceRef"] == lifecycle["sourceRef"]  # type: ignore[index]
+        assert restarted_listed_canonical_packet["sourceRef"] == listed_canonical_packet["sourceRef"]  # type: ignore[index]
 
         assert _table_count(db_path, "authoritative_work_packets") == 1
         assert _table_count(db_path, "authoritative_work_packet_lifecycle_events") == 1

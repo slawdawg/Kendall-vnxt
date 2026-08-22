@@ -21,6 +21,9 @@ Status: current navigation index
 - `kendall-vnxt-phase-3-canonical-presentation-preparation-2026-08-17.md`:
   implementation-ready first-slice plan for replacing the live V0 cockpit
   presentation and operational projection before any legacy deletion.
+- `kendall-vnxt-phase-3-legacy-workpacket-retirement-inventory-2026-08-22.md`:
+  current route-by-route legacy WorkPacket retirement inventory, native-read
+  replacements, persistence proofs, and dependency-ordered deletion gates.
 - `kendall-vnxt-orchestration-boundary-decision-2026-08-16.md`: current Phase 1
   no-adoption decision and the supervisor-owned lifecycle-evidence / governed
   workspace-outcome contract boundary for any future engine evaluation.
