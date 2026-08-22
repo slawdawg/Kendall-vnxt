@@ -1945,10 +1945,11 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
   assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
-  assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
+  assert.match(cockpitSource, /projectionToCockpitPackets\(currentActiveBoardProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
+  assert.doesNotMatch(cockpitSource, /projectionToCockpitPackets\(currentProjection,/);
   assert.match(cockpitSource, /runtimePacketIds = new Set\(runtimePackets\.map/);
   assert.match(cockpitSource, /!runtimePacketIds\.has\(card\.packetId\)/);
-  assert.match(cockpitSource, /selectedDetailByPacketId = new Map\(projection\.selectedPacketDetails\.map/);
+  assert.match(cockpitSource, /selectedDetailByPacketId = new Map<string, ActiveBoardSelectedPacketDetail>\(projection\.selectedPacketDetails\.map/);
   assert.match(cockpitSource, /selectedDetailByPacketId\.get\(packet\.packetId\)/);
   assert.match(cockpitSource, /projectionDetailSourceRefs = detail\?\.sourceRefs \?\? \[\]/);
   assert.match(cockpitSource, /projectionDetailEvidenceRefs = detail\?\.evidenceRefs \?\? \[\]/);
@@ -2005,9 +2006,10 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.match(cockpitSource, /effectiveLabels = projectionDisplayLabels\(projection, proofSource, proofFreshness, refreshUnavailable, projectionLiveProof\)/);
   assert.match(cockpitSource, /stageSummaryByStage/);
   assert.match(cockpitSource, /buildStageSummaryByStage/);
-  assert.match(cockpitSource, /buildStageSummaryByStage\(currentProjection, currentProjectionError, fixtureMode\)/);
+  assert.match(cockpitSource, /buildStageSummaryByStage\(currentActiveBoardProjection, currentProjectionError, fixtureMode\)/);
+  assert.doesNotMatch(cockpitSource, /buildStageSummaryByStage\(currentProjection,/);
   assert.match(cockpitSource, /stageSummary=\{stageSummaryByStage\.get\(stage\)/);
-  assert.match(cockpitSource, /projectionAvailable=\{Boolean\(currentProjection\)\}/);
+  assert.match(cockpitSource, /projectionAvailable=\{Boolean\(currentActiveBoardProjection\)\}/);
   assert.doesNotMatch(cockpitSource, /stageProjectionCount/);
   assert.match(cockpitSource, /stageRenderedCount = sortedPackets\.length/);
   assert.match(cockpitSource, /stageKnownTotalCount = stageRenderedCount/);

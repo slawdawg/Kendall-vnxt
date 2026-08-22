@@ -85,6 +85,7 @@ export function LanPipelinePage({ lanAuthEnabled }: { lanAuthEnabled: boolean })
         readOnly={role !== "operator"}
         canonicalPackets={result.canonicalPackets}
         operationalTruth={result.operationalTruth}
+        activeBoardProjection={result.activeBoardProjection}
         operationalProjection={result.operationalProjection}
         projectionError={result.projectionError}
       />

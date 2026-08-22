@@ -1890,6 +1890,11 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   assert.deepEqual(Object.keys(clientPacket).sort(), ["presentation"]);
   assert.equal(clientPacket.presentation.schemaVersion, "dashboard-canonical-presentation/v1");
   assert.equal(result.operationalProjection.schemaVersion, "dashboard-canonical-operational-projection/v1");
+  assert.equal(result.activeBoardProjection.schemaVersion, "dashboard-canonical-active-board/v1");
+  assert.equal(result.activeBoardProjection.workPackets[0].canonicalContract, null);
+  assert.equal(result.activeBoardProjection.workPackets[0].productModeMapping, null);
+  assert.equal(result.activeBoardProjection.selectedPacketDetails.length, 0);
+  assert.doesNotMatch(JSON.stringify(result.activeBoardProjection), /provider payload|credential token|server-only|wrong-shape collision/i);
   assert.doesNotMatch(JSON.stringify(clientPacket), /provider payload|credential token|server-only/i);
   assert.equal(clientPacket.presentation.packetId, lifecycle.packetId);
   assert.equal(result.operationalProjection.workPackets[0].canonicalContract, null);
@@ -1908,6 +1913,80 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   assert.equal(result.operationalProjection.queueSummary.dispatchableCount, 2);
   assert.doesNotMatch(JSON.stringify(result.operationalProjection), /python-only extension/i);
   assert.doesNotMatch(JSON.stringify(result.operationalProjection), /rawProviderResponse/i);
+});
+
+test("active-board projection omits a truthy but incomplete selected-detail review route", async () => {
+  const packet = authoritativeWorkPacket();
+  const projection = runtimeProjection([packet.packetId]);
+  projection.selectedPacketDetails = [{
+    packetId: packet.packetId,
+    canonicalContract: null,
+    productModeMapping: null,
+    sourceRefs: [],
+    evidenceRefs: [],
+    reviewRoute: { packetId: packet.packetId },
+  }];
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getDashboardCanonicalOperationalProjection: async () => projection,
+    getWorkPackets: async () => [packet],
+  });
+
+  const result = await loader.__canonicalListForTest();
+
+  assert.equal(result.operationalProjection.selectedPacketDetails.length, 1);
+  assert.equal(result.activeBoardProjection.selectedPacketDetails.length, 0);
+});
+
+test("active-board projection omits selected detail missing required canonical fields", async () => {
+  const packet = authoritativeWorkPacket();
+  const projection = runtimeProjection([packet.packetId]);
+  projection.selectedPacketDetails = [{
+    packetId: packet.packetId,
+    canonicalContract: null,
+    productModeMapping: null,
+    sourceRefs: [],
+    evidenceRefs: [],
+    currentStage: "capture",
+    status: "waiting",
+    truthLabel: "live",
+    blocker: null,
+    nextAction: null,
+    readyToTest: null,
+    recentTransitionEventRefs: [],
+    latestTransitionEventRef: null,
+    latestMovementSummary: null,
+    canSatisfyLiveMovementProof: false,
+    actionCapabilities: [],
+    actionCapabilitiesV1: [],
+    reviewRoute: {
+      schemaVersion: "pipeline-review-route-evidence/v0",
+      availability: "available",
+      packetId: packet.packetId,
+      routeState: "report_only",
+      reasonCode: "report_only",
+      reason: "Read-only review route.",
+      safeFallback: "Inspect the packet.",
+      exactIdentity: "current",
+      issuanceState: "active",
+      findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+      dataClass: "metadata_only",
+      execution: "none",
+      deliveryEvidenceEligible: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    },
+    // `unblocker` and `metadataOnly` are deliberately absent.
+  }];
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getDashboardCanonicalOperationalProjection: async () => projection,
+    getWorkPackets: async () => [packet],
+  });
+
+  const result = await loader.__canonicalListForTest();
+
+  assert.equal(result.operationalProjection.selectedPacketDetails.length, 1);
+  assert.equal(result.activeBoardProjection.selectedPacketDetails.length, 0);
 });
 
 test("canonical dashboard presentation rejects unknown root and nested fields before cockpit rendering", async () => {

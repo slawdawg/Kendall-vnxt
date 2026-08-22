@@ -2,20 +2,20 @@ import type {
   AuthoritativePacketStage,
   PipelineCanonicalContractV1,
   PipelineOperationalActionCapabilityV1,
-  PipelineManagerSummaryV0,
   PipelineProductModeMappingV0,
   PipelineProjectionSourceLabelV0,
   PipelineQualityGateNodeV0,
-  PipelineQueueSummaryV0,
   PipelineReviewRouteEvidenceV0,
 } from "@kendall/contracts";
 import type {
-  DashboardCanonicalOperationalProjectionV1,
-  DashboardCanonicalOperationalWorkPacketV1,
+  DashboardCanonicalActiveBoardManagerSummaryV1,
+  DashboardCanonicalActiveBoardProjectionV1,
+  DashboardCanonicalActiveBoardQueueSummaryV1,
+  DashboardCanonicalActiveBoardWorkPacketV1,
 } from "./canonical-operational-projection";
 
-type CanonicalOperationalProjection = DashboardCanonicalOperationalProjectionV1;
-type CanonicalOperationalWorkPacket = DashboardCanonicalOperationalWorkPacketV1;
+type CanonicalOperationalProjection = DashboardCanonicalActiveBoardProjectionV1;
+type CanonicalOperationalWorkPacket = DashboardCanonicalActiveBoardWorkPacketV1;
 type CanonicalGatedControl = CanonicalOperationalProjection["gatedControls"][number];
 type CanonicalLegacyActionCapability = NonNullable<CanonicalOperationalProjection["actionCapabilities"]>[number];
 
@@ -186,7 +186,7 @@ export type PipelinePacketDetailWhyDiagnostics = {
   placement: PipelinePacketBoardPlacement;
   actionability: PipelinePacketActionability;
   backpressure: PipelineBackpressureState | null;
-  detailSource: "DashboardCanonicalOperationalProjectionV1.selectedPacketDetails" | "DashboardCanonicalOperationalProjectionV1.workPackets";
+  detailSource: "DashboardCanonicalActiveBoardProjectionV1.selectedPacketDetails" | "DashboardCanonicalActiveBoardProjectionV1.workPackets";
   selectedDetailAvailable: boolean;
   why: {
     label: string;
@@ -495,8 +495,8 @@ export function buildPacketDetailWhyDiagnosticsForPacket(
     actionability,
     backpressure: derivePacketBackpressureState(packet, projection),
     detailSource: selectedDetailAvailable
-      ? "DashboardCanonicalOperationalProjectionV1.selectedPacketDetails"
-      : "DashboardCanonicalOperationalProjectionV1.workPackets",
+      ? "DashboardCanonicalActiveBoardProjectionV1.selectedPacketDetails"
+      : "DashboardCanonicalActiveBoardProjectionV1.workPackets",
     selectedDetailAvailable,
     why: {
       label: `${placement} / ${actionability}`,
@@ -970,7 +970,7 @@ function countSourceStates(projection: CanonicalOperationalProjection) {
   });
 }
 
-function managerSummaryIsUnhealthy(managerSummary: PipelineManagerSummaryV0) {
+function managerSummaryIsUnhealthy(managerSummary: DashboardCanonicalActiveBoardManagerSummaryV1) {
   return managerSummary.reliabilityState === "degraded"
     || managerSummary.inactivityReason === "failure_budget_hit";
 }
@@ -1268,8 +1268,8 @@ export function buildStaleHistoryItem(
 }
 
 export function isDispatchAffectingManagerState(
-  managerSummary: PipelineManagerSummaryV0,
-  queueSummary: PipelineQueueSummaryV0,
+  managerSummary: DashboardCanonicalActiveBoardManagerSummaryV1,
+  queueSummary: DashboardCanonicalActiveBoardQueueSummaryV1,
   projection?: CanonicalOperationalProjection
 ): PipelineDispatchAffectingManagerState | { visible: false } {
   const summaryText = managerSummary.summary.toLowerCase();

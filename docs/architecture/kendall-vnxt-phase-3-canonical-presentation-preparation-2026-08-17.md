@@ -112,6 +112,19 @@ even if their first field set is intentionally isomorphic.
    WorkItem memory-review migration is separately complete, but its operator
    action and provenance fences remain part of the Phase 3 readback audit.
 
+### Active-board migration slice
+
+Normal and LAN cockpit active-board calculation and runtime V1 action strips
+now receive `DashboardCanonicalActiveBoardProjectionV1`, a dashboard-owned
+client DTO reconstructed field-by-field by `pipeline-packet-loader`. It carries
+the bounded stage, source-state, manager, worker, queue, admission, control,
+and V1-action fields the active-board view model reads; it omits raw lifecycle
+extensions and incomplete selected-detail evidence. The older
+`DashboardCanonicalOperationalProjectionV1` remains a named temporary hold for
+direct-detail inspection, manager-lane/coordination panels, and legacy V0
+action compatibility. It must not be used to reintroduce active-board or
+runtime-action rendering.
+
 ## File and test map
 
 | Area | First-slice files | Required evidence |
