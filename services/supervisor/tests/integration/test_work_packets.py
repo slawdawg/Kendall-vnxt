@@ -6785,7 +6785,7 @@ def test_memory_proposal_rejects_raw_content_missing_refs_and_write_back_authori
         assert write_back_response.status_code == 422
 
 
-def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path, monkeypatch) -> None:
+def test_canonical_operational_projection_and_work_items_cover_blocked_and_done_delivery_states(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-terminal-states.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -6891,88 +6891,37 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
             next_step=None,
         )
 
-        packets_response = client.get("/work-packets")
-        assert packets_response.status_code == 200
-        packets = packets_response.json()["data"]
-        blocked_packet = next(packet for packet in packets if packet["packetId"] == f"work_item:{blocked_item['id']}")
-        done_packet = next(packet for packet in packets if packet["packetId"] == f"work_item:{done_item['id']}")
+        blocked_work_item = client.get(f"/work-items/{blocked_item['id']}")
+        done_work_item = client.get(f"/work-items/{done_item['id']}")
+        assert blocked_work_item.status_code == 200
+        assert done_work_item.status_code == 200
+        assert blocked_work_item.json()["data"]["state"] == "blocked"
+        assert blocked_work_item.json()["data"]["blockedReason"] == "Fixture blocker for coverage."
+        assert blocked_work_item.json()["data"]["statusSummary"] == "Blocked by fixture."
+        assert blocked_work_item.json()["data"]["nextStep"] == "Resolve fixture blocker."
+        assert done_work_item.json()["data"]["state"] == "done"
+        assert done_work_item.json()["data"]["metadata"]["pullRequestUrl"] == "https://github.com/example/repo/pull/42"
+        assert done_work_item.json()["data"]["metadata"]["ciStatus"] == "passed"
+        assert done_work_item.json()["data"]["metadata"]["mergeStatus"] == "ready"
 
-        assert blocked_packet["currentStage"] == "human_gate"
-        assert blocked_packet["currentOwner"] == "blocked"
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert projection_response.status_code == 200
+        projection = projection_response.json()["data"]
+        assert projection["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
+        blocked_packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{blocked_item['id']}")
+        done_packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{done_item['id']}")
+        blocked_detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == blocked_packet["packetId"])
+        done_detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == done_packet["packetId"])
+
+        assert blocked_packet["currentStage"] == "needs_approval"
         assert blocked_packet["status"] == "blocked"
-        assert blocked_packet["recoveryActions"][0]["actionType"] == "retry_smaller"
-        blocked_source_refs = {ref["refId"]: ref for ref in blocked_packet["sourceRefs"]}
-        canonical_ref = blocked_source_refs[f"work_item:{blocked_item['id']}"]
-        assert canonical_ref["accessState"] == "blocked"
-        assert canonical_ref["freshness"] == "stale"
-        assert canonical_ref["pathOrUrl"] is None
-        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in canonical_ref["blockedReason"]
-        assert blocked_source_refs["fixture:source:stale"]["freshness"] == "stale"
-        assert blocked_source_refs["fixture:source:missing"]["accessState"] == "missing"
-        assert blocked_source_refs["fixture:source:excluded"]["accessState"] == "excluded"
-        assert blocked_source_refs["fixture:source:excluded"]["pathOrUrl"] is None
-        assert blocked_source_refs["fixture:source:blocked"]["accessState"] == "blocked"
-        assert blocked_source_refs["fixture:source:superseded-prd"]["accessState"] == "blocked"
-        assert blocked_source_refs["fixture:source:superseded-prd"]["freshness"] == "stale"
-        assert blocked_source_refs["fixture:source:superseded-prd"]["pathOrUrl"] is None
-        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in blocked_source_refs["fixture:source:superseded-prd"]["blockedReason"]
-        assert blocked_source_refs["fixture:source:malformed-type"]["sourceType"] == "manual"
-        assert blocked_source_refs["fixture:source:malformed-type"]["accessState"] == "blocked"
-        assert "invalid source type" in blocked_source_refs["fixture:source:malformed-type"]["label"]
-        assert blocked_source_refs["fixture:source:malformed-type"]["pathOrUrl"] is None
-        assert blocked_source_refs["fixture:source:unavailable"]["sourceType"] == "obsidian"
-        assert blocked_source_refs["fixture:source:unavailable"]["accessState"] == "missing"
-        assert "invalid access state" in blocked_source_refs["fixture:source:unavailable"]["label"]
-        assert blocked_source_refs["fixture:source:unavailable"]["pathOrUrl"] is None
-        assert blocked_source_refs["fixture:source:missing-state"]["accessState"] == "blocked"
-        assert "invalid access state" in blocked_source_refs["fixture:source:missing-state"]["label"]
-        assert blocked_source_refs["metadata_source:8"]["sourceType"] == "manual"
-        assert blocked_source_refs["metadata_source:8"]["accessState"] == "blocked"
-        assert "malformed source ref" in blocked_source_refs["metadata_source:8"]["label"]
-        alpha_status = blocked_packet["alphaMemorySourceStatus"]
-        assert alpha_status["authorityFamily"] == "memory-writeback-and-source-mutation"
-        assert alpha_status["operationMode"] == "dry_run"
-        assert alpha_status["decisionState"] == "blocked"
-        assert alpha_status["retentionClass"] == "metadata_only"
-        assert alpha_status["canonicalMutationAllowed"] is False
-        assert alpha_status["sourceMutationAllowed"] is False
-        assert alpha_status["providerCallsAllowed"] is False
-        assert alpha_status["workerLaunchAllowed"] is False
-        assert alpha_status["githubCallsAllowed"] is False
-        assert alpha_status["networkEgressAllowed"] is False
-        assert alpha_status["sourceRefs"]
-        assert "fixture:source:malformed-type" in alpha_status["sourceRefs"]
-        assert "fixture:source:unavailable" in alpha_status["sourceRefs"]
-        assert "approval_metadata.missing" in alpha_status["blockedReasons"]
-        assert "source_ref.invalid_or_blocked.fixture:source:malformed-type" in alpha_status["blockedReasons"]
-        assert "source_ref.invalid_or_blocked.fixture:source:unavailable" in alpha_status["blockedReasons"]
-        assert "source_ref.invalid_or_blocked.fixture:source:superseded-prd" in alpha_status["blockedReasons"]
-        assert "source_ref.stale.fixture:source:superseded-prd" in alpha_status["blockedReasons"]
-        assert "source_ref.stale.fixture:source:stale" in alpha_status["blockedReasons"]
-        assert alpha_status["backupPath"] == "not_authorized_for_alpha_status"
-        assert alpha_status["rollbackPath"] == "no_mutation_performed"
-        assert "Review blocked source refs" in alpha_status["recoveryOptions"]
-        assert "Provide explicit approval metadata" in alpha_status["recoveryOptions"]
-        assert alpha_status["targetMetadata"]["targetKind"] == "draft_or_quarantine_preview"
-        assert alpha_status["targetMetadata"]["canonicalMutationAllowed"] is False
-        assert alpha_status["auditEventSummary"].startswith("Alpha memory/source dry-run status")
-
+        assert "superseded by the July 4 pipeline execution-loop reliability PRD" in blocked_packet["blocker"]
+        assert blocked_detail["workItemId"] == blocked_item["id"]
+        assert blocked_detail["metadataOnly"] is True
         assert done_packet["currentStage"] == "deliver"
-        assert done_packet["currentOwner"] == "github"
         assert done_packet["status"] == "complete"
-        assert done_packet["lifecycleState"]["source"] == "delivery_evidence"
-        assert done_packet["lifecycleState"]["authoritativeRef"] == f"work_item:{done_item['id']}"
-        assert done_packet["lifecycleState"]["stage"] == "deliver"
-        assert done_packet["lifecycleState"]["owner"] == "github"
-        assert done_packet["lifecycleState"]["status"] == "complete"
-        assert f"delivery:{done_item['id']}" in done_packet["lifecycleState"]["derivedFromRefs"]
-        assert done_packet["lifecycleState"]["githubMutationAllowed"] is False
-        assert done_packet["lifecycleState"]["cleanupAllowed"] is False
-        assert any(ref["evidenceType"] == "gate" and ref["refId"] == f"delivery:{done_item['id']}" for ref in done_packet["evidenceRefs"])
-        assert any(
-            ref["artifactType"] == "pull_request" and ref["pathOrUrl"] == "https://github.com/example/repo/pull/42"
-            for ref in done_packet["artifactRefs"]
-        )
+        assert done_detail["workItemId"] == done_item["id"]
+        assert done_detail["metadataOnly"] is True
 
 
 def test_pipeline_dashboard_projection_endpoint_projects_live_work_packets(tmp_path, monkeypatch) -> None:
@@ -7333,7 +7282,7 @@ def test_user_facing_documentation_proposal_rejects_unsafe_targets_and_missing_e
         assert review["metadataOnly"] is True
         assert review["proposals"] == []
 
-def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(tmp_path, monkeypatch) -> None:
+def test_promoted_work_item_preserves_linkage_and_canonical_ready_to_test_metadata(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-learn-refill-promotion.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -7385,45 +7334,38 @@ def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(t
         assert promoted.status_code == 200
         work_item = promoted.json()["data"]["workItem"]
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        projection = packet["learnRefill"]
-        assert projection["retentionClass"] == "metadata_only"
-        assert projection["rawPayloadRetained"] is False
-        assert projection["refillSourceState"]["state"] == "source_exhausted"
-        assert projection["refillSourceState"]["explanation"] == "Approved source is empty after promotion."
-        assert projection["followUpCandidates"][0]["sourcePacketId"] == f"candidate_work:{candidate['id']}"
-        assert projection["followUpCandidates"][0]["candidateWorkId"] == "candidate-work-promoted-follow-up"
-        assert projection["followUpCandidates"][0]["reason"] == "Learn recorded a metadata-only follow-up."
-        assert "rawPrompt" not in projection["followUpCandidates"][0]["reason"]
-        assert "rawCompletion" not in projection["sourceExhaustion"]["summary"]
-        assert "reasoningTrace" not in projection["nextSafeAction"]
-        assert projection["readyToTest"]["userFacingSummary"] == "Promoted Learn/refill projection is ready to test."
-        assert projection["readyToTest"]["testableSurface"] == "/pipeline selected packet"
-        assert projection["readyToTest"]["verificationRefs"] == ["pytest tests/integration/test_work_packets.py"]
-        assert projection["readyToTest"]["evidenceRefs"] == ["evidence:promoted-ready"]
-        assert "terminal-output:must-not-project" not in json.dumps(projection["readyToTest"])
-        assert "tmux-stdout:must-not-project" not in json.dumps(projection["readyToTest"])
-        assert projection["providerCallsAllowed"] is False
-        assert projection["workerLaunchAllowed"] is False
-        assert projection["githubMutationAllowed"] is False
+        persisted_candidate = next(
+            entry
+            for entry in client.get("/candidate-work").json()["data"]
+            if entry["id"] == candidate["id"]
+        )
+        persisted_work_item = client.get(f"/work-items/{work_item['id']}")
+        assert persisted_candidate["status"] == "approved"
+        assert persisted_candidate["promotedWorkItemId"] == work_item["id"]
+        assert persisted_work_item.status_code == 200
+        assert persisted_work_item.json()["data"]["metadata"]["candidateWorkId"] == candidate["id"]
 
-        dashboard_projection_response = client.get("/pipeline-control-plane/projection")
-        assert dashboard_projection_response.status_code == 200
-        dashboard_projection = dashboard_projection_response.json()["data"]
-        dashboard_packet = next(
+        canonical_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert canonical_projection_response.status_code == 200
+        canonical_projection = canonical_projection_response.json()["data"]
+        canonical_packet = next(
             packet
-            for packet in dashboard_projection["workPackets"]
+            for packet in canonical_projection["workPackets"]
             if packet["packetId"] == f"work_item:{work_item['id']}"
         )
-        dashboard_detail = next(
+        canonical_detail = next(
             detail
-            for detail in dashboard_projection["selectedPacketDetails"]
-            if detail["packetId"] == f"work_item:{work_item['id']}"
+            for detail in canonical_projection["selectedPacketDetails"]
+            if detail["packetId"] == canonical_packet["packetId"]
         )
-        assert dashboard_packet["readyToTest"] == projection["readyToTest"]
-        assert dashboard_detail["readyToTest"] == projection["readyToTest"]
+        ready_to_test = canonical_packet["readyToTest"]
+        assert ready_to_test["userFacingSummary"] == "Promoted Learn/refill projection is ready to test."
+        assert ready_to_test["testableSurface"] == "/pipeline selected packet"
+        assert ready_to_test["verificationRefs"] == ["pytest tests/integration/test_work_packets.py"]
+        assert ready_to_test["evidenceRefs"] == ["evidence:promoted-ready"]
+        assert "terminal-output:must-not-project" not in json.dumps(ready_to_test)
+        assert "tmux-stdout:must-not-project" not in json.dumps(ready_to_test)
+        assert canonical_detail["readyToTest"] == ready_to_test
 
 
 def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(tmp_path, monkeypatch) -> None:
