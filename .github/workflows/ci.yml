@@ -414,6 +414,9 @@ jobs:
     steps:
       - name: Verify required CI jobs
         shell: bash
+        env:
+          SELECTED_WORKSPACE_PROFILES: ${{ needs.changes.outputs.selected_workspace_profiles }}
+          SELECTED_SUPERVISOR_SHARDS: ${{ needs.changes.outputs.selected_supervisor_shards }}
         run: |
           set -euo pipefail
 
@@ -445,12 +448,12 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ needs.changes.outputs.selected_workspace_profiles }}" != "[]" ] && [ "${{ needs.workspace_behavior_shadow.result }}" != "success" ]; then
+          if [ "$SELECTED_WORKSPACE_PROFILES" != "[]" ] && [ "${{ needs.workspace_behavior_shadow.result }}" != "success" ]; then
             echo "Required workspace behavior profiles did not pass: ${{ needs.workspace_behavior_shadow.result }}"
             exit 1
           fi
 
-          if [ "${{ needs.changes.outputs.selected_supervisor_shards }}" != "[]" ] && [ "${{ needs.supervisor_behavior_shadow.result }}" != "success" ]; then
+          if [ "$SELECTED_SUPERVISOR_SHARDS" != "[]" ] && [ "${{ needs.supervisor_behavior_shadow.result }}" != "success" ]; then
             echo "Required supervisor behavior shards did not pass: ${{ needs.supervisor_behavior_shadow.result }}"
             exit 1
           fi

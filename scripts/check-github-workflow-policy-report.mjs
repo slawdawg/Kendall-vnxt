@@ -312,6 +312,10 @@ assertCondition(
     !ciJobBlock("supervisor_behavior_shadow").includes("continue-on-error: true") &&
     ciJobBlock("check").includes("workspace_behavior_shadow") &&
     ciJobBlock("check").includes("supervisor_behavior_shadow") &&
+    ciJobBlock("check").includes("SELECTED_WORKSPACE_PROFILES: ${{ needs.changes.outputs.selected_workspace_profiles }}") &&
+    ciJobBlock("check").includes("SELECTED_SUPERVISOR_SHARDS: ${{ needs.changes.outputs.selected_supervisor_shards }}") &&
+    ciJobBlock("check").includes('[ "$SELECTED_WORKSPACE_PROFILES" != "[]" ]') &&
+    ciJobBlock("check").includes('[ "$SELECTED_SUPERVISOR_SHARDS" != "[]" ]') &&
     ciJobBlock("check").includes("Required workspace behavior profiles did not pass") &&
     ciJobBlock("check").includes("Required supervisor behavior shards did not pass"),
   ".github/workflows/ci.yml must require selected workspace profiles and supervisor shards through check",
