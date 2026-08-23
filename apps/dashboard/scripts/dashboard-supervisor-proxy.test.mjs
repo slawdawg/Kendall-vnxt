@@ -39,7 +39,6 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
       if (request.url === "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write") { forwarded.push(request.url); response.end(JSON.stringify({ data: { proposalId: "proposal-1", revision: 3 } })); return; }
       if (request.url === "/pipeline-control-plane/projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions() })); return; }
       if (request.url === "/pipeline-control-plane/canonical-operational-projection") { response.end(JSON.stringify({ data: projectionWithRawCanonicalExtensions(canonicalProjectionOverrides || {}) })); return; }
-      if (request.url === "/work-packets") { response.end(JSON.stringify({ data: [{ packetId: "legacy-packet-1" }] })); return; }
       if (request.url === "/supervisor/runtime-evidence-review-report") { response.end(JSON.stringify({ data: { workItems: [] } })); return; }
       if (request.url === "/operator-views?scope=queue") { forwarded.push(request.url); response.end(JSON.stringify({ data: [] })); return; }
       response.writeHead(404).end(JSON.stringify({ detail: "not found" }));
@@ -128,9 +127,10 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     assert.equal(projectionMutation.status, 405);
     const canonicalProjectionMutation = await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
     assert.equal(canonicalProjectionMutation.status, 405);
-    const legacy = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok" } });
-    assert.equal(legacy.status, 200);
-    assert.deepEqual(legacy.body.data, [{ packetId: "legacy-packet-1" }]);
+    const legacyList = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok" } });
+    assert.equal(legacyList.status, 404);
+    const legacyDetail = await request(port, "/api/supervisor/work-packets/legacy-packet-1", { headers: { cookie: "session=ok" } });
+    assert.equal(legacyDetail.status, 404);
     const runtimeEvidenceReview = await request(port, "/api/supervisor/supervisor/runtime-evidence-review-report", { headers: { cookie: "session=ok" } });
     assert.equal(runtimeEvidenceReview.status, 200);
     const savedViews = await request(port, "/api/supervisor/operator-views?scope=queue", { headers: { cookie: "session=ok" } });
@@ -163,11 +163,11 @@ test("session-aware supervisor proxy forwards authenticated LAN API traffic over
     assert.equal(savedViewsExtra.status, 404);
     assert.deepEqual(forwarded, ["/operator-views?scope=queue", "/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", "/work-items/work-item-1/memory-proposals/proposal-1", "/work-items/work-item-1/memory-proposals/proposal-1/ai-draft", "/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write"]);
     const legacyMutation = await request(port, "/api/supervisor/work-packets/legacy-packet-1", { method: "POST", headers: { cookie: "session=ok", origin: `https://127.0.0.1:${port}` } });
-    assert.equal(legacyMutation.status, 405);
+    assert.equal(legacyMutation.status, 404);
     const denied = await request(port, "/api/supervisor/pipeline-control-plane/work-packets");
     assert.equal(denied.status, 401);
     const forwardedRequest = await request(port, "/api/supervisor/work-packets", { headers: { cookie: "session=ok", "x-forwarded-for": "127.0.0.1" } });
-    assert.equal(forwardedRequest.status, 400);
+    assert.equal(forwardedRequest.status, 404);
     const unknown = await request(port, "/api/supervisor/private-admin", { headers: { cookie: "session=ok" } });
     assert.equal(unknown.status, 404);
   } finally {
@@ -384,7 +384,8 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     const headers = { cookie: "viewer=ok" };
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/projection", { headers })).status, 200);
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/canonical-operational-projection", { headers })).status, 200);
-    assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 200);
+    assert.equal((await request(port, "/api/supervisor/work-packets", { headers })).status, 404);
+    assert.equal((await request(port, "/api/supervisor/work-packets/packet-1", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/pipeline-control-plane/work-items/work-item-1/memory-review", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/llm-wiki-artifact?query=metadata", { headers })).status, 404);
     assert.equal((await request(port, "/api/supervisor/work-items/work-item-1/memory-proposals/proposal-1/recover-abandoned-write", { method: "POST", headers: { ...headers, origin: "https://dashboard.test", "x-csrf-token": "csrf-ok" }, body: JSON.stringify({ expectedRevision: 2, recoveryRef: "operator:dead-supervisor" }) })).status, 404);
@@ -397,7 +398,6 @@ test("test viewer is limited to fixed pipeline reads before any supervisor forwa
     assert.deepEqual(forwarded, [
       { method: "GET", url: "/pipeline-control-plane/projection" },
       { method: "GET", url: "/pipeline-control-plane/canonical-operational-projection" },
-      { method: "GET", url: "/work-packets/packet-1" },
     ]);
   } finally {
     if (dashboard?.listening) await close(dashboard);

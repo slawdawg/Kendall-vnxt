@@ -151,8 +151,6 @@ from supervisor.api.schemas import (
     WorkItemManagedActionRequest,
     WorkItemRecipeGateAuditApiEnvelope,
     WorkItemPremiumApprovalRequest,
-    WorkPacketApiEnvelope,
-    WorkPacketListApiEnvelope,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
     WorkItemSupervisedCodexLaunchRequest,
@@ -1347,20 +1345,6 @@ async def import_obsidian_metadata_candidate_work(
 async def list_candidate_work(session: AsyncSession = Depends(get_session)):
     candidates = await service.list_candidate_work(session)
     return CandidateWorkListApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
-
-
-@app.get("/work-packets", response_model=WorkPacketListApiEnvelope)
-async def list_work_packets(session: AsyncSession = Depends(get_session)):
-    packets = await service.list_work_packets(session)
-    return WorkPacketListApiEnvelope(data=packets)
-
-
-@app.get("/work-packets/{packet_id}", response_model=WorkPacketApiEnvelope)
-async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
-    packet = await service.get_work_packet(session, packet_id)
-    if not packet:
-        raise HTTPException(status_code=404, detail=error_response("Work Packet not found.", "work_packet_not_found").model_dump())
-    return WorkPacketApiEnvelope(data=packet)
 
 
 @app.post("/pipeline-control-plane/work-packets", response_model=AuthoritativeWorkPacketApiEnvelope)

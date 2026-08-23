@@ -1399,6 +1399,8 @@ def test_native_work_item_and_candidate_reads_persist_without_synthetic_work_pac
         assert canonical_packets.status_code == 200
         assert {packet["packetId"] for packet in canonical_packets.json()["data"]} == {packet_id, mismatched_packet_id}
         assert client.get(f"/pipeline-control-plane/work-packets/{packet_id}").json()["data"]["packetId"] == packet_id
+        assert client.get("/work-packets").status_code == 404
+        assert client.get(f"/work-packets/{packet_id}").status_code == 404
         assert client.get(f"/pipeline-control-plane/work-items/{linked_work_item['id']}/packet").json()["data"]["packetId"] == packet_id
         assert client.get(f"/pipeline-control-plane/work-items/{unlinked_work_item['id']}/packet").status_code == 404
         assert client.get(f"/pipeline-control-plane/work-items/{mismatched_work_item['id']}/packet").status_code == 404
@@ -1420,6 +1422,8 @@ def test_native_work_item_and_candidate_reads_persist_without_synthetic_work_pac
         assert restarted_packets.status_code == 200
         assert {packet["packetId"] for packet in restarted_packets.json()["data"]} == {packet_id, mismatched_packet_id}
         assert restarted_client.get(f"/pipeline-control-plane/work-packets/{packet_id}").json()["data"]["packetId"] == packet_id
+        assert restarted_client.get("/work-packets").status_code == 404
+        assert restarted_client.get(f"/work-packets/{packet_id}").status_code == 404
         assert restarted_client.get(f"/pipeline-control-plane/work-items/{linked_work_item['id']}/packet").json()["data"]["packetId"] == packet_id
         assert restarted_client.get(f"/pipeline-control-plane/work-items/{unlinked_work_item['id']}/packet").status_code == 404
         assert restarted_client.get(f"/pipeline-control-plane/work-items/{mismatched_work_item['id']}/packet").status_code == 404

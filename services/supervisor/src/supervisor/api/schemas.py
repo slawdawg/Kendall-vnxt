@@ -5308,24 +5308,6 @@ class WorkPacketV0View(BaseModel):
     recoveryActions: list[RecoveryActionV0View] = Field(default_factory=list)
 
 
-class WorkPacketApiEnvelope(BaseModel):
-    """Typed response boundary for a supervisor-owned WorkPacketV0 detail."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    data: WorkPacketV0View
-    meta: dict[str, Any] | None = None
-
-
-class WorkPacketListApiEnvelope(BaseModel):
-    """Typed response boundary for supervisor-owned cockpit WorkPacketV0 rows."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    data: list[WorkPacketV0View]
-    meta: dict[str, Any] | None = None
-
-
 class SubscriptionHandoffEvidenceView(BaseModel):
     eventType: str
     summary: str

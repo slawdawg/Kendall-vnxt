@@ -9839,29 +9839,6 @@ class SupervisorService:
             evidenceRefs=[],
         )
 
-    async def get_work_packet(self, session: AsyncSession, packet_id: str) -> WorkPacketV0View | None:
-        authoritative_packet = await self.get_authoritative_work_packet(session, packet_id)
-        if authoritative_packet:
-            return self._authoritative_work_packet_v0_projection(authoritative_packet)
-        if packet_id.startswith("work_item:"):
-            work_item_id = packet_id.removeprefix("work_item:")
-            item = await session.get(WorkItem, work_item_id)
-            if not item:
-                return None
-            candidate = self._candidate_by_work_item_id(await self.list_candidate_work(session), [item]).get(item.id)
-            return await self._assemble_work_packet(session, candidate=candidate, item=item)
-        if packet_id.startswith("candidate_work:"):
-            candidate_id = packet_id.removeprefix("candidate_work:")
-            candidate = await session.get(CandidateWork, candidate_id)
-            if not candidate:
-                return None
-            if candidate.promoted_work_item_id:
-                item = await session.get(WorkItem, candidate.promoted_work_item_id)
-                if item:
-                    return await self._assemble_work_packet(session, candidate=candidate, item=item)
-            return await self._assemble_work_packet(session, candidate=candidate, item=None)
-        return None
-
     def _authoritative_work_packet_v0_projection(
         self,
         packet: AuthoritativeWorkPacketLifecycleView,

@@ -8,7 +8,7 @@
     "baselineRevision": "bfe5e44b0bee9c0f2424fccf0a3b4a462592ada1",
     "generator": "gate4-bmad-dashboard-e2e/v3",
     "commandVersion": 3,
-    "runnerSha256": "sha256:44bb1b1389e3947879ac45c2d14fa766ef8091bf3703772971807a42b9368f01"
+    "runnerSha256": "sha256:be2a231de2442a7ca340914097711e2b74486d1793f7b5217ef5380c2ab2041d"
   },
   "manager": {
     "sourceResolutionMode": "default_local_bmad",
@@ -64,10 +64,10 @@
     "comparedFieldsParity": true,
     "comparedFields": [
       "packetId",
-      "sourceRefs",
+      "sourceRef",
       "currentStage",
       "status",
-      "evidenceRefs"
+      "metadataOnly"
     ],
     "metadataOnly": true
   },
@@ -80,13 +80,13 @@
     "comparedFieldsParity": true,
     "comparedFields": [
       "packetId",
-      "sourceRefs",
+      "sourceRef",
       "currentStage",
       "status",
-      "evidenceRefs"
+      "metadataOnly"
     ],
     "requestedPacketUsedSupervisorProjection": true,
-    "staticFallbackPacketsRenderedInList": true
+    "staticFallbackPacketsRenderedInList": false
   },
   "persistence": {
     "supervisorRestartVerified": true,
@@ -121,7 +121,8 @@
     "launchedTopLevelProcessLabels": [
       "dashboard",
       "manager-source-intake",
-      "supervisor"
+      "supervisor",
+      "supervisor-private-uds"
     ]
   },
   "retention": {

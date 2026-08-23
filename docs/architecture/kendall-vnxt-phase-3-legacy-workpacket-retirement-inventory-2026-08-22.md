@@ -1,20 +1,20 @@
 # Phase 3 Legacy WorkPacket Retirement Inventory
 
 Date: 2026-08-22
-Status: active retirement plan; deletion not yet authorized by this document
+Status: implementation and proof complete; delivery pending
 
 ## Scope and current evidence
 
 The canonical dashboard no longer requests the legacy `GET /work-packets`
-family. The remaining production route definitions are
-`services/supervisor/src/supervisor/api/main.py` list/detail handlers; the
-remaining dashboard transport admissions are the exact legacy-read patterns in
-`dashboard-supervisor-proxy.mjs` and `pipeline-supervisor-uds.ts`.
+family. This slice removes those two HTTP handlers, their route-only Python and
+TypeScript envelopes, and the dashboard proxy/UDS admissions. It retains the
+internal `WorkPacketV0View` projection hold only where the canonical operational
+projection is still reconstructed from it; that hold is not an HTTP caller.
 
-The route is nevertheless not source-zero. Integration coverage currently uses
-it to materialize three different persisted identities. The route must not be
-removed until each identity has a native, versioned readback proof after a
-supervisor restart.
+The deletion proof covers each persisted identity through native, versioned
+readback after a supervisor restart, both removed GET forms return 404 before
+and after restart, and operator/test-viewer proxy attempts are denied without
+forwarding.
 
 | Legacy identity | Current legacy behavior | Replacement boundary | Required persisted proof |
 | --- | --- | --- | --- |
@@ -24,20 +24,20 @@ supervisor restart.
 
 ## Ordered retirement
 
-1. Move each legacy integration assertion to its replacement boundary. Add the
+1. Completed: move each legacy integration assertion to its replacement boundary. Add the
    CandidateWork exact-detail read only if the source inventory proves that
    list filtering is not a sufficient native replacement. Keep all
    authoritative lifecycle checks on the canonical control-plane route.
-2. Add one restart-backed mixed-data regression covering every required state:
+2. Completed: add one restart-backed mixed-data regression covering every required state:
    one authoritative packet, linked and unlinked WorkItems, and unpromoted and
    promoted CandidateWork. Include a 404 assertion for both legacy route forms
    after removal. This is the persistence/readback proof; a pure source search
    is insufficient.
-3. Remove the two supervisor handlers, their Python and TypeScript legacy
+3. Completed: remove the two supervisor handlers, their Python and TypeScript legacy
    envelopes, and the proxy/UDS legacy allowlist entries in one bounded change.
    Replace permit tests with exact GET and mutation denial tests. Do not remove
    canonical packet, WorkItem, or CandidateWork routes.
-4. Establish source-zero for the deleted routes and envelopes outside archived
+4. Completed: establish source-zero for the deleted routes and envelopes outside archived
    migration fixtures. Update readiness and E2E scripts to canonical/native
    reads before deleting their legacy assertions.
 5. Retire the remaining `WorkPacketV0View`, V0 projector, fixtures, and
@@ -51,16 +51,16 @@ supervisor restart.
 | Caller class | Current disposition |
 | --- | --- |
 | Normal dashboard runtime, cockpit, direct detail, WorkItem detail, and LAN canonical reads | Already canonical; must retain no legacy fallback. |
-| Dashboard proxy and UDS | Legacy read admission only; remove after the API route and replace with deny coverage. |
+| Dashboard proxy and UDS | Legacy read admission retired; exact list/detail denial coverage proves neither transport forwards it. |
 | Supervisor integration tests | Migrate by identity using the table above; do not preserve synthetic V0 assertions behind a helper. |
 | Manager intake and Gate 4 external verification scripts | Replace authoritative legacy list/detail checks with canonical control-plane list/detail checks and retain restart readback. |
 | Demo fixtures and V0 projector | Explicit later holds, not evidence that the legacy HTTP route remains needed. |
 
-The existing Gate 4 runner currently stops at its manager source-resolution
-precondition before it reaches its legacy parity reads. Repair and rerun that
-owned fixture before changing its recorded passed-proof digest or treating its
-caller as migrated; the manager-adapter integration proof is independently
-canonical in this slice.
+Gate 4 now starts the same-user private UDS intake server before its public
+canonical-read server, then proves canonical list/detail and dashboard reads
+across restart. Its refreshed proof records only canonical `packetId`,
+`sourceRef`, stage/status, and metadata-only fields; normal `/pipeline` is
+also asserted not to render a fixture fallback.
 
 ## Rollback and stop lines
 

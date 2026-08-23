@@ -5,10 +5,10 @@ Lane: `20260717-audit-legacy-dashboard-fixtures-and-fallback-pat`
 
 ## Decision
 
-This audit found no fixture or fallback path that is safe to retire in this
-slice. No compatibility route, fallback branch, fixture catalog, or supervisor
-endpoint was removed. The paths below remain intentionally bounded and have
-current test or runtime-contract evidence.
+The initial inventory is superseded for the legacy WorkPacket HTTP reads: the
+normal dashboard is canonical-only, the legacy list/detail API and transport
+admissions are retired, and explicit source-zero/404/deny coverage records the
+change. The demo fixture catalog remains intentionally bounded.
 
 ## Inventory and evidence
 
@@ -16,9 +16,9 @@ current test or runtime-contract evidence.
 | --- | --- | --- |
 | `apps/dashboard/src/lib/pipeline-fixtures.ts` | Imported by `/pipeline/demo` and `/pipeline/demo/packets/[packetId]`. The demo is the explicit fixture catalog; normal `/pipeline` is tested to avoid this import. | Retain. Removing it would break the supported demo and its fixture-only contract. |
 | `apps/dashboard/src/lib/pipeline-evidence-source.ts` | Compiled and exercised by `tests/dashboard-pipeline-fixtures.test.mjs` as the metadata-only evidence-source contract. It is not a normal `/pipeline` fixture fallback. | Retain. No replacement contract or proof of dead code exists. |
-| Canonical-first runtime reads in `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts` | Requests `/pipeline-control-plane/work-packets` first, then uses the guarded legacy `/work-packets` read for compatibility. Loader tests cover canonical success, legacy fallback, malformed payloads, and safe packet IDs. | Retain until all supported supervisor consumers are canonical-only. |
-| Legacy `/work-packets` routes | `services/supervisor/tests/integration/test_work_packets.py` and source-intake adapter tests exercise the remaining synthetic read compatibility behavior. The former follow-up mutation was retired after source-zero and persisted candidate-work readback proof. | Retain the read routes only. They remain compatibility/API paths, not fixture-only code. |
-| Legacy route entries in `apps/dashboard/scripts/dashboard-supervisor-proxy.mjs` | Proxy tests exercise canonical and legacy base-read compatibility plus authentication forwarding. The retired follow-up subresource is not admitted; the direct denial/source-zero regression proves that removal. | Retain only the base GET compatibility route. Do not reintroduce the retired follow-up subresource. |
+| Canonical runtime reads in `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts` | Requests versioned `/pipeline-control-plane/work-packets`; no `/work-packets` fallback remains. Loader tests cover canonical success, malformed payloads, and safe packet IDs. | Retain as the normal canonical boundary. |
+| Legacy `/work-packets` routes | Removed. The restart-backed mixed-data test proves native WorkItem/CandidateWork and canonical packet readbacks while both removed GET forms return 404. | Do not reintroduce a synthetic read route; internal V0 projection retirement is a separate later dependency. |
+| Legacy route entries in `apps/dashboard/scripts/dashboard-supervisor-proxy.mjs` | Removed from operator and test-viewer read admissions. Proxy tests prove legacy list/detail attempts return 404 without supervisor forwarding. | Keep exact deny coverage. |
 | `legacySignInPage` in `apps/dashboard/scripts/secure-dashboard-runtime.mjs` | Legacy sign-in rendering compatibility. It is outside the fixture/fallback surface audited here. | No change in this slice. |
 
 ## Verification evidence
@@ -50,9 +50,6 @@ is retained; this document records the bounded commands and result only.
 
 ## Revisit triggers
 
-Re-audit before removal when the repository and deployed-client inventory shows
-no supported legacy callers, the follow-up mutation has a canonical replacement
-and migrated callers (including a direct proxy regression test), and the
-metadata-only evidence source has a replacement contract with equivalent test
-coverage. Any retirement should preserve the explicit `/pipeline/demo` boundary
-unless that route is deliberately removed as a product decision.
+Re-audit before removing the remaining internal V0 projector/fixture holds.
+Any later retirement must preserve the explicit `/pipeline/demo` boundary unless
+that route is deliberately removed as a product decision.
