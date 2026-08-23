@@ -4839,7 +4839,7 @@ def test_operator_owned_exit_revokes_active_execution_attempt_and_queue_lease(tm
         assert datetime.fromisoformat(revoked_lease[2]).astimezone(timezone.utc) <= datetime.now(timezone.utc)
 
 
-def test_done_delivery_work_packet_outranks_historical_execution_attempts(tmp_path, monkeypatch) -> None:
+def test_done_delivery_work_item_retains_historical_execution_attempts(tmp_path, monkeypatch) -> None:
     db_name = "done-delivery-attempt-precedence.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -4888,22 +4888,29 @@ def test_done_delivery_work_packet_outranks_historical_execution_attempts(tmp_pa
             next_step=None,
         )
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        assert packet["currentStage"] == "deliver"
-        assert packet["currentOwner"] == "github"
-        assert packet["status"] == "complete"
-        assert "work_item.done" in packet["routeSummary"]["reasonCodes"]
-        assert "delivery.evidence_present" in packet["routeSummary"]["reasonCodes"]
-        assert "execution_attempt.failed" not in packet["routeSummary"]["reasonCodes"]
-        assert packet["lifecycleState"]["source"] == "delivery_evidence"
-        assert packet["lifecycleState"]["authoritativeRef"] == f"work_item:{work_item['id']}"
-        assert packet["lifecycleState"]["attemptRef"] is None
-        assert packet["executionAttempts"][0]["status"] == "failed"
+        persisted_work_item = client.get(f"/work-items/{work_item['id']}")
+        assert persisted_work_item.status_code == 200
+        persisted = persisted_work_item.json()["data"]
+        assert persisted["state"] == "done"
+        assert persisted["lane"] == "review"
+        assert persisted["statusSummary"] == "Delivered with PR evidence."
+        assert persisted["nextStep"] is None
+        assert persisted["metadata"]["pullRequestUrl"] == "https://github.com/example/repo/pull/4242"
+        assert persisted["metadata"]["pullRequestStatus"] == "ready"
+        assert persisted["metadata"]["ciStatus"] == "passed"
+        assert persisted["metadata"]["mergeStatus"] == "ready"
+
+        attempts_response = client.get(f"/work-items/{work_item['id']}/execution-attempts")
+        assert attempts_response.status_code == 200
+        persisted_attempt = next(
+            item for item in attempts_response.json()["data"] if item["attemptId"] == attempt["attemptId"]
+        )
+        assert persisted_attempt["status"] == "failed"
+        assert persisted_attempt["failureReason"] == "Historical failed attempt before delivery."
+        assert persisted_attempt["eventRefs"][-1]["eventType"] == "execution_attempt.failed"
 
 
-def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(tmp_path, monkeypatch) -> None:
+def test_work_item_metadata_references_candidate_without_mutation(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-metadata-link.db") as client:
         candidate = _create_candidate(client, title="Metadata linked candidate")
         work_item_response = client.post(
@@ -4926,16 +4933,18 @@ def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(
         before_candidates = client.get("/candidate-work").json()["data"]
         before_work_items = client.get("/work-items").json()["data"]
 
-        packets_response = client.get("/work-packets")
-        assert packets_response.status_code == 200
-        packets = packets_response.json()["data"]
-        packet_ids = {packet["packetId"] for packet in packets}
-        assert packet_ids == {f"work_item:{work_item['id']}"}
+        persisted_work_item = client.get(f"/work-items/{work_item['id']}")
+        assert persisted_work_item.status_code == 200
+        assert persisted_work_item.json()["data"]["metadata"]["candidateWorkId"] == candidate["id"]
+        assert persisted_work_item.json()["data"]["metadata"]["candidatePriority"] == "high"
 
-        packet = packets[0]
-        assert packet["candidateWork"]["id"] == candidate["id"]
-        assert packet["workItem"]["id"] == work_item["id"]
-        assert {ref["sourceType"] for ref in packet["sourceRefs"]} == {"candidate_work", "work_item"}
+        persisted_candidates_response = client.get("/candidate-work")
+        assert persisted_candidates_response.status_code == 200
+        persisted_candidate = next(
+            item for item in persisted_candidates_response.json()["data"] if item["id"] == candidate["id"]
+        )
+        assert persisted_candidate["title"] == candidate["title"]
+        assert persisted_candidate["promotedWorkItemId"] is None
 
         assert client.get("/candidate-work").json()["data"] == before_candidates
         assert client.get("/work-items").json()["data"] == before_work_items
