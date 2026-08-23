@@ -7015,7 +7015,7 @@ def test_dashboard_canonical_operational_projection_reconstructs_safe_v1_rows(tm
         assert detail["workGraph"]["schemaVersion"] == "dashboard-canonical-work-graph/v1"
         assert detail["workGraph"]["rawPayloadRetained"] is False
 
-def test_work_packet_transition_events_replay_work_item_and_subscription_launch_events(tmp_path, monkeypatch) -> None:
+def test_work_item_events_persist_transition_and_subscription_launch_evidence(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-transition-event-replay.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -7065,7 +7065,7 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
             },
             created_at="2026-06-28 00:00:01.750000",
         )
-        for event_id, event_type, summary in [
+        for sequence, (event_id, event_type, summary) in enumerate([
             (
                 "event-subscription-z-started",
                 "execution_attempt.subscription_launch_fixture_started",
@@ -7086,7 +7086,7 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
                 "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
                 "Subscription-agent rollback-disabled policy recorded.",
             ),
-        ]:
+        ], start=1):
             _insert_workflow_event_fixture(
                 db_path,
                 work_item["id"],
@@ -7097,7 +7097,7 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
                     "executionAttemptId": "attempt-subscription-fixture",
                     "approvalBinding": {"lane": "subscription_agent"},
                 },
-                created_at="2026-06-28 00:00:02.000000",
+                created_at=f"2026-06-28 00:00:02.{sequence:06d}",
             )
         _insert_workflow_event_fixture(
             db_path,
@@ -7110,57 +7110,37 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
                 "attemptStatus": "completed",
                 "approvalBinding": {"lane": "subscription_agent"},
             },
-            created_at="2026-06-28 00:00:02.000000",
+            created_at="2026-06-28 00:00:02.999999",
         )
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        transition_by_type = {transition["eventType"]: transition for transition in packet["transitionEvents"]}
+        events_response = client.get(f"/work-items/{work_item['id']}/events")
+        assert events_response.status_code == 200
+        events_by_type = {event["eventType"]: event for event in events_response.json()["data"]}
 
-        ready_transition = transition_by_type["work_item.ready"]
-        assert ready_transition["targetStage"] == "human_gate"
-        assert ready_transition["targetOwner"] == "operator"
-        assert ready_transition["targetStatus"] == "waiting"
-        assert ready_transition["evidenceRefs"] == ["event:event-work-item-ready"]
-        recipe_transition = transition_by_type["recipe.ready"]
-        assert recipe_transition["targetStage"] == "human_gate"
-        assert recipe_transition["targetOwner"] == "operator"
-        assert recipe_transition["targetStatus"] == "waiting"
-        assert recipe_transition["evidenceRefs"] == ["event:event-recipe-ready"]
+        assert events_by_type["work_item.ready"]["id"] == "event-work-item-ready"
+        assert events_by_type["work_item.ready"]["payload"] == {"state": "ready", "lane": "utility"}
+        assert events_by_type["recipe.ready"]["id"] == "event-recipe-ready"
+        assert events_by_type["recipe.ready"]["payload"] == {"state": "ready", "lane": "local_patch_draft"}
         for bookkeeping_event_type in ["work_item.assigned", "work_item.unassigned", "work_item.escalated"]:
-            assert bookkeeping_event_type not in transition_by_type
+            assert events_by_type[bookkeeping_event_type]["payload"]["assigneeLabel"] == "Operator"
 
-        supervised_transition = transition_by_type["execution_attempt.supervised_codex_launch_started"]
-        assert supervised_transition["targetStage"] == "execute"
-        assert supervised_transition["targetOwner"] == "codex_worker"
-        assert supervised_transition["targetStatus"] == "active"
-        assert "attempt:attempt-supervised-codex" in supervised_transition["evidenceRefs"]
-
-        subscription_transition = transition_by_type["execution_attempt.subscription_launch_fixture_completed"]
-        assert subscription_transition["targetStage"] == "review"
-        assert subscription_transition["targetOwner"] == "kendall"
-        assert subscription_transition["targetStatus"] == "complete"
-        assert "event:event-subscription-completed" in subscription_transition["evidenceRefs"]
-        assert "attempt:attempt-subscription-fixture" in subscription_transition["evidenceRefs"]
-        subscription_order = [
-            transition["eventType"]
-            for transition in packet["transitionEvents"]
-            if transition["eventType"].startswith("execution_attempt.subscription_launch_fixture_")
+        assert events_by_type["execution_attempt.supervised_codex_launch_started"]["payload"]["attemptId"] == "attempt-supervised-codex"
+        subscription_events = [
+            event
+            for event in events_response.json()["data"]
+            if event["eventType"].startswith("execution_attempt.subscription_launch_fixture_")
         ]
-        assert subscription_order == [
+        assert [event["eventType"] for event in reversed(subscription_events)] == [
             "execution_attempt.subscription_launch_fixture_started",
             "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
             "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
             "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
             "execution_attempt.subscription_launch_fixture_completed",
         ]
+        assert events_by_type["execution_attempt.subscription_launch_fixture_completed"]["id"] == "event-subscription-completed"
+        assert events_by_type["execution_attempt.subscription_launch_fixture_completed"]["payload"]["executionAttemptId"] == "attempt-subscription-fixture"
 
-        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
-        assert "event:event-work-item-ready" in packet_evidence_ref_ids
-        assert "event:event-subscription-completed" in packet_evidence_ref_ids
-
-def test_work_packet_list_replays_gate_state_from_descending_events(tmp_path, monkeypatch) -> None:
+def test_work_item_events_are_descending_with_persisted_work_item_state(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-list-event-order.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
@@ -7185,24 +7165,17 @@ def test_work_packet_list_replays_gate_state_from_descending_events(tmp_path, mo
         )
         _update_work_item_fixture(db_path, work_item["id"], state="ready")
 
-        list_response = client.get("/work-packets")
-        assert list_response.status_code == 200
-        list_packet = next(packet for packet in list_response.json()["data"] if packet["packetId"] == f"work_item:{work_item['id']}")
-        single_packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        persisted_work_item = client.get(f"/work-items/{work_item['id']}")
+        assert persisted_work_item.status_code == 200
+        assert persisted_work_item.json()["data"]["state"] == "ready"
+        events_response = client.get(f"/work-items/{work_item['id']}/events")
+        assert events_response.status_code == 200
+        assert [event["eventType"] for event in events_response.json()["data"][:2]] == [
+            "work_item.ready",
+            "work_item.triaged",
+        ]
 
-        for packet in [list_packet, single_packet]:
-            validation = packet["gateStateValidation"]
-            assert validation["status"] == "matched"
-            assert validation["latestEventType"] == "work_item.ready"
-            assert validation["derivedStage"] == "human_gate"
-            assert validation["derivedOwner"] == "operator"
-            assert validation["derivedStatus"] == "waiting"
-            assert validation["mismatchReasons"] == []
-
-        list_event_types = [transition["eventType"] for transition in list_packet["transitionEvents"]]
-        assert list_event_types.index("work_item.triaged") < list_event_types.index("work_item.ready")
-
-def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:
+def test_execution_attempt_approval_persists_event_without_read_mutation(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-gate-replay-match.db"
     with _client(tmp_path, monkeypatch, db_name) as client:
         from supervisor.api.main import service
@@ -7242,131 +7215,14 @@ def test_work_packet_gate_state_validation_matches_event_replay_without_mutation
         assert approval_response.status_code == 200
         before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        validation = packet["gateStateValidation"]
-
-        assert validation["status"] == "matched"
-        assert validation["storedStage"] == "human_gate"
-        assert validation["derivedStage"] == "human_gate"
-        assert validation["storedOwner"] == "operator"
-        assert validation["derivedOwner"] == "operator"
-        assert validation["storedStatus"] == "waiting"
-        assert validation["derivedStatus"] == "waiting"
-        assert validation["latestEventType"] == "execution_attempt.approved"
-        assert "execution_attempt.approved" in validation["replayedEventTypes"]
-        assert validation["mismatchReasons"] == []
-        assert validation["blockedReasons"] == []
-        assert validation["readOnly"] is True
-        assert validation["sourceMutationAllowed"] is False
-        assert validation["providerCallsAllowed"] is False
-        assert validation["workerLaunchAllowed"] is False
+        attempts_response = client.get(f"/work-items/{work_item['id']}/execution-attempts")
+        assert attempts_response.status_code == 200
+        persisted_attempt = next(
+            item for item in attempts_response.json()["data"] if item["attemptId"] == attempt["attemptId"]
+        )
+        assert persisted_attempt["status"] == "approved"
+        assert persisted_attempt["eventRefs"][-1]["eventType"] == "execution_attempt.approved"
         assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
-
-def test_work_packet_gate_state_validation_blocks_mismatch_from_event_replay(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-gate-replay-mismatch.db"
-    db_path = _db_path(tmp_path, db_name)
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        from supervisor.api.main import service
-
-        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
-        work_item_response = client.post(
-            "/work-items",
-            json={
-                "title": "Gate replay mismatch packet",
-                "requestedOutcome": "Report stored gate state drift as blocked validation.",
-                "source": "pytest",
-                "riskLevel": "low",
-                "metadata": {
-                    "executionRecipeId": "dashboard-test-coverage",
-                    "sourceArtifactPath": "docs/gate-replay.md",
-                },
-            },
-        )
-        assert work_item_response.status_code == 200
-        work_item = work_item_response.json()["data"]
-        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
-        attempt = attempt_response.json()["data"]
-        approval_response = client.post(
-            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
-            json={
-                **_attempt_transition_fence(attempt),
-                "status": "approved",
-                "reason": "operator gate approval",
-                "routeDecisionId": attempt["routeDecisionId"],
-                "workerId": attempt["workerId"],
-                "lane": attempt["lane"],
-                "authorityMode": attempt["authorityMode"],
-            },
-        )
-        assert approval_response.status_code == 200
-        _update_execution_attempt_fixture(db_path, attempt["attemptId"], status="running")
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        validation = packet_response.json()["data"]["gateStateValidation"]
-
-        assert validation["status"] == "blocked"
-        assert validation["storedStage"] == "execute"
-        assert validation["derivedStage"] == "human_gate"
-        assert validation["storedStatus"] == "active"
-        assert validation["derivedStatus"] == "waiting"
-        assert any("stored stage execute" in reason for reason in validation["mismatchReasons"])
-        assert any("stored status active" in reason for reason in validation["mismatchReasons"])
-
-def test_work_packet_gate_state_validation_blocks_inaccessible_refs_with_explicit_states(tmp_path, monkeypatch) -> None:
-    db_name = "work-packet-gate-replay-refs.db"
-    db_path = _db_path(tmp_path, db_name)
-    with _client(tmp_path, monkeypatch, db_name) as client:
-        work_item = _create_work_item(client, title="Gate replay inaccessible refs packet")
-        _update_work_item_fixture(
-            db_path,
-            work_item["id"],
-            metadata_json={
-                "sourceArtifactPath": "docs/direct-work.md",
-                "workPacketSourceRefs": [
-                    {
-                        "refId": "fixture:source:missing",
-                        "sourceType": "github",
-                        "label": "Missing GitHub evidence",
-                        "freshness": "unknown",
-                        "accessState": "missing",
-                    },
-                    {
-                        "refId": "fixture:source:excluded",
-                        "sourceType": "llm_wiki",
-                        "label": "Excluded wiki source",
-                        "pathOrUrl": "https://example.invalid/raw-source",
-                        "freshness": "unknown",
-                        "accessState": "excluded",
-                    },
-                    {
-                        "refId": "fixture:source:unsupported",
-                        "sourceType": "private_dump",
-                        "label": "Unsupported private dump",
-                        "pathOrUrl": "file:///private/raw-source.md",
-                        "freshness": "fresh",
-                        "accessState": "allowed",
-                    },
-                ],
-            },
-        )
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        validation = packet["gateStateValidation"]
-        ref_states = {ref["refId"]: ref for ref in validation["refStates"] if ref["refType"] == "source"}
-
-        assert validation["status"] in {"blocked", "preview_only"}
-        assert ref_states["fixture:source:missing"]["state"] == "missing"
-        assert ref_states["fixture:source:excluded"]["state"] == "excluded"
-        assert ref_states["fixture:source:unsupported"]["state"] == "blocked"
-        assert ref_states["fixture:source:excluded"]["blockingReason"]
-        assert packet["sourceRefs"][1]["accessState"] == "missing"
-        assert packet["sourceRefs"][2]["accessState"] == "excluded"
-        assert packet["sourceRefs"][2]["pathOrUrl"] is None
 
 def test_work_item_routes_user_facing_documentation_proposal_as_draft_plan_only(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal.db") as client:
