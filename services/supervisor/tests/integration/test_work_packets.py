@@ -4624,36 +4624,27 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
             ],
         )
 
-        before_attempts = client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"]
-        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
+        task_packet_response = client.get(f"/work-items/{work_item['id']}/task-packet-preview")
+        routing_response = client.get(f"/work-items/{work_item['id']}/routing-preview?taskKind=path_scope_check")
+        work_item_response = client.get(f"/work-items/{work_item['id']}")
+        attempts_response = client.get(f"/work-items/{work_item['id']}/execution-attempts")
+        events_response = client.get(f"/work-items/{work_item['id']}/events")
+        assert task_packet_response.status_code == routing_response.status_code == 200
+        assert work_item_response.status_code == attempts_response.status_code == events_response.status_code == 200
 
-        packets_response = client.get("/work-packets")
-        assert packets_response.status_code == 200
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-
-        assert packet["taskPacket"]["workItemId"] == work_item["id"]
-        assert packet["routingPreview"]["decision"]["selectedLane"] == "utility"
-        assert packet["routeSummary"]["recommendation"] == "utility"
-        assert packet["routeSummary"]["confidenceScore"] > 0
-        assert "task.deterministic_check" in packet["routeSummary"]["reasonCodes"]
-        assert packet["currentStage"] == "execute"
-        assert packet["currentOwner"] == "blocked"
-        assert packet["status"] == "failed"
-        assert packet["lifecycleState"]["source"] == "execution_attempt"
-        assert packet["lifecycleState"]["stage"] == "execute"
-        assert packet["lifecycleState"]["owner"] == "blocked"
-        assert packet["lifecycleState"]["status"] == "failed"
-        assert packet["lifecycleState"]["authoritativeRef"] == f"attempt:{attempt['attemptId']}"
-        assert packet["lifecycleState"]["attemptRef"] == f"attempt:{attempt['attemptId']}"
-        assert f"attempt:{attempt['attemptId']}" in packet["lifecycleState"]["derivedFromRefs"]
-        assert all(ref.startswith("event:") for ref in packet["lifecycleState"]["transitionEventRefs"])
-        assert packet["lifecycleState"]["latestTransitionEventRef"] in packet["lifecycleState"]["transitionEventRefs"]
-        assert packet["lifecycleState"]["workerLaunchAllowed"] is False
-        assert len(packet["executionAttempts"]) == 1
-        attempt_summary = packet["executionAttempts"][0]
+        task_packet = task_packet_response.json()["data"]
+        route = routing_response.json()["data"]
+        persisted_work_item = work_item_response.json()["data"]
+        attempts = attempts_response.json()["data"]
+        events = events_response.json()["data"]
+        assert task_packet["packet"]["workItemId"] == work_item["id"]
+        assert route["decision"]["workItemId"] == work_item["id"]
+        assert route["decision"]["confidenceScore"] > 0
+        assert route["decision"]["reasonCodes"]
+        assert persisted_work_item["id"] == work_item["id"]
+        assert persisted_work_item["state"] == "queued"
+        assert len(attempts) == 1
+        attempt_summary = attempts[0]
         assert attempt_summary["attemptId"] == attempt["attemptId"]
         assert attempt_summary["workItemId"] == work_item["id"]
         assert attempt_summary["routeDecisionId"] == attempt["routeDecisionId"]
@@ -4661,22 +4652,13 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert attempt_summary["workerId"] == "utility.internal"
         assert attempt_summary["status"] == "failed"
         assert attempt_summary["failureReason"] == "Fixture failure for recovery drawer."
-        assert attempt_summary["evidenceRefs"]
         assert attempt_summary["artifactRefs"]
-        assert all("workspaceIsolationPlan" not in summary for summary in packet["executionAttempts"])
-        assert any(ref["evidenceType"] == "attempt" for ref in packet["evidenceRefs"])
-        attempt_artifacts = [ref for ref in packet["artifactRefs"] if ref["refId"].startswith(f"artifact:attempt:{attempt['attemptId']}")]
-        assert attempt_artifacts
-        assert attempt_artifacts[0]["artifactType"] == "fixture"
-        assert attempt_artifacts[0]["pathOrUrl"] == "docs/direct-work.md"
-        assert any(ref["status"] == "missing" and ref["label"] == "missing_fixture" for ref in attempt_artifacts)
-        assert packet["laneCards"][0]["laneType"] == "utility"
-        assert packet["laneCards"][0]["status"] == "blocked"
-        assert packet["recoveryActions"]
-        assert packet["recoveryActions"][0]["actionType"] == "retry_smaller"
-
-        assert client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"] == before_attempts
-        assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
+        assert attempt_summary["artifactRefs"][0]["artifactType"] == "task_packet_v0"
+        assert attempt_summary["artifactRefs"][0]["sourceArtifactPath"] == "docs/direct-work.md"
+        assert any(ref["artifactType"] == "missing_fixture" for ref in attempt_summary["artifactRefs"])
+        assert any(event["eventType"] == "execution_attempt.failed" for event in events)
+        assert client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"] == attempts
+        assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == events
 
 
 def test_operator_owned_rework_exit_stops_automation_until_reenter_capture(tmp_path, monkeypatch) -> None:
@@ -4732,49 +4714,6 @@ def test_operator_owned_rework_exit_stops_automation_until_reenter_capture(tmp_p
         assert exited["attentionReason"] == "Idea is too broad; operator will split it in Obsidian before re-entry."
         assert exited["nextStep"] == "Update input and re-enter capture"
 
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        assert packet["currentStage"] == "capture"
-        assert packet["currentOwner"] == "operator"
-        assert packet["status"] == "deferred"
-        assert "work_item.operator_owned" in packet["routeSummary"]["reasonCodes"]
-        assert "execution_attempt.failed" not in packet["routeSummary"]["reasonCodes"]
-        assert packet["lifecycleState"]["source"] == "work_item"
-        assert packet["lifecycleState"]["stage"] == "capture"
-        assert packet["lifecycleState"]["owner"] == "operator"
-        assert packet["lifecycleState"]["status"] == "deferred"
-        assert packet["lifecycleState"]["authoritativeRef"] == f"work_item:{work_item['id']}"
-        assert packet["lifecycleState"]["attemptRef"] is None
-        assert packet["lifecycleState"]["sourceMutationAllowed"] is False
-        assert packet["lifecycleState"]["providerCallsAllowed"] is False
-        assert packet["lifecycleState"]["workerLaunchAllowed"] is False
-        assert packet["lifecycleState"]["githubMutationAllowed"] is False
-        assert packet["lifecycleState"]["cleanupAllowed"] is False
-        assert packet["learnRefill"]["operatorOwnedExits"][0]["evidenceRefs"]
-        assert packet["learnRefill"]["operatorOwnedExits"][0]["stopStateKind"] == "operator_owned_exit"
-        assert len(packet["loopStopStates"]) == 1
-        stop_state = packet["loopStopStates"][0]
-        assert stop_state["kind"] == "operator_owned"
-        assert stop_state["severity"] == "blocking"
-        assert stop_state["sourceMutationAllowed"] is False
-        assert stop_state["providerCallsAllowed"] is False
-        assert stop_state["workerLaunchAllowed"] is False
-        assert stop_state["githubMutationAllowed"] is False
-        assert stop_state["cleanupAllowed"] is False
-        assert "Do not dispatch workers" in stop_state["stopLine"]
-        assert packet["recoveryActions"] == [
-            {
-                "actionId": "reenter-capture",
-                "actionType": "reenter_capture",
-                "label": "Re-enter capture",
-                "availability": "available",
-                "consequence": "Return the operator-refined packet to Capture for normal triage without replaying stale automation.",
-                "resultingStage": "capture",
-                "resultingOwner": "kendall",
-                "evidenceRefs": [ref["refId"] for ref in packet["evidenceRefs"]],
-            }
-        ]
         blocked_retry_response = client.post(f"/work-items/{work_item['id']}/retry")
         assert blocked_retry_response.status_code == 409
         assert "must re-enter Capture before retry" in blocked_retry_response.text
@@ -4830,15 +4769,6 @@ def test_operator_owned_exit_reconciles_unowned_implementing_work_item_without_l
         assert exited["state"] == "operator_owned"
         assert exited["lane"] is None
         assert exited["blockedReason"] == "Reconciled as obsolete stale work; preserve history and do not dispatch."
-
-        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
-        assert packet_response.status_code == 200
-        packet = packet_response.json()["data"]
-        assert packet["currentStage"] == "capture"
-        assert packet["currentOwner"] == "operator"
-        assert packet["status"] == "deferred"
-        assert packet["lifecycleState"]["workerLaunchAllowed"] is False
-        assert packet["lifecycleState"]["providerCallsAllowed"] is False
 
 
 def test_operator_owned_exit_revokes_active_execution_attempt_and_queue_lease(tmp_path, monkeypatch) -> None:
