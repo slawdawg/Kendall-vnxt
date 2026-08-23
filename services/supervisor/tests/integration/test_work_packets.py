@@ -6569,16 +6569,22 @@ def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, mo
         assert created["writeBackAllowed"] is False
         assert "rawContent" not in created
 
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet["currentOwner"] == "memory_review"
-        assert packet["status"] == "waiting"
-        assert len(packet["memoryProposals"]) == 1
-        packet_proposal = packet["memoryProposals"][0]
-        assert packet_proposal["proposalId"] == payload["proposalId"]
-        assert packet_proposal["sourceRefs"] == payload["sourceRefs"]
-        assert packet_proposal["evidenceRefs"] == payload["evidenceRefs"]
-        assert packet_proposal["writeBackStatus"] == "review_gated"
-        assert packet_proposal["writeBackAllowed"] is False
+        review_response = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review_response.status_code == 200
+        review = review_response.json()["data"]
+        assert review["schemaVersion"] == "work-item-memory-review/v1"
+        assert review["workItemId"] == work_item["id"]
+        assert review["metadataOnly"] is True
+        assert review["rawPayloadRetained"] is False
+        assert review["canonicalMutationAllowed"] is False
+        assert review["sourceMutationAllowed"] is False
+        assert len(review["proposals"]) == 1
+        proposal = review["proposals"][0]
+        assert proposal["proposalId"] == payload["proposalId"]
+        assert proposal["sourceRefs"] == payload["sourceRefs"]
+        assert proposal["evidenceRefs"] == payload["evidenceRefs"]
+        assert proposal["writeBackStatus"] == "review_gated"
+        assert proposal["writeBackAllowed"] is False
 
 
 def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_path, monkeypatch) -> None:
@@ -6645,9 +6651,14 @@ def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_pat
             },
         )
         assert create_response.status_code == 200
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet["memoryProposals"][0]["proposalId"] == "mp-after-schema-repair"
-        assert packet["memoryProposals"][0]["writeBackAllowed"] is False
+        review_response = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review_response.status_code == 200
+        review = review_response.json()["data"]
+        assert review["workItemId"] == work_item["id"]
+        assert review["metadataOnly"] is True
+        assert review["rawPayloadRetained"] is False
+        assert review["proposals"][0]["proposalId"] == "mp-after-schema-repair"
+        assert review["proposals"][0]["writeBackAllowed"] is False
 
     with sqlite3.connect(db_path) as conn:
         legacy = conn.execute(
@@ -6783,8 +6794,12 @@ def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkey
             assert update_response.status_code == 400
             assert update_response.json()["detail"]["error"]["code"] == "memory_proposal_review_rejected"
 
-            packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-            proposal = next(item for item in packet["memoryProposals"] if item["proposalId"] == proposal_id)
+            review_response = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+            assert review_response.status_code == 200
+            review = review_response.json()["data"]
+            assert review["workItemId"] == work_item["id"]
+            assert review["metadataOnly"] is True
+            proposal = next(item for item in review["proposals"] if item["proposalId"] == proposal_id)
             assert proposal["status"] == "pending_human_approval"
             assert proposal["operatorAction"] == "defer"
             assert proposal["writeBackStatus"] == "review_gated"
@@ -7461,11 +7476,14 @@ def test_work_item_routes_user_facing_documentation_proposal_as_draft_plan_only(
         assert created["writeBackAllowed"] is False
         assert "rawContent" not in created
 
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet["currentStage"] == "learn"
-        assert packet["currentOwner"] == "memory_review"
-        assert packet["status"] == "waiting"
-        proposal = packet["memoryProposals"][0]
+        review_response = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review_response.status_code == 200
+        review = review_response.json()["data"]
+        assert review["schemaVersion"] == "work-item-memory-review/v1"
+        assert review["workItemId"] == work_item["id"]
+        assert review["metadataOnly"] is True
+        assert review["rawPayloadRetained"] is False
+        proposal = review["proposals"][0]
         assert proposal["proposalId"] == payload["proposalId"]
         assert proposal["proposalType"] == "user_facing_documentation"
         assert proposal["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
@@ -7513,8 +7531,12 @@ def test_user_facing_documentation_proposal_rejects_unsafe_targets_and_missing_e
             assert response.status_code == 409
             assert response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
 
-        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
-        assert packet["memoryProposals"] == []
+        review_response = client.get(f"/pipeline-control-plane/work-items/{work_item['id']}/memory-review")
+        assert review_response.status_code == 200
+        review = review_response.json()["data"]
+        assert review["workItemId"] == work_item["id"]
+        assert review["metadataOnly"] is True
+        assert review["proposals"] == []
 
 def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-learn-refill-promotion.db"
