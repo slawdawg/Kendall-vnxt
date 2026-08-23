@@ -2882,22 +2882,13 @@ function loadDashboardSupervisorModule(source) {
   const canonicalProjectionModule = projectionContext.module.exports;
   let projectionPayload = projectionContractFixture();
   let projectionEnvelope = { data: projectionPayload };
-  let workPacketsPayload = [];
   let responseOk = true;
   const runtimeRequestJson = async (path) => {
     const expectedUrl = path === "/pipeline-control-plane/projection"
       ? "http://supervisor.test/pipeline-control-plane/projection"
-      : path === "/work-packets"
-        ? "http://supervisor.test/work-packets"
-        : /^\/work-packets\/[^/]+$/.test(path)
-          ? `http://supervisor.test${path}`
-          : null;
+      : null;
     assert.ok(expectedUrl, `unexpected runtime read path ${path}`);
-    const envelope = path === "/pipeline-control-plane/projection"
-      ? projectionEnvelope
-      : path === "/work-packets"
-        ? { data: workPacketsPayload }
-        : { data: workPacketsPayload[0] ?? null };
+    const envelope = projectionEnvelope;
     const response = {
       ok: responseOk,
       async json() {
@@ -2935,8 +2926,6 @@ function loadDashboardSupervisorModule(source) {
       if (specifier === "./pipeline-supervisor-runtime") {
         return {
           getPipelineDashboardProjection: () => runtimeRequestJson("/pipeline-control-plane/projection"),
-          getWorkPacket: (packetId) => runtimeRequestJson(`/work-packets/${encodeURIComponent(packetId)}`),
-          getWorkPackets: () => runtimeRequestJson("/work-packets"),
         };
       }
       if (specifier === "./pipeline-supervisor-projection") {
@@ -2979,7 +2968,6 @@ function loadDashboardSupervisorModule(source) {
     setProjectionPayload(nextProjectionPayload) {
       projectionPayload = nextProjectionPayload;
       projectionEnvelope = { data: projectionPayload };
-      workPacketsPayload = Array.isArray(nextProjectionPayload.workPackets) ? nextProjectionPayload.workPackets : [];
       responseOk = true;
     },
     setResponseOk(nextResponseOk) {

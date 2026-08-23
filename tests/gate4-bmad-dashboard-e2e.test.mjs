@@ -27,6 +27,9 @@ test("Gate 4 joined proof is wired as a zero-skip real-process command", async (
   assert.match(source, /manager-source-intake-ready/);
   assert.match(source, /apps\/dashboard\/node_modules\/\.bin\/next/);
   assert.match(source, /supervisor\.api\.main:app/);
+  assert.match(source, /pipeline-control-plane\/work-packets/);
+  assert.match(source, /\["packetId", "sourceRef", "currentStage", "status", "metadataOnly"\]/);
+  assert.doesNotMatch(source, /supervisorUrl}\/work-packets/);
   assert.match(source, /skipped:\s*0/);
   assert.doesNotMatch(source, /pytest\.skip|\bskip\s*\(/);
 });
@@ -48,10 +51,10 @@ test("Gate 4 proof artifact is metadata-only and records authoritative parity", 
   assert.equal(proof.manager.sourceResolutionMode, "default_local_bmad");
   assert.equal(proof.manager.callerSuppliedCandidateDefaults, false);
   assert.equal(proof.supervisor.comparedFieldsParity, true);
-  assert.deepEqual(proof.supervisor.comparedFields, ["packetId", "sourceRefs", "currentStage", "status", "evidenceRefs"]);
+  assert.deepEqual(proof.supervisor.comparedFields, ["packetId", "sourceRef", "currentStage", "status", "metadataOnly"]);
   assert.equal(proof.dashboard.actualProcess, true);
   assert.equal(proof.dashboard.requestedPacketUsedSupervisorProjection, true);
-  assert.equal(proof.dashboard.staticFallbackPacketsRenderedInList, true);
+  assert.equal(proof.dashboard.staticFallbackPacketsRenderedInList, false);
   assert.equal(proof.persistence.supervisorRestartVerified, true);
   assert.deepEqual(proof.sideEffects.tableCounts, {
     candidate_work: 0,
@@ -75,7 +78,7 @@ test("Gate 4 proof artifact is metadata-only and records authoritative parity", 
     workerSourceMutation: false,
     backgroundExecution: false,
   });
-  assert.deepEqual(proof.executionBoundary.launchedTopLevelProcessLabels, ["dashboard", "manager-source-intake", "supervisor"]);
+  assert.deepEqual(proof.executionBoundary.launchedTopLevelProcessLabels, ["dashboard", "manager-source-intake", "supervisor", "supervisor-private-uds"]);
   assert.equal(proof.retention.trackedSourceBytesUnchanged, true);
   assert.equal(proof.cleanup.disposableBmadRootRemoved, true);
   assert.equal(proof.cleanup.disposableRuntimeRootRemoved, true);

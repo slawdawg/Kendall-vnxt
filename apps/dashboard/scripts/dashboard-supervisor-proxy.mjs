@@ -22,7 +22,6 @@ const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
   /^\/memory-inbox\/projection$/,
   /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/revisions\/[1-9][0-9]*\/reader$/,
-  /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
   LLM_WIKI_ARTIFACT_PATH,
 ];
@@ -38,7 +37,6 @@ const TEST_VIEWER_READ_PATHS = [
   // Target IDs are decoded exactly once before this check. `%` is excluded so
   // a second decoder in an upstream library can never reinterpret a permitted
   // viewer packet ID as a path separator or dot segment.
-  /^\/work-packets(?:\/[A-Za-z0-9._:-]+)?$/,
   /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:-]+)?|work-items\/[A-Za-z0-9._:-]+\/packet)$/,
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
@@ -50,7 +48,6 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/supervisor\/runtime-evidence-review-report$/,
   /^\/events$/,
   /^\/audit-events$/,
-  /^\/work-packets(?:\/[A-Za-z0-9._:%-]+)?$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
   /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,

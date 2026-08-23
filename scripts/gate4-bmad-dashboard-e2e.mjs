@@ -5,6 +5,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -64,6 +65,9 @@ try {
   const supervisorUrl = `http://127.0.0.1:${supervisorPort}`;
   const dashboardUrl = `http://127.0.0.1:${dashboardPort}`;
   const dbPath = join(tempRoot, "gate4-proof.db");
+  const privateSupervisorDir = join(tempRoot, "private-supervisor");
+  const supervisorUdsPath = join(privateSupervisorDir, "supervisor.sock");
+  const bootstrapPasswordPath = join(privateSupervisorDir, "bootstrap-password");
   const baseEnv = {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
@@ -80,16 +84,27 @@ try {
     SUPERVISOR_CORS_ORIGINS: dashboardUrl,
     UV_CACHE_DIR: join(tempRoot, "uv-cache"),
   };
+  await mkdir(privateSupervisorDir, { recursive: true, mode: 0o700 });
+  await chmod(privateSupervisorDir, 0o700);
+  await writeFile(bootstrapPasswordPath, "gate4-private-supervisor-bootstrap\n", { mode: 0o600 });
+  await chmod(bootstrapPasswordPath, 0o600);
+  const privateSupervisorEnv = {
+    ...baseEnv,
+    KENDALL_LAN_AUTH_ENABLED: "true",
+    KENDALL_SUPERVISOR_TRANSPORT: "private_uds",
+    KENDALL_SUPERVISOR_UDS_PATH: supervisorUdsPath,
+    KENDALL_DASHBOARD_BOOTSTRAP_PASSWORD_FILE: bootstrapPasswordPath,
+  };
 
   let supervisor = startProcess(
     "uv",
-    ["run", "--directory", "services/supervisor", "uvicorn", "supervisor.api.main:app", "--host", "127.0.0.1", "--port", String(supervisorPort)],
-    { env: baseEnv, label: "supervisor" },
+    ["run", "--directory", "services/supervisor", "uvicorn", "supervisor.api.main:app", "--uds", supervisorUdsPath],
+    { env: privateSupervisorEnv, label: "supervisor-private-uds" },
   );
-  await waitForUrl(`${supervisorUrl}/health`, supervisor, 60_000);
+  await waitForSocket(supervisorUdsPath, supervisor, 60_000);
 
   const plan = buildRefillPlan(
-    { runId: "gate4-bmad-dashboard-proof", desiredWorkers: 1, supervisorUrl },
+    { runId: "gate4-bmad-dashboard-proof", desiredWorkers: 1, supervisorUrl, supervisorUdsPath },
     managerContext(bmadRoot),
   );
   const action = plan.nextActions.find((candidate) => candidate.code === "manager-source-intake-ready");
@@ -99,6 +114,7 @@ try {
     warnings: plan.warnings,
     nextActionCodes: plan.nextActions?.map((candidate) => candidate.code),
     defaultBmadSourceResolution: plan.summary?.defaultBmadSourceResolution,
+    sourceWorkEligibility: plan.summary?.sourceBackedPacketSeed?.sourceWorkEligibility,
     sourceBackedPacketSeed: plan.summary?.sourceBackedPacketSeed,
   })}`);
   const provenance = plan.summary.sourceBackedPacketSeed.seedPacket.sourceProvenance;
@@ -117,6 +133,14 @@ try {
   assert.equal(intake.metadataOnly, true);
   assert.equal(intake.rawPayloadRetained, false);
   const packetId = intake.packetId;
+
+  await stopProcess(supervisor);
+  supervisor = startProcess(
+    "uv",
+    ["run", "--directory", "services/supervisor", "uvicorn", "supervisor.api.main:app", "--host", "127.0.0.1", "--port", String(supervisorPort)],
+    { env: baseEnv, label: "supervisor" },
+  );
+  await waitForUrl(`${supervisorUrl}/health`, supervisor, 60_000);
 
   const lifecycle = await jsonData(`${supervisorUrl}/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`);
   const firstSupervisorProof = await readSupervisorParity(supervisorUrl, packetId);
@@ -138,9 +162,12 @@ try {
   );
   await waitForUrl(`${supervisorUrl}/health`, supervisor, 60_000);
   const restartedLifecycle = await jsonData(`${supervisorUrl}/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`);
-  assert.deepEqual(restartedLifecycle, lifecycle);
+  assert.deepEqual(comparableAuthoritativeLifecycle(restartedLifecycle), comparableAuthoritativeLifecycle(lifecycle));
   const restartedSupervisorProof = await readSupervisorParity(supervisorUrl, packetId);
-  assert.deepEqual(restartedSupervisorProof.detail, firstSupervisorProof.detail);
+  assert.deepEqual(
+    comparableAuthoritativeLifecycle(restartedSupervisorProof.detail),
+    comparableAuthoritativeLifecycle(firstSupervisorProof.detail),
+  );
 
   dashboard = startDashboard(dashboardPort, supervisorUrl, baseEnv);
   await waitForUrl(`${dashboardUrl}/pipeline`, dashboard, 120_000);
@@ -187,7 +214,7 @@ try {
       stage: firstSupervisorProof.detail.currentStage,
       status: firstSupervisorProof.detail.status,
       comparedFieldsParity: true,
-      comparedFields: ["packetId", "sourceRefs", "currentStage", "status", "evidenceRefs"],
+      comparedFields: ["packetId", "sourceRef", "currentStage", "status", "metadataOnly"],
       metadataOnly: true,
     },
     dashboard: {
@@ -197,7 +224,7 @@ try {
       detailRoute: `/pipeline/packets/${packetId}`,
       supervisorPacketMode: firstDashboardProof.supervisorPacketMode,
       comparedFieldsParity: true,
-      comparedFields: ["packetId", "sourceRefs", "currentStage", "status", "evidenceRefs"],
+      comparedFields: ["packetId", "sourceRef", "currentStage", "status", "metadataOnly"],
       requestedPacketUsedSupervisorProjection: true,
       staticFallbackPacketsRenderedInList: firstDashboardProof.staticFallbackPacketsRenderedInList,
     },
@@ -314,6 +341,18 @@ async function freeLoopbackPort(label) {
   });
 }
 
+async function waitForSocket(socketPath, process, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(socketPath)) return;
+    if (process.exitCode !== null) {
+      throw new Error(`${process.kendallLabel} exited before its private UDS became available: ${process.kendallLog}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`${process.kendallLabel} did not expose its private UDS within ${timeoutMs}ms: ${process.kendallLog}`);
+}
+
 function startDashboard(port, supervisorUrl, env) {
   return startProcess(nextBinary, ["dev", "apps/dashboard", "--hostname", "127.0.0.1", "--port", String(port)], {
     env: { ...env, NEXT_PUBLIC_SUPERVISOR_URL: supervisorUrl, SUPERVISOR_INTERNAL_URL: supervisorUrl },
@@ -415,19 +454,17 @@ async function jsonData(url) {
 }
 
 async function readSupervisorParity(supervisorUrl, packetId) {
-  const list = await jsonData(`${supervisorUrl}/work-packets`);
+  const list = await jsonData(`${supervisorUrl}/pipeline-control-plane/work-packets`);
   const listed = list.find((packet) => packet.packetId === packetId);
-  assert.ok(listed, `authoritative packet ${packetId} missing from /work-packets`);
-  const detail = await jsonData(`${supervisorUrl}/work-packets/${encodeURIComponent(packetId)}`);
-  const comparedFields = ["packetId", "sourceRefs", "currentStage", "status", "evidenceRefs"];
+  assert.ok(listed, `authoritative packet ${packetId} missing from canonical list`);
+  const detail = await jsonData(`${supervisorUrl}/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`);
+  const comparedFields = ["packetId", "sourceRef", "currentStage", "status", "metadataOnly"];
   assert.deepEqual(pickFields(detail, comparedFields), pickFields(listed, comparedFields));
   assert.equal(detail.currentStage, "capture");
   assert.equal(detail.status, "waiting");
-  assert.equal(detail.candidateWork, null);
-  assert.equal(detail.workItem, null);
-  assert.equal(detail.lifecycleState.metadataOnly, true);
-  assert.deepEqual(detail.sourceRefs.map((source) => source.refId), [`story:${storyRef}`]);
-  assert.ok(detail.evidenceRefs.length > 0);
+  assert.equal(detail.metadataOnly, true);
+  assert.equal(detail.sourceRef.refId, `story:${storyRef}`);
+  assert.ok(detail.history.at(-1).evidenceRefs.length > 0);
   return { detail };
 }
 
@@ -438,21 +475,32 @@ async function readDashboardParity(dashboardUrl, packet) {
     assert.ok(listHtml.includes(value), `dashboard list omitted ${value}`);
     assert.ok(detailHtml.includes(value), `dashboard detail omitted ${value}`);
   }
-  for (const evidence of packet.evidenceRefs) {
-    assert.ok(listHtml.includes(evidence.refId), `dashboard list omitted ${evidence.refId}`);
-    assert.ok(detailHtml.includes(evidence.refId), `dashboard detail omitted ${evidence.refId}`);
+  for (const evidenceRef of packet.history.at(-1).evidenceRefs) {
+    assert.ok(listHtml.includes(evidenceRef), `dashboard list omitted ${evidenceRef}`);
+    assert.ok(detailHtml.includes(evidenceRef), `dashboard detail omitted ${evidenceRef}`);
   }
-  assert.ok(listHtml.includes("Supervisor packets"));
-  assert.ok(listHtml.includes("fixture:happy-path"), "dashboard list did not render the documented static fallback packets");
-  assert.ok(detailHtml.includes("supervisor WorkPacketV0 projection"));
+  assert.ok(listHtml.includes("Pipeline cockpit"));
+  assert.equal(listHtml.includes("fixture:happy-path"), false, "normal dashboard list rendered a fixture fallback");
+  assert.ok(detailHtml.includes("Authoritative lifecycle"));
   for (const forbidden of ["Fixture/non-live packet", "Fixture fallback", "Supervisor unavailable"]) {
     assert.equal(detailHtml.includes(forbidden), false, `dashboard detail used ${forbidden}`);
   }
-  return { supervisorPacketMode: true, staticFallbackPacketsRenderedInList: true, packetId: packet.packetId, sourceRef: `story:${storyRef}` };
+  return { supervisorPacketMode: true, staticFallbackPacketsRenderedInList: false, packetId: packet.packetId, sourceRef: `story:${storyRef}` };
 }
 
 function pickFields(value, fields) {
   return Object.fromEntries(fields.map((field) => [field, value[field]]));
+}
+
+function comparableAuthoritativeLifecycle(packet) {
+  const comparable = structuredClone(packet);
+  // The supervisor recomputes this bounded, five-minute read freshness window
+  // on each canonical read. It is not persisted lifecycle state.
+  if (comparable.productModeMapping) {
+    comparable.productModeMapping.checkedAt = null;
+    comparable.productModeMapping.expiresAt = null;
+  }
+  return comparable;
 }
 
 async function text(url) {
@@ -477,7 +525,15 @@ async function trackedSourceDigest() {
   for (const path of paths) {
     digest.update(path);
     digest.update("\0");
-    digest.update(await readFile(join(rootDir, path)));
+    const sourcePath = join(rootDir, path);
+    if (existsSync(sourcePath)) {
+      digest.update(await readFile(sourcePath));
+    } else {
+      // A retirement lane can intentionally delete a tracked source file. Keep
+      // that absence in the before/after snapshot instead of failing before
+      // the proof can validate the replacement boundary.
+      digest.update("<missing>");
+    }
     digest.update("\0");
   }
   return digest.digest("hex");
