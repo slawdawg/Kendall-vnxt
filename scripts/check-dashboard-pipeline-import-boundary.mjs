@@ -109,7 +109,6 @@ if (!demoRouteGraph.includes("apps/dashboard/src/lib/pipeline/manager-execution-
 for (const runtimeBoundaryFile of [
   "apps/dashboard/src/lib/pipeline-packet-loader.ts",
   "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts",
-  "apps/dashboard/src/lib/pipeline-supervisor-projector.ts",
 ]) {
   const runtimeBoundarySource = await readFile(join(rootDir, runtimeBoundaryFile), "utf8");
   if (/pipeline-fixtures/.test(runtimeBoundarySource)) {

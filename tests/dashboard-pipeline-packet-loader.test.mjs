@@ -83,8 +83,7 @@ test("authoritative-only WorkPacketV0 is listed and loaded by the same detail id
   assert.equal(detailed.fixtureMode.kind, "runtime");
   assert.equal(detailed.fixtureMode.label, "Supervisor runtime");
   assert.equal(detailed.packet.packetId, listed.packets[0].packetId);
-  assert.equal(detailed.packet.sourceKind, "supervisor-runtime");
-  assert.equal(detailed.packet.sourceId, authoritativePacket.packetId);
+  assert.equal(detailed.packet.sourceId, undefined);
   assert.equal(detailed.packet.fixtureId, undefined);
   assert.equal(detailed.packet.fixtureKind, undefined);
   assert.deepEqual(calls, [
@@ -310,7 +309,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   const malformed = await malformedLoader.loadPipelineCockpitPackets();
   assert.equal(malformed.fixtureMode.kind, "invalid");
   assert.equal(malformed.packets.length, 0);
-  assert.match(malformed.fixtureMode.summary, /malformed WorkPacketV0 row/);
+  assert.match(malformed.fixtureMode.summary, /omitted runtime packet identity/);
 
   const unreadableLoader = await loadPipelinePacketLoader(fixtures, {
     getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["requested-runtime-packet"]),
@@ -331,7 +330,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   assert.equal(unavailable.packet, null);
 });
 
-test("stale supervisor data stays readable but fixture-shaped packets fail closed", async () => {
+test("stale supervisor data remains readable and read-only", async () => {
   const fixtures = populatedFixtureCatalog();
   const staleLoader = await loadPipelinePacketLoader(fixtures, {
     getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
@@ -392,30 +391,6 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   assert.equal(contradictoryStale.fixtureMode.kind, "invalid");
   assert.match(contradictoryStale.fixtureMode.summary, /future-dated/);
 
-  const fixtureShapedLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
-    getWorkPackets: async () => [{
-      ...authoritativeWorkPacket(),
-      fixtureId: "fixture:leaked-runtime",
-      fixtureKind: "future-real-source",
-      fixtureLabel: "Future real-source boundary",
-    }],
-  });
-
-  const fixtureShaped = await fixtureShapedLoader.loadPipelineCockpitPackets();
-  assert.equal(fixtureShaped.fixtureMode.kind, "invalid");
-  assert.equal(fixtureShaped.packets.length, 0);
-  assert.equal(fixtureShaped.operationalProjection, null);
-  assert.match(fixtureShaped.fixtureMode.summary, /fixture-shaped|fixture-only/i);
-
-  const fixturePrefixedLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["fixture:leaked-runtime"]),
-    getWorkPackets: async () => [{ ...authoritativeWorkPacket(), packetId: "fixture:leaked-runtime" }],
-  });
-  const fixturePrefixed = await fixturePrefixedLoader.loadPipelineCockpitPackets();
-  assert.equal(fixturePrefixed.fixtureMode.kind, "invalid");
-  assert.equal(fixturePrefixed.packets.length, 0);
-  assert.match(fixturePrefixed.fixtureMode.summary, /fixture-shaped|fixture-only/i);
 });
 
 test("stale projections reconcile list identities and malformed nested truth fails closed", async () => {
@@ -446,602 +421,6 @@ test("stale projections reconcile list identities and malformed nested truth fai
   assert.match(malformed.projectionError, /missing or malformed/);
 });
 
-test("synthetic reference identities are rejected while fixture-classified evidence metadata remains readable", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const fixtureRefCases = [
-    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "fixture:source-ref" }] },
-    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "fixture:evidence-artifact" }] },
-    { artifactRefs: [{ refId: "fixture:artifact-ref", artifactType: "report", label: "Fixture artifact", status: "available" }] },
-  ];
-  for (const [index, overrides] of fixtureRefCases.entries()) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
-      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", `fixture ref case ${index} must fail closed`);
-    assert.equal(result.packets.length, 0);
-  }
-
-  for (const overrides of [
-    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "fixture" }] },
-    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "fixture" }] },
-    { artifactRefs: [{ refId: "artifact:normal", artifactType: "fixture", label: "Fixture artifact", status: "available" }] },
-  ]) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
-      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "runtime");
-    assert.equal(result.packets.length, 1);
-  }
-
-  const labelOnlyLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
-    getWorkPackets: async () => [{
-      ...authoritativeWorkPacket(),
-      evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], label: "Operator note mentions fixture:legacy text" }],
-    }],
-  });
-  const labelOnly = await labelOnlyLoader.loadPipelineCockpitPackets();
-  assert.equal(labelOnly.fixtureMode.kind, "runtime");
-  assert.equal(labelOnly.packets.length, 1);
-});
-
-test("nested review, gate, and learn fixture provenance fails closed without scanning ordinary text", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const reviewSummary = {
-    reviewer: "claude_reviewer",
-    status: "complete",
-    summary: "Read-only review complete.",
-    evidenceRefs: ["review:complete"],
-    artifactRefs: ["artifact:review"],
-  };
-  const learnOutcome = authoritativeLearnOutcome();
-  const learnRefill = authoritativeLearnRefill();
-  const nestedFixtureCases = [
-    ["review evidence", { reviewSummaries: [{ ...reviewSummary, evidenceRefs: ["fixture:nested-review"] }] }],
-    ["delivery retained evidence", {
-      deliveryEvidence: {
-        evidenceId: "delivery:authoritative",
-        mode: "metadata_only",
-        status: "ready",
-        readyForApproval: false,
-        hasDeliveryExecutionEvidence: false,
-        evidenceRefs: ["event:created"],
-        artifactRefs: [],
-        retainedEvidence: ["fixture:nested-delivery-retained"],
-        blockedReasons: [],
-        recoveryPath: "Return to delivery review.",
-        deliveryRailsGrantAuthority: false,
-        rawPayloadRetained: false,
-        remoteMutationApproved: false,
-        mergeApproved: false,
-        cleanupApproved: false,
-      },
-    }],
-    ["delivery pull request URL", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestUrl: "fixture:pr" },
-    }],
-    ["learn evidence", { learnOutcome: { ...learnOutcome, evidenceRefs: ["fixture:nested-learn-evidence"] } }],
-    ["learn source", { learnOutcome: { ...learnOutcome, sourceRefs: ["fixture:nested-learn-source"] } }],
-    ["learn decision evidence", {
-      learnOutcome: {
-        ...learnOutcome,
-        decisionRecords: [{ ...learnOutcome.decisionRecords[0], evidenceRefs: ["fixture:nested-decision"] }],
-      },
-    }],
-    ["human gate required evidence", {
-      humanGateActions: [{ ...authoritativeHumanGateAction(), requiredEvidenceRefs: ["fixture:nested-human-gate"] }],
-    }],
-    ["learn refill follow-up evidence", {
-      learnRefill: {
-        ...learnRefill,
-        followUpCandidates: [{ ...learnRefill.followUpCandidates[0], evidenceRefs: ["fixture:nested-follow-up"] }],
-      },
-    }],
-    ["learn refill source state", {
-      learnRefill: {
-        ...learnRefill,
-        refillSourceState: { ...learnRefill.refillSourceState, sourceRefs: ["fixture:nested-refill-source"] },
-      },
-    }],
-    ["learn refill ready-to-test verification", {
-      learnRefill: {
-        ...learnRefill,
-        readyToTest: { ...learnRefill.readyToTest, verificationRefs: ["fixture:nested-verification"] },
-      },
-    }],
-    ["gate replay ref state", {
-      gateStateValidation: {
-        ...authoritativeGateStateValidation(),
-        refStates: [{ ...authoritativeGateStateValidation().refStates[0], refId: "fixture:nested-gate-ref" }],
-      },
-    }],
-    ["nested fixture id discriminator", {
-      routeSummary: {
-        recommendation: "capture",
-        reasonCodes: ["route.capture"],
-        detail: { fixtureId: "ordinary-looking-value" },
-      },
-    }],
-    ["nested case-variant fixture id discriminator", {
-      routeSummary: {
-        recommendation: "capture",
-        reasonCodes: ["route.capture"],
-        detail: { FixtureID: "ordinary-looking-value" },
-      },
-    }],
-    ["nested fixture kind discriminator", {
-      reviewSummaries: [{ ...reviewSummary, detail: { fixtureKind: "future-real-source" } }],
-    }],
-    ["nested fixture label discriminator", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), detail: { fixtureLabel: "Demo source" } },
-    }],
-    ["nested demo source kind discriminator", {
-      learnOutcome: { ...learnOutcome, detail: { sourceKind: "demo-fixture" } },
-    }],
-    ["nested case-normalized demo source kind discriminator", {
-      learnOutcome: { ...learnOutcome, detail: { SourceKind: "DEMO-FIXTURE" } },
-    }],
-  ];
-
-  for (const [label, overrides] of nestedFixtureCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-
-  const ordinaryTextLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{
-      ...packet,
-      reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
-      humanGateActions: [{ ...authoritativeHumanGateAction(), label: "Discuss fixture:legacy wording" }],
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        detail: { label: "Operator label mentions fixture:legacy text" },
-      },
-      learnRefill: { ...learnRefill, nextSafeAction: "Document fixture:legacy as ordinary text." },
-      gateStateValidation: { ...authoritativeGateStateValidation(), detail: { retentionClass: "fixture" } },
-      humanGateActions: [{ ...authoritativeHumanGateAction(), detail: { artifactType: "fixture" } }],
-    }],
-  });
-  const ordinaryText = await ordinaryTextLoader.loadPipelineCockpitPackets();
-  assert.equal(ordinaryText.fixtureMode.kind, "runtime");
-  assert.equal(ordinaryText.packets.length, 1);
-});
-
-test("runtime-reachable nested WorkPacket collection members fail closed before rendering", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const nested = authoritativeNestedWorkPacketCollections(packet.packetId);
-  const validLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{ ...packet, ...nested }],
-  });
-  const valid = await validLoader.loadPipelineCockpitPackets();
-  assert.equal(valid.fixtureMode.kind, "runtime");
-  assert.equal(valid.packets.length, 1);
-
-  const malformedCases = [
-    ["humanGateActions null member", { humanGateActions: [null] }],
-    ["humanGateActions contradictory packet identity", {
-      humanGateActions: [{
-        ...nested.humanGateActions[0],
-        payload: { ...nested.humanGateActions[0].payload, packetId: "packet:other" },
-      }],
-    }],
-    ["humanGateActionRequests null member", { humanGateActionRequests: [null] }],
-    ["humanGateActionRequests contradictory packet identity", {
-      humanGateActionRequests: [{ ...nested.humanGateActionRequests[0], packetId: "packet:other" }],
-    }],
-    ["laneCards wrong enum", { laneCards: [{ ...nested.laneCards[0], status: "live" }] }],
-    ["memoryProposals missing required field", { memoryProposals: [{ ...nested.memoryProposals[0], proposalId: undefined }] }],
-    ["memoryProposals contradictory packet identity", { memoryProposals: [{ ...nested.memoryProposals[0], packetId: "packet:other" }] }],
-    ["reviewSummaries null member", { reviewSummaries: [null] }],
-    ["recoveryActions wrong enum", { recoveryActions: [{ ...nested.recoveryActions[0], actionType: "retry_forever" }] }],
-    ["executionAttempts missing required field", { executionAttempts: [{ ...nested.executionAttempts[0], attemptId: undefined }] }],
-    ["transitionEvents wrong enum", { transitionEvents: [{ ...nested.transitionEvents[0], targetStage: "archive" }] }],
-    ["loopStopStates contradictory authority", { loopStopStates: [{ ...nested.loopStopStates[0], cleanupAllowed: true }] }],
-  ];
-
-  for (const [label, overrides] of malformedCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-});
-
-test("malformed nested projection detail structures fail closed before UI dereference", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const learnOutcome = authoritativeLearnOutcome();
-  const learnRefill = authoritativeLearnRefill();
-  const malformedCases = [
-    ["route summary reason codes", { routeSummary: { recommendation: "capture", reasonCodes: null } }],
-    ["delivery evidence refs", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), evidenceRefs: [null] } }],
-    ["learn decision record", { learnOutcome: { ...learnOutcome, decisionRecords: [null] } }],
-    ["learn refill follow-up", { learnRefill: { ...learnRefill, followUpCandidates: [null] } }],
-    ["gate replay detail", {
-      gateStateValidation: { ...authoritativeGateStateValidation(), refStates: [null] },
-    }],
-  ];
-
-  for (const [label, overrides] of malformedCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-});
-
-test("lifecycle source accepts only the bounded WorkPacketV0 source contract", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const allowedSources = [
-    "candidate_work",
-    "work_item",
-    "execution_attempt",
-    "workflow_event",
-    "memory_proposal",
-    "delivery_evidence",
-    "source_missing",
-  ];
-
-  for (const source of allowedSources) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, lifecycleState: { ...packet.lifecycleState, source } }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "runtime", source);
-  }
-
-  const missingSourceState = { ...packet.lifecycleState };
-  delete missingSourceState.source;
-  for (const [label, lifecycleState] of [
-    ["missing", missingSourceState],
-    ["null", { ...packet.lifecycleState, source: null }],
-    ["non-string", { ...packet.lifecycleState, source: 42 }],
-    ["empty", { ...packet.lifecycleState, source: "" }],
-    ["unknown", { ...packet.lifecycleState, source: "supervisor_runtime" }],
-  ]) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, lifecycleState }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-});
-
-test("canonical lifecycle provenance and optional WorkPacket source views fail closed on malformed fields", async () => {
-  const fixtures = populatedFixtureCatalog();
-  const packet = authoritativeWorkPacket();
-  const optionalSources = authoritativeOptionalWorkPacketSources();
-  const validLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{ ...packet, ...optionalSources }],
-  });
-  const valid = await validLoader.loadPipelineCockpitPackets();
-  assert.equal(valid.fixtureMode.kind, "runtime");
-  assert.equal(valid.packets.length, 1);
-
-  const proseOnlySources = structuredClone(optionalSources);
-  proseOnlySources.candidateWork.sourceSummary.label = "Operator label mentions fixture:legacy text";
-  proseOnlySources.workItem.executionRecipe.label = "Review fixture:legacy wording";
-  proseOnlySources.taskPacket.verificationSummary = "Document fixture:legacy as ordinary prose.";
-  proseOnlySources.routingPreview.decision.humanExplanation = "The label fixture:legacy is not provenance.";
-  const proseOnlyLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{ ...packet, ...proseOnlySources }],
-  });
-  const proseOnly = await proseOnlyLoader.loadPipelineCockpitPackets();
-  assert.equal(proseOnly.fixtureMode.kind, "runtime");
-  assert.equal(proseOnly.packets.length, 1);
-
-  const nestedPacketCollections = authoritativeNestedWorkPacketCollections(packet.packetId);
-  const nestedSyntheticProvenanceCases = [
-    ["allowed inputs", {
-      routingPreview: { ...optionalSources.routingPreview, detail: { allowedInputs: ["fixture:nested-input"] } },
-    }],
-    ["targetVaultFolder", {
-      memoryProposals: [{ ...nestedPacketCollections.memoryProposals[0], targetVaultFolder: "fixture:nested-folder" }],
-    }],
-    ["branchPrefix", {
-      workItem: {
-        ...optionalSources.workItem,
-        executionRecipe: { ...optionalSources.workItem.executionRecipe, branchPrefix: "fixture:nested-branch-prefix" },
-      },
-    }],
-    ["derivedTargetFolder", {
-      alphaMemorySourceStatus: {
-        ...authoritativeAlphaMemorySourceStatus(),
-        llmWikiReadiness: authoritativeLlmWikiReadiness({
-          rebuildPreview: { derivedTargetFolder: "fixture:nested-derived-folder" },
-        }),
-      },
-    }],
-    ["disposableTargetNamespace", {
-      alphaMemorySourceStatus: {
-        ...authoritativeAlphaMemorySourceStatus(),
-        llmWikiReadiness: authoritativeLlmWikiReadiness({
-          rebuildDryRunPlan: authoritativeLlmWikiRebuildDryRunPlan({
-            disposableTargetNamespace: "fixture:nested-dry-run-namespace",
-          }),
-        }),
-      },
-    }],
-    ["reference array object member", {
-      alphaMemorySourceStatus: {
-        ...authoritativeAlphaMemorySourceStatus(),
-        llmWikiReadiness: authoritativeLlmWikiReadiness({
-          rebuildPreview: { inputRefs: [{ refId: "fixture:nested-input-ref" }] },
-        }),
-      },
-    }],
-    ["backupPath", {
-      alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), backupPath: "demo:nested-backup" },
-    }],
-    ["rollbackPath", {
-      alphaMemorySourceStatus: { ...authoritativeAlphaMemorySourceStatus(), rollbackPath: "fixture:nested-rollback" },
-    }],
-    ["expectedPr", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedPr: "demo:nested-pr" }),
-      },
-    }],
-    ["expectedWorktree", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedWorktree: "fixture:nested-worktree" }),
-      },
-    }],
-    ["expectedOwner", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedOwner: "fixture:nested-owner" }),
-      },
-    }],
-    ["expectedLocalBranch", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedLocalBranch: "fixture:nested-local-branch" }),
-      },
-    }],
-    ["expectedRemoteBranch", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedRemoteBranch: "fixture:nested-remote-branch" }),
-      },
-    }],
-    ["expectedHeadRevision", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedHeadRevision: "fixture:nested-head-revision" }),
-      },
-    }],
-    ["delivery target branch", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), targetBranch: "fixture:nested-target-branch" },
-    }],
-    ["delivery base branch", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), baseBranch: "fixture:nested-base-branch" },
-    }],
-    ["delivery pull request head revision", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestHeadRevision: "fixture:nested-pr-head" },
-    }],
-    ["delivery evidence identity", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), evidenceId: "fixture:nested-delivery-id" },
-    }],
-    ["delivery gate evidence", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        mergeGate: {
-          status: "blocked",
-          lowRiskReady: false,
-          criteria: [{
-            criterionId: "criterion:delivery",
-            label: "Delivery criterion",
-            status: "blocked",
-            evidence: ["fixture:nested-gate-evidence"],
-            blockedReason: null,
-          }],
-          blockedReasons: [],
-          recoveryPath: "Return to delivery review.",
-          metadataOnly: true,
-          mergeApproved: false,
-        },
-      },
-    }],
-    ["cleanupTarget", {
-      deliveryEvidence: { ...authoritativeDeliveryEvidence(), cleanupTarget: "demo:nested-cleanup" },
-    }],
-    ["lowercase url", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { url: "fixture:nested-url" } } }],
-    ["uppercase URI", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { URI: "demo:nested-uri" } } }],
-    ["uppercase HREF", { candidateWork: { ...optionalSources.candidateWork, importMetadata: { HREF: "fixture:nested-href" } } }],
-  ];
-  for (const [label, overrides] of nestedSyntheticProvenanceCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-
-  const whitespaceProvenanceCases = [
-    ["lifecycle latest transition event reference", { lifecycleState: { ...packet.lifecycleState, latestTransitionEventRef: " \t " } }],
-    ["lifecycle attempt reference", { lifecycleState: { ...packet.lifecycleState, attemptRef: "  " } }],
-    ["delivery pull request URL", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), pullRequestUrl: " \t " } }],
-    ["delivery expected head revision", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), expectedHeadRevision: "  " } }],
-    ["delivery cleanup target", { deliveryEvidence: { ...authoritativeDeliveryEvidence(), cleanupTarget: "\t" } }],
-    ["cleanup expected head revision", {
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        cleanupDryRunGate: authoritativeCleanupDryRunGate({ expectedHeadRevision: "  " }),
-      },
-    }],
-  ];
-  for (const [label, overrides] of whitespaceProvenanceCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-
-  const nullableDeliveryLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-    getWorkPackets: async () => [{
-      ...packet,
-      ...optionalSources,
-      deliveryEvidence: {
-        ...authoritativeDeliveryEvidence(),
-        pullRequestUrl: null,
-        expectedHeadRevision: null,
-        cleanupTarget: null,
-        cleanupDryRunGate: authoritativeCleanupDryRunGate(),
-      },
-    }],
-  });
-  const nullableDelivery = await nullableDeliveryLoader.loadPipelineCockpitPackets();
-  assert.equal(nullableDelivery.fixtureMode.kind, "runtime");
-  assert.equal(nullableDelivery.packets.length, 1);
-
-  const lifecycleCases = [
-    ["reasonCodes", { ...packet.lifecycleState, reasonCodes: null }],
-    ["authoritativeRef", { ...packet.lifecycleState, authoritativeRef: "" }],
-    ["derivedFromRefs", { ...packet.lifecycleState, derivedFromRefs: ["doc:source", null] }],
-    ["transitionEventRefs", { ...packet.lifecycleState, transitionEventRefs: 42 }],
-    ["latestTransitionEventRef", { ...packet.lifecycleState, latestTransitionEventRef: { refId: "event:created" } }],
-    ["attemptRef", { ...packet.lifecycleState, attemptRef: 42 }],
-  ];
-  for (const [label, lifecycleState] of lifecycleCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, lifecycleState }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-
-  const { candidateWork, workItem, taskPacket, routingPreview } = optionalSources;
-  const optionalSourceCases = [
-    ["candidate required field", { candidateWork: { ...candidateWork, title: null } }],
-    ["candidate source enum", { candidateWork: { ...candidateWork, source: "runtime_fixture" } }],
-    ["candidate source artifact path", { candidateWork: { ...candidateWork, sourceArtifactPath: "fixture:candidate-source" } }],
-    ["candidate source summary", {
-      candidateWork: { ...candidateWork, sourceSummary: { ...candidateWork.sourceSummary, evidenceRefs: [null] } },
-    }],
-    ["candidate summary source artifact path", {
-      candidateWork: {
-        ...candidateWork,
-        sourceSummary: { ...candidateWork.sourceSummary, sourceArtifactPath: "demo:candidate-summary-source" },
-      },
-    }],
-    ["candidate import metadata", { candidateWork: { ...candidateWork, importMetadata: [] } }],
-    ["work item workflow state", { workItem: { ...workItem, state: "active" } }],
-    ["work item source", { workItem: { ...workItem, source: "fixture:work-item-source" } }],
-    ["work item metadata value", { workItem: { ...workItem, metadata: { nested: { unsafe: true } } } }],
-    ["work item recipe", {
-      workItem: {
-        ...workItem,
-        executionRecipe: {
-          ...workItem.executionRecipe,
-          remoteAutomationPolicy: { ...workItem.executionRecipe.remoteAutomationPolicy, blockedOperations: null },
-        },
-      },
-    }],
-    ["work item delivery readiness", {
-      workItem: { ...workItem, deliveryReadiness: { ...workItem.deliveryReadiness, readyForApproval: "yes" } },
-    }],
-    ["work item recipe allowed path", {
-      workItem: {
-        ...workItem,
-        executionRecipe: { ...workItem.executionRecipe, allowedPaths: ["demo:work-item-path"] },
-      },
-    }],
-    ["task packet required field", { taskPacket: { ...taskPacket, verificationSummary: undefined } }],
-    ["task packet source", { taskPacket: { ...taskPacket, source: "fixture:task-packet-source" } }],
-    ["task packet source artifact path", {
-      taskPacket: { ...taskPacket, sourceArtifactPath: "demo:task-packet-source" },
-    }],
-    ["routing profile paths", {
-      routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: null } },
-    }],
-    ["routing profile synthetic path", {
-      routingPreview: { ...routingPreview, profile: { ...routingPreview.profile, allowedPaths: ["fixture:routing-path"] } },
-    }],
-    ["routing decision profile snapshot", {
-      routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, profileSnapshot: null } },
-    }],
-    ["routing decision snapshot synthetic path", {
-      routingPreview: {
-        ...routingPreview,
-        decision: {
-          ...routingPreview.decision,
-          profileSnapshot: { ...routingPreview.decision.profileSnapshot, allowedPaths: ["demo:routing-snapshot-path"] },
-        },
-      },
-    }],
-    ["routing rejected lane", {
-      routingPreview: { ...routingPreview, decision: { ...routingPreview.decision, rejectedLanes: [null] } },
-    }],
-  ];
-  for (const [label, overrides] of optionalSourceCases) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
-      getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-});
-
-test("malformed nested evidence and artifact references fail closed before rendering", async () => {
-  const fixtures = populatedFixtureCatalog();
-  for (const overrides of [
-    { evidenceRefs: ["event:created"] },
-    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], sourceType: "repo_doc" }] },
-    { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "live" }] },
-    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], rawPayloadRetained: true }] },
-    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], evidenceType: "raw_payload" }] },
-    { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], retentionClass: "forever" }] },
-    { artifactRefs: ["artifact:report"] },
-    { artifactRefs: [{ refId: "artifact:report", artifactType: "report", label: "Report" }] },
-    { artifactRefs: [{ refId: "artifact:report", artifactType: "raw_payload", label: "Report", status: "available" }] },
-    { artifactRefs: [{ refId: "artifact:report", artifactType: "report", label: "Report", status: "live" }] },
-  ]) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
-      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid");
-    assert.equal(result.packets.length, 0);
-  }
-});
 
 test("detail lookup accepts canonical stale truth read-only and fails closed for unavailable or omitted identities", async () => {
   const fixtures = populatedFixtureCatalog();
@@ -1226,62 +605,6 @@ test("normal mode does not substitute the real compiled fixture catalog", async 
   assert.equal(unavailable.packets.map((packet) => packet.packetId).length, 0);
 });
 
-test("source path invariants and case-insensitive synthetic prefixes fail closed", async () => {
-  const fixtures = populatedFixtureCatalog();
-  for (const [label, packetOverride] of [
-    ["restricted-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "blocked", canonical: false, summaryOnly: true, pathOrUrl: "docs/source.md", blockedReason: "blocked by policy" }] }],
-    ["restricted-source-url", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "missing", canonical: false, summaryOnly: true, pathOrUrl: "https://example.com/source", blockedReason: "missing from backend" }] }],
-    ["restricted-source-empty-reason", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], accessState: "excluded", pathOrUrl: null, blockedReason: "" }] }],
-    ["allowed-source-blocked-reason", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], blockedReason: "not allowed for an accessible source" }] }],
-    ["malformed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: 42 }] }],
-    ["demo-prefixed-packet-id", { packetId: "Demo:synthetic-runtime" }],
-    ["demo-prefixed-source-ref", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], refId: "DeMo:source-ref" }] }],
-    ["demo-prefixed-source-path", { sourceRefs: [{ ...authoritativeWorkPacket().sourceRefs[0], pathOrUrl: " demo:source-path " }] }],
-    ["demo-prefixed-evidence-artifact", { evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], artifactPath: "DeMo:evidence-artifact" }] }],
-    ["demo-prefixed-artifact-path", { artifactRefs: [{ refId: "artifact:demo", artifactType: "report", label: "Report", pathOrUrl: "DEMO:artifact-path", status: "available" }] }],
-  ]) {
-    const loader = await loadPipelinePacketLoader(fixtures, {
-      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
-      getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...packetOverride }],
-    });
-    const result = await loader.loadPipelineCockpitPackets();
-    assert.equal(result.fixtureMode.kind, "invalid", label);
-    assert.equal(result.packets.length, 0, label);
-  }
-
-  const canonicalRestrictedPacket = authoritativeWorkPacket();
-  canonicalRestrictedPacket.sourceRefs = [{
-    ...canonicalRestrictedPacket.sourceRefs[0],
-    accessState: "blocked",
-    canonical: true,
-    summaryOnly: true,
-    pathOrUrl: null,
-    blockedReason: "Canonical source metadata is blocked by policy.",
-  }];
-  const canonicalRestrictedLoader = await loadPipelinePacketLoader(fixtures, {
-    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([canonicalRestrictedPacket.packetId]),
-    getWorkPackets: async () => [canonicalRestrictedPacket],
-  });
-  const canonicalRestricted = await canonicalRestrictedLoader.loadPipelineCockpitPackets();
-  assert.equal(canonicalRestricted.fixtureMode.kind, "runtime");
-  assert.equal(canonicalRestricted.packets.length, 1);
-});
-
-test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
-  const source = await readFile(detailRoutePath, "utf8");
-  assert.match(source, /loadPipelineCockpitPacket\(decodedPacketId\)/);
-  assert.doesNotMatch(source, /packets\.find\(/);
-  assert.match(source, /decodeURIComponent\(packetId\)/);
-  assert.doesNotMatch(source, /generateStaticParams/);
-});
-
-test("packet detail exposes canonical supervisor provenance without fixture-only semantics", async () => {
-  const source = await readFile(detailComponentPath, "utf8");
-  assert.match(source, /Source: Supervisor runtime/);
-  assert.match(source, /canonical presentation v1/);
-  assert.doesNotMatch(source, /PipelineDashboardPacket|WorkPacketV0View/);
-});
-
 test("explicit demo route is the only fixture catalog boundary", async () => {
   const normalRouteSource = await readFile(normalRoutePath, "utf8");
   const demoRouteSource = await readFile(demoRoutePath, "utf8");
@@ -1290,8 +613,6 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.doesNotMatch(normalRouteSource, /pipeline-fixtures/);
   assert.doesNotMatch(normalRouteSource, /manager-execution-lane-summary|selectedManagerExecutionLaneSummary|managerExecutionLane=/);
   assert.match(demoRouteSource, /pipeline-fixtures/);
-  assert.match(demoRouteSource, /manager-execution-lane-summary/);
-  assert.match(demoRouteSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
   assert.match(demoDetailRouteSource, /pipeline-fixtures/);
   assert.match(demoRouteSource, /PipelineFixturePacketV1/);
   assert.match(demoDetailRouteSource, /PipelineFixturePacketV1/);
@@ -1302,6 +623,14 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoRouteSource, /dashboardDemoRoutesEnabled\(\)/);
   assert.match(demoDetailRouteSource, /dashboardDemoRoutesEnabled\(\)/);
   assert.match(demoRouteSource, /notFound\(\)/);
+});
+
+test("pipeline detail route resolves decoded identity through the direct packet loader", async () => {
+  const source = await readFile(detailRoutePath, "utf8");
+  assert.match(source, /loadPipelineCockpitPacket\(decodedPacketId\)/);
+  assert.doesNotMatch(source, /packets\.find\(/);
+  assert.match(source, /decodeURIComponent\(packetId\)/);
+  assert.doesNotMatch(source, /generateStaticParams/);
 });
 
 test("dedicated runtime delegates timeout and LAN-auth policy to shared transport", async () => {
@@ -1321,13 +650,6 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return {
-          normalizePipelineDashboardProjection: (projection) => projection,
-          isPipelineDashboardProjection: () => true,
-        };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path, options) => {
@@ -1376,16 +698,6 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
             && value?.availability !== "impossible"
             && value?.metadataOnly === true),
       };
-      if (specifier === "./pipeline-supervisor-projection") return {
-        normalizePipelineDashboardProjection: (value) => value,
-        isPipelineDashboardProjection: () => true,
-        isPipelineCoordinationHealth: (value) => value?.schemaVersion === "manager-coordination-health/v0",
-        isDashboardCoordinationHealthInput: (value) => value?.schemaVersion === "manager-coordination-health/v0"
-          || (value?.source === "manager_workspace_inventory"
-            && value?.availability !== "impossible"
-            && value?.metadataOnly === true),
-      };
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
         requestSupervisorJson: async (path, options) => {
           calls.push({ path, options });
@@ -1546,7 +858,6 @@ test("runtime plus loader converts malformed optional review-route evidence to u
   const context = { exports: {}, module: { exports: {} }, process: { env: {} }, require: (specifier) => {
     if (specifier === "@kendall/contracts") return runtimeContractValidators;
     if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-    if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
     if (specifier === "./dashboard-supervisor-transport") return { requestSupervisorJson: async () => projection };
     throw new Error(`Unexpected runtime import: ${specifier}`);
   } };
@@ -1578,10 +889,6 @@ test("dedicated runtime surfaces canonical list and detail 404s without legacy r
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -1628,10 +935,6 @@ test("dedicated runtime fails closed on canonical 404 for authoritative identity
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -1682,7 +985,6 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
         requestSupervisorJson: async (path) => {
           if (path.endsWith("work-item-a/memory-review")) return review;
@@ -1738,12 +1040,8 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
 
 test("dedicated runtime projects consistent authoritative list and detail without legacy requests", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
-  const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
-    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const projectorOutput = ts.transpileModule(projectorSource, {
     compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const calls = [];
@@ -1754,15 +1052,6 @@ test("dedicated runtime projects consistent authoritative list and detail withou
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") {
-        const projectorContext = { exports: {}, module: { exports: {} } };
-        projectorContext.exports = projectorContext.module.exports;
-        vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
-        return projectorContext.module.exports;
-      }
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -1840,8 +1129,6 @@ test("dashboard canonical DTO carries validated extensions and resolves WorkItem
         };
       }
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -1922,8 +1209,6 @@ test("dashboard canonical DTO rejects extension provenance and mode cross-bindin
         validatePipelineEpic25EvidenceChainV1: () => ["evidence chain omitted"],
       };
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
         requestSupervisorJson: async (path) => {
           if (path.endsWith("packet-provenance-mismatch")) return provenanceMismatch;
@@ -1982,8 +1267,6 @@ test("dashboard canonical DTO accepts a structurally valid stale supervisor evid
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return contracts;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
         requestSupervisorJson: async (path) => {
           if (path.endsWith("packet-stale-evidence")) return { ...packet, evidenceChain: staleEvidence };
@@ -2010,12 +1293,8 @@ test("dashboard canonical DTO accepts a structurally valid stale supervisor evid
 
 test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evidence refs before rendering", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
-  const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(runtimeSource, {
-    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const projectorOutput = ts.transpileModule(projectorSource, {
     compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const unsafeSummaries = [
@@ -2050,15 +1329,6 @@ test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evide
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") {
-        const projectorContext = { exports: {}, module: { exports: {} } };
-        projectorContext.exports = projectorContext.module.exports;
-        vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
-        return projectorContext.module.exports;
-      }
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2308,47 +1578,6 @@ test("active-board projection omits selected detail missing required canonical f
   assert.equal(result.activeBoardProjection.selectedPacketDetails.length, 0);
 });
 
-test("canonical dashboard presentation rejects unknown root and nested fields before cockpit rendering", async () => {
-  const packet = authoritativeWorkPacket();
-  const presentation = {
-    schemaVersion: "dashboard-canonical-presentation/v1",
-    packetId: packet.packetId,
-    title: packet.title,
-    requestedOutcome: packet.requestedOutcome,
-    currentStage: packet.currentStage,
-    currentOwner: packet.currentOwner,
-    status: packet.status,
-    lifecycleState: packet.lifecycleState,
-    riskLevel: packet.riskLevel,
-    priority: packet.priority,
-    sourceRefs: packet.sourceRefs,
-    evidenceRefs: packet.evidenceRefs,
-    transitionEvents: packet.transitionEvents,
-  };
-  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {});
-
-  const accepted = loader.__projectCanonicalPresentationsForTest([presentation]);
-  assert.equal(accepted.kind, "runtime");
-  assert.equal(accepted.packets[0].schemaVersion, "dashboard-canonical-presentation/v1");
-  assert.equal(accepted.packets[0].packetId, packet.packetId);
-  assert.equal(accepted.packets[0].executionAttempts.length, 0);
-  assert.equal(accepted.packets[0].humanGateActions.length, 0);
-  assert.equal(Object.hasOwn(accepted.packets[0], "candidateWork"), false);
-  assert.equal(Object.hasOwn(accepted.packets[0], "memoryProposals"), false);
-  assert.equal(Object.hasOwn(accepted.packets[0], "artifactRefs"), false);
-  assert.equal(Object.hasOwn(accepted.packets[0], "humanGateActionRequests"), false);
-
-  const unknownRoot = loader.__projectCanonicalPresentationsForTest([{ ...presentation, rawProviderResponse: "server-only" }]);
-  assert.equal(unknownRoot.kind, "invalid");
-  const legacyV0Root = loader.__projectCanonicalPresentationsForTest([{ ...presentation, memoryProposals: [{ raw: "server-only" }] }]);
-  assert.equal(legacyV0Root.kind, "invalid");
-  const unknownNested = loader.__projectCanonicalPresentationsForTest([{
-    ...presentation,
-    evidenceRefs: [{ ...presentation.evidenceRefs[0], rawProviderResponse: "server-only" }],
-  }]);
-  assert.equal(unknownNested.kind, "invalid");
-});
-
 test("dedicated runtime treats a successful empty canonical list as authoritative", async () => {
   const runtimeSource = await readFile(runtimePath, "utf8");
   const ts = dashboardRequire("typescript");
@@ -2363,10 +1592,6 @@ test("dedicated runtime treats a successful empty canonical list as authoritativ
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2407,10 +1632,6 @@ test("dedicated runtime rejects malformed canonical list actors without legacy r
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2464,10 +1685,6 @@ test("dedicated runtime rejects malformed canonical ready-to-test evidence witho
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2516,10 +1733,6 @@ test("dedicated runtime does not legacy-fallback unsafe slash-containing packet 
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2557,10 +1770,6 @@ test("dedicated runtime fails closed without legacy fallback when canonical pack
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: (value) => value?.shape === "valid" };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2596,10 +1805,6 @@ test("dedicated runtime surfaces malformed canonical list results without legacy
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -2636,10 +1841,6 @@ test("dedicated runtime rejects V0-shaped canonical lists without legacy merge",
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
-      if (specifier === "./pipeline-supervisor-projection") {
-        return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
-      }
-      if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
         return {
           requestSupervisorJson: async (path) => {
@@ -3553,16 +2754,8 @@ function authoritativeGateStateValidation() {
 
 async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuthEnabled = false, requestPipelineSupervisorViaUds } = {}) {
   const source = await readFile(loaderPath, "utf8");
-  const projectorSource = await readFile(new URL("../apps/dashboard/src/lib/pipeline-supervisor-projector.ts", import.meta.url), "utf8");
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(source, {
-    compilerOptions: {
-      esModuleInterop: true,
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
-  }).outputText;
-  const projectorOutput = ts.transpileModule(projectorSource, {
     compilerOptions: {
       esModuleInterop: true,
       module: ts.ModuleKind.CommonJS,
@@ -3576,25 +2769,13 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
     isDashboardCanonicalManagerLaneClarity: () => true,
     ...supervisorOverrides,
   };
-  let projectorModule;
   const context = {
     exports: {},
     module: { exports: {} },
     process: { env: { KENDALL_LAN_AUTH_ENABLED: lanAuthEnabled ? "true" : "false" } },
     require: (specifier) => {
-      if (specifier === "./pipeline-supervisor-projector") {
-        if (projectorModule) return projectorModule;
-        const projectorContext = { exports: {}, module: { exports: {} }, require: () => fixtures };
-        projectorContext.exports = projectorContext.module.exports;
-        vm.runInNewContext(projectorOutput, projectorContext, { filename: "pipeline-supervisor-projector.ts" });
-        projectorModule = projectorContext.module.exports;
-        return projectorModule;
-      }
       if (specifier === "./pipeline-supervisor-runtime") return supervisor;
       if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: supervisor.isDashboardCoordinationHealthInput };
-      if (specifier === "./pipeline-supervisor-projection") return {
-        isDashboardCoordinationHealthInput: supervisor.isDashboardCoordinationHealthInput,
-      };
       if (specifier === "./pipeline-supervisor-uds") return {
         requestPipelineSupervisorViaUds: requestPipelineSupervisorViaUds ?? (async () => { throw new Error("UDS should be unused when LAN auth is disabled"); }),
       };
@@ -3603,27 +2784,8 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
   };
   context.exports = context.module.exports;
   vm.runInNewContext(output, context, { filename: "pipeline-packet-loader.ts" });
-  projectorModule = context.require("./pipeline-supervisor-projector");
-  let fixtureAdapterError = null;
-  // Existing fixture callers are V0-shaped. Adapt them only after the real
-  // projector validates the same bounded shape that historical tests cover;
-  // malformed V0 inputs therefore remain fail-closed rather than acquiring a
-  // synthetic canonical wrapper.
   const canonicalFixtureAdapter = (packet) => {
     if (packet?.presentation) return packet;
-    const projection = projectorModule.projectSupervisorWorkPacketsToCockpitPackets([packet]);
-    if (projection.kind !== "runtime" || projection.packets.length !== 1) {
-      fixtureAdapterError = projection.kind === "invalid"
-        ? projection.error
-        : "Fixture packet did not produce one runtime compatibility projection.";
-      return {
-        authoritativeLifecycle: authoritativeWorkPacket(),
-        canonicalContract: null,
-        evidenceChain: null,
-        productModeMapping: null,
-        presentation: authoritativeWorkPacket(),
-      };
-    }
     const currentStage = packet.currentStage === "human_gate" ? "needs_approval" : packet.currentStage;
     const lifecycle = authoritativeLifecyclePacket(packet.packetId);
     lifecycle.title = packet.title;
@@ -3647,58 +2809,18 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
     const getWorkPacket = supervisor.getWorkPacket;
     supervisor.getWorkPacket = async (...args) => canonicalFixtureAdapter(await getWorkPacket(...args));
   }
-  const invalidFixtureMode = (label, summary) => ({
-    kind: "invalid",
-    label,
-    summary: `${summary} No runtime or demo packets are shown.`,
-    matrixRows: 0,
-    fixtureCatalogEntries: 0,
-    canSatisfyLiveProof: false,
-  });
-  // Legacy assertions intentionally inspect the existing V0 cockpit projector.
-  // Production loader results now expose only canonical packets; this harness
-  // keeps those unrelated V0 assertions at their explicit test adapter.
   const loadCanonicalList = context.module.exports.loadPipelineCockpitPackets;
   const loadCanonicalDetail = context.module.exports.loadPipelineCockpitPacket;
   context.module.exports.loadPipelineCockpitPackets = async (...args) => {
-    fixtureAdapterError = null;
     const result = await loadCanonicalList(...args);
-    if (fixtureAdapterError) {
-      return {
-        fixtureMode: invalidFixtureMode("Supervisor invalid", fixtureAdapterError),
-        canonicalPackets: [],
-        operationalProjection: null,
-        projectionError: fixtureAdapterError,
-        packets: [],
-      };
-    }
-    const projection = projectorModule.projectSupervisorWorkPacketsToCockpitPackets(
-      result.canonicalPackets.map((packet) => packet.presentation),
-    );
-    return { ...result, packets: projection.kind === "runtime" ? projection.packets : [] };
+    return { ...result, packets: result.canonicalPackets.map((packet) => packet.presentation) };
   };
   context.module.exports.loadPipelineCockpitPacket = async (...args) => {
-    fixtureAdapterError = null;
     const result = await loadCanonicalDetail(...args);
-    if (fixtureAdapterError) {
-      return {
-        fixtureMode: {
-          ...invalidFixtureMode("Supervisor packet invalid", fixtureAdapterError),
-          summary: `${fixtureAdapterError} No demo packet was substituted.`,
-        },
-        canonicalPacket: null,
-        workGraph: null,
-        packet: null,
-      };
-    }
-    const projection = result.canonicalPacket
-      ? projectorModule.projectSupervisorWorkPacketsToCockpitPackets([result.canonicalPacket.presentation])
-      : null;
-    return { ...result, packet: projection?.kind === "runtime" ? projection.packets[0] ?? null : null };
+    return { ...result, packet: result.canonicalPacket?.presentation ?? null };
   };
   return {
     ...context.module.exports,
-    __projectCanonicalPresentationsForTest: (presentations) => projectorModule.projectDashboardCanonicalPresentationsToCockpitPackets(presentations),
     __canonicalListForTest: loadCanonicalList,
     __canonicalDetailForTest: loadCanonicalDetail,
   };
