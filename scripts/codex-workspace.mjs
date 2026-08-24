@@ -65,7 +65,7 @@ const resumableCheckInvocationBudgetMs = 180_000;
 // consumed the invocation budget just before it began.
 const resumableCheckDefaultLeafExecutionReserveMs = 30_000;
 const resumableCheckSupervisorLeafTimeoutMs = 150_000;
-const resumableCheckSupervisorLeafExecutionReserveMs = 170_000;
+const resumableCheckOrdinarySupervisorLeafExecutionBudgetMs = 170_000;
 const resumableCheckPacketSchemaVersion = 1;
 // Packets need enough lifetime for every leaf in their exact immutable plan.
 // The plan has grown beyond the old three-hour aggregate assumption, so new
@@ -143,6 +143,31 @@ const resumableCheckSupervisorLeaves = Object.freeze([
   "test:supervisor:check:integration:supervisor-flow",
 ]);
 const resumableCheckSupervisorLeafSet = new Set(resumableCheckSupervisorLeaves);
+const resumableCheckSupervisorLeafExecutionBudgetOverrides = Object.freeze({
+  "test:supervisor:check:integration:work-packets": 200_000,
+});
+
+function resumableCheckSupervisorLeafExecutionBudgetMs(stage) {
+  if (!resumableCheckSupervisorLeafSet.has(stage)) {
+    throw new Error(`unsupported supervisor check leaf budget: ${stage}`);
+  }
+  return resumableCheckSupervisorLeafExecutionBudgetOverrides[stage]
+    ?? resumableCheckOrdinarySupervisorLeafExecutionBudgetMs;
+}
+
+function resumableCheckStageExecutionBudgetMs(stage) {
+  if (resumableCheckLongLeafStages.has(stage)) return resumableCheckLongLeafBudgetMs;
+  if (resumableCheckSupervisorLeafSet.has(stage)) return resumableCheckSupervisorLeafExecutionBudgetMs(stage);
+  return resumableCheckInvocationBudgetMs;
+}
+
+function resumableCheckStageInvocationBudgetMs(stage) {
+  if (resumableCheckLongLeafStages.has(stage)) return resumableCheckLongLeafBudgetMs;
+  if (Object.hasOwn(resumableCheckSupervisorLeafExecutionBudgetOverrides, stage)) {
+    return resumableCheckSupervisorLeafExecutionBudgetMs(stage);
+  }
+  return resumableCheckInvocationBudgetMs;
+}
 const resumableCheckNestedStageExpansions = Object.freeze({
   "check:fast": ["check:ci-fast", "check:workspace-fast", "check:sandbox-fast", "check:dashboard-fast"],
   "check:workspace-fast": [
@@ -176,13 +201,21 @@ const resumableCheckLongLeafStages = new Set([
 function resumableCheckPacketMaximumLifetimeMs() {
   return Math.max(
     resumableCheckPacketMinimumLifetimeMs,
-    256 * Math.max(resumableCheckInvocationBudgetMs, resumableCheckSupervisorLeafExecutionReserveMs, resumableCheckLongLeafBudgetMs)
+    256 * Math.max(
+      resumableCheckInvocationBudgetMs,
+      resumableCheckOrdinarySupervisorLeafExecutionBudgetMs,
+      ...Object.values(resumableCheckSupervisorLeafExecutionBudgetOverrides),
+      resumableCheckLongLeafBudgetMs,
+    )
       + resumableCheckPacketResumeOverheadMs
       + 256 * resumableCheckPacketStageOrchestrationReserveMs,
   );
 }
 const taskLockSchemaVersion = 1;
 const taskLeaseSchemaVersion = 1;
+const inFlightCheckRecoverySchemaVersion = 1;
+const inFlightCheckRecoveryApprovalMaximumLength = 512;
+const inFlightCheckRecoveryReasonMaximumLength = 512;
 const legacyRecoveryAdoptionTaskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
 const taskLeaseMaximumHistoryRecords = 4_096;
 const taskLeaseMaximumHeartbeatHistoryRecords = 1_024;
@@ -352,6 +385,9 @@ try {
       break;
     case "settle-external-intent":
       settleExternalIntent(commandArgs);
+      break;
+    case "recover-inflight-check":
+      recoverInFlightCheck(commandArgs);
       break;
     case "rollover-task-lease-ledger":
       rolloverTaskLeaseLedger(commandArgs);
@@ -592,6 +628,13 @@ settle-external-intent options:
   --dry-run                 Print the bounded settlement packet without mutation.
   --apply                   Append an immutable owner-attested completion record.
   --approval <text>         Required with --apply; records the operator authorization.
+
+recover-inflight-check options:
+  <task-id>                 Exact owner-managed task with a retained in-flight check marker.
+  --dry-run                 Print the bounded recovery admission packet without mutation.
+  --apply                   Publish immutable invalidation evidence and remove only the active packet.
+  --approval <text>         Required with --apply; records only a fingerprint and bounded metadata.
+  --reason <text>           Required with --apply; explains the approved invalidation in at least 10 non-whitespace characters.
 
 rollover-task-lease-ledger options:
   <task-id>                 Exact released versioned lease whose current ledger segment is full.
@@ -2768,6 +2811,7 @@ function finishPr(argv) {
   if (!options.noVerify) {
     assertKnownVerificationProfile(String(options.verify || ""));
   }
+  assertInFlightCheckRecoveryDeliveryAdmission(state, manifest, options);
   assertLaneOwner(manifest, options);
   assertBaseCheckoutRecoveryClearForDelivery(state);
   requireGh("finish-pr");
@@ -2858,6 +2902,7 @@ function finishPr(argv) {
           cwd: manifest.worktree_path,
           allowTerminalPacketRecovery: Boolean(options.stageAll),
           allowEnvironmentPreflightRetry: Boolean(options.retryEnvironmentPreflight),
+          allowFreshVerificationAfterInFlightRecovery: Boolean(options.stageAll),
         });
       } else runBoundedVerification(verificationPlan, {
         cwd: manifest.worktree_path,
@@ -3106,6 +3151,489 @@ function settleExternalIntent(argv) {
   };
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("settle-external-intent", [JSON.stringify(output)]);
+}
+
+function inFlightCheckRecoveryRecordPath(state, taskId, fingerprint) {
+  assertSafeTaskId(taskId);
+  if (!/^[a-f0-9]{64}$/i.test(fingerprint || "")) throw new Error("in-flight check recovery fingerprint is invalid.");
+  return taskLeasePath(state, taskId, "inflight-check-recoveries", fingerprint);
+}
+
+function boundedInFlightCheckPacketProjection(packet) {
+  return {
+    schema_version: packet.schema_version,
+    task_id: packet.task_id,
+    owner: packet.owner,
+    head: packet.head,
+    plan_digest: packet.plan_digest,
+    staged_input_digest: packet.staged_input_digest,
+    status: packet.status,
+    next_stage: packet.next_stage,
+    created_at: packet.created_at,
+    updated_at: packet.updated_at,
+    expires_at: packet.expires_at,
+    packet_lifetime_ms: packet.packet_lifetime_ms,
+    stages: packet.stages.map((stage) => ({
+      stage: stage.stage,
+      completed_at: stage.completed_at,
+      status: stage.status,
+      signal: stage.signal,
+      error_code: stage.error_code,
+    })),
+    in_flight_stage: {
+      stage: packet.in_flight_stage.stage,
+      started_at: packet.in_flight_stage.started_at,
+      timeout_ms: packet.in_flight_stage.timeout_ms,
+    },
+  };
+}
+
+function inFlightCheckPacketFingerprint(packet) {
+  return createHash("sha256").update(JSON.stringify(boundedInFlightCheckPacketProjection(packet))).digest("hex");
+}
+
+function validInFlightCheckRecoveryRecord(record, taskId) {
+  return Boolean(
+    record &&
+      record.schema_version === inFlightCheckRecoverySchemaVersion &&
+      record.task_id === taskId &&
+      record.recovery === "invalidate-and-reverify/v1" &&
+      typeof record.packet_fingerprint === "string" && /^[a-f0-9]{64}$/i.test(record.packet_fingerprint) &&
+      typeof record.owner === "string" && record.owner.length > 0 && record.owner.length <= 240 &&
+      record.prior_lease && typeof record.prior_lease === "object" &&
+      typeof record.prior_lease.generation === "string" && isUuid(record.prior_lease.generation) &&
+      Number.isInteger(record.prior_lease.pid) && record.prior_lease.pid > 0 &&
+      typeof record.prior_lease.process_start_identity === "string" && record.prior_lease.process_start_identity.length > 0 &&
+      record.packet && typeof record.packet === "object" &&
+      typeof record.packet.stage === "string" && /^[A-Za-z0-9:_-]{1,120}$/.test(record.packet.stage) &&
+      typeof record.packet.started_at === "string" && isCanonicalIsoTimestamp(record.packet.started_at) &&
+      Number.isSafeInteger(record.packet.timeout_ms) && record.packet.timeout_ms > 0 &&
+      typeof record.packet.head === "string" && /^[a-f0-9]{40,64}$/i.test(record.packet.head) &&
+      typeof record.packet.plan_digest === "string" && /^[a-f0-9]{64}$/i.test(record.packet.plan_digest) &&
+      typeof record.packet.staged_input_digest === "string" && /^[a-f0-9]{64}$/i.test(record.packet.staged_input_digest) &&
+      typeof record.approval_sha256 === "string" && /^[a-f0-9]{64}$/i.test(record.approval_sha256) &&
+      Number.isInteger(record.approval_length) && record.approval_length >= 10 && record.approval_length <= inFlightCheckRecoveryApprovalMaximumLength &&
+      typeof record.reason === "string" && validTakeoverReason(record.reason) && record.reason.length <= inFlightCheckRecoveryReasonMaximumLength &&
+      typeof record.recovered_at === "string" && isCanonicalIsoTimestamp(record.recovered_at) &&
+      record.metadata_only === true && record.raw_payload_retained === false,
+  );
+}
+
+function inFlightCheckRecoveryRecords(state, taskId) {
+  const directory = taskLeasePath(state, taskId, "inflight-check-recoveries");
+  return leaseJsonRecords(directory).map(({ name, record }) => {
+    if (!validInFlightCheckRecoveryRecord(record, taskId) || name !== `${record.packet_fingerprint}.json`) {
+      throw new Error("in-flight check recovery evidence is invalid.");
+    }
+    return record;
+  });
+}
+
+function recoveryRecordMatchesInFlightPacket(record, packet, owner, priorLease) {
+  return Boolean(
+    record && packet &&
+      record.packet_fingerprint === inFlightCheckPacketFingerprint(packet) &&
+      record.owner === owner &&
+      record.prior_lease?.generation === priorLease?.generation &&
+      record.prior_lease?.pid === priorLease?.pid &&
+      record.prior_lease?.process_start_identity === priorLease?.processStartIdentity &&
+      record.packet?.stage === packet.in_flight_stage?.stage &&
+      record.packet?.started_at === packet.in_flight_stage?.started_at &&
+      record.packet?.timeout_ms === packet.in_flight_stage?.timeout_ms &&
+      record.packet?.head === packet.head &&
+      record.packet?.plan_digest === packet.plan_digest &&
+      record.packet?.staged_input_digest === packet.staged_input_digest,
+  );
+}
+
+function validateInFlightCheckRecoveryPacket(packet, expected, manifest) {
+  if (packet?.status === "failed" && Object.hasOwn(packet, "in_flight_stage")) {
+    validateTerminalCheckPacketForDiscard(packet, expected, { allowInFlightStage: true });
+    const history = validatedEnvironmentPreflightRetryHistory(manifest.environment_preflight_retry_history);
+    const pending = history.filter((record) => record.status === "started" && environmentPreflightRetryMatchesBinding(record, expected));
+    if (pending.length !== 1) {
+      throw new Error("failed preflight retry marker has no exact pending retry history record");
+    }
+    return { environmentPreflightRetryPending: true };
+  }
+  validateResumableCheckPacket(packet, expected);
+  return { environmentPreflightRetryPending: false };
+}
+
+function assertInFlightCheckRecoveryReleasedLeaseEvidence(state, taskId, owner, priorLease) {
+  if (!priorLease?.generation || !Number.isInteger(priorLease.pid) || !priorLease.processStartIdentity) {
+    throw new Error("in-flight check recovery prior released lease evidence is incomplete; refusing to invalidate.");
+  }
+  const prior = leaseRecord(state, taskId, priorLease.generation);
+  if (
+    !validTaskLeaseRecord(prior, taskId) || prior.owner !== owner || prior.pid !== priorLease.pid ||
+    prior.process_start_identity !== priorLease.processStartIdentity
+  ) {
+    throw new Error("in-flight check recovery prior released lease evidence changed before invalidation; refusing to mutate.");
+  }
+  const tokenDigest = taskLeaseTokenDigest(prior.token);
+  const releasePath = taskLeasePath(state, taskId, "releases", prior.generation);
+  const release = existsSync(releasePath) ? readRegularJson(releasePath) : null;
+  if (!validTaskLeaseRelease(release, taskId, prior.generation, tokenDigest)) {
+    throw new Error("in-flight check recovery released lease evidence changed before invalidation; refusing to mutate.");
+  }
+  if (processStartIdentity(prior.pid) !== null) {
+    throw new Error("in-flight check recovery released owner PID/start identity is still observable or reused; refusing to mutate.");
+  }
+  try {
+    process.kill(prior.pid, 0);
+    throw new Error("in-flight check recovery released owner PID is still live or not probeable as absent; refusing to mutate.");
+  } catch (error) {
+    if (error?.message?.includes("released owner PID is still live")) throw error;
+    if (error?.code !== "ESRCH") {
+      throw new Error("in-flight check recovery released owner PID absence could not be proven; refusing to mutate.");
+    }
+  }
+  const unresolved = unresolvedTaskLeaseExternalIntent(state, taskId, prior, tokenDigest);
+  if (unresolved) {
+    throw new Error("in-flight check recovery released lease has an unresolved external intent; refusing to mutate.");
+  }
+}
+
+function assertInFlightCheckRecoveryReleasedLeaseLineage(state, taskId, targetGeneration) {
+  const root = readRegularJson(taskLeaseRootRecordPath(state, taskId));
+  if (!validTaskLeaseRootRecord(root, taskId) || !targetGeneration) {
+    throw new Error("in-flight check recovery released lease lineage is not provable; refusing to invalidate.");
+  }
+  let generation = root.initial_generation;
+  let epoch = 0;
+  let segmentDepth = 0;
+  const seen = new Set();
+  const maximumTraversedGenerations = taskLeaseMaximumGenerationChainLength * (taskLeaseMaximumEpochCount + 1);
+  for (let traversed = 0; traversed < maximumTraversedGenerations; traversed += 1) {
+    if (seen.has(generation)) throw new Error("in-flight check recovery released lease lineage is cyclic; refusing to invalidate.");
+    seen.add(generation);
+    const record = leaseRecord(state, taskId, generation);
+    if (!validTaskLeaseRecord(record, taskId)) {
+      throw new Error("in-flight check recovery released lease lineage is invalid; refusing to invalidate.");
+    }
+    const tokenDigest = taskLeaseTokenDigest(record.token);
+    const unresolved = unresolvedTaskLeaseExternalIntent(state, taskId, record, tokenDigest);
+    if (unresolved) {
+      throw new Error("in-flight check recovery released lease lineage has an unresolved external intent; refusing to invalidate.");
+    }
+    if (generation === targetGeneration) return;
+    const handoffPath = taskLeasePath(state, taskId, "handoffs", generation);
+    const epochPath = taskLeasePath(state, taskId, "epochs", generation);
+    const releasePath = taskLeasePath(state, taskId, "releases", generation);
+    const handoff = existsSync(handoffPath) ? readRegularJson(handoffPath) : null;
+    const release = existsSync(releasePath) ? readRegularJson(releasePath) : null;
+    if (handoff && !validTaskLeaseHandoff(handoff, taskId, generation, tokenDigest)) {
+      throw new Error("in-flight check recovery released lease lineage is incomplete; refusing to invalidate.");
+    }
+    if (release && !validTaskLeaseRelease(release, taskId, generation, tokenDigest)) {
+      throw new Error("in-flight check recovery released lease lineage is invalid; refusing to invalidate.");
+    }
+    if (handoff) {
+      if ((release && handoff.reason !== "released") || (!release && handoff.reason !== "stale_owner_process_absent")) {
+        throw new Error("in-flight check recovery released lease lineage predecessor state is invalid; refusing to invalidate.");
+      }
+      if (segmentDepth + 1 >= taskLeaseMaximumGenerationChainLength) {
+        throw new Error("in-flight check recovery released lease lineage exceeds its bounded depth; refusing to invalidate.");
+      }
+      generation = handoff.to_generation;
+      segmentDepth += 1;
+      continue;
+    }
+    const epochRecord = existsSync(epochPath) ? readRegularJson(epochPath) : null;
+    if (!epochRecord) {
+      throw new Error("in-flight check recovery released lease lineage is incomplete; refusing to invalidate.");
+    }
+    const expectedReason = release ? "released" : "stale_owner_process_absent";
+    if (
+      !validTaskLeaseEpoch(epochRecord, taskId, generation, tokenDigest, epoch) ||
+      epochRecord.reason !== expectedReason
+    ) {
+      throw new Error("in-flight check recovery released lease epoch record is invalid; refusing to invalidate.");
+    }
+    if (epoch >= taskLeaseMaximumEpochCount) {
+      throw new Error("in-flight check recovery released lease epoch capacity is exceeded; refusing to invalidate.");
+    }
+    generation = epochRecord.to_generation;
+    epoch += 1;
+    segmentDepth = 0;
+  }
+  throw new Error("in-flight check recovery released lease lineage exceeds its bounded depth; refusing to invalidate.");
+}
+
+function assertInFlightCheckRecoveryLockedLeaseAdmission(state, taskId, owner, priorLease, lockingPriorLease, lock) {
+  const current = inspectTaskLock(state, taskId);
+  if (
+    current.protocol !== "versioned_lease" || current.status !== "active" ||
+    current.generation !== lock.generation || current.metadata?.token !== lock.token ||
+    current.metadata?.owner !== owner || current.metadata?.pid !== process.pid ||
+    current.metadata?.process_start_identity !== processStartIdentity(process.pid)
+  ) {
+    throw new Error("in-flight check recovery lease ownership changed before invalidation; refusing to mutate.");
+  }
+  // Re-read every predecessor through the immediately released generation while
+  // holding the successor lease.  Admission may have observed an earlier
+  // lineage, but an immutable external intent can be published after admission
+  // and before this mutation.  A global seen set in the traversal keeps epoch
+  // rollover bounded without allowing a cross-epoch cycle to hide that intent.
+  assertInFlightCheckRecoveryReleasedLeaseLineage(state, taskId, lockingPriorLease.generation);
+  assertInFlightCheckRecoveryReleasedLeaseEvidence(state, taskId, owner, priorLease);
+  assertInFlightCheckRecoveryReleasedLeaseEvidence(state, taskId, owner, lockingPriorLease);
+  const lockingPrior = leaseRecord(state, taskId, lockingPriorLease.generation);
+  const tokenDigest = taskLeaseTokenDigest(lockingPrior.token);
+  const handoffPath = taskLeasePath(state, taskId, "handoffs", lockingPrior.generation);
+  const epochPath = taskLeasePath(state, taskId, "epochs", lockingPrior.generation);
+  const handoff = existsSync(handoffPath)
+    ? readRegularJson(handoffPath)
+    : existsSync(epochPath) ? readRegularJson(epochPath) : null;
+  if (
+    !validTaskLeaseHandoff(handoff, taskId, lockingPrior.generation, tokenDigest) ||
+    handoff.reason !== "released" || handoff.to_generation !== lock.generation
+  ) {
+    throw new Error("in-flight check recovery released lease chain changed before invalidation; refusing to mutate.");
+  }
+}
+
+function settleInFlightCheckRecoveryEnvironmentPreflightRetry(manifest, manifestPath, packet, expected) {
+  if (!(packet.status === "failed" && packet.in_flight_stage?.stage === "preflight")) return;
+  completeEnvironmentPreflightRetry(manifest, manifestPath, expected, "blocked_packet_changed", { write: false });
+  appendTaskEvent(manifest, "environment_preflight_retry_recovery_settled", "retained preflight retry marker invalidated by approved recovery; fresh full verification required");
+}
+
+function assertInFlightCheckRecoveryDeliveryAdmission(state, manifest, options) {
+  const recoveries = inFlightCheckRecoveryRecords(state, manifest.task_id);
+  if (recoveries.length === 0) return;
+  if (
+    options.noVerify || options.verify !== "check" || options.stageAll !== true ||
+    options.retryEnvironmentPreflight
+  ) {
+    throw new Error(
+      "in-flight check recovery provenance requires the fresh exact finish-pr --stage-all --verify check path; " +
+      "--no-verify, non-check profiles, non-bare --stage-all, and environment retry are blocked before delivery.",
+    );
+  }
+}
+
+function inFlightCheckRecoveryAdmissionPacket(state, taskId, owner) {
+  const blockers = [];
+  let manifestRecord = null;
+  let plan = null;
+  let head = null;
+  let stagedInputDigest = null;
+  let packet = null;
+  let inspection = null;
+  let recoveryRecord = null;
+  let lockingPriorLease = null;
+  let priorLease = null;
+  let environmentPreflightRetryPending = false;
+  try {
+    manifestRecord = findManifestByExactTaskId(state, taskId);
+    validateManifest(manifestRecord.manifest, manifestRecord.path);
+    assertWorktreeExists(manifestRecord.manifest);
+    assertCurrentBranch(manifestRecord.manifest);
+    if (manifestRecord.manifest.owner !== owner) blockers.push("current runner is not the exact manifest owner");
+    plan = resumableCheckPlan(manifestRecord.manifest.worktree_path);
+    head = git(["rev-parse", "HEAD"], { cwd: manifestRecord.manifest.worktree_path }).stdout.trim();
+    stagedInputDigest = stagedInputDigestForWorktree(manifestRecord.manifest.worktree_path);
+    packet = manifestRecord.manifest.check_verification_packet;
+    const validation = validateInFlightCheckRecoveryPacket(
+      packet,
+      { taskId, owner, head, plan, stagedInputDigest },
+      manifestRecord.manifest,
+    );
+    environmentPreflightRetryPending = validation.environmentPreflightRetryPending;
+    if (!Object.hasOwn(packet, "in_flight_stage")) blockers.push("check verification packet has no retained in-flight stage");
+  } catch (error) {
+    blockers.push(`packet or source binding is not admissible: ${error?.message || "unknown"}`);
+  }
+  let fingerprint = null;
+  if (packet?.in_flight_stage) {
+    try { fingerprint = inFlightCheckPacketFingerprint(packet); } catch { blockers.push("retained in-flight packet fingerprint is not provable"); }
+  }
+  try {
+    inspection = inspectTaskLock(state, taskId);
+    if (inspection.protocol !== "versioned_lease" || inspection.status !== "released" || !inspection.metadata || inspection.metadata.owner !== owner) {
+      blockers.push("task does not have an exact released versioned lease for the manifest owner");
+    } else {
+      lockingPriorLease = {
+        generation: inspection.generation || null,
+        pid: inspection.metadata.pid,
+        processStartIdentity: inspection.metadata.process_start_identity,
+      };
+      priorLease = lockingPriorLease;
+      if (processStartIdentity(inspection.metadata.pid) !== null) blockers.push("released owner PID/start identity is still observable or reused");
+      try {
+        process.kill(inspection.metadata.pid, 0);
+        blockers.push("released owner PID is still live or not probeable as absent");
+      } catch (error) {
+        if (error?.code !== "ESRCH") blockers.push("released owner PID absence could not be proven");
+      }
+      try {
+        const unresolved = unresolvedTaskLeaseExternalIntent(state, taskId, inspection.metadata, taskLeaseTokenDigest(inspection.metadata.token));
+        if (unresolved) blockers.push("released lease has an unresolved external intent");
+      } catch {
+        blockers.push("released lease external intent evidence is ambiguous");
+      }
+      try {
+        assertInFlightCheckRecoveryReleasedLeaseLineage(state, taskId, inspection.generation);
+      } catch (error) {
+        blockers.push(`released lease lineage is not admissible: ${error?.message || "unknown"}`);
+      }
+    }
+  } catch (error) {
+    blockers.push(`released lease evidence is not admissible: ${error?.message || "unknown"}`);
+  }
+  if (fingerprint) {
+    try {
+      const recoveryPath = inFlightCheckRecoveryRecordPath(state, taskId, fingerprint);
+      if (existsSync(recoveryPath)) {
+        const record = readRegularJson(recoveryPath);
+        if (!validInFlightCheckRecoveryRecord(record, taskId)) {
+          blockers.push("in-flight check recovery evidence is invalid");
+        } else if (!recoveryRecordMatchesInFlightPacket(record, packet, owner, {
+          generation: record.prior_lease.generation,
+          pid: record.prior_lease.pid,
+          processStartIdentity: record.prior_lease.process_start_identity,
+        })) {
+          blockers.push("in-flight check recovery evidence does not exactly match the retained packet");
+        } else {
+          recoveryRecord = record;
+          priorLease = {
+            generation: record.prior_lease.generation,
+            pid: record.prior_lease.pid,
+            processStartIdentity: record.prior_lease.process_start_identity,
+          };
+          try {
+            assertInFlightCheckRecoveryReleasedLeaseEvidence(state, taskId, owner, priorLease);
+          } catch (error) {
+            blockers.push(`recorded prior released lease evidence is not admissible: ${error?.message || "unknown"}`);
+          }
+        }
+      }
+    } catch {
+      blockers.push("in-flight check recovery evidence path is invalid");
+    }
+  }
+  return {
+    taskId,
+    owner,
+    manifestPath: manifestRecord?.path || null,
+    packetFingerprint: fingerprint,
+    priorLease,
+    lockingPriorLease,
+    packet: packet?.in_flight_stage && packet?.head && packet?.plan_digest && packet?.staged_input_digest
+      ? { stage: packet.in_flight_stage.stage, startedAt: packet.in_flight_stage.started_at, timeoutMs: packet.in_flight_stage.timeout_ms, head: packet.head, planDigest: packet.plan_digest, stagedInputDigest: packet.staged_input_digest }
+      : null,
+    recoveryPendingInvalidation: Boolean(recoveryRecord),
+    recoveryRecord,
+    environmentPreflightRetryPending: Boolean(environmentPreflightRetryPending),
+    allowed: blockers.length === 0,
+    blockers,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function recoverInFlightCheck(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length !== 1) throw new Error("recover-inflight-check requires exactly one task id.");
+  if (Boolean(options.dryRun) === Boolean(options.apply)) throw new Error("recover-inflight-check requires exactly one of --dry-run or --apply.");
+  assertBareApplyOption(options, "recover-inflight-check");
+  const taskId = String(positional[0] || "").trim();
+  assertSafeTaskId(taskId);
+  const approval = safeMetadataText(options.approval, inFlightCheckRecoveryApprovalMaximumLength);
+  const reason = safeMetadataText(options.reason, inFlightCheckRecoveryReasonMaximumLength);
+  if (options.apply && !validTakeoverReason(approval)) throw new Error("recover-inflight-check --apply requires explicit operator approval of at least 10 non-whitespace characters.");
+  if (options.apply && !validTakeoverReason(reason)) throw new Error("recover-inflight-check --apply requires a bounded reason of at least 10 non-whitespace characters.");
+  const state = workspaceState(options);
+  const owner = currentLaneOwner(options);
+  const packet = inFlightCheckRecoveryAdmissionPacket(state, taskId, owner);
+  if (options.dryRun) {
+    const output = { ...packet, mutation: "none; dry-run only" };
+    if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+    else printPlan("recover-inflight-check", [JSON.stringify(output)]);
+    return;
+  }
+  if (!packet.allowed) throw new Error(`in-flight check recovery blocked: ${packet.blockers.join("; ")}`);
+  const approvalSha256 = createHash("sha256").update(approval).digest("hex");
+  if (
+    packet.recoveryRecord &&
+    (packet.recoveryRecord.approval_sha256 !== approvalSha256 || packet.recoveryRecord.reason !== reason)
+  ) {
+    throw new Error("in-flight check recovery resumption requires the exact original approval and reason.");
+  }
+  withManifestLock(state, taskId, (lock) => {
+    const locked = readManifest(packet.manifestPath);
+    validateManifest(locked, packet.manifestPath);
+    assertWorktreeExists(locked);
+    assertCurrentBranch(locked);
+    const currentPlan = resumableCheckPlan(locked.worktree_path);
+    const currentHead = git(["rev-parse", "HEAD"], { cwd: locked.worktree_path }).stdout.trim();
+    const currentStagedInputDigest = stagedInputDigestForWorktree(locked.worktree_path);
+    if (
+      locked.owner !== owner || !locked.check_verification_packet ||
+      inFlightCheckPacketFingerprint(locked.check_verification_packet) !== packet.packetFingerprint ||
+      currentHead !== packet.packet.head || currentPlan.digest !== packet.packet.planDigest || currentStagedInputDigest !== packet.packet.stagedInputDigest
+    ) {
+      throw new Error("in-flight check recovery evidence changed before invalidation; refusing to mutate.");
+    }
+    const recoveryPath = inFlightCheckRecoveryRecordPath(state, taskId, packet.packetFingerprint);
+    assertInFlightCheckRecoveryLockedLeaseAdmission(state, taskId, owner, packet.priorLease, packet.lockingPriorLease, lock);
+    let existingRecovery = null;
+    if (existsSync(recoveryPath)) {
+      existingRecovery = readRegularJson(recoveryPath);
+      if (
+        !validInFlightCheckRecoveryRecord(existingRecovery, taskId) ||
+        !recoveryRecordMatchesInFlightPacket(existingRecovery, locked.check_verification_packet, owner, packet.priorLease) ||
+        existingRecovery.approval_sha256 !== approvalSha256 || existingRecovery.reason !== reason
+      ) {
+        throw new Error("in-flight check recovery evidence is not an exact resumable invalidation record.");
+      }
+    } else {
+      writeNewJson(recoveryPath, {
+        schema_version: inFlightCheckRecoverySchemaVersion,
+        task_id: taskId,
+        recovery: "invalidate-and-reverify/v1",
+        packet_fingerprint: packet.packetFingerprint,
+        owner,
+        prior_lease: {
+          generation: packet.priorLease.generation,
+          pid: packet.priorLease.pid,
+          process_start_identity: packet.priorLease.processStartIdentity,
+        },
+        packet: {
+          stage: packet.packet.stage,
+          started_at: packet.packet.startedAt,
+          timeout_ms: packet.packet.timeoutMs,
+          head: packet.packet.head,
+          plan_digest: packet.packet.planDigest,
+          staged_input_digest: packet.packet.stagedInputDigest,
+        },
+        approval_sha256: approvalSha256,
+        approval_length: approval.length,
+        reason,
+        recovered_at: new Date().toISOString(),
+        metadata_only: true,
+        raw_payload_retained: false,
+      });
+      if (process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_IN_FLIGHT_RECOVERY_RECORD === "1") {
+        throw new Error("fixture interruption after in-flight recovery evidence publication");
+      }
+    }
+    settleInFlightCheckRecoveryEnvironmentPreflightRetry(locked, packet.manifestPath, locked.check_verification_packet, {
+      taskId,
+      owner,
+      head: currentHead,
+      plan: currentPlan,
+      stagedInputDigest: currentStagedInputDigest,
+    });
+    delete locked.check_verification_packet;
+    appendTaskEvent(locked, "inflight_check_packet_invalidated", `fingerprint=${packet.packetFingerprint}; stage=${packet.packet.stage}; fresh --stage-all --verify check required`);
+    writeManifest(packet.manifestPath, locked);
+  });
+  const output = { ...packet, recoveredAt: new Date().toISOString(), mutation: "immutable in-flight recovery evidence published; active packet invalidated; fresh --stage-all --verify check required" };
+  if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
+  else printPlan("recover-inflight-check", [JSON.stringify(output)]);
 }
 
 function rolloverTaskLeaseLedger(argv) {
@@ -15217,9 +15745,7 @@ function resumableCheckPacketLifetimeMs(plan) {
     throw new Error("resumable check packet lifetime requires a bounded stage plan.");
   }
   const executionBudgetMs = stages.reduce((total, stage) => {
-    if (resumableCheckLongLeafStages.has(stage)) return total + resumableCheckLongLeafBudgetMs;
-    if (resumableCheckSupervisorLeafSet.has(stage)) return total + resumableCheckSupervisorLeafExecutionReserveMs;
-    return total + resumableCheckInvocationBudgetMs;
+    return total + resumableCheckStageExecutionBudgetMs(stage);
   }, 0);
   const orchestrationReserveMs = resumableCheckPacketResumeOverheadMs + stages.length * resumableCheckPacketStageOrchestrationReserveMs;
   return Math.max(resumableCheckPacketMinimumLifetimeMs, executionBudgetMs + orchestrationReserveMs);
@@ -15278,6 +15804,9 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
   const head = git(["rev-parse", "HEAD"], { cwd: options.cwd }).stdout.trim();
   const stagedInputDigest = stagedInputDigestForWorktree(options.cwd);
   const prior = manifest.check_verification_packet;
+  if (!prior && !options.allowFreshVerificationAfterInFlightRecovery && inFlightCheckRecoveryRecords(options.state, manifest.task_id).length > 0) {
+    throw new Error("in-flight check recovery requires an explicit fresh --stage-all --verify check before any new verification packet can begin.");
+  }
   let packet = prior;
   let environmentPreflightRetry = null;
   if (options.allowEnvironmentPreflightRetry) {
@@ -15317,29 +15846,38 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
   if (environmentPreflightRetry) {
     runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, environmentPreflightRetry, options, started);
   }
+  if (packet.in_flight_stage) {
+    throw new Error(`check verification packet has unresolved in-flight stage ${packet.in_flight_stage.stage}; fresh authorized recovery is required; refusing to resume.`);
+  }
   for (let index = packet.stages.length; index < plan.stages.length; index += 1) {
     const stage = plan.stages[index];
-    const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;
-    // A long leaf has its own reviewed budget. Subtracting the elapsed packet
-    // time here gave test:codex-workspace less than its dedicated allowance merely
-    // because earlier bounded leaves had already produced evidence. Ordinary
-    // leaves retain the packet-level 180s pause/resume behavior below.
+    const invocationBudgetMs = resumableCheckStageInvocationBudgetMs(stage);
+    const hasDedicatedExecutionBudget = resumableCheckLongLeafStages.has(stage)
+      || Object.hasOwn(resumableCheckSupervisorLeafExecutionBudgetOverrides, stage);
+    // Long leaves and the explicitly adjusted work-packet leaf have their own
+    // reviewed invocation budgets. Ordinary supervisor leaves retain their
+    // existing 180s packet admission window with a 170s execution reserve.
     const elapsedMs = Date.now() - started;
-    const remainingMs = resumableCheckLongLeafStages.has(stage)
+    const remainingMs = hasDedicatedExecutionBudget
       ? invocationBudgetMs
       : invocationBudgetMs - elapsedMs;
     const needsSupervisorLeafReserve = resumableCheckSupervisorLeafSet.has(stage);
     const executionReserveMs = needsSupervisorLeafReserve
-      ? resumableCheckSupervisorLeafExecutionReserveMs
+      ? resumableCheckSupervisorLeafExecutionBudgetMs(stage)
       : resumableCheckDefaultLeafExecutionReserveMs;
     if (remainingMs < executionReserveMs) {
       packet.status = "partial"; packet.next_stage = stage; packet.updated_at = new Date().toISOString(); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest);
       throw new Error(`Check verification packet paused before ${packet.next_stage}; resume finish-pr to continue.`);
     }
-    const timeout = needsSupervisorLeafReserve ? resumableCheckSupervisorLeafExecutionReserveMs : remainingMs;
+    const timeout = needsSupervisorLeafReserve ? resumableCheckSupervisorLeafExecutionBudgetMs(stage) : remainingMs;
+    const startedAt = new Date().toISOString();
+    packet.in_flight_stage = { stage, started_at: startedAt, timeout_ms: timeout };
+    packet.updated_at = startedAt;
+    manifest.check_verification_packet = packet;
+    writeManifest(manifestPath, manifest);
     const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL" });
     const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
-    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: timeout, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
+    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); delete packet.in_flight_stage; manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: timeout, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
     packet.stages.push(evidence);
     packet.updated_at = new Date().toISOString();
     if (index + 1 === plan.stages.length) {
@@ -15350,6 +15888,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
       packet.status = "partial";
       packet.next_stage = plan.stages[index + 1];
     }
+    delete packet.in_flight_stage;
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
   }
@@ -15357,7 +15896,11 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
 
 function prepareExactEnvironmentPreflightRetry(manifest, manifestPath, packet, expected, options = {}) {
   if (!options.allowEnvironmentPreflightRetry) return false;
-  validateTerminalCheckPacketForDiscard(packet, expected);
+  const hasInFlightStage = Object.hasOwn(packet || {}, "in_flight_stage");
+  validateTerminalCheckPacketForDiscard(packet, expected, { allowInFlightStage: hasInFlightStage });
+  if (hasInFlightStage) {
+    throw new Error(`check verification packet has unresolved in-flight stage ${packet.in_flight_stage.stage}; fresh authorized recovery is required; refusing to resume.`);
+  }
   if (
     packet.status !== "failed" ||
     packet.task_id !== expected.taskId ||
@@ -15500,14 +16043,24 @@ function environmentPreflightRetryMatchesBinding(record, expected) {
 }
 
 function runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, retry, options, started) {
+  const timeoutMs = Math.max(1, resumableCheckInvocationBudgetMs - (Date.now() - started));
+  const startedAt = new Date().toISOString();
+  packet.in_flight_stage = { stage: "preflight", started_at: startedAt, timeout_ms: timeoutMs };
+  packet.updated_at = startedAt;
+  manifest.check_verification_packet = packet;
+  writeManifest(manifestPath, manifest);
   const result = run("pnpm", ["run", "preflight"], {
     cwd: options.cwd,
-    timeout: Math.max(1, resumableCheckInvocationBudgetMs - (Date.now() - started)),
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
   const outcome = verificationOutcome(result);
   if (outcome !== "success") {
-    completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "failed");
+    delete packet.in_flight_stage;
+    packet.updated_at = new Date().toISOString();
+    manifest.check_verification_packet = packet;
+    completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "failed", { write: false });
+    writeManifest(manifestPath, manifest);
     const diagnostic = persistVerificationDiagnostic({
       context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"],
       elapsedMs: Date.now() - started, timeoutMs: checkVerificationTimeoutMs, outcome, result,
@@ -15527,7 +16080,7 @@ function runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, retry
     completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "blocked_snapshot_changed");
     throw new Error("environment preflight retry changed or lost the exact source, plan, or staged-input snapshot; refusing continuation or delivery.");
   }
-  validateTerminalCheckPacketForDiscard(packet, retry.expected);
+  validateTerminalCheckPacketForDiscard(packet, retry.expected, { allowInFlightStage: true });
   if (
     packet.status !== "failed" ||
     packet.failed_stage !== "preflight" ||
@@ -15544,6 +16097,7 @@ function runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, retry
   packet.status = retry.expected.plan.stages.length === 1 ? "passed" : "partial";
   packet.next_stage = retry.expected.plan.stages[1] || null;
   delete packet.failed_stage;
+  delete packet.in_flight_stage;
   if (packet.status === "passed") packet.completed_at = completedAt;
   manifest.check_verification_packet = packet;
   completeEnvironmentPreflightRetry(manifest, manifestPath, retry.expected, "preflight_passed", { write: false });
@@ -15639,10 +16193,10 @@ function validateStalePartialCheckPacketForDiscard(packet, expected) {
   }
 }
 
-function validateTerminalCheckPacketForDiscard(packet, expected) {
+function validateTerminalCheckPacketForDiscard(packet, expected, options = {}) {
   const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
-  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage", "packet_lifetime_ms"];
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage", "packet_lifetime_ms", ...(options.allowInFlightStage ? ["in_flight_stage"] : [])];
   if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
   if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
   if (packet.task_id !== expected.taskId || packet.owner !== expected.owner) invalid("binding changed");
@@ -15661,6 +16215,18 @@ function validateTerminalCheckPacketForDiscard(packet, expected) {
   const expiresAt = timestamp(packet.expires_at, "expires_at", { allowFuture: true });
   const discardLifetimeMs = resumableCheckDiscardPacketLifetimeMs(packet, expected.plan, invalid);
   if (updatedAt < createdAt || expiresAt <= createdAt || expiresAt - createdAt > discardLifetimeMs + resumableCheckPacketFutureSkewMs) invalid("timestamp ordering is invalid");
+  if (Object.hasOwn(packet, "in_flight_stage")) {
+    const marker = packet.in_flight_stage;
+    if (!options.allowInFlightStage || !marker || typeof marker !== "object" || Array.isArray(marker) || Object.getPrototypeOf(marker) !== Object.prototype) invalid("in-flight stage is malformed");
+    if (packet.status !== "failed") invalid("in-flight stage is allowed only for a failed preflight retry packet");
+    const allowedMarkerKeys = ["stage", "started_at", "timeout_ms"];
+    if (Object.keys(marker).some((key) => !allowedMarkerKeys.includes(key))) invalid("in-flight stage contains unbounded fields");
+    if (marker.stage !== "preflight" || marker.stage !== expected.plan.stages[0]) invalid("in-flight stage does not match the authorized preflight retry");
+    if (!isCanonicalIsoTimestamp(marker.started_at)) invalid("in-flight stage started_at is malformed");
+    const startedAt = Date.parse(marker.started_at);
+    if (startedAt < createdAt || startedAt > updatedAt) invalid("in-flight stage timestamp is invalid");
+    if (!Number.isSafeInteger(marker.timeout_ms) || marker.timeout_ms <= 0 || marker.timeout_ms > resumableCheckInvocationBudgetMs) invalid("in-flight stage timeout is invalid");
+  }
   if (!Array.isArray(packet.stages) || packet.stages.length > 256) invalid("stage evidence is malformed");
   const seenStages = new Set();
   const history = [];
@@ -15742,7 +16308,7 @@ function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInp
 function validateResumableCheckPacket(packet, expected) {
   const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
-  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage", "packet_lifetime_ms"];
+  const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "completed_at", "failed_stage", "packet_lifetime_ms", "in_flight_stage"];
   if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
   if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
   if (typeof packet.staged_input_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.staged_input_digest)) invalid("staged input binding is malformed");
@@ -15788,7 +16354,23 @@ function validateResumableCheckPacket(packet, expected) {
   if (packet.status === "partial") {
     if (packet.stages.length >= expected.plan.stages.length || packet.next_stage !== expected.plan.stages[packet.stages.length]) invalid("partial packet next stage is invalid");
     if (Object.hasOwn(packet, "completed_at")) invalid("partial packet cannot be complete");
+    if (Object.hasOwn(packet, "in_flight_stage")) {
+      const marker = packet.in_flight_stage;
+      if (!marker || typeof marker !== "object" || Array.isArray(marker) || Object.getPrototypeOf(marker) !== Object.prototype) invalid("in-flight stage is malformed");
+      const allowedMarkerKeys = ["stage", "started_at", "timeout_ms"];
+      if (Object.keys(marker).some((key) => !allowedMarkerKeys.includes(key))) invalid("in-flight stage contains unbounded fields");
+      if (marker.stage !== packet.next_stage) invalid("in-flight stage does not match partial packet next stage");
+      if (!isCanonicalIsoTimestamp(marker.started_at)) invalid("in-flight stage started_at is malformed");
+      const startedAt = Date.parse(marker.started_at);
+      if (startedAt < createdAt || startedAt > updatedAt) invalid("in-flight stage timestamp is invalid");
+      const maximumTimeoutMs = resumableCheckStageExecutionBudgetMs(marker.stage);
+      if (!Number.isSafeInteger(marker.timeout_ms) || marker.timeout_ms <= 0 || marker.timeout_ms > maximumTimeoutMs) invalid("in-flight stage timeout is invalid");
+      if (resumableCheckSupervisorLeafSet.has(marker.stage) && marker.timeout_ms !== maximumTimeoutMs) {
+        invalid("in-flight stage timeout does not match the supervisor leaf budget");
+      }
+    }
   } else {
+    if (Object.hasOwn(packet, "in_flight_stage")) invalid("terminal packet cannot retain an in-flight stage");
     if (packet.stages.length !== expected.plan.stages.length || packet.next_stage !== null) invalid("passed packet completion is invalid");
     const completedAt = timestamp(packet.completed_at, "completed_at");
     if (completedAt < createdAt || completedAt > updatedAt) invalid("completion timestamp is invalid");

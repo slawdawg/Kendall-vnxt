@@ -11,7 +11,7 @@ test("work-packets behavior shard retains the fixed package-level timeout", () =
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
   assert.match(
     packageJson.scripts["test:supervisor:check:integration:work-packets"],
-    /--timeout-ms=150000 tests\/integration\/test_work_packets\.py -q/,
+    /--timeout-ms=180000 tests\/integration\/test_work_packets\.py -q/,
   );
 });
 

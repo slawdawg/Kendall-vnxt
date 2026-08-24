@@ -8454,8 +8454,11 @@ try {
       const packageScripts = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")).scripts;
       assert(packageScripts["test:supervisor"] === "node ./scripts/run-supervisor-tests.mjs", packageScripts["test:supervisor"]);
       assert(packageScripts["test:supervisor:review-route"] === "node ./scripts/run-supervisor-tests.mjs tests/integration/test_review_route_packet.py -q", packageScripts["test:supervisor:review-route"]);
+      const workPacketStage = "test:supervisor:check:integration:work-packets";
+      assert(packageScripts[workPacketStage]?.includes("--timeout-ms=180000"), "work-packet leaf lacks the fixed 180s child timeout");
       for (const stage of supervisorLeaves) {
-        assert(packageScripts[stage]?.includes("--timeout-ms=150000"), `supervisor leaf lacks the fixed 150s child timeout: ${stage}`);
+        if (stage === workPacketStage) continue;
+        assert(packageScripts[stage]?.includes("--timeout-ms=150000"), `ordinary supervisor leaf lacks the fixed 150s child timeout: ${stage}`);
       }
       const routingSource = readFileSync(join(rootDir, "services", "supervisor", "tests", "integration", "test_routing_preview.py"), "utf8");
       const routingSourceNames = [...routingSource.matchAll(/^def (test_[A-Za-z0-9_]+)\(/gm)].map((match) => match[1]);
@@ -8756,8 +8759,424 @@ try {
       );
       assert(second.code === 0, second.stderr || second.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-two", "interrupted packet reran a committed stage");
+      assert(!Object.hasOwn(readJson(join(fixture.stateRoot, "tasks", "resumed-task.json")).check_verification_packet, "in_flight_stage"), "successful packet retained an in-flight marker");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr fails closed after an interruption immediately following an in-flight stage marker", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+      installFixtureDeliveryProbes(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "in-flight marker interruption unexpectedly completed delivery");
+      assert(first.stderr.includes("fixture packet interruption after in-flight marker"), first.stderr || first.stdout);
+      const interrupted = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const marker = interrupted.check_verification_packet?.in_flight_stage;
+      assert(interrupted.check_verification_packet?.status === "partial", JSON.stringify(interrupted.check_verification_packet));
+      assert(interrupted.check_verification_packet?.next_stage === "check:packet-one", JSON.stringify(interrupted.check_verification_packet));
+      assert(interrupted.check_verification_packet?.stages?.length === 0, JSON.stringify(interrupted.check_verification_packet));
+      assert(JSON.stringify(Object.keys(marker || {}).sort()) === JSON.stringify(["stage", "started_at", "timeout_ms"]), JSON.stringify(marker));
+      assert(marker?.stage === "check:packet-one" && typeof marker.started_at === "string" && Number.isSafeInteger(marker.timeout_ms), JSON.stringify(marker));
+      assert(!JSON.stringify(interrupted.check_verification_packet).includes("fixture-packet-secret"), "in-flight marker retained child output");
+      assert(readFixtureStageLog(stageLog).length === 0, "interruption after marker executed a leaf");
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "0" } },
+      );
+      assert(second.code !== 0, "unresolved in-flight stage unexpectedly resumed");
+      assert(second.stderr.includes("unresolved in-flight stage check:packet-one"), second.stderr || second.stdout);
+      assert(second.stderr.includes("fresh authorized recovery is required"), second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "unresolved in-flight stage was implicitly replayed");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "unresolved in-flight stage reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "unresolved in-flight stage reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("recover-inflight-check invalidates only an approved released marker packet and requires fresh stage-all verification", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "fixture interruption unexpectedly completed");
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const retained = readJson(manifestPath).check_verification_packet;
+      assert(retained?.in_flight_stage?.stage === "check:packet-one", JSON.stringify(retained));
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const recovered = runFixtureScript(
+        fixture,
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "recovery launched a verification stage");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "recovery reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "recovery reached PR creation");
+      const invalidated = readJson(manifestPath);
+      assert(!Object.hasOwn(invalidated, "check_verification_packet"), JSON.stringify(invalidated));
+      const recoveryDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries");
+      const recoveryNames = readdirSync(recoveryDirectory).filter((name) => name.endsWith(".json"));
+      assert(recoveryNames.length === 1, JSON.stringify(recoveryNames));
+      const evidence = readJson(join(recoveryDirectory, recoveryNames[0]));
+      assert(evidence.packet.stage === "check:packet-one" && evidence.packet_fingerprint.length === 64, JSON.stringify(evidence));
+      assert(evidence.metadata_only === true && evidence.raw_payload_retained === false, JSON.stringify(evidence));
+      assert(!JSON.stringify(evidence).includes("fixture-packet-secret"), "recovery evidence retained child output");
+
+      for (const args of [
+        ["--no-verify"],
+        ["--stage-all", "--verify", "workspace-fast"],
+        ["--verify", "check"],
+      ]) {
+        const deliveryBlocked = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", ...args, "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(deliveryBlocked.code !== 0, `recovery provenance allowed ${args.join(" ")}`);
+        assert(deliveryBlocked.stderr.includes("fresh exact finish-pr --stage-all --verify check"), deliveryBlocked.stderr || deliveryBlocked.stdout);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), "recovery provenance bypass reached git push");
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "recovery provenance bypass reached PR creation");
+      }
+
+      const blocked = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(blocked.code !== 0, "recovered packet unexpectedly began without stage-all");
+      assert(blocked.stderr.includes("fresh exact finish-pr --stage-all --verify check"), blocked.stderr || blocked.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "non-stage-all restart launched a leaf");
+
+      const fresh = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "0" } },
+      );
+      assert(fresh.code === 0, fresh.stderr || fresh.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "fresh verification did not restart from its first leaf");
+      assert(readJson(manifestPath).check_verification_packet?.status === "passed", JSON.stringify(readJson(manifestPath)));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("recover-inflight-check fails closed without approval or with a changed packet binding", () => {
+    for (const scenario of [
+      { name: "missing approval", args: ["--apply", "--reason", "fixture approved invalidation reason"] },
+      { name: "short approval", args: ["--apply", "--approval", "short", "--reason", "fixture approved invalidation reason"] },
+      { name: "valued inline apply", args: ["--apply=unexpected", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker"] },
+      { name: "valued positional apply", args: ["--apply", "unexpected", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker"] },
+      { name: "binding drift", args: ["--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker"], mutate: (packet) => { packet.head = "f".repeat(40); } },
+      { name: "malformed marker", args: ["--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker"], mutate: (packet) => { packet.in_flight_stage.timeout_ms = 0; } },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["check:packet-one", "check:packet-two"];
+        installFixtureResumableCheckPlan(fixture, stages);
+        installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+        const first = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(first.code !== 0, `${scenario.name} fixture interruption unexpectedly completed`);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const before = readFileSync(manifestPath, "utf8");
+        if (scenario.mutate) {
+          const changed = JSON.parse(before);
+          scenario.mutate(changed.check_verification_packet);
+          writeFileSync(manifestPath, `${JSON.stringify(changed, null, 2)}\n`);
+        }
+        const expected = scenario.mutate ? readFileSync(manifestPath, "utf8") : before;
+        const result = runFixtureScript(
+          fixture,
+          ["recover-inflight-check", "resumed-task", ...scenario.args, "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} recovery unexpectedly applied`);
+        assert(readFileSync(manifestPath, "utf8") === expected, `${scenario.name} recovery mutated the manifest`);
+        assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries")), `${scenario.name} recovery wrote immutable evidence`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("recover-inflight-check refuses active ownership, unresolved external intent, and a duplicate request without a retained packet", () => {
+    for (const scenario of ["active lease", "unresolved external intent", "duplicate request"]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["check:packet-one", "check:packet-two"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+        const first = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(first.code !== 0, `${scenario} fixture interruption unexpectedly completed`);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+        if (scenario === "active lease") {
+          rmSync(leaseRoot, { recursive: true, force: true });
+          writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a" }));
+        } else if (scenario === "unresolved external intent") {
+          const root = readJson(join(leaseRoot, "root.json"));
+          const prior = readJson(join(leaseRoot, "generations", `${root.initial_generation}.json`));
+          const tokenDigest = createHash("sha256").update(prior.token).digest("hex");
+          const intentDirectory = join(leaseRoot, "external-intents");
+          mkdirSync(intentDirectory, { recursive: true });
+          writeFileSync(join(intentDirectory, "33333333-3333-4333-8333-333333333333.json"), `${JSON.stringify({
+            schema_version: 1,
+            task_id: "resumed-task",
+            generation: prior.generation,
+            token_digest: tokenDigest,
+            intent_id: "33333333-3333-4333-8333-333333333333",
+            runner_pid: prior.pid,
+            runner_process_start_identity: prior.process_start_identity,
+            command_digest: "c".repeat(64),
+            started_at: "2026-07-26T00:00:00.000Z",
+          })}\n`);
+        } else {
+          const applied = runFixtureScript(
+            fixture,
+            ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+            { cwd: fixture.worktree, env: fixture.env },
+          );
+          assert(applied.code === 0, applied.stderr || applied.stdout);
+        }
+        const before = readFileSync(manifestPath, "utf8");
+        const result = runFixtureScript(
+          fixture,
+          ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario} recovery unexpectedly applied`);
+        assert(readFileSync(manifestPath, "utf8") === before, `${scenario} recovery mutated the retained manifest`);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario} recovery launched a verification stage`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario} recovery reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario} recovery reached PR creation`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("recover-inflight-check resumes only the exact recovery record after evidence publication interruption", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["check:packet-one", "check:packet-two"]);
+      installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "fixture interruption unexpectedly completed");
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const args = ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      const interrupted = runFixtureScript(
+        fixture,
+        args,
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_IN_FLIGHT_RECOVERY_RECORD: "1" } },
+      );
+      assert(interrupted.code !== 0, "recovery evidence interruption unexpectedly completed invalidation");
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "crash discarded the retained in-flight packet");
+      const recoveryDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries");
+      assert(readdirSync(recoveryDirectory).filter((name) => name.endsWith(".json")).length === 1, "crash did not retain exactly one immutable recovery record");
+
+      const wrongApproval = runFixtureScript(
+        fixture,
+        [...args.slice(0, 5), "different operator approval text", ...args.slice(6)],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(wrongApproval.code !== 0, "different approval resumed an existing recovery record");
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "inexact resumption mutated the retained packet");
+
+      const recoveryPath = join(recoveryDirectory, readdirSync(recoveryDirectory).find((name) => name.endsWith(".json")));
+      const exactRecovery = readJson(recoveryPath);
+      writeFileSync(recoveryPath, `${JSON.stringify({ ...exactRecovery, packet_fingerprint: "f".repeat(64) }, null, 2)}\n`);
+      const mismatchedFingerprint = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(mismatchedFingerprint.code !== 0, "mismatched recovery fingerprint resumed an existing recovery record");
+      assert(mismatchedFingerprint.stderr.includes("recovery evidence"), mismatchedFingerprint.stderr || mismatchedFingerprint.stdout);
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "mismatched recovery fingerprint invalidated the retained packet");
+      writeFileSync(recoveryPath, `${JSON.stringify(exactRecovery, null, 2)}\n`);
+
+      writeFileSync(recoveryPath, `${JSON.stringify({ ...exactRecovery, prior_lease: { ...exactRecovery.prior_lease, generation: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" } }, null, 2)}\n`);
+      const mismatchedPriorLease = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(mismatchedPriorLease.code !== 0, "mismatched recovery prior lease resumed an existing recovery record");
+      assert(mismatchedPriorLease.stderr.includes("prior released lease evidence"), mismatchedPriorLease.stderr || mismatchedPriorLease.stdout);
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "mismatched recovery prior lease invalidated the retained packet");
+      writeFileSync(recoveryPath, `${JSON.stringify(exactRecovery, null, 2)}\n`);
+
+      const resumed = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      assert(!Object.hasOwn(readJson(manifestPath), "check_verification_packet"), "exact recovery resumption did not invalidate the retained packet");
+      assert(readdirSync(recoveryDirectory).filter((name) => name.endsWith(".json")).length === 1, "exact recovery resumption duplicated immutable evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("recover-inflight-check revalidates released predecessor intent evidence while holding the manifest lease", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+      const interrupted = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(interrupted.code !== 0, "fixture interruption unexpectedly completed");
+      installFixtureInFlightRecoveryLockedIntentSeam(fixture);
+      installFixtureDeliveryProbes(fixture);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const result = runFixtureScript(
+        fixture,
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "post-admission predecessor intent race unexpectedly invalidated the packet");
+      assert(result.stderr.includes("unresolved external intent"), result.stderr || result.stdout);
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "locked recovery race invalidated the retained packet");
+      const recoveryDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries");
+      assert(!existsSync(recoveryDirectory), "failed final predecessor proof published recovery evidence");
+
+      const retry = runFixtureScript(
+        fixture,
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_IN_FLIGHT_RECOVERY_LOCKED_INTENT: "0" } },
+      );
+      assert(retry.code !== 0, "later recovery retry bypassed the failed predecessor proof");
+      assert(retry.stderr.includes("unresolved external intent"), retry.stderr || retry.stdout);
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "later recovery retry invalidated the retained packet");
+      assert(readFixtureStageLog(stageLog).length === 0, "locked recovery race launched a verification stage");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "locked recovery race reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "locked recovery race reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("recover-inflight-check revalidates the original predecessor through a later released recovery lineage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["check:packet-one", "check:packet-two"]);
+      installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+      const args = ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "fixture interruption unexpectedly completed");
+      const recordInterrupted = runFixtureScript(
+        fixture,
+        args,
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_IN_FLIGHT_RECOVERY_RECORD: "1" } },
+      );
+      assert(recordInterrupted.code !== 0, "recovery evidence interruption unexpectedly completed invalidation");
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "crash discarded the retained in-flight packet");
+      installFixtureInFlightRecoveryLockedIntentSeam(fixture);
+
+      const blocked = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(blocked.code !== 0, "later locked recovery lineage intent unexpectedly invalidated the packet");
+      assert(blocked.stderr.includes("unresolved external intent"), blocked.stderr || blocked.stdout);
+      assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "later locked lineage proof invalidated the retained packet");
+      const recoveryDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries");
+      assert(readdirSync(recoveryDirectory).filter((name) => name.endsWith(".json")).length === 1, "failed final lineage proof duplicated immutable recovery evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("recover-inflight-check traverses a bounded released lease epoch without losing cycle protection", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["check:packet-one", "check:packet-two"]);
+      installFixtureResumableCheckInterruptAfterInFlightWrite(fixture);
+      const interrupted = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(interrupted.code !== 0, "fixture interruption unexpectedly completed");
+      for (let index = 0; index < 64; index += 1) {
+        const heartbeat = runFixtureScript(
+          fixture,
+          ["heartbeat", "resumed-task", "--phase", `recovery-epoch-${index}`, "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(heartbeat.code === 0, heartbeat.stderr || heartbeat.stdout);
+      }
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      assert(readdirSync(join(leaseRoot, "epochs")).some((name) => name.endsWith(".json")), "fixture did not create the bounded lease epoch");
+      const recovered = runFixtureScript(
+        fixture,
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(!Object.hasOwn(readJson(join(fixture.stateRoot, "tasks", "resumed-task.json")), "check_verification_packet"), "epoch lineage recovery did not invalidate the retained packet");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr fails closed on malformed or mismatched in-flight stage markers", () => {
+    for (const scenario of [
+      { name: "mismatched stage", mutate: (marker) => ({ ...marker, stage: "check:packet-two" }) },
+      { name: "malformed timestamp", mutate: (marker) => ({ ...marker, started_at: "not-a-timestamp" }) },
+      { name: "unexpected key", mutate: (marker) => ({ ...marker, extra: "fixture-packet-secret" }) },
+      { name: "output field", mutate: (marker) => ({ ...marker, output: "fixture-packet-secret" }) },
+      { name: "invalid timeout", mutate: (marker) => ({ ...marker, timeout_ms: 0 }) },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["check:packet-one", "check:packet-two"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        const packet = fixtureResumableCheckPacket(fixture, stages);
+        packet.in_flight_stage = scenario.mutate({ stage: stages[0], started_at: packet.created_at, timeout_ms: 1 });
+        writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, check_verification_packet: packet }, null, 2)}\n`);
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, `${scenario.name} in-flight marker unexpectedly resumed`);
+        assert(result.stderr.includes("in-flight stage"), result.stderr || result.stdout);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} in-flight marker ran a leaf`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} in-flight marker reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.name} in-flight marker reached PR creation`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
   });
 
@@ -8920,6 +9339,7 @@ try {
       const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
       assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));
       assert(manifest.check_verification_packet?.failed_stage === "check:packet-failure", JSON.stringify(manifest.check_verification_packet));
+      assert(!Object.hasOwn(manifest.check_verification_packet, "in_flight_stage"), "failed packet retained an in-flight marker");
       assert(!JSON.stringify(manifest.check_verification_packet).includes("fixture-packet-secret"), "packet retained child output");
       assert(readFixtureStageLog(stageLog).join(",") === "check:packet-one,check:packet-failure", "nonzero stage evidence did not preserve execution order");
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "nonzero packet stage reached git push");
@@ -8962,10 +9382,72 @@ try {
       assert(fixtureStagedInputDigest(fixture) === stagedBefore, "environment retry changed the reviewed staged snapshot");
       const updated = readJson(manifestPath);
       assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(!Object.hasOwn(updated.check_verification_packet, "in_flight_stage"), "successful environment preflight retry retained an in-flight marker");
       assert(updated.environment_preflight_retry_history?.length === 1, JSON.stringify(updated.environment_preflight_retry_history));
       assert(updated.environment_preflight_retry_history[0]?.status === "preflight_passed", JSON.stringify(updated.environment_preflight_retry_history));
       assert(updated.events?.some((event) => event.type === "environment_preflight_retry_started"), JSON.stringify(updated.events));
       assert(updated.events?.some((event) => event.type === "environment_preflight_retry_passed"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr fails closed after interruption immediately following an environment preflight retry marker", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["preflight", "check:packet-after-preflight"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "interrupted environment retry unexpectedly completed delivery");
+      assert(first.stderr.includes("fixture environment preflight retry interruption after in-flight marker"), first.stderr || first.stdout);
+      const interrupted = readJson(manifestPath);
+      const marker = interrupted.check_verification_packet?.in_flight_stage;
+      assert(interrupted.check_verification_packet?.status === "failed", JSON.stringify(interrupted.check_verification_packet));
+      assert(JSON.stringify(Object.keys(marker || {}).sort()) === JSON.stringify(["stage", "started_at", "timeout_ms"]), JSON.stringify(marker));
+      assert(marker?.stage === "preflight" && typeof marker.started_at === "string" && Number.isSafeInteger(marker.timeout_ms), JSON.stringify(marker));
+      assert(readFixtureStageLog(stageLog).length === 0, "interruption after environment retry marker ran preflight");
+      assert(interrupted.environment_preflight_retry_history?.[0]?.status === "started", JSON.stringify(interrupted.environment_preflight_retry_history));
+
+      const second = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "0" } },
+      );
+      assert(second.code !== 0, "unresolved environment retry marker unexpectedly resumed");
+      assert(second.stderr.includes("unresolved in-flight stage preflight"), second.stderr || second.stdout);
+      assert(second.stderr.includes("fresh authorized recovery is required"), second.stderr || second.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "unresolved environment retry marker reran preflight");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "unresolved environment retry marker reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "unresolved environment retry marker reached PR creation");
+
+      const recovered = runFixtureScript(
+        fixture,
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating uncertain fixture stage", "--reason", "fixture parent disappeared after durable preflight marker", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      const recoveredManifest = readJson(manifestPath);
+      assert(!Object.hasOwn(recoveredManifest, "check_verification_packet"), JSON.stringify(recoveredManifest));
+      assert(recoveredManifest.environment_preflight_retry_history?.[0]?.status === "blocked_packet_changed", JSON.stringify(recoveredManifest.environment_preflight_retry_history));
+
+      const fresh = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "0" } },
+      );
+      assert(fresh.code === 0, fresh.stderr || fresh.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "fresh full verification remained blocked after settled preflight retry recovery");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -9028,6 +9510,7 @@ try {
       assert(first.stderr.includes("check stage=preflight"), first.stderr || first.stdout);
       const afterFirst = readJson(manifestPath);
       assert(afterFirst.check_verification_packet?.status === "failed", JSON.stringify(afterFirst.check_verification_packet));
+      assert(!Object.hasOwn(afterFirst.check_verification_packet, "in_flight_stage"), "failed environment preflight retry retained an in-flight marker");
       assert(afterFirst.environment_preflight_retry_history?.[0]?.status === "failed", JSON.stringify(afterFirst.environment_preflight_retry_history));
 
       const repeat = runFixtureScript(
@@ -9147,33 +9630,72 @@ try {
     }
   });
 
-  test("finish-pr records a fixed supervisor leaf timeout without launching later leaves or delivery", () => {
-    const fixture = createFinishPrExistingCommitFixture();
-    const timeoutStage = "test:supervisor:check:integration:orchestrator-fake-workers";
-    const stages = supervisorCheckLeaves;
-    try {
-      const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["test:supervisor"], ["test:supervisor"]);
-      installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage);
-      installFixtureDeliveryProbes(fixture);
-      const result = runFixtureScript(
-        fixture,
-        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
-        { cwd: fixture.worktree, env: fixture.env },
-      );
+  test("finish-pr applies exact supervisor leaf budgets and retains fail-closed timeout delivery fences", () => {
+    for (const { timeoutStage, expectedTimeoutMs } of [
+      { timeoutStage: "test:supervisor:check:integration:orchestrator-fake-workers", expectedTimeoutMs: 170_000 },
+      { timeoutStage: "test:supervisor:check:integration:work-packets", expectedTimeoutMs: 200_000 },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      const stages = supervisorCheckLeaves;
+      try {
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages, {}, ["test:supervisor"], ["test:supervisor"]);
+        installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage);
+        installFixtureDeliveryProbes(fixture);
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
 
-      assert(result.code !== 0, "timed-out supervisor leaf unexpectedly passed");
-      assert(result.stderr.includes(`check stage=${timeoutStage}`), result.stderr || result.stdout);
-      assert(result.stderr.includes("timeout_ms=170000"), result.stderr || result.stdout);
-      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
-      const evidence = manifest.check_verification_packet?.stages?.at(-1);
-      assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));
-      assert(manifest.check_verification_packet?.failed_stage === timeoutStage, JSON.stringify(manifest.check_verification_packet));
-      assert(evidence?.stage === timeoutStage && evidence.status === null && evidence.signal === "SIGKILL" && evidence.error_code === "ETIMEDOUT" && evidence.output === "omitted", JSON.stringify(evidence));
-      assert(readFixtureStageLog(stageLog).join(",") === `test:supervisor:check:preflight,test:supervisor:check:non-integration,${timeoutStage}`, "timeout launched a later supervisor leaf");
-      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "timeout reached git push");
-      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "timeout reached PR creation");
-    } finally {
-      cleanupFinishPrExistingCommitFixture(fixture);
+        assert(result.code !== 0, "timed-out supervisor leaf unexpectedly passed");
+        assert(result.stderr.includes(`check stage=${timeoutStage}`), result.stderr || result.stdout);
+        assert(result.stderr.includes(`timeout_ms=${expectedTimeoutMs}`), result.stderr || result.stdout);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        const evidence = manifest.check_verification_packet?.stages?.at(-1);
+        assert(manifest.check_verification_packet?.status === "failed", JSON.stringify(manifest.check_verification_packet));
+        assert(manifest.check_verification_packet?.failed_stage === timeoutStage, JSON.stringify(manifest.check_verification_packet));
+        assert(evidence?.stage === timeoutStage && evidence.status === null && evidence.signal === "SIGKILL" && evidence.error_code === "ETIMEDOUT" && evidence.output === "omitted", JSON.stringify(evidence));
+        assert(readFixtureStageLog(stageLog).join(",") === stages.slice(0, stages.indexOf(timeoutStage) + 1).join(","), "timeout launched a later supervisor leaf");
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), "timeout reached git push");
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "timeout reached PR creation");
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("finish-pr validates retained supervisor markers against their exact leaf budget", () => {
+    for (const { stage, timeoutMs, valid } of [
+      { stage: "test:supervisor:check:integration:orchestrator-fake-workers", timeoutMs: 170_000, valid: true },
+      { stage: "test:supervisor:check:integration:work-packets", timeoutMs: 200_000, valid: true },
+      { stage: "test:supervisor:check:integration:work-packets", timeoutMs: 170_000, valid: false },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stageLog = installFixtureResumableCheckPlan(fixture, [stage]);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        const packet = fixtureResumableCheckPacket(fixture, [stage]);
+        packet.in_flight_stage = { stage, started_at: packet.created_at, timeout_ms: timeoutMs };
+        writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, check_verification_packet: packet }, null, 2)}\n`);
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+        assert(result.code !== 0, "retained supervisor marker unexpectedly resumed");
+        assert(
+          result.stderr.includes(valid ? "unresolved in-flight stage" : "timeout does not match the supervisor leaf budget"),
+          result.stderr || result.stdout,
+        );
+        assert(readFixtureStageLog(stageLog).length === 0, "retained supervisor marker launched a leaf");
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), "retained supervisor marker reached git push");
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "retained supervisor marker reached PR creation");
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
   });
 
@@ -20503,7 +21025,7 @@ function readFixtureStageLog(path) {
 function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const invocationBudget = "    const invocationBudgetMs = resumableCheckLongLeafStages.has(stage) ? resumableCheckLongLeafBudgetMs : resumableCheckInvocationBudgetMs;";
+  const invocationBudget = "    const invocationBudgetMs = resumableCheckStageInvocationBudgetMs(stage);";
   const elapsed = "    const elapsedMs = Date.now() - started;";
   const remaining = "      : invocationBudgetMs - elapsedMs;";
   assert(source.includes(started) && source.includes(invocationBudget) && source.includes(elapsed) && source.includes(remaining), "fixture did not contain the resumable check clock seams");
@@ -20560,7 +21082,7 @@ function installFixtureResumableCheckSupervisorReserveSeam(fixture) {
   assert(source.includes(started), "fixture did not contain the resumable check start clock seam");
   const replacement = [
     '  const started = process.env.CODEX_WORKSPACE_FIXTURE_SUPERVISOR_RESERVE === "1"',
-    "    ? Date.now() - (resumableCheckInvocationBudgetMs - resumableCheckSupervisorLeafExecutionReserveMs + 1)",
+    "    ? Date.now() - (resumableCheckInvocationBudgetMs - resumableCheckSupervisorLeafExecutionBudgetMs(\"test:supervisor:check:preflight\") + 1)",
     "    : Date.now();",
   ].join("\n");
   writeFileSync(fixture.script, source.replace(started, replacement));
@@ -20628,6 +21150,74 @@ function installFixtureResumableCheckInterruptAfterStageWrite(fixture) {
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable packet interruption seam"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_STAGE_WRITE: "1" };
+}
+
+function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const inFlightTransition = [
+    "    manifest.check_verification_packet = packet;",
+    "    writeManifest(manifestPath, manifest);",
+    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+  ].join("\n");
+  assert(source.includes(inFlightTransition), "fixture did not contain the persisted in-flight stage transition");
+  const interruption = [
+    "    manifest.check_verification_packet = packet;",
+    "    writeManifest(manifestPath, manifest);",
+    '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
+    '      throw new Error("fixture packet interruption after in-flight marker");',
+    "    }",
+    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable in-flight interruption seam"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
+}
+
+function installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const inFlightTransition = [
+    "  manifest.check_verification_packet = packet;",
+    "  writeManifest(manifestPath, manifest);",
+    "  const result = run(\"pnpm\", [\"run\", \"preflight\"], {",
+  ].join("\n");
+  assert(source.includes(inFlightTransition), "fixture did not contain the persisted environment preflight retry transition");
+  const interruption = [
+    "  manifest.check_verification_packet = packet;",
+    "  writeManifest(manifestPath, manifest);",
+    '  if (process.env.CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
+    '    throw new Error("fixture environment preflight retry interruption after in-flight marker");',
+    "  }",
+    "  const result = run(\"pnpm\", [\"run\", \"preflight\"], {",
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture environment retry in-flight interruption seam"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
+}
+
+function installFixtureInFlightRecoveryLockedIntentSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const admission = "    assertInFlightCheckRecoveryLockedLeaseAdmission(state, taskId, owner, packet.priorLease, packet.lockingPriorLease, lock);";
+  assert(source.includes(admission), "fixture did not contain the locked in-flight recovery admission seam");
+  const replacement = [
+    '    if (process.env.CODEX_WORKSPACE_FIXTURE_IN_FLIGHT_RECOVERY_LOCKED_INTENT === "1") {',
+    "      const fixturePriorLease = leaseRecord(state, taskId, packet.priorLease.generation);",
+    "      const fixtureTokenDigest = taskLeaseTokenDigest(fixturePriorLease.token);",
+    "      const fixtureProcessStart = processStartIdentity(process.pid);",
+    '      if (!fixtureProcessStart) throw new Error("fixture process identity is unavailable");',
+    "      writeNewJson(taskLeasePath(state, taskId, \"external-intents\", \"44444444-4444-4444-8444-444444444444\"), {",
+    "        schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: fixturePriorLease.generation, token_digest: fixtureTokenDigest,",
+    "        intent_id: \"44444444-4444-4444-8444-444444444444\", runner_pid: process.pid, runner_process_start_identity: fixtureProcessStart,",
+    "        command_digest: \"d\".repeat(64), started_at: new Date().toISOString(),",
+    "      });",
+    "    }",
+    admission,
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(admission, replacement));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture locked recovery intent race"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_IN_FLIGHT_RECOVERY_LOCKED_INTENT: "1" };
 }
 
 function installFixtureExternalCheckStageEvidenceLockDrift(fixture, { expirePacket = false } = {}) {
