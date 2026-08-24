@@ -2925,7 +2925,7 @@ function PacketInspection({
           <InspectionRow label="Five whys" value={routeSourceContext} />
         </dl>
       </section>
-      <ReviewRoutePanel route={packetDetailWhyDiagnostics?.reviewRoute ?? projectionDetail?.reviewRoute ?? null} />
+      <ReviewRoutePanel route={projectionDetail?.reviewRoute ?? null} />
       <section aria-label="Testing and risk" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
         <h3 className="text-sm font-semibold">Testing and risk</h3>
         <dl className="grid gap-2 text-sm">
