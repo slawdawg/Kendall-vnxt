@@ -21,9 +21,9 @@ supervisor explicitly reconstructs its versioned
 board read; it does not relabel or forward the V0 envelope. Its nested legacy
 action and board-detail values remain explicit compatibility holds while their
 canonical replacements are delivered. The old
-`GET /pipeline-control-plane/projection` endpoint remains a separately
-inventoried compatibility read until source-zero and persisted-readback
-retirement gates pass.
+`GET /pipeline-control-plane/projection` endpoint was retired in the
+transport-retirement slice; direct 404 and proxy-denial proofs remain part of
+the source-owned retirement evidence.
 
 The direct packet-detail work graph is now a separately reconstructed
 `DashboardCanonicalWorkGraphEvidenceV1`; it no longer passes a
@@ -73,9 +73,10 @@ forms:
    `PipelineDashboardPacket` by
    `apps/dashboard/src/lib/pipeline-supervisor-projector.ts`; and
 2. the internal supervisor `PipelineDashboardProjectionV0` board read and its
-   public `/pipeline-control-plane/projection` compatibility endpoint. Normal
-   and LAN cockpit loaders now use the separate canonical operational endpoint;
-   the V0 endpoint remains for named compatibility consumers only.
+   former public `/pipeline-control-plane/projection` endpoint. Normal and LAN
+   cockpit loaders now use the separate canonical operational endpoint;
+   internal V0 board/materializer values remain named holds for fixture and
+   compatibility tests only.
 
 These are active compatibility surfaces, not dead code. Phase 3 must replace
 them before removing `WorkPacketV0View`, the legacy supervisor routes, or their

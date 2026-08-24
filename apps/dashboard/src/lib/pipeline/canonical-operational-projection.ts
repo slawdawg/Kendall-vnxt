@@ -248,6 +248,36 @@ export type DashboardCanonicalActiveBoardReviewRouteV1 = {
   retention: "metadata_only_evidence_references";
 };
 
+/** Dashboard-owned review-route DTO for the normal operational-detail path. */
+export type DashboardCanonicalOperationalReviewRouteV1 = {
+  schemaVersion: "dashboard-canonical-operational-review-route/v1";
+  sourceSchemaVersion: "pipeline-review-route-evidence/v0";
+  availability: "available" | "stale" | "unavailable";
+  packetId: string;
+  routeState: "report_only" | "simulated" | "blocked" | "unavailable";
+  reasonCode:
+    | "report_only"
+    | "simulated_completed"
+    | "immutable_identity_stale"
+    | "policy_vetoed"
+    | "review_blocked"
+    | "issuance_expired"
+    | "issuance_revoked"
+    | "issuance_cancelled"
+    | "review_evidence_unavailable";
+  reason: string;
+  safeFallback: string;
+  exactIdentity: "current" | "changed" | "unavailable";
+  issuanceState: "active" | "expired" | "revoked" | "cancelled" | "unavailable";
+  findingSummary: { count: number; highestSeverity: "info" | "low" | "medium" | "high" | null; evidenceRefs: string[] };
+  dataClass: "metadata_only";
+  execution: "none";
+  deliveryEvidenceEligible: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
+};
+
 export type DashboardCanonicalActiveBoardManagerSummaryV1 = {
   stateSource: "supervisor_projection" | "manager_summary" | "unavailable" | "unknown";
   reliabilityState: "ready" | "running" | "healthy_idle" | "source_exhausted" | "waiting_for_approval" | "blocked" | "refilling" | "degraded" | "unavailable" | "unknown";
@@ -464,7 +494,7 @@ export type DashboardCanonicalOperationalSelectedPacketDetailV1 = {
   actionCapabilities?: PipelineOperationalActionCapabilityV0[];
   actionCapabilitiesV1?: PipelineOperationalActionCapabilityV1[];
   actionResults?: PipelineOperationalActionResultV0[];
-  reviewRoute: PipelineReviewRouteEvidenceV0;
+  reviewRoute: DashboardCanonicalOperationalReviewRouteV1;
   workGraph: DashboardCanonicalWorkGraphEvidenceV1;
   workItemId?: string | null;
   queueLease?: DashboardCanonicalQueueLeaseV1 | null;

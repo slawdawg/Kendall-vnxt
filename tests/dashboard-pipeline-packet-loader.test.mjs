@@ -1467,6 +1467,94 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
       label,
     );
   }
+  projection.activeManagerLaneClarity.goal.summary = "Render the canonical Lane Clarity card.";
+  projection.selectedPacketDetails = [{
+    packetId: "manager-source-authoritative-only",
+    sourceRefs: [],
+    canonicalContract: null,
+    productModeMapping: null,
+    evidenceRefs: [],
+    reviewRoute: {
+      schemaVersion: "pipeline-review-route-evidence/v0",
+      availability: "available",
+      packetId: "manager-source-authoritative-only",
+      routeState: "report_only",
+      reasonCode: "report_only",
+      reason: "A bounded report-only review is available.",
+      safeFallback: "Re-evaluate bounded review evidence before any later promotion.",
+      exactIdentity: "current",
+      issuanceState: "active",
+      findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+      dataClass: "metadata_only",
+      execution: "none",
+      deliveryEvidenceEligible: false,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+      retention: "metadata_only_evidence_references",
+    },
+  }];
+  await assert.doesNotReject(() => context.module.exports.getDashboardCanonicalOperationalProjection());
+  projection.selectedPacketDetails[0].reviewRoute.reasonCode = "unexpected_reason";
+  await assert.doesNotReject(
+    () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    "runtime preserves malformed optional review-route evidence for the loader boundary",
+  );
+});
+
+test("runtime plus loader converts malformed optional review-route evidence to unavailable V1", async () => {
+  const packet = authoritativeWorkPacket();
+  const projection = runtimeProjection([packet.packetId], {
+    schemaVersion: "dashboard-canonical-operational-projection/v1",
+    selectedPacketDetails: [{
+      packetId: packet.packetId,
+      sourceRefs: [],
+      canonicalContract: null,
+      productModeMapping: null,
+      evidenceRefs: [],
+      reviewRoute: {
+        schemaVersion: "pipeline-review-route-evidence/v0",
+        availability: "available",
+        packetId: packet.packetId,
+        routeState: "report_only",
+        reasonCode: "unexpected_reason",
+        reason: "untrusted route text",
+        safeFallback: "untrusted fallback text",
+        exactIdentity: "current",
+        issuanceState: "active",
+        findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+        dataClass: "metadata_only",
+        execution: "none",
+        deliveryEvidenceEligible: false,
+        metadataOnly: true,
+        rawPayloadRetained: false,
+        retention: "metadata_only_evidence_references",
+      },
+    }],
+  });
+  const runtimeSource = await readFile(runtimePath, "utf8");
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(runtimeSource, {
+    compilerOptions: { esModuleInterop: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const context = { exports: {}, module: { exports: {} }, process: { env: {} }, require: (specifier) => {
+    if (specifier === "@kendall/contracts") return runtimeContractValidators;
+    if (specifier === "./pipeline-supervisor-projection") return { isDashboardCoordinationHealthInput: () => true };
+    if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
+    if (specifier === "./dashboard-supervisor-transport") return { requestSupervisorJson: async () => projection };
+    throw new Error(`Unexpected runtime import: ${specifier}`);
+  } };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-supervisor-runtime.ts" });
+  const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+    getDashboardCanonicalOperationalProjection: () => context.module.exports.getDashboardCanonicalOperationalProjection(),
+    getWorkPackets: async () => [packet],
+  });
+  const result = await loader.__canonicalListForTest();
+  const route = result.operationalProjection.selectedPacketDetails[0].reviewRoute;
+  assert.equal(route.schemaVersion, "dashboard-canonical-operational-review-route/v1");
+  assert.equal(route.reasonCode, "review_evidence_unavailable");
+  assert.equal(route.routeState, "unavailable");
+  assert.equal(route.availability, "unavailable");
 });
 
 test("dedicated runtime surfaces canonical list and detail 404s without legacy reads", async () => {
@@ -2075,6 +2163,8 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   assert.equal(result.operationalProjection.selectedPacketDetails[0].actionResults[0].summary, undefined);
   assert.equal(result.operationalProjection.selectedPacketDetails[0].actionResultsV1, undefined);
   assert.equal(result.operationalProjection.selectedPacketDetails[0].workGraph.schemaVersion, "dashboard-canonical-work-graph/v1");
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].reviewRoute.schemaVersion, "dashboard-canonical-operational-review-route/v1");
+  assert.equal(result.operationalProjection.selectedPacketDetails[0].reviewRoute.sourceSchemaVersion, "pipeline-review-route-evidence/v0");
   assert.equal(result.operationalProjection.selectedPacketDetails[0].workGraph.rawPayloadRetained, false);
   assert.equal(result.operationalProjection.selectedPacketDetails[0].workGraph.rawProviderResponse, undefined);
   assert.equal(result.operationalProjection.backendReachability.checkedAt, "2026-08-17T00:00:00.000Z");
@@ -2083,6 +2173,50 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
   assert.equal(result.operationalProjection.queueSummary.dispatchableCount, 2);
   assert.doesNotMatch(JSON.stringify(result.operationalProjection), /python-only extension/i);
   assert.doesNotMatch(JSON.stringify(result.operationalProjection), /rawProviderResponse/i);
+});
+
+test("pipeline loader fails closed on malformed operational review-route DTO fields", async () => {
+  const packet = authoritativeWorkPacket();
+  const validRoute = {
+    schemaVersion: "pipeline-review-route-evidence/v0",
+    availability: "available",
+    packetId: packet.packetId,
+    routeState: "report_only",
+    reasonCode: "report_only",
+    reason: "A bounded report-only review is available.",
+    safeFallback: "Re-evaluate bounded review evidence before any later promotion.",
+    exactIdentity: "current",
+    issuanceState: "active",
+    findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+    dataClass: "metadata_only",
+    execution: "none",
+    deliveryEvidenceEligible: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  };
+  const cases = [
+    ["unknown nested field", { unexpected: true }],
+    ["invalid enum", { reasonCode: "not_a_reason" }],
+    ["inconsistent matrix", { availability: "stale", exactIdentity: "changed" }],
+    ["unsafe bounded text", { reason: "raw prompt contents" }],
+    ["invalid evidence ref", { findingSummary: { count: 1, highestSeverity: "high", evidenceRefs: ["provider:raw"] } }],
+  ];
+  for (const [label, mutation] of cases) {
+    const projection = runtimeProjection([packet.packetId], {
+      selectedPacketDetails: [{ packetId: packet.packetId, sourceRefs: [], canonicalContract: null, productModeMapping: null, evidenceRefs: [], reviewRoute: { ...validRoute, ...mutation } }],
+    });
+    const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
+      getDashboardCanonicalOperationalProjection: async () => projection,
+      getWorkPackets: async () => [packet],
+    });
+    const result = await loader.__canonicalListForTest();
+    const route = result.operationalProjection.selectedPacketDetails[0].reviewRoute;
+    assert.equal(route.schemaVersion, "dashboard-canonical-operational-review-route/v1", label);
+    assert.equal(route.reasonCode, "review_evidence_unavailable", label);
+    assert.equal(route.routeState, "unavailable", label);
+    assert.equal(route.findingSummary.evidenceRefs.length, 0, label);
+  }
 });
 
 test("active-board projection omits a truthy but incomplete selected-detail review route", async () => {

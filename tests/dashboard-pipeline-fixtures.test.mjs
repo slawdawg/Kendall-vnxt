@@ -869,7 +869,8 @@ test("Review route remains supervisor-backed Packet Detail evidence and rejects 
   const miniPacketSource = extractFunctionSource(cockpitSource, "PacketMiniCard");
   const cleanProjection = validDashboardProjection();
   assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
-  assert.match(cockpitSource, /<ReviewRoutePanel route=\{packetDetailWhyDiagnostics\?\.reviewRoute \?\? projectionDetail\?\.reviewRoute \?\? null\}/);
+  assert.match(cockpitSource, /<ReviewRoutePanel route=\{projectionDetail\?\.reviewRoute \?\? null\}/);
+  assert.doesNotMatch(cockpitSource, /PipelineReviewRouteEvidenceV0/);
   assert.match(cockpitSource, /aria-label="Review route"/);
   assert.match(cockpitSource, /No provider received a live packet\./);
   assert.match(cockpitSource, /Stale — exact head changed/);

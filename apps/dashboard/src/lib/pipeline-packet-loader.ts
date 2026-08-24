@@ -2,6 +2,7 @@ import type { PipelineOperationalActionResultV0 } from "@kendall/contracts";
 import type {
   DashboardCanonicalActiveBoardProjectionV1,
   DashboardCanonicalManagerLaneClarityV1,
+  DashboardCanonicalOperationalReviewRouteV1,
   DashboardCanonicalOperationalProjectionTruthV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
@@ -314,7 +315,7 @@ function clientSafeActiveBoardProjection(
       actionCapabilitiesV1: clientSafeActionCapabilitiesV1(detail.actionCapabilitiesV1) ?? [],
       actionCapabilities: clientSafeActiveBoardLegacyActionCapabilities(detail.actionCapabilities),
       reviewRoute: {
-        schemaVersion: detail.reviewRoute.schemaVersion,
+        schemaVersion: "pipeline-review-route-evidence/v0",
         availability: detail.reviewRoute.availability,
         packetId: detail.reviewRoute.packetId,
         routeState: detail.reviewRoute.routeState,
@@ -628,7 +629,7 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
       queueLease: detail.queueLease,
       executionAttempts: detail.executionAttempts,
       correlationIds: detail.correlationIds,
-      reviewRoute: detail.reviewRoute,
+      reviewRoute: clientSafeOperationalReviewRoute(detail.reviewRoute, detail.packetId),
       workGraph: clientSafeWorkGraph(detail.workGraph, detail.packetId),
       metadataOnly: detail.metadataOnly,
     })),
@@ -650,6 +651,163 @@ function clientSafeOperationalProjection(projection: DashboardCanonicalOperation
     ...clientSafeProjection,
     // Lane Clarity now crosses only in the dashboard-owned active-board DTO.
     activeManagerLaneClarity: null,
+  };
+}
+
+type OperationalReviewRouteSourceV0 = {
+  schemaVersion: "pipeline-review-route-evidence/v0";
+  availability: DashboardCanonicalOperationalReviewRouteV1["availability"];
+  packetId: string;
+  routeState: DashboardCanonicalOperationalReviewRouteV1["routeState"];
+  reasonCode: DashboardCanonicalOperationalReviewRouteV1["reasonCode"];
+  reason: string;
+  safeFallback: string;
+  exactIdentity: DashboardCanonicalOperationalReviewRouteV1["exactIdentity"];
+  issuanceState: DashboardCanonicalOperationalReviewRouteV1["issuanceState"];
+  findingSummary: DashboardCanonicalOperationalReviewRouteV1["findingSummary"];
+  dataClass: "metadata_only";
+  execution: "none";
+  deliveryEvidenceEligible: false;
+  metadataOnly: true;
+  rawPayloadRetained: false;
+  retention: "metadata_only_evidence_references";
+};
+
+const OPERATIONAL_REVIEW_ROUTE_KEYS = new Set([
+  "schemaVersion", "availability", "packetId", "routeState", "reasonCode", "reason", "safeFallback",
+  "exactIdentity", "issuanceState", "findingSummary", "dataClass", "execution", "deliveryEvidenceEligible",
+  "metadataOnly", "rawPayloadRetained", "retention",
+]);
+const OPERATIONAL_REVIEW_ROUTE_REASON_TEXT: Record<OperationalReviewRouteSourceV0["reasonCode"], readonly [string, string]> = {
+  report_only: ["A bounded report-only review is available.", "Re-evaluate bounded review evidence before any later promotion."],
+  simulated_completed: ["Simulation preparation is recorded without an execution action.", "Re-evaluate bounded review evidence before any later promotion."],
+  immutable_identity_stale: ["The reviewed exact identity no longer matches the current packet.", "Re-evaluate and reissue bounded review evidence for the current exact identity."],
+  policy_vetoed: ["A policy decision blocks this review preparation.", "Resolve the policy decision and re-evaluate bounded review evidence."],
+  review_blocked: ["A bounded review preparation is blocked.", "Resolve the recorded block and re-evaluate bounded review evidence."],
+  issuance_expired: ["Review evidence issuance has expired.", "Reissue bounded review evidence before relying on it."],
+  issuance_revoked: ["Review evidence issuance has been revoked.", "Resolve the policy block and re-evaluate bounded review evidence."],
+  issuance_cancelled: ["Review evidence issuance was cancelled.", "Re-evaluate before issuing new bounded review evidence."],
+  review_evidence_unavailable: ["Review evidence unavailable.", "Re-evaluate and reissue bounded review evidence before relying on it."],
+};
+const OPERATIONAL_REVIEW_ROUTE_COMPATIBILITY: Record<OperationalReviewRouteSourceV0["reasonCode"], readonly [OperationalReviewRouteSourceV0["availability"], readonly OperationalReviewRouteSourceV0["routeState"][], OperationalReviewRouteSourceV0["exactIdentity"], OperationalReviewRouteSourceV0["issuanceState"]]> = {
+  report_only: ["available", ["report_only"], "current", "active"],
+  simulated_completed: ["available", ["simulated"], "current", "active"],
+  immutable_identity_stale: ["stale", ["report_only", "simulated", "blocked"], "changed", "active"],
+  policy_vetoed: ["unavailable", ["blocked"], "current", "active"],
+  review_blocked: ["unavailable", ["blocked"], "current", "active"],
+  issuance_expired: ["unavailable", ["blocked"], "current", "expired"],
+  issuance_revoked: ["unavailable", ["blocked"], "current", "revoked"],
+  issuance_cancelled: ["unavailable", ["blocked"], "current", "cancelled"],
+  review_evidence_unavailable: ["unavailable", ["unavailable"], "unavailable", "unavailable"],
+};
+const OPERATIONAL_REVIEW_ROUTE_UNSAFE_TEXT = /\b(?:source|diff|prompt|completion|reasoning|secret|credential|token|payload|transcript)\b|(?:^|[\s"'])\/(?:home|tmp|var|etc)\//i;
+
+function isOperationalReviewRouteText(value: unknown): value is string {
+  return typeof value === "string"
+    && value.trim() === value
+    && value.length > 0
+    && value.length <= 500
+    && !/[\x00-\x1f\x7f]/.test(value)
+    && !OPERATIONAL_REVIEW_ROUTE_UNSAFE_TEXT.test(value);
+}
+
+function isOperationalReviewRouteSourceV0(value: unknown, packetId: string): value is OperationalReviewRouteSourceV0 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const route = value as Record<string, unknown>;
+  if (!Object.keys(route).every((key) => OPERATIONAL_REVIEW_ROUTE_KEYS.has(key)) || Object.keys(route).length !== OPERATIONAL_REVIEW_ROUTE_KEYS.size) return false;
+  const findingSummary = route.findingSummary;
+  if (!findingSummary || typeof findingSummary !== "object" || Array.isArray(findingSummary)) return false;
+  const finding = findingSummary as Record<string, unknown>;
+  const findingCount = typeof finding.count === "number" ? finding.count : null;
+  const findingHighestSeverity = finding.highestSeverity === null || ["info", "low", "medium", "high"].includes(String(finding.highestSeverity))
+    ? finding.highestSeverity as OperationalReviewRouteSourceV0["findingSummary"]["highestSeverity"]
+    : undefined;
+  const findingEvidenceRefs = Array.isArray(finding.evidenceRefs) && finding.evidenceRefs.every((ref) => typeof ref === "string" && /^review-evidence:sha256:[a-f0-9]{64}$/.test(ref))
+    ? finding.evidenceRefs as string[]
+    : null;
+  if (Object.keys(finding).length !== 3
+    || findingCount === null || !Number.isInteger(findingCount) || findingCount < 0 || findingCount > 32
+    || findingHighestSeverity === undefined
+    || findingEvidenceRefs === null || findingEvidenceRefs.length > 20
+    || ((findingCount === 0) !== (findingHighestSeverity === null))) return false;
+  const reasonCode = route.reasonCode;
+  if (typeof reasonCode !== "string" || !Object.hasOwn(OPERATIONAL_REVIEW_ROUTE_REASON_TEXT, reasonCode)) return false;
+  const reasonText = OPERATIONAL_REVIEW_ROUTE_REASON_TEXT[reasonCode as OperationalReviewRouteSourceV0["reasonCode"]];
+  const compatibility = OPERATIONAL_REVIEW_ROUTE_COMPATIBILITY[reasonCode as OperationalReviewRouteSourceV0["reasonCode"]];
+  return route.schemaVersion === "pipeline-review-route-evidence/v0"
+    && route.packetId === packetId
+    && ["available", "stale", "unavailable"].includes(String(route.availability))
+    && ["report_only", "simulated", "blocked", "unavailable"].includes(String(route.routeState))
+    && isOperationalReviewRouteText(route.reason)
+    && isOperationalReviewRouteText(route.safeFallback)
+    && route.reason === reasonText[0]
+    && route.safeFallback === reasonText[1]
+    && ["current", "changed", "unavailable"].includes(String(route.exactIdentity))
+    && ["active", "expired", "revoked", "cancelled", "unavailable"].includes(String(route.issuanceState))
+    && route.dataClass === "metadata_only"
+    && route.execution === "none"
+    && route.deliveryEvidenceEligible === false
+    && route.metadataOnly === true
+    && route.rawPayloadRetained === false
+    && route.retention === "metadata_only_evidence_references"
+    && route.availability === compatibility[0]
+    && compatibility[1].includes(route.routeState as OperationalReviewRouteSourceV0["routeState"])
+    && route.exactIdentity === compatibility[2]
+    && route.issuanceState === compatibility[3]
+    && (reasonCode !== "review_evidence_unavailable" || (findingCount === 0 && findingHighestSeverity === null && findingEvidenceRefs.length === 0));
+}
+
+function clientSafeOperationalReviewRoute(
+  route: unknown,
+  packetId: string,
+): DashboardCanonicalOperationalReviewRouteV1 {
+  if (!isOperationalReviewRouteSourceV0(route, packetId)) {
+    return unavailableOperationalReviewRoute(packetId);
+  }
+  return {
+    schemaVersion: "dashboard-canonical-operational-review-route/v1",
+    sourceSchemaVersion: "pipeline-review-route-evidence/v0",
+    availability: route.availability,
+    packetId,
+    routeState: route.routeState,
+    reasonCode: route.reasonCode,
+    reason: route.reason,
+    safeFallback: route.safeFallback,
+    exactIdentity: route.exactIdentity,
+    issuanceState: route.issuanceState,
+    findingSummary: {
+      count: route.findingSummary.count,
+      highestSeverity: route.findingSummary.highestSeverity,
+      evidenceRefs: [...route.findingSummary.evidenceRefs],
+    },
+    dataClass: "metadata_only",
+    execution: "none",
+    deliveryEvidenceEligible: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
+  };
+}
+
+function unavailableOperationalReviewRoute(packetId: string): DashboardCanonicalOperationalReviewRouteV1 {
+  return {
+    schemaVersion: "dashboard-canonical-operational-review-route/v1",
+    sourceSchemaVersion: "pipeline-review-route-evidence/v0",
+    availability: "unavailable",
+    packetId,
+    routeState: "unavailable",
+    reasonCode: "review_evidence_unavailable",
+    reason: "Review evidence unavailable.",
+    safeFallback: "Re-evaluate and reissue bounded review evidence before relying on it.",
+    exactIdentity: "unavailable",
+    issuanceState: "unavailable",
+    findingSummary: { count: 0, highestSeverity: null, evidenceRefs: [] },
+    dataClass: "metadata_only",
+    execution: "none",
+    deliveryEvidenceEligible: false,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    retention: "metadata_only_evidence_references",
   };
 }
 

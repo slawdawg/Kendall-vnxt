@@ -11,7 +11,6 @@ import type {
   PipelineEpic25EvidenceChainReadV0,
   PipelineEpic25EvidenceChainReadV1,
   PipelineProductModeMappingV0,
-  WorkPacketV0View,
 } from "@kendall/contracts";
 import type {
   DashboardCanonicalManagerLaneClarityV1,
@@ -470,14 +469,14 @@ function projectionSafeLifecycleRefs(refs: string[]): string[] {
   });
 }
 
-function legacyStage(stage: AuthoritativeWorkPacketLifecycleView["currentStage"]): WorkPacketV0View["currentStage"] {
+function legacyStage(stage: AuthoritativeWorkPacketLifecycleView["currentStage"]): DashboardCanonicalPresentationV1["currentStage"] {
   return stage === "needs_approval" ? "human_gate" : stage;
 }
 
 function legacyOwner(
   stage: AuthoritativeWorkPacketLifecycleView["currentStage"],
   status: AuthoritativeWorkPacketLifecycleView["status"],
-): WorkPacketV0View["currentOwner"] {
+): DashboardCanonicalPresentationV1["currentOwner"] {
   if (status === "blocked" || status === "failed") return "blocked";
   return stage === "needs_approval" ? "operator" : "kendall";
 }
@@ -833,7 +832,6 @@ const CANONICAL_OPERATIONAL_SELECTED_DETAIL_KEYS = new Set([
   "actionCapabilitiesV1", "actionResults", "reviewRoute", "workGraph", "workItemId", "queueLease", "executionAttempts",
   "correlationIds", "metadataOnly",
 ]);
-
 function hasOnlyKeys(value: unknown, allowed: ReadonlySet<string>): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return Object.keys(value).every((key) => allowed.has(key));
