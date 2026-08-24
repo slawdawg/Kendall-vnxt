@@ -7,6 +7,7 @@ import {
   pipelineSourceBoundaryChecklist,
 } from "../../../../../lib/pipeline-fixtures";
 import { dashboardDemoRoutesEnabled } from "../../../../../lib/dashboard-demo-routes";
+import type { PipelineFixturePacketV1 } from "../../../../../lib/pipeline/pipeline-fixture-contract";
 
 export const dynamic = "force-dynamic";
 
@@ -36,11 +37,7 @@ export default async function PipelineDemoPacketPage({
   if (!fixturePacket) {
     notFound();
   }
-  const packet = {
-    ...fixturePacket,
-    sourceKind: "demo-fixture" as const,
-    sourceId: fixturePacket.fixtureId,
-  };
+  const packet: PipelineFixturePacketV1 = fixturePacket;
   const snapshot = pipelineGoldenPathSnapshots.find((candidate) => candidate.packetId === packet.packetId) ?? null;
 
   return (

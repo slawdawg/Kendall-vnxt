@@ -12,8 +12,8 @@ import {
   pipelineCockpitPackets,
   projectGovernedCopiedWorktreeExecutionEvidenceSnapshot,
   type GovernedCopiedWorktreeExecutionEvidenceSnapshotV0,
-  type PipelineFixturePacket,
 } from "./pipeline-fixtures";
+import type { PipelineFixturePacketV1 } from "./pipeline/pipeline-fixture-contract";
 
 const MAX_EVIDENCE_FILE_BYTES = 256 * 1024;
 const MAX_EVIDENCE_FILES = 10;
@@ -24,12 +24,12 @@ type LoadEvidenceOptions = {
 };
 
 export type PipelineEvidenceLoadResult = {
-  packets: PipelineFixturePacket[];
+  packets: PipelineFixturePacketV1[];
   evidenceFiles: string[];
   warnings: string[];
 };
 
-export function pipelinePacketsWithPersistedGovernedWorkerEvidence(options: LoadEvidenceOptions = {}): PipelineFixturePacket[] {
+export function pipelinePacketsWithPersistedGovernedWorkerEvidence(options: LoadEvidenceOptions = {}): PipelineFixturePacketV1[] {
   const loaded = loadPersistedGovernedWorkerEvidencePackets(options);
   return mergePipelinePackets(loaded.packets, pipelineCockpitPackets);
 }
@@ -53,7 +53,7 @@ export function loadPersistedGovernedWorkerEvidencePackets(options: LoadEvidence
     return { packets: [], evidenceFiles: [], warnings: ["evidence_path_not_directory"] };
   }
 
-  const packets: PipelineFixturePacket[] = [];
+  const packets: PipelineFixturePacketV1[] = [];
   const evidenceFiles: string[] = [];
   const warnings: string[] = [];
   const directoryEntries = safeReadDir(evidenceDir, warnings);
@@ -191,11 +191,11 @@ function isSafeEvidenceFile(file: string, evidenceDir: string, warnings: string[
   return true;
 }
 
-function mergePipelinePackets(primary: PipelineFixturePacket[], fallback: PipelineFixturePacket[]): PipelineFixturePacket[] {
+function mergePipelinePackets(primary: PipelineFixturePacketV1[], fallback: PipelineFixturePacketV1[]): PipelineFixturePacketV1[] {
   return dedupePackets([...primary, ...fallback]);
 }
 
-function dedupePackets(packets: PipelineFixturePacket[]): PipelineFixturePacket[] {
+function dedupePackets(packets: PipelineFixturePacketV1[]): PipelineFixturePacketV1[] {
   const seen = new Set<string>();
   return packets.filter((packet) => {
     if (seen.has(packet.packetId)) {

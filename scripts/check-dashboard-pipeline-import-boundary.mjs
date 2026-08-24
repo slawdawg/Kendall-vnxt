@@ -9,6 +9,7 @@ const dashboardSrcDir = join(rootDir, "apps/dashboard/src");
 const PIPELINE_SOURCE_TARGETS = [
   "apps/dashboard/src/app/pipeline",
   "apps/dashboard/src/components/pipeline",
+  "apps/dashboard/src/lib/pipeline/pipeline-fixture-contract.ts",
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
   "apps/dashboard/src/lib/pipeline-packet-loader.ts",
 ];
@@ -74,6 +75,7 @@ const requiredSourceFiles = [
   "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
   "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
   "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
+  "apps/dashboard/src/lib/pipeline/pipeline-fixture-contract.ts",
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
   "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts",
 ];

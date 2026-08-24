@@ -40,11 +40,13 @@ forwarding.
 4. Completed: establish source-zero for the deleted routes and envelopes outside archived
    migration fixtures. Update readiness and E2E scripts to canonical/native
    reads before deleting their legacy assertions.
-5. Retire the remaining `WorkPacketV0View`, V0 projector, fixtures, and
+5. Retire the remaining `WorkPacketV0View`, V0 projector, and
    `PipelineDashboardProjectionV0` only in later dependency-ordered slices.
-   Those types still back explicitly isolated demo fixtures and internal
-   compatibility projection materialization; deleting the HTTP route alone
-   does not prove that broader retirement.
+   The demo catalog now uses the strict `dashboard-pipeline-fixture/v1` DTO
+   with an explicit fixture-only detail extension, but it retains named nested
+   V0 contracts as compatibility/schema holds. Deleting the HTTP route alone
+   does not prove broader service, projector, fixture-detail, or database
+   retirement.
 
 ## Current caller classification
 
