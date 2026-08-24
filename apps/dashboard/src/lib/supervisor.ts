@@ -3,14 +3,7 @@ import {
   isPipelineCanonicalContractV1,
   isPipelineProductModeMappingV0,
 } from "@kendall/contracts";
-import {
-  getPipelineDashboardProjection as getRuntimePipelineDashboardProjection,
-} from "./pipeline-supervisor-runtime";
 export { getWorkPacket, getWorkPacketForWorkItem, getWorkItemMemoryReview, getWorkPackets } from "./pipeline-supervisor-runtime";
-import {
-  isPipelineDashboardProjection as canonicalIsPipelineDashboardProjection,
-  normalizePipelineDashboardProjection as canonicalNormalizePipelineDashboardProjection,
-} from "./pipeline-supervisor-projection";
 import {
   getSupervisorBaseUrl as canonicalGetSupervisorBaseUrl,
   requestSupervisorMutation,
@@ -289,18 +282,6 @@ export async function getWorkItem(id: string, options?: RequestOptions): Promise
 
 export async function getWorkItemEvents(id: string, options?: RequestOptions): Promise<WorkflowEventView[]> {
   return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`, options);
-}
-
-export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {
-  const projection = canonicalNormalizePipelineDashboardProjection(
-    await getRuntimePipelineDashboardProjection(),
-  );
-  // Keep the legacy supervisor API tolerant of additive/partial payloads while
-  // the dedicated pipeline runtime enforces the canonical projection contract.
-  if (!canonicalIsPipelineDashboardProjection(projection) && !isPipelineDashboardProjection(projection)) {
-    throw new Error("Invalid projection payload");
-  }
-  return projection;
 }
 
 export async function applyPipelineOperationalAction(

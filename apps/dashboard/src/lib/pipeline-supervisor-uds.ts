@@ -6,7 +6,7 @@ const CANONICAL_WORK_ITEM_PACKET_PATH = /^\/pipeline-control-plane\/work-items\/
 const CANONICAL_WORK_ITEM_MEMORY_REVIEW_PATH = /^\/pipeline-control-plane\/work-items\/[A-Za-z0-9._:%-]+\/memory-review$/;
 
 function assertAllowedPath(path: string) {
-  if (path === "/pipeline-control-plane/projection" || CANONICAL_WORK_ITEM_PACKET_PATH.test(path) || CANONICAL_WORK_ITEM_MEMORY_REVIEW_PATH.test(path)) return;
+  if (path === "/pipeline-control-plane/canonical-operational-projection" || CANONICAL_WORK_ITEM_PACKET_PATH.test(path) || CANONICAL_WORK_ITEM_MEMORY_REVIEW_PATH.test(path)) return;
   throw new Error("LAN-auth pipeline read path is not allowed.");
 }
 

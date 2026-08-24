@@ -74,7 +74,6 @@ from supervisor.api.schemas import (
     OperationalActionApprovalRequestV1,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
-    PipelineDashboardProjectionApiEnvelope,
     DashboardCanonicalOperationalProjectionApiEnvelope,
     PipelineEpic25EvidenceChainIngestRequest,
     RoutingPreviewApiEnvelope,
@@ -1407,16 +1406,6 @@ async def get_authoritative_work_packet_for_work_item(work_item_id: str, session
             detail=error_response("Authoritative WorkPacket link not found.", "authoritative_work_packet_link_not_found").model_dump(),
         )
     return AuthoritativeWorkPacketApiEnvelope(data=packet)
-
-
-@app.get("/pipeline-control-plane/projection", response_model=PipelineDashboardProjectionApiEnvelope)
-async def get_pipeline_dashboard_projection(request: Request, session: AsyncSession = Depends(get_session)):
-    return PipelineDashboardProjectionApiEnvelope(
-        data=await service.get_pipeline_dashboard_projection(
-            session,
-            mutation_access=request_has_local_operational_transport(request),
-        )
-    )
 
 
 @app.get(

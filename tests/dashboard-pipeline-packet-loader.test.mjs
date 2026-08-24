@@ -101,7 +101,7 @@ test("pipeline loader exposes only the client-safe canonical lifecycle while nam
     productModeMapping: { requestedProductMode: "operator_assisted" },
   };
   const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
-    getPipelineDashboardProjection: async () => runtimeProjection([authoritativePacket.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([authoritativePacket.packetId]),
     getWorkPackets: async () => [authoritativePacket],
     getWorkPacket: async () => authoritativePacket,
   });
@@ -237,7 +237,7 @@ test("pipeline packet reads use the transport selected by the caller runtime", a
   const authoritativePacket = authoritativeWorkPacket();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => {
+    getDashboardCanonicalOperationalProjection: async () => {
       calls.push("projection");
       return runtimeProjection([authoritativePacket.packetId]);
     },
@@ -273,7 +273,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   });
   emptyProjection.rawProviderResponse = "python-only extension";
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => emptyProjection,
+    getDashboardCanonicalOperationalProjection: async () => emptyProjection,
     getWorkPackets: async () => [],
     getWorkPacket: async () => { throw detailError; },
   });
@@ -294,7 +294,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
       queueSummary: { emptyReason },
     });
     const reasonLoader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => reasonProjection,
+      getDashboardCanonicalOperationalProjection: async () => reasonProjection,
       getWorkPackets: async () => [],
     });
     const reasonEmpty = await reasonLoader.loadPipelineCockpitPackets();
@@ -304,7 +304,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   }
 
   const malformedLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => [authoritativeWorkPacket(), { packetId: "malformed-runtime-row" }],
   });
   const malformed = await malformedLoader.loadPipelineCockpitPackets();
@@ -313,7 +313,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
   assert.match(malformed.fixtureMode.summary, /malformed WorkPacketV0 row/);
 
   const unreadableLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["requested-runtime-packet"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["requested-runtime-packet"]),
     getWorkPackets: async () => [],
     getWorkPacket: async () => ({ ...authoritativeWorkPacket(), packetId: "different-supervisor-packet" }),
   });
@@ -334,7 +334,7 @@ test("empty, malformed, missing, and unavailable states fail closed without fixt
 test("stale supervisor data stays readable but fixture-shaped packets fail closed", async () => {
   const fixtures = populatedFixtureCatalog();
   const staleLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       generatedAt: new Date().toISOString(),
       sourceUpdatedAt: new Date(Date.now() - 86_400_000).toISOString(),
       sourceLabel: "stale",
@@ -351,7 +351,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   assert.match(stale.fixtureMode.summary, /stale and read-only/i);
 
   const staleTimestampLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       generatedAt: new Date().toISOString(),
       sourceUpdatedAt: new Date(Date.now() - 86_400_000).toISOString(),
       sourceLabel: "live",
@@ -370,7 +370,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
     ["overflow-window", { staleAfterSeconds: Number.MAX_SAFE_INTEGER }, /overflowed/],
   ]) {
     const badFreshnessLoader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], overrides),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], overrides),
       getWorkPackets: async () => [authoritativeWorkPacket()],
     });
     const badFreshness = await badFreshnessLoader.loadPipelineCockpitPackets();
@@ -379,7 +379,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   }
 
   const contradictoryStaleLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       generatedAt: new Date(Date.now() + 86_400_000).toISOString(),
       sourceUpdatedAt: new Date(Date.now() + 86_400_000).toISOString(),
       sourceLabel: "stale",
@@ -393,7 +393,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   assert.match(contradictoryStale.fixtureMode.summary, /future-dated/);
 
   const fixtureShapedLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => [{
       ...authoritativeWorkPacket(),
       fixtureId: "fixture:leaked-runtime",
@@ -409,7 +409,7 @@ test("stale supervisor data stays readable but fixture-shaped packets fail close
   assert.match(fixtureShaped.fixtureMode.summary, /fixture-shaped|fixture-only/i);
 
   const fixturePrefixedLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["fixture:leaked-runtime"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["fixture:leaked-runtime"]),
     getWorkPackets: async () => [{ ...authoritativeWorkPacket(), packetId: "fixture:leaked-runtime" }],
   });
   const fixturePrefixed = await fixturePrefixedLoader.loadPipelineCockpitPackets();
@@ -428,7 +428,7 @@ test("stale projections reconcile list identities and malformed nested truth fai
     truthSummary: { label: "stale", stale: true, summary: "Stale supervisor projection." },
   });
   const staleIdentityMismatch = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => staleProjection,
+    getDashboardCanonicalOperationalProjection: async () => staleProjection,
     getWorkPackets: async () => [{ ...authoritativeWorkPacket(), packetId: "different-runtime-packet" }],
   });
   const mismatch = await staleIdentityMismatch.loadPipelineCockpitPackets();
@@ -437,7 +437,7 @@ test("stale projections reconcile list identities and malformed nested truth fai
   assert.match(mismatch.projectionError, /omitted runtime packet identity|included runtime packet identity/);
 
   const malformedNestedTruth = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => ({ ...staleProjection, truthSummary: null }),
+    getDashboardCanonicalOperationalProjection: async () => ({ ...staleProjection, truthSummary: null }),
     getWorkPackets: async () => [authoritativeWorkPacket()],
   });
   const malformed = await malformedNestedTruth.loadPipelineCockpitPackets();
@@ -455,7 +455,7 @@ test("synthetic reference identities are rejected while fixture-classified evide
   ];
   for (const [index, overrides] of fixtureRefCases.entries()) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
       getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -469,7 +469,7 @@ test("synthetic reference identities are rejected while fixture-classified evide
     { artifactRefs: [{ refId: "artifact:normal", artifactType: "fixture", label: "Fixture artifact", status: "available" }] },
   ]) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
       getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -478,7 +478,7 @@ test("synthetic reference identities are rejected while fixture-classified evide
   }
 
   const labelOnlyLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => [{
       ...authoritativeWorkPacket(),
       evidenceRefs: [{ ...authoritativeWorkPacket().evidenceRefs[0], label: "Operator note mentions fixture:legacy text" }],
@@ -590,7 +590,7 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
 
   for (const [label, overrides] of nestedFixtureCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -599,7 +599,7 @@ test("nested review, gate, and learn fixture provenance fails closed without sca
   }
 
   const ordinaryTextLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
     getWorkPackets: async () => [{
       ...packet,
       reviewSummaries: [{ ...reviewSummary, summary: "Review discusses fixture:legacy wording only." }],
@@ -623,7 +623,7 @@ test("runtime-reachable nested WorkPacket collection members fail closed before 
   const packet = authoritativeWorkPacket();
   const nested = authoritativeNestedWorkPacketCollections(packet.packetId);
   const validLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
     getWorkPackets: async () => [{ ...packet, ...nested }],
   });
   const valid = await validLoader.loadPipelineCockpitPackets();
@@ -654,7 +654,7 @@ test("runtime-reachable nested WorkPacket collection members fail closed before 
 
   for (const [label, overrides] of malformedCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -680,7 +680,7 @@ test("malformed nested projection detail structures fail closed before UI derefe
 
   for (const [label, overrides] of malformedCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -704,7 +704,7 @@ test("lifecycle source accepts only the bounded WorkPacketV0 source contract", a
 
   for (const source of allowedSources) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, lifecycleState: { ...packet.lifecycleState, source } }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -721,7 +721,7 @@ test("lifecycle source accepts only the bounded WorkPacketV0 source contract", a
     ["unknown", { ...packet.lifecycleState, source: "supervisor_runtime" }],
   ]) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, lifecycleState }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -735,7 +735,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   const packet = authoritativeWorkPacket();
   const optionalSources = authoritativeOptionalWorkPacketSources();
   const validLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
     getWorkPackets: async () => [{ ...packet, ...optionalSources }],
   });
   const valid = await validLoader.loadPipelineCockpitPackets();
@@ -748,7 +748,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   proseOnlySources.taskPacket.verificationSummary = "Document fixture:legacy as ordinary prose.";
   proseOnlySources.routingPreview.decision.humanExplanation = "The label fixture:legacy is not provenance.";
   const proseOnlyLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
     getWorkPackets: async () => [{ ...packet, ...proseOnlySources }],
   });
   const proseOnly = await proseOnlyLoader.loadPipelineCockpitPackets();
@@ -878,7 +878,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   ];
   for (const [label, overrides] of nestedSyntheticProvenanceCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -901,7 +901,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   ];
   for (const [label, overrides] of whitespaceProvenanceCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -910,7 +910,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   }
 
   const nullableDeliveryLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
     getWorkPackets: async () => [{
       ...packet,
       ...optionalSources,
@@ -937,7 +937,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   ];
   for (const [label, lifecycleState] of lifecycleCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, lifecycleState }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -1010,7 +1010,7 @@ test("canonical lifecycle provenance and optional WorkPacket source views fail c
   ];
   for (const [label, overrides] of optionalSourceCases) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection([packet.packetId]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection([packet.packetId]),
       getWorkPackets: async () => [{ ...packet, ...optionalSources, ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -1034,7 +1034,7 @@ test("malformed nested evidence and artifact references fail closed before rende
     { artifactRefs: [{ refId: "artifact:report", artifactType: "report", label: "Report", status: "live" }] },
   ]) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
       getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...overrides }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -1047,7 +1047,7 @@ test("detail lookup accepts canonical stale truth read-only and fails closed for
   const fixtures = populatedFixtureCatalog();
   let detailCalls = 0;
   const staleLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       generatedAt: new Date().toISOString(),
       sourceUpdatedAt: new Date(Date.now() - 86_400_000).toISOString(),
       sourceLabel: "stale",
@@ -1065,7 +1065,7 @@ test("detail lookup accepts canonical stale truth read-only and fails closed for
   assert.equal(stale.packet?.packetId, "manager-source-authoritative-only");
 
   const unavailableLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       sourceLabel: "unavailable",
       freshnessState: "unavailable",
       backendReachability: { state: "unavailable" },
@@ -1081,7 +1081,7 @@ test("detail lookup accepts canonical stale truth read-only and fails closed for
   assert.equal(unavailable.packet, null);
 
   const omittedIdentityLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([]),
     getWorkPacket: async () => {
       detailCalls += 1;
       return authoritativeWorkPacket();
@@ -1093,7 +1093,7 @@ test("detail lookup accepts canonical stale truth read-only and fails closed for
   assert.equal(detailCalls, 2, "canonical stale and valid live projections may reach detail lookup");
 
   const emptyClaimLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       truthSummary: { backendEmpty: true, emptyReason: "healthy_empty", summary: "Contradictory backend-empty detail projection." },
     }),
     getWorkPacket: async () => {
@@ -1111,7 +1111,7 @@ test("malformed detail packet IDs fail closed before supervisor lookup", async (
   const fixtures = populatedFixtureCatalog();
   const calls = [];
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPacket: async (packetId) => {
       calls.push(packetId);
       return authoritativeWorkPacket();
@@ -1129,7 +1129,7 @@ test("malformed detail packet IDs fail closed before supervisor lookup", async (
 test("WorkPacket list failure clears a successful projection and reports the read error", async () => {
   const fixtures = populatedFixtureCatalog();
   const loader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => { throw new Error("Supervisor WorkPacket list unavailable"); },
   });
 
@@ -1145,7 +1145,7 @@ test("WorkPacket list failure clears a successful projection and reports the rea
 test("contradictory projection empty and populated states fail closed", async () => {
   const fixtures = populatedFixtureCatalog();
   const nullProjectionLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => null,
+    getDashboardCanonicalOperationalProjection: async () => null,
     getWorkPackets: async () => [],
   });
   const nullProjection = await nullProjectionLoader.loadPipelineCockpitPackets();
@@ -1154,7 +1154,7 @@ test("contradictory projection empty and populated states fail closed", async ()
   assert.match(nullProjection.projectionError, /Invalid projection payload/);
 
   const emptyContradictionLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"], {
       truthSummary: { backendEmpty: true, emptyReason: "healthy_empty", summary: "Contradictory empty projection." },
     }),
     getWorkPackets: async () => [],
@@ -1164,7 +1164,7 @@ test("contradictory projection empty and populated states fail closed", async ()
   assert.match(emptyContradiction.fixtureMode.summary, /zero rows while projection still contains packet identities/);
 
   const populatedContradictionLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([]),
     getWorkPackets: async () => [authoritativeWorkPacket()],
   });
   const populatedContradiction = await populatedContradictionLoader.loadPipelineCockpitPackets();
@@ -1172,7 +1172,7 @@ test("contradictory projection empty and populated states fail closed", async ()
   assert.match(populatedContradiction.fixtureMode.summary, /omitted runtime packet identity/);
 
   const duplicateRuntimeLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => [authoritativeWorkPacket(), authoritativeWorkPacket()],
   });
   const duplicateRuntime = await duplicateRuntimeLoader.loadPipelineCockpitPackets();
@@ -1183,7 +1183,7 @@ test("contradictory projection empty and populated states fail closed", async ()
 test("projection and runtime list identities must match exactly with unique packet IDs", async () => {
   const fixtures = populatedFixtureCatalog();
   const exactIdentityLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only", "extra-runtime-packet"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only", "extra-runtime-packet"]),
     getWorkPackets: async () => [authoritativeWorkPacket()],
   });
 
@@ -1208,7 +1208,7 @@ test("normal mode does not substitute the real compiled fixture catalog", async 
     },
   });
   const loader = await loadPipelinePacketLoader(realFixtures, {
-    getPipelineDashboardProjection: async () => emptyProjection,
+    getDashboardCanonicalOperationalProjection: async () => emptyProjection,
     getWorkPackets: async () => [],
   });
   const empty = await loader.loadPipelineCockpitPackets();
@@ -1217,7 +1217,7 @@ test("normal mode does not substitute the real compiled fixture catalog", async 
   assert.equal(empty.packets.map((packet) => packet.packetId).length, 0);
 
   const unavailableLoader = await loadPipelinePacketLoader(realFixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
     getWorkPackets: async () => { throw new Error("Supervisor WorkPacket list unavailable"); },
   });
   const unavailable = await unavailableLoader.loadPipelineCockpitPackets();
@@ -1241,7 +1241,7 @@ test("source path invariants and case-insensitive synthetic prefixes fail closed
     ["demo-prefixed-artifact-path", { artifactRefs: [{ refId: "artifact:demo", artifactType: "report", label: "Report", pathOrUrl: "DEMO:artifact-path", status: "available" }] }],
   ]) {
     const loader = await loadPipelinePacketLoader(fixtures, {
-      getPipelineDashboardProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
+      getDashboardCanonicalOperationalProjection: async () => runtimeProjection(["manager-source-authoritative-only"]),
       getWorkPackets: async () => [{ ...authoritativeWorkPacket(), ...packetOverride }],
     });
     const result = await loader.loadPipelineCockpitPackets();
@@ -1259,7 +1259,7 @@ test("source path invariants and case-insensitive synthetic prefixes fail closed
     blockedReason: "Canonical source metadata is blocked by policy.",
   }];
   const canonicalRestrictedLoader = await loadPipelinePacketLoader(fixtures, {
-    getPipelineDashboardProjection: async () => runtimeProjection([canonicalRestrictedPacket.packetId]),
+    getDashboardCanonicalOperationalProjection: async () => runtimeProjection([canonicalRestrictedPacket.packetId]),
     getWorkPackets: async () => [canonicalRestrictedPacket],
   });
   const canonicalRestricted = await canonicalRestrictedLoader.loadPipelineCockpitPackets();
@@ -2051,7 +2051,7 @@ test("pipeline loader strips raw canonical lifecycle fields before cockpit clien
     workGraph: { ...rawWorkGraph, rawProviderResponse: "wrong-shape work-graph secret" },
   }];
   const loader = await loadPipelinePacketLoader(populatedFixtureCatalog(), {
-    getPipelineDashboardProjection: async () => projection,
+    getDashboardCanonicalOperationalProjection: async () => projection,
     getWorkPackets: async () => [rawCanonicalPacket],
   });
 
@@ -3420,13 +3420,6 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
     isDashboardCanonicalManagerLaneClarity: () => true,
     ...supervisorOverrides,
   };
-  // Existing focused fixtures predate the canonical operational endpoint.
-  // Keep their V0-shaped values as test data only; production loader code
-  // imports and invokes the new canonical runtime function exclusively.
-  if (typeof supervisor.getDashboardCanonicalOperationalProjection !== "function"
-    && typeof supervisor.getPipelineDashboardProjection === "function") {
-    supervisor.getDashboardCanonicalOperationalProjection = supervisor.getPipelineDashboardProjection;
-  }
   let projectorModule;
   const context = {
     exports: {},

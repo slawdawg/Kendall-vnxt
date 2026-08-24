@@ -421,11 +421,13 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert lifecycle["history"][0]["metadataOnly"] is True  # type: ignore[index]
 
         projection = _json_get(
-            f"http://127.0.0.1:{port}/pipeline-control-plane/projection"
+            f"http://127.0.0.1:{port}/pipeline-control-plane/canonical-operational-projection"
         )["data"]
+        assert projection["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
         projected = next(
             packet for packet in projection["workPackets"] if packet["packetId"] == packet_id  # type: ignore[index,union-attr]
         )
+        assert projected["productModeMapping"] is None
         assert projected["currentStage"] == "capture"
         assert projected["status"] == "waiting"
         assert projected["truthLabel"] == "live"
@@ -483,14 +485,15 @@ def test_source_backed_manager_candidate_persists_as_authoritative_supervisor_pr
         assert restarted_lifecycle["history"][0]["eventType"] == "packet.created"  # type: ignore[index]
 
         restarted_projection = _json_get(
-            f"http://127.0.0.1:{port}/pipeline-control-plane/projection"
+            f"http://127.0.0.1:{port}/pipeline-control-plane/canonical-operational-projection"
         )["data"]
+        assert restarted_projection["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
         restarted_projected = next(
             packet
             for packet in restarted_projection["workPackets"]  # type: ignore[index,union-attr]
             if packet["packetId"] == packet_id
         )
-        _normalize_read_time_product_mode_mapping(restarted_projected, projected)
+        assert restarted_projected["productModeMapping"] is None
         assert restarted_projected == projected
 
         restarted_canonical_packet_list = _json_get(
@@ -575,18 +578,14 @@ def test_worker_result_loop_continues_reconciled_manager_intake_through_supervis
         assert lifecycle["readyToTest"]["verificationRefs"] == [f"attempt:{proof['attemptId']}"]  # type: ignore[index]
         assert f"evidence:local-proof:gate4-manager-worker-result-1" in lifecycle["readyToTest"]["evidenceRefs"]  # type: ignore[index]
 
-        projection = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/projection")["data"]
+        projection = _json_get(
+            f"http://127.0.0.1:{port}/pipeline-control-plane/canonical-operational-projection"
+        )["data"]
+        assert projection["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
         projected = next(packet for packet in projection["workPackets"] if packet["packetId"] == packet_id)  # type: ignore[index,union-attr]
         assert projected["workItemId"] == proof["workItemId"]
-        assert projected["executionAttempts"] == [  # type: ignore[index]
-            {
-                "attemptId": proof["attemptId"], "workItemId": proof["workItemId"], "leaseId": proof["leaseId"],
-                "fencingToken": proof["fencingToken"], "routeDecisionId": projected["executionAttempts"][0]["routeDecisionId"],
-                "workerId": projected["executionAttempts"][0]["workerId"], "lane": projected["executionAttempts"][0]["lane"],
-                "status": "completed", "eventRefs": projected["executionAttempts"][0]["eventRefs"],
-                "evidenceRefs": projected["executionAttempts"][0]["evidenceRefs"], "metadataOnly": True,
-            }
-        ]
+        assert projected["productModeMapping"] is None
+        assert projected["executionAttempts"] == []
 
         stale = _json_post(
             f"http://127.0.0.1:{port}/pipeline-control-plane/work-packets/{packet_id}/local-proof/lease",
@@ -616,8 +615,12 @@ def test_worker_result_loop_continues_reconciled_manager_intake_through_supervis
         private_server = None
         server, private_server = _start_supervisor(port, socket_path)
         _enable_attested_local_proof(db_path)
-        restarted = _json_get(f"http://127.0.0.1:{port}/pipeline-control-plane/projection")["data"]
+        restarted = _json_get(
+            f"http://127.0.0.1:{port}/pipeline-control-plane/canonical-operational-projection"
+        )["data"]
+        assert restarted["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
         restarted_packet = next(packet for packet in restarted["workPackets"] if packet["packetId"] == packet_id)  # type: ignore[index,union-attr]
+        assert restarted_packet["productModeMapping"] is None
         for field in ("packetId", "currentStage", "status", "workItemId", "queueLease", "executionAttempts"):
             assert restarted_packet[field] == projected[field]
         assert set(projected["evidenceRefs"]).issubset(restarted_packet["evidenceRefs"])

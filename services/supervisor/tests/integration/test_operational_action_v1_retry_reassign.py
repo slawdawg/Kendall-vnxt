@@ -268,7 +268,7 @@ def test_retry_verification_preserves_attempt_and_queues_one_idempotent_metadata
         assert result["successEvidence"]["providerOrWorkerLaunched"] is False
         assert _typescript_result_validation_issues(result) == []
         assert result["replayed"] is False
-        projection = client.get("/pipeline-control-plane/projection")
+        projection = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection.status_code == 200
         selected_detail = next(
             detail
@@ -283,8 +283,9 @@ def test_retry_verification_preserves_attempt_and_queues_one_idempotent_metadata
         assert retry_capability["sourceMode"] == "packet"
         assert retry_capability["targetId"] == target["attemptId"]
         assert retry_capability["actionContextDigestSha256"].startswith("sha256:")
-        assert retry_capability["typedReason"] == "invalid_transition"
+        assert retry_capability["typedReason"] == "authenticated_session_required"
         assert retry_capability["capabilityState"] == "unavailable"
+        assert retry_capability["authorityState"] == "blocked"
         admission = projection.json()["data"]["executeAdmission"]
         assert admission["observed"]["verification"] == 1
         assert admission["capacityAvailable"] is False

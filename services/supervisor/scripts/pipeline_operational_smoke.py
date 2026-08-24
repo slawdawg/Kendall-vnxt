@@ -300,7 +300,7 @@ def main() -> int:
             if packet["sourceRef"] != source_ref or packet["truthLabel"] != "source_owned":
                 fail("packet seed did not preserve the tracked source-owned authority ref")
 
-            initial_projection = require(client.get("/pipeline-control-plane/projection"), 200, "initial projection")
+            initial_projection = require(client.get("/pipeline-control-plane/canonical-operational-projection"), 200, "initial projection")
             if initial_projection["runtimeReadiness"]["operationalMode"] not in {"unavailable", "read_only"}:
                 fail("capability-off projection incorrectly reported an operational runtime mode")
             if initial_projection["runtimeReadiness"]["capabilityState"] != "unavailable" or initial_projection["runtimeReadiness"]["readinessState"] != "unavailable":
@@ -668,7 +668,7 @@ def main() -> int:
             service.settings.database_url = f"sqlite+aiosqlite:///{db_path}"
             service.settings.allow_worker_network = True
             unsafe_settings_readiness = require(
-                client.get("/pipeline-control-plane/projection"),
+                client.get("/pipeline-control-plane/canonical-operational-projection"),
                 200,
                 "unsafe local-proof settings readiness",
             )["runtimeReadiness"]
@@ -681,7 +681,7 @@ def main() -> int:
                 fail("runtime readiness advertised local proof despite externally-authorized supervisor settings")
             service.settings.allow_worker_network = False
             ready_settings_readiness = require(
-                client.get("/pipeline-control-plane/projection"),
+                client.get("/pipeline-control-plane/canonical-operational-projection"),
                 200,
                 "safe local-proof settings readiness",
             )["runtimeReadiness"]
@@ -1596,7 +1596,7 @@ def main() -> int:
                 if len(reloaded_attempts) != 1 or reloaded_attempts[0]["attemptId"] != happy_proof["attempt"]["attemptId"]:
                     fail("engine/session reload created a duplicate success or lost execution lineage")
                 reloaded_projection = require(
-                    reloaded_client.get("/pipeline-control-plane/projection"),
+                    reloaded_client.get("/pipeline-control-plane/canonical-operational-projection"),
                     200,
                     "reloaded pipeline projection",
                 )
@@ -1700,7 +1700,7 @@ def main() -> int:
                     "happy event reconstruction",
                 )
                 replayed_projection = require(
-                    reloaded_client.get("/pipeline-control-plane/projection"),
+                    reloaded_client.get("/pipeline-control-plane/canonical-operational-projection"),
                     200,
                     "replayed pipeline projection",
                 )
@@ -1797,7 +1797,7 @@ def main() -> int:
                     "held event reconstruction",
                 )
                 reloaded_projection = require(
-                    reloaded_client.get("/pipeline-control-plane/projection"),
+                    reloaded_client.get("/pipeline-control-plane/canonical-operational-projection"),
                     200,
                     "projection after held event reconstruction",
                 )

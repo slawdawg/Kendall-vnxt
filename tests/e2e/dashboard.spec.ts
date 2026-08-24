@@ -128,7 +128,7 @@ async function seedSupervisorPipelinePacket(
   // this narrow setup only gives the renderer a persisted authoritative event.
   if (parallelWorkGraphEvidence || reviewRouteEvidence) attachSupervisorPipelineWorkGraph(packetId, parallelWorkGraphEvidence ?? {}, reviewRouteEvidence);
   await expect.poll(async () => {
-    const projectionResponse = await request.get(`${supervisorUrl}/pipeline-control-plane/projection`);
+    const projectionResponse = await request.get(`${supervisorUrl}/pipeline-control-plane/canonical-operational-projection`);
     if (!projectionResponse.ok()) return false;
     const projection = (await projectionResponse.json()) as { data?: { workPackets?: Array<{ packetId?: string }> } };
     return projection.data?.workPackets?.some((packet) => packet.packetId === packetId) ?? false;
