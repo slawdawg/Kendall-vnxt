@@ -35,10 +35,12 @@ V0 packet renderer is isolated to the explicit demo route as
 explicitly inventoried V0 board values remain compatibility surfaces until
 their own replacement and readback proofs land.
 
-Slice5A also removes the normal cockpit's V1-to-V0-shaped presentation adapter:
-the cockpit uses canonical packet identities with the V1 active-board model,
-while the V0 projection validator/projector remain only for explicit fixture
-and direct-detail evidence holds. Coordination Health validation is isolated
+Slice5A removed the normal cockpit's V1-to-V0-shaped presentation adapter:
+the cockpit uses canonical packet identities with the V1 active-board model.
+Slice5B then retired the dashboard TS V0 projection validator/projector and
+their top-level re-export; nested V0 service/schema/database values remain
+explicit compatibility holds, while demo and direct-detail evidence use their
+named canonical/fixture boundaries. Coordination Health validation is isolated
 in its dashboard-owned standalone validator.
 
 The disposable Lane Clarity dogfood proof now reads that same canonical
@@ -153,7 +155,7 @@ Lane Clarity, Coordination Health, or runtime-action rendering.
 
 | Area | First-slice files | Required evidence |
 | --- | --- | --- |
-| Canonical packet presentation | `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`, `apps/dashboard/src/lib/pipeline-supervisor-projector.ts`, `apps/dashboard/src/lib/pipeline-packet-loader.ts` | Canonical lifecycle fields map to the new presentation; malformed lifecycle and unknown fields fail closed; no legacy request is issued. |
+| Canonical packet presentation | `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`, `apps/dashboard/src/lib/pipeline-packet-loader.ts` | Canonical lifecycle fields map to the new presentation; malformed lifecycle and unknown fields fail closed; no legacy request is issued. The retired TS V0 projector/validator is not a normal consumer. |
 | Operational projection | supervisor canonical operational endpoint, `apps/dashboard/src/lib/pipeline-supervisor-runtime.ts`, `apps/dashboard/src/lib/pipeline-packet-loader.ts`, and the dashboard proxy | The supervisor reconstructs a strict versioned V1 envelope; dashboard and proxy allowlists preserve required V1 action-context fences and active-board fields while stripping unknown root and nested fields in normal and LAN paths. The V0 endpoint is a named compatibility hold. |
 | Cockpit and direct packet detail consumers | `apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx`, `packet-detail-page.tsx`, `apps/dashboard/src/lib/pipeline/active-board-view-model.ts`, normal/LAN route components | Runtime rows use canonical presentation; the direct-detail work graph uses `DashboardCanonicalWorkGraphEvidenceV1`; demo remains explicit through the strict V1 fixture DTO and detail extension; direct packet detail preserves URL behavior. |
 | WorkItem memory review | `apps/dashboard/src/components/work-item-detail-page.tsx`, `apps/dashboard/src/components/memory-proposal-review-panel.tsx` | The panel uses the canonical, work-item-scoped memory-review DTO. PATCH and every durable proposal action use its opaque route key, persisted revision fence, and the dashboard's operator mutation transport (Origin and CSRF fenced); reserved canonical evidence namespaces are resolved from WorkItem-scoped records before an AI draft or derived rebuild can proceed. |

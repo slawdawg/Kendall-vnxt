@@ -40,13 +40,15 @@ forwarding.
 4. Completed: establish source-zero for the deleted routes and envelopes outside archived
    migration fixtures. Update readiness and E2E scripts to canonical/native
    reads before deleting their legacy assertions.
-5. Retire the remaining `WorkPacketV0View`, V0 projector, and
-   `PipelineDashboardProjectionV0` only in later dependency-ordered slices.
-   The demo catalog now uses the strict `dashboard-pipeline-fixture/v1` DTO
-   with an explicit fixture-only detail extension, but it retains named nested
-   V0 contracts as compatibility/schema holds. Deleting the HTTP route alone
-   does not prove broader service, projector, fixture-detail, or database
-   retirement.
+5. Continue the dependency-ordered retirement of the remaining
+   `WorkPacketV0View` service/schema and `PipelineDashboardProjectionV0`
+   internal/database holds. Slice5B retired the dashboard TS V0
+   projector/validator and top-level re-export; it did not remove the
+   supervisor materializer, nested V0 contracts, demo fixture data, or
+   direct-detail evidence holds. The demo catalog uses the strict
+   `dashboard-pipeline-fixture/v1` DTO with an explicit fixture-only detail
+   extension. Deleting the HTTP route alone does not prove broader service,
+   fixture-detail, or database retirement.
 
 ## Current caller classification
 
@@ -56,7 +58,7 @@ forwarding.
 | Dashboard proxy and UDS | Legacy read admission retired; exact list/detail denial coverage proves neither transport forwards it. |
 | Supervisor integration tests | Migrate by identity using the table above; do not preserve synthetic V0 assertions behind a helper. |
 | Manager intake and Gate 4 external verification scripts | Replace authoritative legacy list/detail checks with canonical control-plane list/detail checks and retain restart readback. |
-| Demo fixtures and V0 projector | Explicit later holds, not evidence that the legacy HTTP route remains needed. |
+| Demo fixtures and nested V0 compatibility data | Explicit later holds, not evidence that the legacy HTTP route remains needed. The dashboard TS V0 projector is retired; fixture/demo and direct-detail boundaries remain. |
 
 Gate 4 now starts the same-user private UDS intake server before its public
 canonical-read server, then proves canonical list/detail and dashboard reads
