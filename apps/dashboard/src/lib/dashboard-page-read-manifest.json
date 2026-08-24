@@ -86,7 +86,7 @@
     "route": "/pipeline",
     "roles": ["operator", "test_viewer"],
     "reads": [
-      { "method": "GET", "path": "/pipeline-control-plane/projection" },
+      { "method": "GET", "path": "/pipeline-control-plane/canonical-operational-projection" },
       { "method": "GET", "path": "/pipeline-control-plane/work-packets" }
     ]
   }

@@ -135,14 +135,14 @@ def test_projection_exposes_only_fresh_coherent_handoff(tmp_path, monkeypatch) -
         stale = _payload(observed_at=datetime.now(UTC) - timedelta(days=1))
         status, _, text = _request(base_url, "/manager-control-plane/lane-clarity-handoffs", method="POST", payload=stale)
         assert status == 200, text
-        projection_status, projection, projection_text = _request(base_url, "/pipeline-control-plane/projection", method="GET")
+        projection_status, projection, projection_text = _request(base_url, "/pipeline-control-plane/canonical-operational-projection", method="GET")
         assert projection_status == 200, projection_text
         assert projection["data"]["activeManagerLaneClarity"] is None
 
         fresh = _payload(sequence=2)
         status, _, text = _request(base_url, "/manager-control-plane/lane-clarity-handoffs", method="POST", payload=fresh)
         assert status == 200, text
-        projection_status, projection, projection_text = _request(base_url, "/pipeline-control-plane/projection", method="GET")
+        projection_status, projection, projection_text = _request(base_url, "/pipeline-control-plane/canonical-operational-projection", method="GET")
         assert projection_status == 200, projection_text
         assert projection["data"]["activeManagerLaneClarity"] == fresh["laneClarity"]
 

@@ -1901,8 +1901,8 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
   assert.doesNotMatch(pipelineSupervisorRuntimeSource, /method\s*:\s*["'](?:POST|PATCH|PUT|DELETE)["']/);
   assert.doesNotMatch(pipelineSupervisorRuntimeSource, /export\s+(?:async\s+)?function\s+requestJson/);
-  assert.match(pipelineSupervisorRuntimeSource, /normalizePipelineDashboardProjection/);
-  assert.match(pipelineSupervisorRuntimeSource, /Invalid projection payload/);
+  assert.match(pipelineSupervisorRuntimeSource, /getDashboardCanonicalOperationalProjection/);
+  assert.match(pipelineSupervisorRuntimeSource, /Invalid canonical operational projection payload/);
   assert.equal((pipelineSupervisorRuntimeSource.match(/\bfetch\s*\(/g) ?? []).length, 0);
   assert.match(pipelineSupervisorRuntimeSource, /requestSupervisorJson/);
   assert.equal((dashboardSupervisorTransportSource.match(/\bfetch\s*\(/g) ?? []).length, 2);
@@ -2236,8 +2236,8 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.doesNotMatch(packetDetailRouteSource, /generateStaticParams/);
   assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
   assert.match(dashboardSupervisorTransportSource, /Malformed response for \$\{path\}/);
-  assert.match(supervisorLibSource, /Invalid projection payload/);
-  assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
+  assert.match(pipelineSupervisorRuntimeSource, /Invalid canonical operational projection payload/);
+  assert.match(pipelineSupervisorRuntimeSource, /isDashboardCanonicalOperationalProjection/);
   assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);
   assert.match(supervisorLibSource, /isLiveProjectionRenderable\(projection\)/);
   assert.match(supervisorLibSource, /function projectionHasOpenPacket/);
@@ -3284,10 +3284,9 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": '"use client";\nimport "../../lib/pipeline-supervisor-actions";\nexport function PipelineCockpit() {}\n',
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
-    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getPipelineDashboardProjection, getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getPipelineDashboardProjection, getWorkPacket, getWorkPackets];\n',
+    "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getWorkPacket, getWorkPackets];\n',
     "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts": [
       'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-      'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
       'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
       'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
       'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
@@ -3402,7 +3401,6 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
         'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
@@ -3463,7 +3461,6 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
         'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
@@ -3518,7 +3515,6 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
       join(fixtureRoot, "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts"),
       [
         'async function requestJson(path) { return fetch(`${baseUrl}${path}`, { cache: "no-store" }); }',
-        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
         'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPacketForWorkItem(workItemId) { return requestJson(`/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet`); }',
@@ -3535,7 +3531,6 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
         'async function requestJson(path) {',
         '  return fetch(`${baseUrl}${path}`, { cache: "no-store" });',
         '}',
-        'export async function getPipelineDashboardProjection() { return requestJson("/pipeline-control-plane/projection"); }',
         'export async function getDashboardCanonicalOperationalProjection() { return requestJson("/pipeline-control-plane/canonical-operational-projection"); }',
         'export async function getWorkPacket(packetId) { return requestJson(`/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}`); }',
         'export async function getWorkPackets() { return requestJson("/pipeline-control-plane/work-packets"); }',

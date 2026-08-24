@@ -44,7 +44,6 @@ const forbiddenCallPatterns = [
 
 const readOnlyPipelineRuntimeFunctions = [
   "getDashboardCanonicalOperationalProjection",
-  "getPipelineDashboardProjection",
   "getWorkPacket",
   "getWorkPacketForWorkItem",
   "getWorkItemMemoryReview",
@@ -60,7 +59,6 @@ const pureValidatorTransportDependency = new RegExp(`\\b(?:${readOnlyPipelineRun
 
 const readOnlyPipelineRuntimeEndpoints = new Map([
   ["getDashboardCanonicalOperationalProjection", "/pipeline-control-plane/canonical-operational-projection"],
-  ["getPipelineDashboardProjection", "/pipeline-control-plane/projection"],
   ["getWorkPacket", "/pipeline-control-plane/work-packets/${encodeURIComponent(packetId)}"],
   ["getWorkPacketForWorkItem", "/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/packet"],
   ["getWorkItemMemoryReview", "/pipeline-control-plane/work-items/${encodeURIComponent(workItemId)}/memory-review"],

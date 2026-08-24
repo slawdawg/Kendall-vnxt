@@ -2058,12 +2058,16 @@ def test_authoritative_packet_projects_canonical_contract_without_granting_write
         assert packet["productModeMapping"]["blockedReasons"] == ["canonical_contract_does_not_grant_write_authority"]
         assert packet["productModeMapping"]["githubMutationAllowed"] is False
 
-        projection = _http_get(base_url, "/pipeline-control-plane/projection")
+        projection = _http_get(base_url, "/pipeline-control-plane/canonical-operational-projection")
         assert projection.status_code == 200
         projected = next(item for item in projection.json()["data"]["workPackets"] if item["packetId"] == payload["packetId"])
         detail = next(item for item in projection.json()["data"]["selectedPacketDetails"] if item["packetId"] == payload["packetId"])
-        assert projected["canonicalContract"] == canonical_contract
-        assert detail["productModeMapping"]["ready"] is False
+        # The canonical V1 board deliberately omits contract/product-mode
+        # authority details; those remain validated on the write response.
+        assert projected["canonicalContract"] is None
+        assert projected["productModeMapping"] is None
+        assert detail["canonicalContract"] is None
+        assert detail["productModeMapping"] is None
         assert "mutate_source" not in {capability["actionId"] for capability in detail["actionCapabilities"]}
 
         raw_payload = json.loads(json.dumps(payload))
@@ -2226,7 +2230,7 @@ def test_authoritative_work_packet_multi_stage_movement_proves_live_projection(t
         assert all(event["metadataOnly"] is True for event in refreshed["history"])
         assert all(event["payloadSummary"] and len(event["payloadSummary"]) <= 500 for event in refreshed["history"])
 
-        projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        projection_response = restarted_client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["sourceLabel"] == "live"
@@ -2301,7 +2305,7 @@ def test_authoritative_work_packet_multi_stage_movement_proves_live_projection(t
         )
         assert same_stage_review_response.status_code == 200
         current_event_id = same_stage_review_response.json()["data"]["currentEventId"]
-        same_stage_projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        same_stage_projection_response = restarted_client.get("/pipeline-control-plane/canonical-operational-projection")
         assert same_stage_projection_response.status_code == 200
         same_stage_projection = same_stage_projection_response.json()["data"]
         same_stage_detail = next(detail for detail in same_stage_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
@@ -2329,7 +2333,7 @@ def test_authoritative_work_packet_multi_stage_movement_proves_live_projection(t
             assert terminal_transition_response.status_code == 200
             current_event_id = terminal_transition_response.json()["data"]["currentEventId"]
 
-        terminal_projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        terminal_projection_response = restarted_client.get("/pipeline-control-plane/canonical-operational-projection")
         assert terminal_projection_response.status_code == 200
         terminal_projection = terminal_projection_response.json()["data"]
         terminal_detail = next(detail for detail in terminal_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
@@ -2348,11 +2352,12 @@ def test_authoritative_work_packet_multi_stage_movement_proves_live_projection(t
             )
             conn.commit()
 
-        redacted_projection_response = restarted_client.get("/pipeline-control-plane/projection")
+        redacted_projection_response = restarted_client.get("/pipeline-control-plane/canonical-operational-projection")
         assert redacted_projection_response.status_code == 200
         redacted_projection = redacted_projection_response.json()["data"]
         redacted_detail = next(detail for detail in redacted_projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-1-4-multi-stage-proof")
-        assert redacted_detail["latestMovementSummary"] == "Redacted metadata-only lifecycle summary."
+        # Unsafe persisted lifecycle text fails closed in the V1 renderer.
+        assert redacted_detail["latestMovementSummary"] is None
         assert "raw transcript:legacy" not in redacted_detail["evidenceRefs"]
         assert "secret_key:legacy" not in redacted_detail["evidenceRefs"]
         assert "raw transcript:legacy" not in redacted_projection["evidenceRefs"]
@@ -2375,7 +2380,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
     }
 
     with _client(tmp_path, monkeypatch, db_name) as client:
-        empty_response = client.get("/pipeline-control-plane/projection")
+        empty_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert empty_response.status_code == 200
         empty_projection = empty_response.json()["data"]
         expected_keys = {
@@ -2503,7 +2508,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert transition_response.status_code == 200
         review_event_ref = f"event:{transition_response.json()['data']['currentEventId']}"
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["sourceLabel"] == "live"
@@ -2545,11 +2550,22 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert projected_packet["sourceRef"] == source_ref
         assert projected_packet["blocker"] is None
         assert projected_packet["nextAction"] == "Advance toward Promote."
-        assert projected_packet["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
+        assert set(projected_packet["evidenceRefs"]) == {
+            "event:review",
+            "proof:pipeline-real-workpacket",
+            "story:1-3",
+            "story:2-4",
+        }
+        assert len(projected_packet["evidenceRefs"]) == len(set(projected_packet["evidenceRefs"]))
         assert projected_packet["metadataOnly"] is True
         selected_detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == "packet-story-2-4-real-proof")
         assert selected_detail["sourceRefs"] == [source_ref]
-        assert selected_detail["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
+        assert set(selected_detail["evidenceRefs"]) == {
+            "event:review",
+            "proof:pipeline-real-workpacket",
+            "story:1-3",
+            "story:2-4",
+        }
         assert selected_detail["currentStage"] == "review"
         assert selected_detail["status"] == "active"
         assert selected_detail["truthLabel"] == "live"
@@ -2565,7 +2581,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert review_summary["sourceLabel"] == "live"
         assert review_summary["freshnessState"] == "live"
 
-        refreshed_response = client.get("/pipeline-control-plane/projection")
+        refreshed_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert refreshed_response.status_code == 200
         refreshed_projection = refreshed_response.json()["data"]
         refreshed_packet = next(packet for packet in refreshed_projection["workPackets"] if packet["packetId"] == "packet-story-2-4-real-proof")
@@ -2579,7 +2595,12 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         assert refreshed_packet["metadataOnly"] is True
         assert refreshed_packet["sourceRef"] == source_ref
         assert refreshed_detail["sourceRefs"] == [source_ref]
-        assert refreshed_detail["evidenceRefs"] == ["event:review", "proof:pipeline-real-workpacket", "story:1-3", "story:2-4"]
+        assert set(refreshed_detail["evidenceRefs"]) == {
+            "event:review",
+            "proof:pipeline-real-workpacket",
+            "story:1-3",
+            "story:2-4",
+        }
         assert refreshed_detail["latestTransitionEventRef"] == review_event_ref
         assert refreshed_detail["canSatisfyLiveMovementProof"] is True
         assert refreshed_detail["truthLabel"] == "live"
@@ -2592,7 +2613,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             )
             conn.commit()
 
-        stale_response = client.get("/pipeline-control-plane/projection")
+        stale_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert stale_response.status_code == 200
         stale_projection = stale_response.json()["data"]
         assert stale_projection["sourceLabel"] == "stale"
@@ -2650,7 +2671,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
         )
         assert approval_waiting_response.status_code == 200
 
-        mixed_response = client.get("/pipeline-control-plane/projection")
+        mixed_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert mixed_response.status_code == 200
         mixed_projection = mixed_response.json()["data"]
         assert mixed_projection["sourceLabel"] == "live"
@@ -2694,7 +2715,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             )
             conn.commit()
 
-        blocked_response = client.get("/pipeline-control-plane/projection")
+        blocked_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert blocked_response.status_code == 200
         blocked_projection = blocked_response.json()["data"]
         assert blocked_projection["sourceLabel"] == "live"
@@ -2708,7 +2729,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             conn.execute("update authoritative_work_packets set updated_at = CURRENT_TIMESTAMP where id in (?, ?)", ("packet-story-2-4-real-proof", "packet-story-2-4-fresh"))
             conn.commit()
 
-        fresh_blocked_response = client.get("/pipeline-control-plane/projection")
+        fresh_blocked_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert fresh_blocked_response.status_code == 200
         fresh_blocked_projection = fresh_blocked_response.json()["data"]
         assert fresh_blocked_projection["sourceLabel"] == "live"
@@ -2729,7 +2750,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             )
             conn.commit()
 
-        failed_response = client.get("/pipeline-control-plane/projection")
+        failed_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert failed_response.status_code == 200
         failed_projection = failed_response.json()["data"]
         assert failed_projection["queueSummary"]["dispatchableCount"] == 0
@@ -2754,7 +2775,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             )
             conn.commit()
 
-        closed_no_source_exhaustion_response = client.get("/pipeline-control-plane/projection")
+        closed_no_source_exhaustion_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert closed_no_source_exhaustion_response.status_code == 200
         closed_no_source_exhaustion_projection = closed_no_source_exhaustion_response.json()["data"]
         assert closed_no_source_exhaustion_projection["sourceLabel"] == "live"
@@ -2788,7 +2809,7 @@ def test_pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_st
             raise SQLAlchemyError("projection backend unavailable")
 
         monkeypatch.setattr(SupervisorService, "list_authoritative_work_packets", unavailable_authoritative_packets)
-        unavailable_response = client.get("/pipeline-control-plane/projection")
+        unavailable_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert unavailable_response.status_code == 200
         unavailable_projection = unavailable_response.json()["data"]
         assert unavailable_projection["sourceLabel"] == "unavailable"
@@ -2818,7 +2839,7 @@ def test_pipeline_dashboard_projection_proves_zero_packet_source_exhaustion(tmp_
     db_name = "pipeline-dashboard-zero-packet-source-exhausted.db"
     db_path = _db_path(tmp_path, db_name)
     with _client(tmp_path, monkeypatch, db_name) as client:
-        no_record_response = client.get("/pipeline-control-plane/projection")
+        no_record_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert no_record_response.status_code == 200
         no_record_projection = no_record_response.json()["data"]
         assert no_record_projection["workPackets"] == []
@@ -2851,7 +2872,7 @@ def test_pipeline_dashboard_projection_proves_zero_packet_source_exhaustion(tmp_
             },
         )
         assert no_evidence_response.status_code == 200
-        no_evidence_projection_response = client.get("/pipeline-control-plane/projection")
+        no_evidence_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert no_evidence_projection_response.status_code == 200
         no_evidence_projection = no_evidence_projection_response.json()["data"]
         assert no_evidence_projection["workPackets"] == []
@@ -2884,7 +2905,7 @@ def test_pipeline_dashboard_projection_proves_zero_packet_source_exhaustion(tmp_
         )
         assert exhausted_response.status_code == 200
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["sourceLabel"] == "live"
@@ -2919,7 +2940,7 @@ def test_pipeline_dashboard_projection_proves_zero_packet_source_exhaustion(tmp_
         assert "tmux-pane-scrollback:must-not-project" not in retained_metadata_text
 
         _update_candidate_fixture(db_path, exhausted_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
-        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        stale_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert stale_projection_response.status_code == 200
         stale_projection = stale_projection_response.json()["data"]
         assert stale_projection["sourceLabel"] == "stale"
@@ -2964,7 +2985,7 @@ def test_pipeline_dashboard_projection_uses_non_exhausted_source_state_only_reas
             },
         )
         assert blocked_response.status_code == 200
-        blocked_projection_response = client.get("/pipeline-control-plane/projection")
+        blocked_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert blocked_projection_response.status_code == 200
         blocked_projection = blocked_projection_response.json()["data"]
         assert blocked_projection["workPackets"] == []
@@ -2978,7 +2999,7 @@ def test_pipeline_dashboard_projection_uses_non_exhausted_source_state_only_reas
 
         rejected_response = client.patch(f"/candidate-work/{blocked_response.json()['data']['id']}", json={"status": "rejected"})
         assert rejected_response.status_code == 200
-        rejected_projection_response = client.get("/pipeline-control-plane/projection")
+        rejected_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert rejected_projection_response.status_code == 200
         rejected_projection = rejected_projection_response.json()["data"]
         assert rejected_projection["workPackets"] == []
@@ -3012,7 +3033,7 @@ def test_pipeline_dashboard_projection_uses_non_exhausted_source_state_only_reas
             },
         )
         assert refilling_response.status_code == 200
-        refilling_projection_response = client.get("/pipeline-control-plane/projection")
+        refilling_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert refilling_projection_response.status_code == 200
         refilling_projection = refilling_projection_response.json()["data"]
         assert refilling_projection["workPackets"] == []
@@ -3051,7 +3072,7 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
         )
         assert worker_response.status_code == 200
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["workPackets"] == []
@@ -3121,7 +3142,7 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
         )
         assert duplicate_response.status_code == 200
 
-        deduped_projection_response = client.get("/pipeline-control-plane/projection")
+        deduped_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert deduped_projection_response.status_code == 200
         deduped_projection = deduped_projection_response.json()["data"]
         assert deduped_projection["workerSummary"]["warmCount"] == 0
@@ -3157,7 +3178,7 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
             },
         )
         assert aggregate_response.status_code == 200
-        aggregate_projection_response = client.get("/pipeline-control-plane/projection")
+        aggregate_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert aggregate_projection_response.status_code == 200
         aggregate_projection = aggregate_projection_response.json()["data"]
         assert aggregate_projection["workerSummary"]["activeCount"] == 6
@@ -3169,7 +3190,7 @@ def test_pipeline_dashboard_projection_aggregates_worker_summary_only_metadata(t
         _update_candidate_fixture(db_path, worker_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
         _update_candidate_fixture(db_path, duplicate_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
         _update_candidate_fixture(db_path, aggregate_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
-        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        stale_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert stale_projection_response.status_code == 200
         stale_projection = stale_projection_response.json()["data"]
         assert stale_projection["workerSummary"]["freshnessState"] == "stale"
@@ -3207,7 +3228,7 @@ def test_pipeline_dashboard_projection_detects_idle_with_ready_work(tmp_path, mo
         )
         assert create_response.status_code == 200
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["queueSummary"]["dispatchableCount"] == 1
@@ -3262,7 +3283,7 @@ def test_pipeline_dashboard_projection_detects_idle_with_ready_work(tmp_path, mo
             },
         )
         assert worker_response.status_code == 200
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["queueSummary"]["dispatchableCount"] == 1
@@ -3307,7 +3328,7 @@ def test_pipeline_dashboard_projection_detects_idle_with_ready_work(tmp_path, mo
             },
         )
         assert worker_response.status_code == 200
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["queueSummary"]["dispatchableCount"] == 1
@@ -3356,7 +3377,7 @@ def test_pipeline_dashboard_projection_detects_idle_with_ready_work(tmp_path, mo
         )
         assert worker_response.status_code == 200
         _update_candidate_fixture(stale_db_path, worker_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["queueSummary"]["dispatchableCount"] == 1
@@ -3402,7 +3423,7 @@ def test_pipeline_dashboard_projection_detects_idle_with_ready_work(tmp_path, mo
         )
         assert worker_response.status_code == 200
         assert worker_response.json()["data"]["importMetadata"]["pipelineWorkerSummary"] == {}
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["queueSummary"]["dispatchableCount"] == 1
@@ -3562,7 +3583,7 @@ def test_pipeline_dashboard_projection_projects_gated_controls_as_metadata_only(
         )
         assert duplicate_response.status_code == 200
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         projected_controls = projection["gatedControls"]
@@ -3605,7 +3626,7 @@ def test_pipeline_dashboard_projection_projects_gated_controls_as_metadata_only(
             gated_response.json()["data"]["id"],
             updated_at="2026-07-04 00:00:00.000000",
         )
-        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        stale_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert stale_projection_response.status_code == 200
         stale_projection = stale_projection_response.json()["data"]
         assert "control:kill-codex-2" in {control["controlId"] for control in stale_projection["gatedControls"]}
@@ -3645,7 +3666,7 @@ def test_pipeline_dashboard_projection_projects_gated_controls_as_metadata_only(
         )
         assert stale_response.status_code == 200
         _update_candidate_fixture(stale_db_path, stale_response.json()["data"]["id"], updated_at="2026-07-04 00:00:00.000000")
-        stale_projection_response = client.get("/pipeline-control-plane/projection")
+        stale_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert stale_projection_response.status_code == 200
         stale_projection = stale_projection_response.json()["data"]
         assert stale_projection["sourceLabel"] == "stale"
@@ -3672,7 +3693,7 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
         assert create_response.status_code == 200
         candidate_id = create_response.json()["data"]["id"]
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         assert projection["sourceLabel"] == "live"
@@ -3695,6 +3716,10 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
                 "unblocker": "unknown",
                 "readyToTest": None,
                 "evidenceRefs": [],
+                "workItemId": None,
+                "queueLease": None,
+                "executionAttempts": [],
+                "correlationIds": [],
                 "updatedAt": create_response.json()["data"]["updatedAt"],
                 "metadataOnly": True,
             }
@@ -3706,18 +3731,17 @@ def test_pipeline_dashboard_projection_includes_existing_backend_work_packets(tm
         assert projection["selectedPacketDetails"][0]["recentTransitionEventRefs"] == []
         assert projection["selectedPacketDetails"][0]["latestMovementSummary"] is None
         assert projection["selectedPacketDetails"][0]["canSatisfyLiveMovementProof"] is False
-        assert projection["sourceStates"] == [
-            {
-                "sourceId": f"candidate_work:{candidate_id}",
-                "sourceRef": f"candidate_work:{candidate_id}",
-                "sourceKind": "candidate_work",
-                "state": "healthy",
-                "summary": "Candidate Work: Legacy backend packet",
-                "evidenceRefs": [],
-                "updatedAt": create_response.json()["data"]["updatedAt"],
-                "metadataOnly": True,
-            }
-        ]
+        source_state = next(
+            item for item in projection["sourceStates"]
+            if item["sourceId"] == f"candidate_work:{candidate_id}"
+        )
+        assert source_state["sourceRef"] == f"candidate_work:{candidate_id}"
+        assert source_state["sourceKind"] == "candidate_work"
+        assert source_state["state"] == "healthy"
+        assert source_state["summary"] == "Candidate work source"
+        assert source_state["evidenceRefs"] == []
+        assert source_state["metadataOnly"] is True
+        assert source_state["updatedAt"]
 
 
 def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_evidence(tmp_path, monkeypatch) -> None:
@@ -3869,12 +3893,17 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
         graph["generatedAt"] = generated_at
         create_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request)
         assert create_response.status_code == 200
-        projection_response = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
+        projection_response = _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET")
         assert projection_response.status_code == 200
         detail = projection_response.json()["data"]["selectedPacketDetails"][0]
-        assert detail["workGraph"] == {**graph, "generatedAt": generated_at.replace("+00:00", "Z")}
-        assert detail["workGraph"]["availability"] == "available"
-        assert detail["workGraph"]["freshnessState"] == "live"
+        work_graph = detail["workGraph"]
+        assert work_graph["schemaVersion"] == "dashboard-canonical-work-graph/v1"
+        assert work_graph["sourceSchemaVersion"] == "parallel-execution-graph-reservation/v1"
+        assert work_graph["packetId"] == packet_id
+        assert work_graph["executionJobId"] == graph["executionJobId"]
+        assert work_graph["reportIdentity"] == graph["reportIdentity"]
+        assert work_graph["availability"] == "available"
+        assert work_graph["freshnessState"] == "live"
         assert "worktree" not in json.dumps(detail["workGraph"]).lower()
         replay_response = _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=request)
         assert replay_response.status_code == 200
@@ -3917,7 +3946,7 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
         }
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=post_transition_refresh).status_code == 200
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=post_transition_refresh).status_code == 200
-        refreshed_detail = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"][0]
+        refreshed_detail = _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"][0]
         assert refreshed_detail["latestTransitionEventRef"] == f"event:{transition.json()['data']['currentEventId']}"
         assert refreshed_detail["canSatisfyLiveMovementProof"] is True
         older_refresh = {
@@ -3952,7 +3981,7 @@ def test_pipeline_dashboard_projects_only_redacted_matching_parallel_work_graph_
             connection.commit()
         malformed_detail = next(
             detail
-            for detail in _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"]
+            for detail in _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"]
             if detail["packetId"] == packet_id
         )
         assert malformed_detail["workGraph"]["availability"] == "unavailable"
@@ -4124,7 +4153,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             "correlationId": "manager-source:review-route-evidence-only-reissue",
         }
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=evidence_only_reissue).status_code == 200
-        projection = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]
+        projection = _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]
         detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet_id)
         assert detail["reviewRoute"] == evidence_only_reissue["reviewRouteEvidence"]
         assert detail["workGraph"]["packetId"] == packet_id
@@ -4139,7 +4168,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
         assert _uds_request(socket_path, "/internal/manager-source-intake/work-packets", payload=refresh_without_review_route).status_code == 200
         cleared_detail = next(
             item
-            for item in _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"]
+            for item in _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"]
             if item["packetId"] == packet_id
         )
         assert cleared_detail["reviewRoute"]["availability"] == "unavailable"
@@ -4163,7 +4192,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             connection.commit()
         stale_detail = next(
             item
-            for item in _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"]
+            for item in _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"]
             if item["packetId"] == packet_id
         )
         assert stale_detail["reviewRoute"]["availability"] == "stale"
@@ -4187,7 +4216,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             connection.commit()
         expired_detail = next(
             item
-            for item in _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"]
+            for item in _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"]
             if item["packetId"] == packet_id
         )
         assert expired_detail["reviewRoute"]["reasonCode"] == "issuance_expired"
@@ -4201,7 +4230,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
             connection.commit()
         unavailable_detail = next(
             item
-            for item in _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"]
+            for item in _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"]
             if item["packetId"] == packet_id
         )
         assert unavailable_detail["reviewRoute"]["availability"] == "unavailable"
@@ -4227,7 +4256,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
                 (unsafe_historical_packet_id, unsafe_historical_packet_id, packet_id),
             )
             connection.commit()
-        unsafe_projection = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
+        unsafe_projection = _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET")
         assert unsafe_projection.status_code == 200
         safe_projection_packet_id = "unavailable:packet:" + hashlib.sha256(unsafe_historical_packet_id.encode("utf8")).hexdigest()
         unsafe_detail = next(
@@ -4244,7 +4273,7 @@ def test_pipeline_dashboard_projects_only_validated_manager_review_route_evidenc
         assert unsafe_detail["actionCapabilities"] == []
         assert unsafe_detail["actionCapabilitiesV1"] == []
         assert unsafe_detail["actionResults"] == []
-        assert unsafe_detail["actionResultsV1"] == []
+        assert "actionResultsV1" not in unsafe_detail
         assert any(
             packet["packetId"] == safe_projection_packet_id
             for packet in unsafe_projection.json()["data"]["workPackets"]
@@ -4320,7 +4349,7 @@ def test_parallel_work_graph_refresh_keeps_newer_concurrent_evidence_current(tmp
                 )
             )
         assert sorted(response.status_code for response in responses) in ([200, 200], [200, 400])
-        detail = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET").json()["data"]["selectedPacketDetails"][0]
+        detail = _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET").json()["data"]["selectedPacketDetails"][0]
         assert detail["workGraph"]["generatedAt"] == newer["parallelWorkGraphEvidence"]["generatedAt"].replace("+00:00", "Z")
         stale = {
             **request,
@@ -4417,7 +4446,7 @@ def test_pipeline_dashboard_projection_blocks_legacy_packets_from_superseded_prd
         assert create_response.status_code == 200
         candidate_id = create_response.json()["data"]["id"]
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"candidate_work:{candidate_id}")
@@ -4496,7 +4525,7 @@ def test_pipeline_dashboard_projection_counts_stale_legacy_queue_state(tmp_path,
             },
         )
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"candidate_work:{candidate_id}")
@@ -4530,7 +4559,7 @@ def test_pipeline_dashboard_projection_bridges_learn_refill_source_states(tmp_pa
                 },
             },
         )
-        refilling_projection_response = client.get("/pipeline-control-plane/projection")
+        refilling_projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert refilling_projection_response.status_code == 200
         refilling_projection = refilling_projection_response.json()["data"]
         refilling_source_states = {source_state["sourceId"]: source_state for source_state in refilling_projection["sourceStates"]}
@@ -4569,7 +4598,7 @@ def test_pipeline_dashboard_projection_bridges_learn_refill_source_states(tmp_pa
             },
         )
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
         source_states = {source_state["sourceId"]: source_state for source_state in projection["sourceStates"]}
@@ -6937,11 +6966,11 @@ def test_pipeline_dashboard_projection_endpoint_projects_live_work_packets(tmp_p
     with _client(tmp_path, monkeypatch, db_name) as client:
         work_item = _create_work_item(client, title="Live projection packet")
 
-        response = client.get("/pipeline-control-plane/projection")
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert response.status_code == 200
         projection = response.json()["data"]
 
-        assert projection["schemaVersion"] == "pipeline-dashboard-projection/v0"
+        assert projection["schemaVersion"] == "dashboard-canonical-operational-projection/v1"
         assert projection["sourceLabel"] == "live"
         assert projection["freshnessState"] == "live"
         assert projection["fixtureMode"]["enabled"] is False
@@ -7628,9 +7657,27 @@ def test_v0_projection_keeps_legacy_runtime_readiness_path_isolated(tmp_path, mo
         monkeypatch.setattr(main.service, "_dashboard_native_runtime_readiness", forbidden_native_readiness)
         monkeypatch.setattr(main.service, "_dashboard_native_routing_preview", forbidden_native_routing)
         monkeypatch.setattr(main.service, "_dashboard_native_lineage", forbidden_native_lineage)
-        response = client.get("/pipeline-control-plane/projection")
-        assert response.status_code == 200
-        assert seen_mutation_access == [True]
+        from supervisor.infrastructure.db.database import SessionLocal
+
+        async def read_v0_projection(*, mutation_access):
+            async with SessionLocal() as session:
+                return await main.service.get_pipeline_dashboard_projection(
+                    session,
+                    mutation_access=mutation_access,
+                )
+
+        projection_with_mutation = asyncio_run(read_v0_projection(mutation_access=True))
+        projection_read_only = asyncio_run(read_v0_projection(mutation_access=False))
+        assert projection_with_mutation.schemaVersion == "pipeline-dashboard-projection/v0"
+        assert projection_read_only.schemaVersion == "pipeline-dashboard-projection/v0"
+        assert seen_mutation_access == [True, False]
+
+
+def test_retired_v0_projection_endpoint_returns_not_found(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "retired-v0-projection-endpoint.db") as client:
+        response = client.get("/pipeline-control-plane/projection", follow_redirects=False)
+        assert response.status_code == 404
+        assert "location" not in {header.lower() for header in response.headers}
 
 
 def test_native_v1_malformed_learn_ready_state_does_not_emit_affirmative_readiness(tmp_path, monkeypatch) -> None:
@@ -8702,15 +8749,20 @@ def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(t
         assert create_response.status_code == 200
         packet = create_response.json()["data"]
 
-        projection_response = client.get("/pipeline-control-plane/projection")
+        projection_response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection_response.status_code == 200
         projection = projection_response.json()["data"]
-        assert projection["runtimeReadiness"]["operationalMode"] == "unavailable"
+        assert projection["runtimeReadiness"]["operationalMode"] == "read_only"
         assert projection["runtimeReadiness"]["capabilityState"] == "unavailable"
-        assert projection["runtimeReadiness"]["readinessState"] == "unavailable"
+        assert projection["runtimeReadiness"]["readinessState"] == "degraded"
+        assert projection["runtimeReadiness"]["typedReason"] == "runtime_unavailable"
         detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet["packetId"])
         assert detail["readyToTest"]["readyId"] == ready_to_test["readyId"]
-        assert any(capability["actionId"] == "mark_tested" and capability["capabilityState"] == "available" for capability in detail["actionCapabilities"])
+        for action_id in ("mark_tested", "request_rework"):
+            capability = next(item for item in detail["actionCapabilities"] if item["actionId"] == action_id)
+            assert capability["capabilityState"] == "unavailable"
+            assert capability["authorityState"] == "blocked"
+            assert capability["typedReason"] == "authenticated_session_required"
 
         action_payload = {
             "actionId": "mark_tested",
@@ -8868,26 +8920,26 @@ def test_operational_authority_matrix_exposes_only_requeue_as_supported(tmp_path
         assert create_response.status_code == 200
         packet = create_response.json()["data"]
 
-        projection = _http_get(base_url, "/pipeline-control-plane/projection").json()["data"]
+        projection = _http_get(base_url, "/pipeline-control-plane/canonical-operational-projection").json()["data"]
         detail = next(item for item in projection["selectedPacketDetails"] if item["packetId"] == packet["packetId"])
         packet_capabilities = {item["actionId"]: item for item in detail["actionCapabilities"]}
         runtime_capabilities = {item["actionId"]: item for item in projection["runtimeReadiness"]["actionCapabilities"]}
 
         requeue_capability = packet_capabilities["requeue"]
-        assert requeue_capability["capabilityState"] == "gated"
-        assert requeue_capability["authorityState"] == "needs_authority_approval"
-        assert requeue_capability["typedReason"] == "blocked_by_approval"
+        assert requeue_capability["capabilityState"] == "unavailable"
+        assert requeue_capability["authorityState"] == "blocked"
+        assert requeue_capability["typedReason"] == "authenticated_session_required"
         assert requeue_capability["targetType"] == "work_packet"
         runtime_requeue_capability = runtime_capabilities["requeue"]
         assert runtime_requeue_capability["capabilityState"] == "unavailable"
         assert runtime_requeue_capability["authorityState"] == "blocked"
-        assert runtime_requeue_capability["typedReason"] == "no_eligible_work"
+        assert runtime_requeue_capability["typedReason"] == "authenticated_session_required"
         assert runtime_requeue_capability["targetId"] is None
         for action_id in ("mark_tested", "request_rework"):
             capability = packet_capabilities[action_id]
-            assert capability["capabilityState"] == "available"
-            assert capability["authorityState"] == "needs_product_approval"
-            assert capability["typedReason"] == "blocked_by_approval"
+            assert capability["capabilityState"] == "unavailable"
+            assert capability["authorityState"] == "blocked"
+            assert capability["typedReason"] == "authenticated_session_required"
 
         for action_id, target_type, capabilities in (
             ("retry_verification", "work_packet", packet_capabilities),
@@ -9329,12 +9381,12 @@ def test_server_owned_local_operator_and_loopback_boundary_reject_spoofing(tmp_p
             assert remote_action_response.status_code == 403
             assert "loopback" in remote_action_response.text
 
-            remote_projection_response = remote_client.get("/pipeline-control-plane/projection")
+            remote_projection_response = remote_client.get("/pipeline-control-plane/canonical-operational-projection")
             assert remote_projection_response.status_code == 200
             remote_projection = remote_projection_response.json()["data"]
             assert remote_projection["runtimeReadiness"]["operationalMode"] == "read_only"
             assert remote_projection["runtimeReadiness"]["typedReason"] == "authenticated_session_required"
-            assert "authenticated server-bound session identity" in remote_projection["runtimeReadiness"]["summary"]
+            assert "Native dashboard projection is read-only" in remote_projection["runtimeReadiness"]["summary"]
             supported_mutating_action_ids = {
                 "mark_tested",
                 "request_rework",
@@ -9800,7 +9852,7 @@ def test_execute_admission_blocks_new_lease_at_review_capacity_and_projects_back
             assert conn.execute("select count(*) from queue_leases where work_item_id = ?", (ready_item["id"],)).fetchone()[0] == 0
             assert conn.execute("select count(*) from execution_attempts where work_item_id = ?", (ready_item["id"],)).fetchone()[0] == 0
 
-        projection = client.get("/pipeline-control-plane/projection").json()["data"]
+        projection = client.get("/pipeline-control-plane/canonical-operational-projection").json()["data"]
         admission = projection["executeAdmission"]
         assert admission == {
             "schemaVersion": "pipeline-execute-admission/v0",
@@ -10016,7 +10068,7 @@ def test_execute_admission_enforces_each_downstream_wip_dimension(
         )
         assert response.status_code == 409
         assert expected_reason in response.text
-        projection = client.get("/pipeline-control-plane/projection").json()["data"]
+        projection = client.get("/pipeline-control-plane/canonical-operational-projection").json()["data"]
         assert projection["executeAdmission"]["typedReason"] == expected_reason
         assert projection["executeAdmission"]["blockingDimensions"] == [dimension]
         with sqlite3.connect(db_path) as conn:

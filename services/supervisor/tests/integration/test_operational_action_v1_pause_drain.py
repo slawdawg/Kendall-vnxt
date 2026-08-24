@@ -200,7 +200,7 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
         assert initial.status_code == 200, initial.text
         assert initial.json()["data"]["mode"] == "running"
         assert initial.json()["data"]["revision"] == 1
-        initial_projection = client.get("/pipeline-control-plane/projection")
+        initial_projection = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert initial_projection.status_code == 200, initial_projection.text
         runtime_capabilities = {
             capability["actionId"]: capability
@@ -208,8 +208,12 @@ def test_pause_and_drain_are_fenced_atomic_preserving_and_legacy_closed(tmp_path
         }
         assert runtime_capabilities["pause"]["sourceMode"] == "supervisor_runtime"
         assert runtime_capabilities["pause"]["targetId"] == "supervisor-runtime"
-        assert runtime_capabilities["pause"]["capabilityState"] == "available"
-        assert runtime_capabilities["drain"]["capabilityState"] == "available"
+        assert runtime_capabilities["pause"]["capabilityState"] == "unavailable"
+        assert runtime_capabilities["pause"]["authorityState"] == "blocked"
+        assert runtime_capabilities["pause"]["typedReason"] == "authenticated_session_required"
+        assert runtime_capabilities["drain"]["capabilityState"] == "unavailable"
+        assert runtime_capabilities["drain"]["authorityState"] == "blocked"
+        assert runtime_capabilities["drain"]["typedReason"] == "authenticated_session_required"
         assert "resume" not in runtime_capabilities
 
         counts = {"activeWorkCount": 1, "activeLeaseCount": 1, "runningAttemptCount": 1}

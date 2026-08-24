@@ -140,7 +140,7 @@ def test_coordination_health_receipt_readback_projects_only_fresh_canonical_evid
         readback = client.get(f"/manager-control-plane/coordination-health-handoffs/{payload['handoffId']}")
         assert readback.status_code == 200, readback.text
         assert readback.json()["data"]["handoffId"] == payload["handoffId"]
-        projection = client.get("/pipeline-control-plane/projection")
+        projection = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection.status_code == 200, projection.text
         assert projection.json()["data"]["coordinationHealth"]["dirtyPreserveCount"] == 3
 
@@ -161,7 +161,7 @@ def test_private_uds_coordination_health_handoff_persists_and_projects(tmp_path,
         assert read_status == 200, read_text
         assert readback["data"]["coordinationHealth"]["freshness"] == "fresh"
 
-        projection_status, projection, projection_text = _uds_request(socket_path, "/pipeline-control-plane/projection", method="GET")
+        projection_status, projection, projection_text = _uds_request(socket_path, "/pipeline-control-plane/canonical-operational-projection", method="GET")
         assert projection_status == 200, projection_text
         assert projection["data"]["coordinationHealth"]["freshness"] == "fresh"
         assert projection["data"]["coordinationHealth"]["dirtyPreserveCount"] == 3
@@ -179,7 +179,7 @@ def test_coordination_health_handoff_rejects_remote_tcp_client(tmp_path, monkeyp
         rejected = client.post("/manager-control-plane/coordination-health-handoffs", json=_payload(observed_at=observed_at))
         assert rejected.status_code == 403
         assert rejected.json()["detail"]["error"]["code"] == "local_operational_boundary_required"
-        assert client.get("/pipeline-control-plane/projection").json()["data"]["coordinationHealth"] is None
+        assert client.get("/pipeline-control-plane/canonical-operational-projection").json()["data"]["coordinationHealth"] is None
 
 
 def test_clientless_operational_transport_requires_lan_private_uds(monkeypatch) -> None:
@@ -204,6 +204,6 @@ def test_coordination_health_projection_fails_closed_when_receipt_is_stale(tmp_p
     with _client(tmp_path, monkeypatch) as client:
         created = client.post("/manager-control-plane/coordination-health-handoffs", json=_payload(observed_at=observed_at))
         assert created.status_code == 200, created.text
-        projection = client.get("/pipeline-control-plane/projection")
+        projection = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert projection.status_code == 200, projection.text
         assert projection.json()["data"]["coordinationHealth"] is None

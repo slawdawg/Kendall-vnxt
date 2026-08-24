@@ -8,7 +8,6 @@ import {
 import type {
   AuthoritativeWorkPacketLifecycleView,
   PipelineCanonicalContractV1,
-  PipelineDashboardProjectionV0,
   PipelineEpic25EvidenceChainReadV0,
   PipelineEpic25EvidenceChainReadV1,
   PipelineProductModeMappingV0,
@@ -18,11 +17,7 @@ import type {
   DashboardCanonicalManagerLaneClarityV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
-import {
-  isDashboardCoordinationHealthInput,
-  isPipelineDashboardProjection,
-  normalizePipelineDashboardProjection,
-} from "./pipeline-supervisor-projection";
+import { isDashboardCoordinationHealthInput } from "./pipeline-supervisor-projection";
 import { requestSupervisorJson, type SupervisorReadOptions } from "./dashboard-supervisor-transport";
 
 function requestJson<T>(path: string, options: SupervisorReadOptions = {}): Promise<T> {
@@ -705,20 +700,10 @@ function isCanonicalWorkItemMemoryReviewUnavailable(error: unknown): boolean {
   );
 }
 
-export async function getPipelineDashboardProjection(): Promise<PipelineDashboardProjectionV0> {
-  const projection = normalizePipelineDashboardProjection(
-    await requestJson<Partial<PipelineDashboardProjectionV0>>("/pipeline-control-plane/projection"),
-  );
-  if (!isPipelineDashboardProjection(projection)) {
-    throw new Error("Invalid projection payload");
-  }
-  return projection;
-}
-
 /**
  * The normal cockpit read uses this separately versioned supervisor boundary.
- * The V0 endpoint remains available only for the explicitly inventoried
- * compatibility consumers while their source-zero retirement proof is pending.
+ * The V0 projection remains an internal compatibility shape only; transport
+ * callers use this native V1 boundary.
  */
 export async function getDashboardCanonicalOperationalProjection(): Promise<DashboardCanonicalOperationalProjectionV1> {
   const projection = await requestJson<unknown>("/pipeline-control-plane/canonical-operational-projection");

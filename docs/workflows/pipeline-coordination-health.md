@@ -96,7 +96,7 @@ command exits nonzero unless Coordination Health is non-null and fresh:
 
 ```bash
 curl --unix-socket "$KENDALL_SUPERVISOR_UDS_PATH" -sS --max-time 10 \
-  http://localhost/pipeline-control-plane/projection \
+  http://localhost/pipeline-control-plane/canonical-operational-projection \
   | jq -e '.data.coordinationHealth | select(. != null and .freshness == "fresh")'
 ```
 

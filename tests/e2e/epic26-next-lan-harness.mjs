@@ -86,7 +86,7 @@ export async function startEpic26NextLanHarness(port = 3103) {
       return json(200, { signedOut: true });
     }
     if (!sessionValid || readCookie(cookie, "kendall_operator_session") !== "harness-session") return json(401, { detail: "Sign-in required." });
-    if (request.url === "/pipeline-control-plane/projection") return json(200, { data: {} });
+    if (request.url === "/pipeline-control-plane/canonical-operational-projection") return json(200, { data: {} });
     if (request.url === "/pipeline-control-plane/work-packets") return json(200, { data: [] });
     if (request.url === "/internal/dashboard/packet-detail/packet-1") return json(200, canonicalPacketDetail("packet-1"));
     return json(404, { detail: "Not found." });

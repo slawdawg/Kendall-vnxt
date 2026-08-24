@@ -22,7 +22,7 @@ const READ_ONLY_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
   /^\/memory-inbox\/projection$/,
   /^\/memory-inbox\/proposals\/[A-Za-z0-9._:%-]+\/revisions\/[1-9][0-9]*\/reader$/,
-  /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
+  /^\/pipeline-control-plane\/(?:canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review))$/,
   LLM_WIKI_ARTIFACT_PATH,
 ];
 const CANONICAL_PACKET_READ_PATH = /^\/pipeline-control-plane\/(?:work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/packet)$/;
@@ -37,7 +37,7 @@ const TEST_VIEWER_READ_PATHS = [
   // Target IDs are decoded exactly once before this check. `%` is excluded so
   // a second decoder in an upstream library can never reinterpret a permitted
   // viewer packet ID as a path separator or dot segment.
-  /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:-]+)?|work-items\/[A-Za-z0-9._:-]+\/packet)$/,
+  /^\/pipeline-control-plane\/(?:canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:-]+)?|work-items\/[A-Za-z0-9._:-]+\/packet)$/,
 ];
 const ALLOWED_SUPERVISOR_PATHS = [
   /^\/memory-inbox\/shell$/,
@@ -50,7 +50,7 @@ const ALLOWED_SUPERVISOR_PATHS = [
   /^\/audit-events$/,
   /^\/work-items(?:\/[A-Za-z0-9._:%-]+(?:\/[A-Za-z0-9._:%?-]+)*)?$/,
   /^\/candidate-work(?:\/[A-Za-z0-9._:%-]+)?(?:\/promote|\/import-bmad|\/import-obsidian-metadata)?$/,
-  /^\/pipeline-control-plane\/(?:projection|canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
+  /^\/pipeline-control-plane\/(?:canonical-operational-projection|work-packets(?:\/[A-Za-z0-9._:%-]+)?|work-items\/[A-Za-z0-9._:%-]+\/(?:packet|memory-review)|actions(?:\/v1(?:\/capability)?)?|approvals(?:\/v1)?)$/,
   /^\/operator-views(?:\/[A-Za-z0-9._:%-]+(?:\/default)?)?$/,
 ];
 export const MEMORY_INBOX_MUTATION_PATHS = new Set([
@@ -263,8 +263,6 @@ export function createSupervisorProxy({ supervisorUdsPath, expectedOrigin, timeo
           ? redactCanonicalPacketResponse(upstream.body)
           : targetPath === "/pipeline-control-plane/canonical-operational-projection"
             ? redactCanonicalOperationalProjectionResponse(upstream.body)
-            : targetPath === "/pipeline-control-plane/projection"
-              ? redactPipelineProjectionResponse(upstream.body)
             : upstream.body
         : upstream.body;
       const headers = { "cache-control": "no-store", "content-type": upstream.contentType || "application/json; charset=utf-8" };

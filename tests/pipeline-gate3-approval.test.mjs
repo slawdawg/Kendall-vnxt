@@ -78,9 +78,22 @@ test("dashboard supervisor client performs approval then apply with server event
       }
       if (specifier === "./pipeline-supervisor-runtime") {
         return {
-          getPipelineDashboardProjection: async () => { throw new Error("unexpected projection read in approval proof"); },
+          getDashboardCanonicalOperationalProjection: async () => { throw new Error("unexpected projection read in approval proof"); },
           getWorkPacket: async () => { throw new Error("unexpected packet read in approval proof"); },
           getWorkPackets: async () => { throw new Error("unexpected packet list read in approval proof"); },
+        };
+      }
+      if (specifier === "./pipeline-supervisor-projection") {
+        return {
+          isPipelineDashboardProjection: () => false,
+          normalizePipelineDashboardProjection: (value) => value,
+        };
+      }
+      if (specifier === "./dashboard-supervisor-transport") {
+        return {
+          getSupervisorBaseUrl: () => "http://supervisor.test",
+          requestSupervisorMutation: (path, options) => context.fetch(`http://supervisor.test${path}`, options),
+          requestSupervisorJson: (path, options) => context.fetch(`http://supervisor.test${path}`, options),
         };
       }
       throw new Error(`Unexpected dashboard supervisor import: ${specifier}`);
