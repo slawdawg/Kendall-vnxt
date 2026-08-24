@@ -479,6 +479,11 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
+    PipelineActiveManagerLaneClarityGoalV0View,
+    PipelineActiveManagerLaneClarityCriterionV0View,
+    PipelineActiveManagerLaneClarityCanonicalStateV0View,
+    PipelineActiveManagerLaneClarityNextGateV0View,
+    PipelineActiveManagerLaneClarityPostureV0View,
     PipelineActiveManagerLaneClarityV0View,
     PipelineCoordinationHealthV0View,
     PipelineBackendReachabilityV0View,
@@ -593,6 +598,9 @@ from supervisor.api.schemas import (
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
+    _is_safe_pipeline_control_text,
+    _is_safe_pipeline_evidence_ref,
+    _is_safe_review_route_evidence_ref,
     _is_safe_review_route_packet_id,
     _validate_authoritative_metadata_text,
     _validate_metadata_tree,
@@ -725,6 +733,84 @@ from supervisor.infrastructure.db.models import (
     WorkflowEvent,
 )
 from supervisor.infrastructure.streaming.bus import EventBus
+
+
+@dataclass(frozen=True)
+class _DashboardOperationalProjectionSnapshot:
+    generated_at: datetime
+    stale_after_seconds: int
+    active_manager_lane_clarity: PipelineActiveManagerLaneClarityV0View | None
+    coordination_health: PipelineCoordinationHealthV0View | None
+    authoritative_packets: list[AuthoritativeWorkPacketLifecycleView]
+    candidates: list[CandidateWork]
+    work_items: list[WorkItem]
+    workflow_events_by_work_item_id: dict[str, list[WorkflowEvent]]
+    execution_attempts_by_work_item_id: dict[str, list[ExecutionAttemptView]]
+    memory_proposals_by_work_item_id: dict[str, list[MemoryProposal]]
+    routing_previews_by_work_item_id: dict[str, RoutingPreviewView]
+    lineage_by_work_item_id: dict[str, dict[str, object]]
+    work_graph_by_packet: dict[str, PipelineWorkGraphEvidenceV0View]
+    review_route_by_packet: dict[str, PipelineReviewRouteEvidenceV0View]
+    source_state_only_records: list[PipelineSourceStateV0View]
+    worker_summary_records: list[dict[str, object]]
+    gated_controls: list[PipelineGatedControlV0View]
+    runtime_readiness: PipelineRuntimeReadinessV0View
+    v1_packet_capabilities_by_packet: dict[str, list[OperationalActionCapabilityV1]]
+    execute_admission: PipelineExecuteAdmissionV0View
+    action_results_by_packet: dict[str, list[OperationalActionRecord]]
+    action_results_v1_by_packet: dict[str, list[OperationalActionRecord]]
+
+
+@dataclass(frozen=True)
+class _DashboardOperationalWorkItemRecord:
+    packet_id: str
+    title: str
+    current_stage: str
+    status: str
+    source_refs: list[SourceRefV0View]
+    evidence_refs: list[EvidenceRefV0View]
+    learn_refill: object | None
+    updated_at: datetime
+    work_item_id: str | None
+    authoritative_packet_id: str | None
+    queue_lease: PipelineQueueLeaseV0View | None
+    execution_attempts: list[PipelineExecutionAttemptLineageV0View]
+    correlation_ids: list[str]
+
+
+@dataclass(frozen=True)
+class _DashboardNativeSourceFact:
+    ref_id: str
+    source_type: str
+    label: str
+    path_or_url: str | None
+    freshness: str
+    access_state: str
+    canonical: bool
+    blocked_reason: str | None
+
+
+@dataclass(frozen=True)
+class _DashboardNativeEvidenceFact:
+    ref_id: str
+    evidence_type: str
+    label: str
+
+
+@dataclass(frozen=True)
+class _DashboardNativeLearnFact:
+    state: str
+    label: str
+    explanation: str
+    source_refs: list[str]
+    evidence_refs: list[str]
+    source_exhausted: bool
+    source_exhaustion_summary: str
+    ready_id: str | None
+    ready_summary: str | None
+    testable_surface: str | None
+    verification_refs: list[str]
+    next_safe_action: str
 
 
 class MemoryProposalRevisionConflict(ValueError):
@@ -5406,6 +5492,154 @@ class SupervisorService:
             rawPayloadRetained=False,
         )
 
+    async def _dashboard_native_runtime_control_snapshot(
+        self,
+        session: AsyncSession,
+    ) -> tuple[SupervisorControl | None, dict[str, int] | None]:
+        """Read runtime state for V1 projection without creating control or locking admission."""
+        control = await session.get(SupervisorControl, 1)
+        if control is None:
+            return None, None
+        active_work = await session.scalar(
+            select(func.count(WorkItem.id)).where(WorkItem.state.in_(ACTIVE_STATES))
+        )
+        active_leases = await session.scalar(
+            select(func.count(QueueLease.id)).where(QueueLease.active.is_(True))
+        )
+        running_attempts = await session.scalar(
+            select(func.count(ExecutionAttempt.id)).where(
+                ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES)
+            )
+        )
+        return control, {
+            "activeWorkCount": int(active_work or 0),
+            "activeLeaseCount": int(active_leases or 0),
+            "runningAttemptCount": int(running_attempts or 0),
+        }
+
+    async def _dashboard_native_runtime_operational_capabilities_v1(
+        self,
+        session: AsyncSession,
+        control: SupervisorControl | None,
+        counts: dict[str, int] | None,
+    ) -> list[OperationalActionCapabilityV1]:
+        if control is None or counts is None:
+            return []
+        contexts: list[tuple[str, OperationalActionContextV1]] = [
+            (
+                "pause",
+                PauseActionContextV1(
+                    kind="pause",
+                    expectedRuntimeMode=control.mode,
+                    expectedRuntimeRevision=control.revision,
+                ),
+            ),
+            (
+                "drain",
+                DrainActionContextV1(
+                    kind="drain",
+                    expectedRuntimeMode=control.mode,
+                    expectedRuntimeRevision=control.revision,
+                    expectedActiveWorkCount=counts["activeWorkCount"],
+                    expectedActiveLeaseCount=counts["activeLeaseCount"],
+                    expectedRunningAttemptCount=counts["runningAttemptCount"],
+                ),
+            ),
+        ]
+        if control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}:
+            contexts.append(
+                (
+                    "resume",
+                    ResumeActionContextV1(
+                        kind="resume",
+                        expectedRuntimeMode=control.mode,
+                        expectedRuntimeRevision=control.revision,
+                    ),
+                )
+            )
+        capabilities: list[OperationalActionCapabilityV1] = []
+        for action_id, context in contexts:
+            request = self._v1_capability_request(
+                action_id,
+                "runtime",
+                "supervisor-runtime",
+                context,
+            )
+            capabilities.append(
+                await self._project_v1_capability(
+                    session,
+                    request,
+                    mutation_access=False,
+                )
+            )
+        return capabilities
+
+    async def _dashboard_native_runtime_readiness(
+        self,
+        session: AsyncSession,
+        generated_at: datetime,
+    ) -> PipelineRuntimeReadinessV0View:
+        """Project bounded runtime readiness without V0 mutation-capable helpers."""
+        control, counts = await self._dashboard_native_runtime_control_snapshot(session)
+        if control is None:
+            return PipelineRuntimeReadinessV0View(
+                readinessState="unavailable",
+                operationalMode="unavailable",
+                freshnessState="live",
+                capabilityState="unavailable",
+                typedReason="runtime_unavailable",
+                checkedAt=generated_at,
+                expiresAt=generated_at + timedelta(minutes=5),
+                summary="Supervisor runtime control is unavailable; native dashboard projection remains read-only.",
+                actionCapabilities=[
+                    self._operational_capability(action_id, mutation_access=False)
+                    for action_id in (
+                        "inspect", "refresh_projection", "mark_tested", "request_rework", "retry_verification",
+                        "requeue", "pause", "drain", "reassign", "reject",
+                    )
+                ],
+                actionCapabilitiesV1=[],
+                evidenceRefs=["runtime:database-reachable"],
+                metadataOnly=True,
+                rawPayloadRetained=False,
+            )
+        paused = control.mode in {RunMode.PAUSED.value, RunMode.DRAINING.value}
+        disabled = control.mode == RunMode.DISABLED.value
+        local_proof_available = (
+            self._local_proof_capability is LOCAL_PROOF_TEST_CAPABILITY
+            and self._local_proof_database_attested()
+            and self._local_proof_settings_safe()
+        )
+        mode = "read_only" if paused or not disabled else "unavailable"
+        readiness_state = "degraded" if not disabled else "unavailable"
+        capability_state = "unavailable"
+        typed_reason = "runtime_unavailable" if disabled or not local_proof_available else "authenticated_session_required"
+        return PipelineRuntimeReadinessV0View(
+            readinessState=readiness_state,
+            operationalMode=mode,
+            freshnessState="live",
+            capabilityState=capability_state,
+            typedReason=typed_reason,
+            checkedAt=generated_at,
+            expiresAt=generated_at + timedelta(minutes=5),
+            summary="Native dashboard projection is read-only; operational mutations require a separate authenticated action path.",
+            actionCapabilities=[
+                self._operational_capability(action_id, mutation_access=False)
+                for action_id in (
+                    "inspect", "refresh_projection", "mark_tested", "request_rework", "retry_verification",
+                    "requeue", "pause", "drain", "reassign", "reject",
+                )
+            ],
+            actionCapabilitiesV1=await self._dashboard_native_runtime_operational_capabilities_v1(
+                session,
+                control,
+                counts,
+            ),
+            evidenceRefs=["runtime:database-reachable", "runtime:local-proof" if local_proof_available else "runtime:read-only"],
+            metadataOnly=True,
+            rawPayloadRetained=False,
+        )
+
     def _operational_action_matches(self, record: OperationalActionRecord, payload: OperationalActionRequest) -> bool:
         return (
             record.action_id == payload.actionId
@@ -9009,6 +9243,355 @@ class SupervisorService:
         except (SQLAlchemyError, ValidationError, ValueError, TypeError):
             return None
 
+    def _dashboard_native_routing_preview(
+        self,
+        item: WorkItem,
+        workflow_events: list[WorkflowEvent],
+        attempts: list[ExecutionAttemptView],
+    ) -> RoutingPreviewView:
+        """Render routing from already-batched work-item inputs without DB access."""
+        recipe = self._execution_recipe_for_item(item)
+        if recipe:
+            audit = self._recipe_gate_audit_view(item, recipe, workflow_events, preview_only=True)
+            profile = self._routing_profile_for_managed_action(item, recipe, audit.nextManagedAction)
+        else:
+            profile = RoutingProfile(
+                work_item_id=item.id,
+                step_id=item.state,
+                task_kind=TaskKind.TASK_CLASSIFICATION,
+                phase=item.state,
+                risk_level=item.risk_level,
+            )
+        task_kind = self._task_kind_from_attempt(attempts[0] if attempts else None)
+        if task_kind:
+            try:
+                profile = replace(profile, task_kind=TaskKind(task_kind))
+            except ValueError:
+                pass
+        decision = RoutingPreviewService().preview(
+            profile,
+            created_at=self._normalize_timestamp(item.updated_at),
+        )
+        return RoutingPreviewView(
+            profile=self._to_routing_profile_view(profile),
+            decision=self._to_routing_decision_view(decision),
+        )
+
+    def _dashboard_native_authoritative_packet_link(self, item: WorkItem) -> str | None:
+        """Return only an unambiguous persisted packet link for native projection."""
+        column_link = item.authoritative_packet_id if isinstance(item.authoritative_packet_id, str) and item.authoritative_packet_id else None
+        if not column_link:
+            return None
+        if not isinstance(item.metadata_json, dict):
+            return None
+        metadata = item.metadata_json
+        if "authoritativePacketId" in metadata:
+            metadata_link = metadata.get("authoritativePacketId")
+            if not isinstance(metadata_link, str) or not metadata_link or metadata_link != column_link:
+                return None
+        return column_link
+
+    async def _dashboard_native_lineage(
+        self,
+        session: AsyncSession,
+        work_item_ids: list[str],
+        workflow_events_by_work_item_id: dict[str, list[WorkflowEvent]],
+        attempts_by_work_item_id: dict[str, list[ExecutionAttemptView]],
+    ) -> dict[str, dict[str, object]]:
+        """Batch the retained V0 lineage fields for native V1 rows."""
+        if not work_item_ids:
+            return {}
+        lease_rows = await session.execute(
+            select(QueueLease)
+            .where(QueueLease.work_item_id.in_(work_item_ids))
+            .order_by(QueueLease.work_item_id.asc(), QueueLease.active.desc(), QueueLease.lease_expires_at.desc())
+        )
+        leases: dict[str, QueueLease] = {}
+        for lease in lease_rows.scalars():
+            leases.setdefault(lease.work_item_id, lease)
+        now = datetime.now(timezone.utc)
+        lineage: dict[str, dict[str, object]] = {}
+        for work_item_id in work_item_ids:
+            safe_work_item_ids = self._dashboard_native_strict_ref_list([work_item_id])
+            if safe_work_item_ids is None or len(safe_work_item_ids) != 1:
+                lineage[work_item_id] = {}
+                continue
+            queue_lease = self._dashboard_native_queue_lease_view(
+                leases.get(work_item_id),
+                expected_work_item_id=safe_work_item_ids[0],
+                now=now,
+            )
+            lineage_attempts: list[PipelineExecutionAttemptLineageV0View] = []
+            for attempt in attempts_by_work_item_id.get(work_item_id, []):
+                attempt_view = self._dashboard_native_execution_attempt_lineage_view(
+                    attempt,
+                    expected_work_item_id=safe_work_item_ids[0],
+                )
+                if attempt_view is not None:
+                    lineage_attempts.append(attempt_view)
+            ordered_events = sorted(
+                workflow_events_by_work_item_id.get(work_item_id, []),
+                key=lambda event: (self._ensure_aware(event.created_at), event.id),
+            )
+            lineage[work_item_id] = {
+                "workItemId": work_item_id,
+                "queueLease": queue_lease,
+                "executionAttempts": lineage_attempts,
+                "correlationIds": self._dashboard_native_safe_correlation_ids(
+                    [event.correlation_id for event in ordered_events if event.correlation_id]
+                ),
+            }
+        return lineage
+
+    def _dashboard_native_queue_lease_view(
+        self,
+        lease: QueueLease | None,
+        *,
+        expected_work_item_id: str,
+        now: datetime,
+    ) -> PipelineQueueLeaseV0View | None:
+        if lease is None:
+            return None
+        try:
+            lease_id = self._dashboard_native_strict_ref_list([lease.id])
+            work_item_id = self._dashboard_native_strict_ref_list([lease.work_item_id])
+            if (
+                lease_id is None
+                or len(lease_id) != 1
+                or work_item_id is None
+                or len(work_item_id) != 1
+                or work_item_id[0] != expected_work_item_id
+                or isinstance(lease.attempt_count, bool)
+                or not isinstance(lease.attempt_count, int)
+                or lease.attempt_count < 0
+                or isinstance(lease.fencing_token, bool)
+                or not isinstance(lease.fencing_token, int)
+                or not isinstance(lease.active, bool)
+            ):
+                return None
+            heartbeat_at = self._ensure_aware(lease.heartbeat_at)
+            lease_expires_at = self._ensure_aware(lease.lease_expires_at)
+            state = (
+                "active"
+                if lease.active and lease_expires_at > now
+                else "expired"
+                if lease_expires_at <= now
+                else "inactive"
+            )
+            return PipelineQueueLeaseV0View(
+                leaseId=lease_id[0],
+                workItemId=work_item_id[0],
+                attemptCount=lease.attempt_count,
+                heartbeatAt=heartbeat_at,
+                leaseExpiresAt=lease_expires_at,
+                fencingToken=lease.fencing_token,
+                active=lease.active,
+                state=state,
+            )
+        except (ValidationError, TypeError, ValueError, AttributeError):
+            return None
+
+    def _dashboard_native_execution_attempt_lineage_view(
+        self,
+        attempt: ExecutionAttemptView,
+        *,
+        expected_work_item_id: str,
+    ) -> PipelineExecutionAttemptLineageV0View | None:
+        try:
+            attempt_id = self._dashboard_native_strict_ref_list([attempt.attemptId])
+            work_item_id = self._dashboard_native_strict_ref_list([attempt.workItemId])
+            lease_ids = None if attempt.leaseId is None else self._dashboard_native_strict_ref_list([attempt.leaseId])
+            route_decision_id = self._dashboard_native_strict_ref_list([attempt.routeDecisionId])
+            if (
+                attempt_id is None
+                or len(attempt_id) != 1
+                or work_item_id is None
+                or len(work_item_id) != 1
+                or work_item_id[0] != expected_work_item_id
+                or (attempt.leaseId is not None and (lease_ids is None or len(lease_ids) != 1))
+                or route_decision_id is None
+                or len(route_decision_id) != 1
+            ):
+                return None
+            worker_id = self._dashboard_native_safe_metadata_text(attempt.workerId, path="execution attempt worker id", max_length=255)
+            lane = self._dashboard_native_safe_metadata_text(attempt.lane, path="execution attempt lane", max_length=120)
+            status = attempt.status.value if isinstance(attempt.status, ExecutionAttemptStatus) else attempt.status
+            if status not in {member.value for member in ExecutionAttemptStatus} or worker_id is None or lane is None:
+                return None
+            raw_event_refs = attempt.eventRefs
+            if not isinstance(raw_event_refs, list) or any(
+                not isinstance(event_ref, dict) or not isinstance(event_ref.get("eventId"), str)
+                for event_ref in raw_event_refs
+            ):
+                return None
+            event_refs = self._dashboard_native_strict_ref_list(
+                [f"event:{event_ref['eventId']}" for event_ref in raw_event_refs]
+            )
+            artifact_refs = self._dashboard_native_strict_ref_list(
+                [f"artifact:attempt:{attempt.attemptId}:{index}" for index, _ in enumerate(attempt.artifactRefs)]
+            )
+            evidence_refs = self._dashboard_native_strict_ref_list([f"attempt:{attempt.attemptId}"])
+            if event_refs is None or artifact_refs is None or evidence_refs is None:
+                return None
+            evidence_refs.extend(artifact_refs)
+            return PipelineExecutionAttemptLineageV0View(
+                attemptId=attempt_id[0],
+                workItemId=work_item_id[0],
+                leaseId=lease_ids[0] if lease_ids else None,
+                fencingToken=attempt.fencingToken,
+                routeDecisionId=route_decision_id[0],
+                workerId=worker_id,
+                lane=lane,
+                status=status,
+                eventRefs=event_refs,
+                evidenceRefs=list(dict.fromkeys(evidence_refs)),
+            )
+        except (ValidationError, TypeError, ValueError, AttributeError):
+            return None
+
+    async def _build_dashboard_operational_projection_snapshot(
+        self,
+        session: AsyncSession,
+        *,
+        mutation_access: bool,
+        native_projection: bool = False,
+    ) -> _DashboardOperationalProjectionSnapshot:
+        """Read shared supervisor evidence once; renderers own their DTO boundaries."""
+        generated_at = datetime.now(timezone.utc)
+        stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
+        active_manager_lane_clarity = await self._pipeline_active_manager_lane_clarity(
+            session, generated_at, stale_after_seconds
+        )
+        coordination_health = await self._pipeline_coordination_health(session, generated_at, stale_after_seconds)
+        authoritative_packets = await self.list_authoritative_work_packets(session)
+        candidates = await self.list_candidate_work(session)
+        work_items = await self.list_work_items(session)
+        workflow_events_by_work_item_id = await self._workflow_events_by_work_item_id(
+            session, [item.id for item in work_items]
+        )
+        work_item_ids = [item.id for item in work_items]
+        execution_attempts_by_work_item_id: dict[str, list[ExecutionAttemptView]] = {
+            work_item_id: [] for work_item_id in work_item_ids
+        }
+        if work_item_ids:
+            attempt_rows = await session.execute(
+                select(ExecutionAttempt)
+                .where(ExecutionAttempt.work_item_id.in_(work_item_ids))
+                .order_by(ExecutionAttempt.work_item_id.asc(), ExecutionAttempt.created_at.desc())
+            )
+            for attempt in attempt_rows.scalars():
+                execution_attempts_by_work_item_id.setdefault(attempt.work_item_id, []).append(
+                    self._to_execution_attempt_view(attempt)
+                )
+        memory_proposals_by_work_item_id: dict[str, list[MemoryProposal]] = {
+            work_item_id: [] for work_item_id in work_item_ids
+        }
+        if work_item_ids:
+            proposal_rows = await session.execute(
+                select(MemoryProposal)
+                .where(MemoryProposal.work_item_id.in_(work_item_ids))
+                .order_by(MemoryProposal.work_item_id.asc(), MemoryProposal.created_at.asc())
+            )
+            for proposal in proposal_rows.scalars():
+                memory_proposals_by_work_item_id.setdefault(proposal.work_item_id, []).append(proposal)
+        routing_previews_by_work_item_id = (
+            {
+                item.id: self._dashboard_native_routing_preview(
+                    item,
+                    workflow_events_by_work_item_id.get(item.id, []),
+                    execution_attempts_by_work_item_id.get(item.id, []),
+                )
+                for item in work_items
+            }
+            if native_projection
+            else {}
+        )
+        lineage_by_work_item_id = (
+            await self._dashboard_native_lineage(
+                session,
+                work_item_ids,
+                workflow_events_by_work_item_id,
+                execution_attempts_by_work_item_id,
+            )
+            if native_projection
+            else {}
+        )
+        work_graph_by_packet = await self._pipeline_work_graph_by_packet(
+            session,
+            authoritative_packets,
+            generated_at=generated_at,
+            stale_after_seconds=stale_after_seconds,
+        )
+        review_route_by_packet = await self._pipeline_review_route_by_packet(session, authoritative_packets)
+        source_state_only_records = self._pipeline_projection_source_state_only_records(
+            candidates,
+            native_projection=native_projection,
+        )
+        worker_summary_records = self._pipeline_projection_worker_summary_records(
+            candidates,
+            native_projection=native_projection,
+        )
+        gated_controls = self._pipeline_projection_gated_controls(
+            candidates,
+            native_projection=native_projection,
+        )
+        if native_projection:
+            runtime_readiness = await self._dashboard_native_runtime_readiness(
+                session,
+                generated_at,
+            )
+        else:
+            runtime_readiness = await self._pipeline_runtime_readiness(
+                session,
+                generated_at,
+                mutation_access=mutation_access,
+            )
+        v1_packet_capabilities_by_packet = {
+            packet.packetId: await self._packet_operational_capabilities_v1(
+                session,
+                packet.packetId,
+                mutation_access=False if native_projection else mutation_access,
+            )
+            for packet in authoritative_packets
+        }
+        execute_admission = await self._evaluate_execute_admission(session)
+        action_result_rows = await session.execute(
+            select(OperationalActionRecord).order_by(OperationalActionRecord.created_at.asc())
+        )
+        action_results_by_packet: dict[str, list[OperationalActionRecord]] = {}
+        action_results_v1_by_packet: dict[str, list[OperationalActionRecord]] = {}
+        for action_record in action_result_rows.scalars():
+            if not action_record.packet_id:
+                continue
+            if action_record.schema_version == "pipeline-operational-action/v0":
+                action_results_by_packet.setdefault(action_record.packet_id, []).append(action_record)
+            elif action_record.schema_version == "pipeline-operational-action/v1":
+                action_results_v1_by_packet.setdefault(action_record.packet_id, []).append(action_record)
+        return _DashboardOperationalProjectionSnapshot(
+            generated_at=generated_at,
+            stale_after_seconds=stale_after_seconds,
+            active_manager_lane_clarity=active_manager_lane_clarity,
+            coordination_health=coordination_health,
+            authoritative_packets=authoritative_packets,
+            candidates=candidates,
+            work_items=work_items,
+            workflow_events_by_work_item_id=workflow_events_by_work_item_id,
+            execution_attempts_by_work_item_id=execution_attempts_by_work_item_id,
+            memory_proposals_by_work_item_id=memory_proposals_by_work_item_id,
+            routing_previews_by_work_item_id=routing_previews_by_work_item_id,
+            lineage_by_work_item_id=lineage_by_work_item_id,
+            work_graph_by_packet=work_graph_by_packet,
+            review_route_by_packet=review_route_by_packet,
+            source_state_only_records=source_state_only_records,
+            worker_summary_records=worker_summary_records,
+            gated_controls=gated_controls,
+            runtime_readiness=runtime_readiness,
+            v1_packet_capabilities_by_packet=v1_packet_capabilities_by_packet,
+            execute_admission=execute_admission,
+            action_results_by_packet=action_results_by_packet,
+            action_results_v1_by_packet=action_results_v1_by_packet,
+        )
+
     async def get_pipeline_dashboard_projection(
         self,
         session: AsyncSession,
@@ -9018,54 +9601,28 @@ class SupervisorService:
         generated_at = datetime.now(timezone.utc)
         stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
         try:
-            active_manager_lane_clarity = await self._pipeline_active_manager_lane_clarity(
-                session, generated_at, stale_after_seconds
-            )
-            coordination_health = await self._pipeline_coordination_health(session, generated_at, stale_after_seconds)
-            authoritative_packets = await self.list_authoritative_work_packets(session)
-            legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
-            legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
-            candidates = await self.list_candidate_work(session)
-            work_graph_by_packet = await self._pipeline_work_graph_by_packet(
+            snapshot = await self._build_dashboard_operational_projection_snapshot(
                 session,
-                authoritative_packets,
-                generated_at=generated_at,
-                stale_after_seconds=stale_after_seconds,
-            )
-            review_route_by_packet = await self._pipeline_review_route_by_packet(
-                session,
-                authoritative_packets,
-            )
-            source_state_only_records = self._pipeline_projection_source_state_only_records(candidates)
-            worker_summary_records = self._pipeline_projection_worker_summary_records(candidates)
-            gated_controls = self._pipeline_projection_gated_controls(candidates)
-            runtime_readiness = await self._pipeline_runtime_readiness(
-                session,
-                generated_at,
                 mutation_access=mutation_access,
             )
-            v1_packet_capabilities_by_packet: dict[str, list[OperationalActionCapabilityV1]] = {
-                packet.packetId: await self._packet_operational_capabilities_v1(
-                    session,
-                    packet.packetId,
-                    mutation_access=mutation_access,
-                )
-                for packet in authoritative_packets
-            }
-            execute_admission = await self._evaluate_execute_admission(session)
-            action_result_rows = await session.execute(
-                select(OperationalActionRecord).order_by(OperationalActionRecord.created_at.asc())
-            )
-            action_results_by_packet: dict[str, list[OperationalActionRecord]] = {}
-            action_results_v1_by_packet: dict[str, list[OperationalActionRecord]] = {}
-            for action_record in action_result_rows.scalars():
-                # P2.1 persists additive v1 results, but the v0 dashboard result
-                # shape cannot represent exact execution-attempt targets. Keep
-                # v1 records out of the legacy projection until P3 cutover.
-                if action_record.packet_id and action_record.schema_version == "pipeline-operational-action/v0":
-                    action_results_by_packet.setdefault(action_record.packet_id, []).append(action_record)
-                elif action_record.packet_id and action_record.schema_version == "pipeline-operational-action/v1":
-                    action_results_v1_by_packet.setdefault(action_record.packet_id, []).append(action_record)
+            generated_at = snapshot.generated_at
+            stale_after_seconds = snapshot.stale_after_seconds
+            active_manager_lane_clarity = snapshot.active_manager_lane_clarity
+            coordination_health = snapshot.coordination_health
+            authoritative_packets = snapshot.authoritative_packets
+            candidates = snapshot.candidates
+            work_graph_by_packet = snapshot.work_graph_by_packet
+            review_route_by_packet = snapshot.review_route_by_packet
+            source_state_only_records = snapshot.source_state_only_records
+            worker_summary_records = snapshot.worker_summary_records
+            gated_controls = snapshot.gated_controls
+            runtime_readiness = snapshot.runtime_readiness
+            v1_packet_capabilities_by_packet = snapshot.v1_packet_capabilities_by_packet
+            execute_admission = snapshot.execute_admission
+            action_results_by_packet = snapshot.action_results_by_packet
+            action_results_v1_by_packet = snapshot.action_results_v1_by_packet
+            legacy_packets = await self.list_work_packets(session, include_authoritative_linked=True)
+            legacy_lineage = await self._pipeline_legacy_lineage(session, legacy_packets)
         except SQLAlchemyError:
             return self._unavailable_pipeline_dashboard_projection(generated_at, stale_after_seconds)
 
@@ -9119,10 +9676,14 @@ class SupervisorService:
             worker_summary_records,
             generated_at=generated_at,
             stale_after_seconds=stale_after_seconds,
+            native_projection=True,
+        )
+        worker_summary = worker_summary.model_copy(
+            update={"evidenceRefs": self._dashboard_native_safe_evidence_refs(worker_summary.evidenceRefs)}
         )
         evidence_refs.extend(worker_summary.evidenceRefs)
         for control in gated_controls:
-            evidence_refs.extend(control.evidenceRefs)
+            evidence_refs.extend(self._dashboard_native_safe_evidence_refs(control.evidenceRefs))
 
         for packet in authoritative_packets:
             projection_packet_id = self._safe_pipeline_projection_packet_id(packet.packetId)
@@ -9589,15 +10150,1406 @@ class SupervisorService:
             evidenceRefs=sorted(set(evidence_refs)),
         )
 
+    async def _dashboard_canonical_operational_projection_native(
+        self,
+        session: AsyncSession,
+        *,
+        mutation_access: bool = True,
+    ) -> DashboardCanonicalOperationalProjectionV1View:
+        """Build the dashboard-owned v1 board directly from the shared snapshot."""
+        generated_at = datetime.now(timezone.utc)
+        stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
+        try:
+            snapshot = await self._build_dashboard_operational_projection_snapshot(
+                session,
+                mutation_access=mutation_access,
+                native_projection=True,
+            )
+            records = self._dashboard_native_work_item_records(snapshot)
+        except (SQLAlchemyError, ValidationError, ValueError, TypeError):
+            return self._unavailable_dashboard_canonical_operational_projection(generated_at, stale_after_seconds)
+
+        authoritative_packets = snapshot.authoritative_packets
+        source_state_only_records = snapshot.source_state_only_records
+        worker_summary_records = snapshot.worker_summary_records
+        gated_controls = snapshot.gated_controls
+        generated_at = snapshot.generated_at
+        stale_after_seconds = snapshot.stale_after_seconds
+        source_label = "live"
+        authoritative_ids = {packet.packetId for packet in authoritative_packets}
+        records = [
+            record
+            for record in records
+            if record.packet_id not in authoritative_ids
+            and record.authoritative_packet_id not in authoritative_ids
+        ]
+        lineage_candidates_by_packet: dict[str, list[dict[str, object]]] = {}
+        for item in snapshot.work_items:
+            authoritative_packet_id = self._dashboard_native_authoritative_packet_link(item)
+            if isinstance(authoritative_packet_id, str) and authoritative_packet_id in authoritative_ids:
+                lineage_candidates_by_packet.setdefault(authoritative_packet_id, []).append(
+                    snapshot.lineage_by_work_item_id.get(item.id, {})
+                )
+        authoritative_lineage_by_packet = {
+            packet_id: candidates[0]
+            for packet_id, candidates in lineage_candidates_by_packet.items()
+            if len(candidates) == 1
+        }
+        source_timestamps = [self._ensure_aware(packet.updatedAt) for packet in authoritative_packets]
+        source_timestamps.extend(self._ensure_aware(record.updated_at) for record in records)
+        source_timestamps.extend(source_state.updatedAt for source_state in source_state_only_records)
+        source_timestamps.extend(record["updated_at"] for record in worker_summary_records)
+        source_timestamps.extend(
+            self._ensure_aware(candidate.updated_at)
+            for candidate in snapshot.candidates
+            if self._candidate_is_pipeline_gated_control_only(candidate)
+            and candidate.status not in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}
+        )
+        source_updated_at = max(source_timestamps, default=generated_at)
+        is_stale = (generated_at - source_updated_at).total_seconds() > stale_after_seconds
+        freshness_state = "stale" if is_stale else "live"
+        source_label = "stale" if is_stale else source_label
+        projected_packet_count = len(authoritative_packets) + len(records)
+        empty_reason = None if projected_packet_count else ("projection_stale" if is_stale else "healthy_empty")
+        stage_counts = {stage: 0 for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE}
+        stage_source_labels = {stage: [] for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE}
+        source_states_by_id: dict[str, PipelineSourceStateV0View] = {}
+        queue_buckets: list[str] = []
+        evidence_refs: list[str] = []
+        for source_state in source_state_only_records:
+            self._upsert_pipeline_source_state(source_states_by_id, source_state)
+            evidence_refs.extend(source_state.evidenceRefs)
+            bucket = self._pipeline_projection_queue_bucket_from_source_state(source_state.state)
+            if bucket:
+                queue_buckets.append(bucket)
+        worker_summary = self._pipeline_projection_worker_summary(
+            worker_summary_records,
+            generated_at=generated_at,
+            stale_after_seconds=stale_after_seconds,
+        )
+        evidence_refs.extend(worker_summary.evidenceRefs)
+        for control in gated_controls:
+            evidence_refs.extend(control.evidenceRefs)
+
+        dashboard_packets: list[DashboardCanonicalOperationalWorkPacketV1View] = []
+        selected_packet_details: list[DashboardCanonicalOperationalSelectedPacketDetailV1View] = []
+        for packet in authoritative_packets:
+            packet_id = self._safe_pipeline_projection_packet_id(packet.packetId)
+            identity_is_safe = packet_id == packet.packetId
+            safe_packet_title = self._dashboard_native_safe_title(
+                packet.title,
+                fallback="Authoritative Work Packet",
+            )
+            safe_operator_test_note = (
+                self._dashboard_native_safe_title(packet.operatorTestNote, fallback="")
+                if packet.operatorTestNote
+                else None
+            ) or None
+            safe_lineage_kind = (
+                packet.lineageKind
+                if packet.lineageKind in {"root", "split", "rework", "remediation", "recombination", "delivery_failure"}
+                else "root"
+            )
+            safe_source_ref = self._dashboard_native_source_ref(packet.sourceRef)
+            ready_to_test = self._dashboard_native_ready_to_test(packet.readyToTest)
+            packet_evidence = self._dashboard_native_safe_evidence_refs(
+                [
+                    *[event_ref for event in packet.history for event_ref in event.evidenceRefs],
+                    *(ready_to_test.evidenceRefs if ready_to_test else []),
+                ]
+            )
+            evidence_refs.extend(packet_evidence)
+            lifecycle_events = [
+                event
+                for event in packet.history
+                if event.eventType in {"packet.created", "packet.stage_transitioned", "packet.operational_action_applied"}
+            ]
+            transitions = [
+                event
+                for event in lifecycle_events
+                if event.eventType == "packet.stage_transitioned" and event.previousStage != event.targetStage
+            ]
+            current_authoritative_event = self._dashboard_native_validated_current_event(packet)
+            latest_movement = (
+                next((event for event in reversed(transitions) if event.targetStage == packet.currentStage), None)
+                if current_authoritative_event
+                else None
+            )
+            latest_transition_ref = self._dashboard_native_safe_event_ref(
+                latest_movement.eventId if latest_movement else None
+            )
+            if latest_movement is not None and latest_transition_ref is None:
+                latest_movement = None
+            recent_transition_refs = [
+                event_ref
+                for event in transitions[-5:]
+                for event_ref in [self._dashboard_native_safe_event_ref(event.eventId)]
+                if event_ref is not None
+            ]
+            packet_source_label = self._pipeline_projection_packet_source_label(
+                generated_at,
+                self._ensure_aware(packet.updatedAt),
+                stale_after_seconds,
+                source_label,
+                packet.status,
+            )
+            planning_authority = self._planning_source_authority(safe_source_ref.pathOrUrl)
+            blocker = "Packet status is blocked." if packet.status == "blocked" else None
+            if packet.status == "failed":
+                blocker = "Packet status is failed."
+            if planning_authority["status"] == "superseded":
+                packet_source_label = "stale"
+                blocker = f"Packet source PRD is superseded by {planning_authority['superseded_by']}; hold downstream work until the source is inspected."
+            elif packet.currentStage == "needs_approval" and packet.status == "blocked":
+                blocker = "Operator approval is required before this packet can advance."
+            self._upsert_pipeline_source_state(
+                source_states_by_id,
+                PipelineSourceStateV0View(
+                    sourceId=safe_source_ref.refId,
+                    sourceRef=safe_source_ref.refId,
+                    sourceKind=self._pipeline_projection_source_kind(safe_source_ref.sourceType),
+                    state="stale" if planning_authority["status"] == "superseded" else "healthy",
+                    summary=(
+                        f"Source PRD is superseded by {planning_authority['superseded_by']}."
+                        if planning_authority["status"] == "superseded"
+                        else "Source is available for pipeline execution-loop planning."
+                    ),
+                    evidenceRefs=packet_evidence,
+                    updatedAt=packet.updatedAt,
+                    metadataOnly=True,
+                ),
+            )
+            stage_counts[packet.currentStage] = stage_counts.get(packet.currentStage, 0) + 1
+            stage_source_labels.setdefault(packet.currentStage, []).append(packet_source_label)
+            queue_buckets.append(
+                self._pipeline_projection_queue_bucket(
+                    current_stage=packet.currentStage,
+                    status=packet.status,
+                    packet_source_label=packet_source_label,
+                    source_states=["stale" if planning_authority["status"] == "superseded" else "healthy"],
+                )
+            )
+            work_graph = self._dashboard_canonical_work_graph_v1(
+                snapshot.work_graph_by_packet.get(packet.packetId, self._unavailable_pipeline_work_graph(packet.packetId))
+            )
+            review_route = self._dashboard_native_review_route_for_packet(snapshot.review_route_by_packet, packet.packetId)
+            dashboard_packets.append(
+                DashboardCanonicalOperationalWorkPacketV1View(
+                    packetId=packet_id,
+                    title=safe_packet_title,
+                    currentStage=packet.currentStage,
+                    status=packet.status,
+                    truthLabel=packet_source_label,
+                    sourceRef=safe_source_ref,
+                    blocker=blocker,
+                    nextAction=self._pipeline_projection_next_action(packet.currentStage, packet.status),
+                    unblocker=self._pipeline_projection_packet_unblocker(packet.currentStage, packet.status),
+                    readyToTest=ready_to_test,
+                    evidenceRefs=packet_evidence,
+                    workItemId=authoritative_lineage_by_packet.get(packet.packetId, {}).get("workItemId"),
+                    queueLease=authoritative_lineage_by_packet.get(packet.packetId, {}).get("queueLease"),
+                    executionAttempts=list(authoritative_lineage_by_packet.get(packet.packetId, {}).get("executionAttempts", [])),
+                    correlationIds=self._dashboard_native_safe_correlation_ids(
+                        authoritative_lineage_by_packet.get(packet.packetId, {}).get("correlationIds", [])
+                    ),
+                    updatedAt=packet.updatedAt,
+                    metadataOnly=True,
+                )
+            )
+            can_satisfy_live_movement_proof = (
+                packet_source_label == "live"
+                and packet.status in {"active", "waiting", "blocked"}
+                and packet.currentStage != "learn"
+                and current_authoritative_event is not None
+                and latest_movement is not None
+                and latest_transition_ref is not None
+            )
+            selected_packet_details.append(
+                DashboardCanonicalOperationalSelectedPacketDetailV1View(
+                    packetId=packet_id,
+                    sourceRefs=[safe_source_ref],
+                    evidenceRefs=packet_evidence,
+                    currentStage=packet.currentStage,
+                    status=packet.status,
+                    truthLabel=packet_source_label,
+                    blocker=blocker,
+                    nextAction=self._pipeline_projection_next_action(packet.currentStage, packet.status),
+                    unblocker=self._pipeline_projection_packet_unblocker(packet.currentStage, packet.status),
+                    readyToTest=ready_to_test,
+                    latestTransitionEventRef=latest_transition_ref,
+                    recentTransitionEventRefs=recent_transition_refs,
+                    latestMovementSummary=(
+                        self._dashboard_native_safe_metadata_text(
+                            latest_movement.payloadSummary,
+                            path="latest movement summary",
+                        )
+                        if latest_movement
+                        else None
+                    ),
+                    canSatisfyLiveMovementProof=can_satisfy_live_movement_proof,
+                    parentPacketId=self._safe_pipeline_projection_packet_id(packet.parentPacketId) if packet.parentPacketId else None,
+                    lineageKind=safe_lineage_kind,
+                    operatorTestState=packet.operatorTestState or "not_ready",
+                    operatorTestNote=safe_operator_test_note,
+                    actionCapabilities=self._packet_operational_capabilities(packet, mutation_access=False) if identity_is_safe else [],
+                    actionCapabilitiesV1=snapshot.v1_packet_capabilities_by_packet.get(packet.packetId, []) if identity_is_safe else [],
+                    actionResults=[],
+                    reviewRoute=review_route,
+                    workGraph=work_graph,
+                    workItemId=authoritative_lineage_by_packet.get(packet.packetId, {}).get("workItemId"),
+                    queueLease=authoritative_lineage_by_packet.get(packet.packetId, {}).get("queueLease"),
+                    executionAttempts=list(authoritative_lineage_by_packet.get(packet.packetId, {}).get("executionAttempts", [])),
+                    correlationIds=self._dashboard_native_safe_correlation_ids(
+                        authoritative_lineage_by_packet.get(packet.packetId, {}).get("correlationIds", [])
+                    ),
+                    metadataOnly=True,
+                )
+            )
+
+        for record in records:
+            packet_id = self._safe_pipeline_projection_packet_id(record.packet_id)
+            current_stage = self._dashboard_native_stage(record.current_stage)
+            packet_evidence = self._dashboard_native_safe_evidence_refs([ref.refId for ref in record.evidence_refs])
+            updated_at = self._ensure_aware(record.updated_at)
+            packet_source_label = self._pipeline_projection_packet_source_label(
+                generated_at,
+                updated_at,
+                stale_after_seconds,
+                source_label,
+                record.status,
+            )
+            source_refs = list(record.source_refs)
+            blocked_source_ref = next((ref for ref in source_refs if ref.accessState == "blocked" or ref.freshness == "stale"), None)
+            blocker = None
+            if blocked_source_ref:
+                packet_source_label = "stale"
+                blocker = blocked_source_ref.blockedReason or "Packet source is stale or blocked; inspect source before downstream work."
+            legacy_source_states = [self._pipeline_projection_source_state_from_ref(ref) for ref in source_refs]
+            for source_ref in source_refs:
+                self._upsert_pipeline_source_state(
+                    source_states_by_id,
+                    PipelineSourceStateV0View(
+                        sourceId=source_ref.refId,
+                        sourceRef=source_ref.refId,
+                        sourceKind=self._pipeline_projection_source_kind(source_ref.sourceType),
+                        state=self._pipeline_projection_source_state_from_ref(source_ref),
+                        summary=self._projection_safe_lifecycle_summary(
+                            source_ref.blockedReason or source_ref.label or "Source state is projected from backend metadata."
+                        ),
+                        evidenceRefs=packet_evidence,
+                        updatedAt=record.updated_at,
+                        metadataOnly=True,
+                    ),
+                )
+            ready_to_test = (
+                WorkPacketReadyToTestV0View(
+                    readyId=record.learn_refill.ready_id,
+                    userFacingSummary=record.learn_refill.ready_summary or "Completed user-facing work is ready to test.",
+                    testableSurface=record.learn_refill.testable_surface or "user-facing workflow",
+                    verificationRefs=list(record.learn_refill.verification_refs),
+                    evidenceRefs=list(record.learn_refill.evidence_refs),
+                )
+                if record.learn_refill and record.learn_refill.ready_id
+                else None
+            )
+            if record.learn_refill is not None:
+                refill_state = record.learn_refill.state
+                projected_state = {"healthy": "healthy", "source_exhausted": "exhausted", "blocked": "blocked", "refilling": "refilling", "unknown": "unknown"}.get(refill_state, "unknown")
+                legacy_source_states.append(projected_state)
+                refill_evidence = self._dashboard_native_safe_evidence_refs(record.learn_refill.evidence_refs)
+                if projected_state != "exhausted" or refill_evidence:
+                    refill_source_ref_ids = list(
+                        dict.fromkeys(
+                            [
+                                *record.learn_refill.source_refs,
+                                *(source_ref.refId for source_ref in source_refs),
+                                record.packet_id,
+                            ]
+                        )
+                    )
+                    source_refs_by_id = {source_ref.refId: source_ref for source_ref in source_refs}
+                    refill_summary = (
+                        record.learn_refill.source_exhaustion_summary
+                        if projected_state == "exhausted"
+                        else record.learn_refill.explanation
+                    )
+                    for source_ref_id in refill_source_ref_ids:
+                        matching_source_ref = source_refs_by_id.get(source_ref_id)
+                        self._upsert_pipeline_source_state(
+                            source_states_by_id,
+                            PipelineSourceStateV0View(
+                                sourceId=source_ref_id,
+                                sourceRef=source_ref_id,
+                                sourceKind=(
+                                    self._pipeline_projection_source_kind(matching_source_ref.sourceType)
+                                    if matching_source_ref
+                                    else self._pipeline_projection_source_kind_from_ref_id(source_ref_id)
+                                ),
+                                state=projected_state,
+                                summary=self._projection_safe_lifecycle_summary(refill_summary),
+                                evidenceRefs=refill_evidence,
+                                updatedAt=record.updated_at,
+                                metadataOnly=True,
+                            ),
+                        )
+            stage_counts[current_stage] = stage_counts.get(current_stage, 0) + 1
+            stage_source_labels.setdefault(current_stage, []).append(packet_source_label)
+            evidence_refs.extend(packet_evidence)
+            queue_buckets.append(self._pipeline_projection_queue_bucket(
+                current_stage=current_stage,
+                status=record.status,
+                packet_source_label=packet_source_label,
+                source_states=legacy_source_states,
+            ))
+            next_action = self._pipeline_projection_next_action(current_stage, record.status)
+            work_graph = self._dashboard_canonical_work_graph_v1(self._unavailable_pipeline_work_graph(record.packet_id))
+            dashboard_packets.append(DashboardCanonicalOperationalWorkPacketV1View(
+                packetId=packet_id,
+                title=record.title,
+                currentStage=current_stage,
+                status=record.status,
+                truthLabel=packet_source_label,
+                sourceRef=None,
+                blocker=blocker,
+                nextAction=next_action,
+                unblocker="unknown",
+                readyToTest=ready_to_test,
+                evidenceRefs=packet_evidence,
+                workItemId=record.work_item_id,
+                queueLease=record.queue_lease,
+                executionAttempts=list(record.execution_attempts),
+                correlationIds=self._dashboard_native_safe_correlation_ids(record.correlation_ids),
+                updatedAt=updated_at,
+                metadataOnly=True,
+            ))
+            selected_packet_details.append(DashboardCanonicalOperationalSelectedPacketDetailV1View(
+                packetId=packet_id,
+                sourceRefs=[],
+                evidenceRefs=packet_evidence,
+                currentStage=current_stage,
+                status=record.status,
+                truthLabel=packet_source_label,
+                blocker=blocker,
+                nextAction=next_action,
+                unblocker="unknown",
+                readyToTest=ready_to_test,
+                reviewRoute=self._unavailable_pipeline_review_route(record.packet_id),
+                workGraph=work_graph,
+                workItemId=record.work_item_id,
+                queueLease=record.queue_lease,
+                executionAttempts=list(record.execution_attempts),
+                correlationIds=self._dashboard_native_safe_correlation_ids(record.correlation_ids),
+                metadataOnly=True,
+            ))
+
+        stage_summaries = [
+            PipelineStageSummaryV0View(
+                stage=stage,
+                label=AUTHORITATIVE_PACKET_STAGE_LABELS[stage],
+                packetCount=stage_counts.get(stage, 0),
+                sourceLabel=self._pipeline_projection_stage_source_label(stage_source_labels.get(stage, []), source_label),
+                freshnessState=self._pipeline_projection_stage_freshness_state(stage_source_labels.get(stage, []), freshness_state),
+                emptyReason=empty_reason if stage_counts.get(stage, 0) == 0 else None,
+            )
+            for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE
+        ]
+        counts = {name: queue_buckets.count(name) for name in ("active", "dispatchable", "blocked", "gated", "closed", "stale", "refilling", "unknown")}
+        source_states = list(source_states_by_id.values())
+        source_state_counts = {name: sum(1 for state in source_states if state.state == name) for name in ("healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown")}
+        inactivity_reason = self._pipeline_projection_inactivity_reason(
+            authoritative_packet_count=projected_packet_count,
+            active_count=counts["active"],
+            dispatchable_count=counts["dispatchable"],
+            blocked_count=counts["blocked"],
+            gated_count=counts["gated"],
+            refilling_count=counts["refilling"],
+            closed_count=counts["closed"],
+            stale_count=counts["stale"],
+            unknown_count=counts["unknown"],
+            empty_reason=empty_reason,
+            is_stale=is_stale,
+            has_exhausted_source=any(state.state == "exhausted" and state.evidenceRefs for state in source_states),
+        )
+        summary_text = (
+            "No backend WorkPackets are present; approved source work is exhausted."
+            if not projected_packet_count and inactivity_reason == "source_exhausted"
+            else "No backend WorkPackets are present."
+            if not projected_packet_count
+            else f"{projected_packet_count} backend WorkPacket(s) projected from supervisor state."
+        )
+        manager_reliability_state = self._pipeline_projection_manager_reliability_state(
+            active_count=counts["active"], dispatchable_count=counts["dispatchable"], blocked_count=counts["blocked"],
+            gated_count=counts["gated"], refilling_count=counts["refilling"], stale_count=counts["stale"],
+            unknown_count=counts["unknown"], inactivity_reason=inactivity_reason, is_stale=is_stale,
+        )
+        return DashboardCanonicalOperationalProjectionV1View(
+            projectionId=f"dashboard-canonical-operational-projection:{generated_at.isoformat()}",
+            generatedAt=generated_at,
+            sourceUpdatedAt=source_updated_at,
+            sourceLabel=source_label,
+            freshnessState=freshness_state,
+            staleAfterSeconds=stale_after_seconds,
+            backendReachability=PipelineBackendReachabilityV0View(state="reachable", checkedAt=generated_at, reason=None, summary="Supervisor projection endpoint is reachable."),
+            fixtureMode=PipelineFixtureModeV0View(enabled=False, reason=None, allowedForEnvironment=False, visibleLabelRequired=True, canSatisfyLiveProof=False),
+            truthSummary=PipelineTruthSummaryV0View(label=source_label, emptyReason=inactivity_reason if not projected_packet_count else empty_reason, backendEmpty=not projected_packet_count, backendUnavailable=False, fixtureBacked=False, stale=is_stale, summary=summary_text),
+            stageSummaries=stage_summaries,
+            sourceStates=source_states,
+            workPackets=dashboard_packets,
+            selectedPacketDetails=selected_packet_details,
+            managerSummary=PipelineManagerSummaryV0View(
+                stateSource="supervisor_projection", reliabilityState=manager_reliability_state, freshnessState=freshness_state,
+                activeLeaseCount=None, activeWorkerCount=None, warmWorkerCount=None,
+                blockedQueueCount=counts["blocked"], dispatchableQueueCount=counts["dispatchable"], closedQueueCount=counts["closed"],
+                healthySourceCount=source_state_counts["healthy"], exhaustedSourceCount=source_state_counts["exhausted"], blockedSourceCount=source_state_counts["blocked"],
+                gatedSourceCount=source_state_counts["gated"], staleSourceCount=source_state_counts["stale"], unavailableSourceCount=source_state_counts["unavailable"],
+                refillingSourceCount=source_state_counts["refilling"], unknownSourceCount=source_state_counts["unknown"],
+                sourceExhausted=inactivity_reason == "source_exhausted", inactivityReason=inactivity_reason,
+                evidenceRefs=sorted(set(self._dashboard_native_safe_evidence_refs(evidence_refs))),
+                summary=f"Manager runtime lease and worker counts are not connected; queue counts are projected from {projected_packet_count} backend WorkPacket(s).",
+                metadataOnly=True,
+            ),
+            activeManagerLaneClarity=self._dashboard_canonical_manager_lane_clarity_v1(snapshot.active_manager_lane_clarity),
+            coordinationHealth=self._dashboard_native_coordination_health(snapshot.coordination_health),
+            workerSummary=worker_summary,
+            reliabilityProblems=self._pipeline_projection_reliability_problems(source_label=source_label, freshness_state=freshness_state, dispatchable_count=counts["dispatchable"], active_count=counts["active"], gated_count=counts["gated"], blocked_count=counts["blocked"], inactivity_reason=inactivity_reason, manager_active_count=None, worker_summary=worker_summary),
+            gatedControls=gated_controls,
+            runtimeReadiness=snapshot.runtime_readiness,
+            actionCapabilities=snapshot.runtime_readiness.actionCapabilities,
+            actionCapabilitiesV1=snapshot.runtime_readiness.actionCapabilitiesV1,
+            executeAdmission=snapshot.execute_admission,
+            queueSummary=PipelineQueueSummaryV0View(activeCount=counts["active"], dispatchableCount=counts["dispatchable"], blockedCount=counts["blocked"], gatedCount=counts["gated"], closedCount=counts["closed"], staleCount=counts["stale"], refillingCount=counts["refilling"], unknownCount=counts["unknown"], emptyReason=inactivity_reason if not counts["dispatchable"] else None, sourceExhausted=inactivity_reason == "source_exhausted", summary=summary_text),
+            evidenceRefs=sorted(set(self._dashboard_native_safe_evidence_refs(evidence_refs))),
+        )
+
     async def get_dashboard_canonical_operational_projection(
         self,
         session: AsyncSession,
         *,
         mutation_access: bool = True,
     ) -> DashboardCanonicalOperationalProjectionV1View:
-        """Reconstruct the dashboard-owned v1 board read without relabelling V0 rows."""
-        projection = await self.get_pipeline_dashboard_projection(session, mutation_access=mutation_access)
-        return self._dashboard_canonical_operational_projection_from_v0(projection)
+        """Return the native projection or a truthful unavailable fallback."""
+        generated_at = datetime.now(timezone.utc)
+        stale_after_seconds = PIPELINE_DASHBOARD_STALE_AFTER_SECONDS
+        try:
+            return await self._dashboard_canonical_operational_projection_native(
+                session,
+                mutation_access=mutation_access,
+            )
+        except (SQLAlchemyError, ValidationError, ValueError, TypeError):
+            return self._unavailable_dashboard_canonical_operational_projection(generated_at, stale_after_seconds)
+
+    def _dashboard_canonical_work_graph_v1(self, work_graph: PipelineWorkGraphEvidenceV0View) -> DashboardCanonicalWorkGraphEvidenceV1View:
+        try:
+            raw = work_graph.model_dump()
+            packet_ids = self._dashboard_native_strict_ref_list([raw.get("packetId")])
+            execution_job_ids = None if raw.get("executionJobId") is None else self._dashboard_native_strict_ref_list([raw.get("executionJobId")])
+            report_ids = None if raw.get("reportIdentity") is None else self._dashboard_native_strict_ref_list([raw.get("reportIdentity")])
+            evidence_refs = self._dashboard_native_strict_ref_list(raw.get("evidenceRefs"))
+            reason = self._dashboard_native_safe_metadata_text(raw.get("reason"), path="work graph reason")
+            next_safe_action = self._dashboard_native_safe_metadata_text(raw.get("nextSafeAction"), path="work graph next safe action")
+            reservation = raw.get("reservation")
+            capacity = raw.get("capacity")
+            if (
+                packet_ids is None
+                or len(packet_ids) != 1
+                or execution_job_ids is None and raw.get("executionJobId") is not None
+                or report_ids is None and raw.get("reportIdentity") is not None
+                or evidence_refs is None
+                or reason is None
+                or next_safe_action is None
+                or not isinstance(reservation, dict)
+                or not isinstance(capacity, dict)
+            ):
+                raise ValueError("unsafe native work graph metadata")
+            reservation_owner = reservation.get("owner")
+            if reservation_owner is not None:
+                reservation_owner = self._dashboard_native_safe_metadata_text(reservation_owner, path="work graph reservation owner")
+                if reservation_owner is None:
+                    raise ValueError("unsafe native work graph reservation owner")
+            safe_reservation = PipelineWorkGraphReservationV0View(
+                status=reservation["status"],
+                owner=reservation_owner,
+                reasonCode=reservation["reasonCode"],
+            )
+            safe_capacity = PipelineWorkGraphCapacityV0View(
+                posture=capacity["posture"],
+                reasonCode=capacity["reasonCode"],
+            )
+            safe_graph = PipelineWorkGraphEvidenceV0View(
+                packetId=packet_ids[0],
+                executionJobId=execution_job_ids[0] if execution_job_ids else None,
+                reportIdentity=report_ids[0] if report_ids else None,
+                generatedAt=raw.get("generatedAt"),
+                availability=raw["availability"],
+                freshnessState=raw["freshnessState"],
+                waveMembership=raw["waveMembership"],
+                dependencyState=raw["dependencyState"],
+                reservation=safe_reservation,
+                capacity=safe_capacity,
+                reason=reason,
+                nextSafeAction=next_safe_action,
+                evidenceRefs=evidence_refs,
+                metadataOnly=True,
+                rawPayloadRetained=False,
+                retention="metadata_only_evidence_references",
+            )
+            return DashboardCanonicalWorkGraphEvidenceV1View(
+                availability=safe_graph.availability,
+                packetId=safe_graph.packetId,
+                executionJobId=safe_graph.executionJobId,
+                reportIdentity=safe_graph.reportIdentity,
+                generatedAt=safe_graph.generatedAt,
+                freshnessState=safe_graph.freshnessState,
+                waveMembership=safe_graph.waveMembership,
+                dependencyState=safe_graph.dependencyState,
+                reservation=safe_graph.reservation,
+                capacity=safe_graph.capacity,
+                reason=safe_graph.reason,
+                nextSafeAction=safe_graph.nextSafeAction,
+                evidenceRefs=list(safe_graph.evidenceRefs),
+                metadataOnly=True,
+                rawPayloadRetained=False,
+            )
+        except (ValidationError, TypeError, ValueError, AttributeError):
+            fallback_packet_id = work_graph.packetId if isinstance(getattr(work_graph, "packetId", None), str) else "unavailable:packet:invalid"
+            unavailable = self._unavailable_pipeline_work_graph(fallback_packet_id)
+            return DashboardCanonicalWorkGraphEvidenceV1View(
+                availability=unavailable.availability,
+                packetId=unavailable.packetId,
+                executionJobId=None,
+                reportIdentity=None,
+                generatedAt=None,
+                freshnessState="unavailable",
+                waveMembership="unavailable",
+                dependencyState="unavailable",
+                reservation=unavailable.reservation,
+                capacity=unavailable.capacity,
+                reason=unavailable.reason,
+                nextSafeAction=unavailable.nextSafeAction,
+                evidenceRefs=[],
+                metadataOnly=True,
+                rawPayloadRetained=False,
+            )
+
+    def _dashboard_canonical_manager_lane_clarity_v1(self, clarity: PipelineActiveManagerLaneClarityV0View | None) -> DashboardCanonicalManagerLaneClarityV1View | None:
+        if clarity is None:
+            return None
+        try:
+            raw = clarity.model_dump()
+            for identity_field in ("runId", "eventWatermark", "sourceCursor"):
+                identity_refs = self._dashboard_native_strict_ref_list([raw.get(identity_field)])
+                if identity_refs is None or len(identity_refs) != 1:
+                    return None
+            goal = raw.get("goal")
+            if not isinstance(goal, dict):
+                return None
+            goal_summary = self._dashboard_native_safe_metadata_text(goal.get("summary"), path="lane clarity goal summary")
+            goal_source_refs = self._dashboard_native_strict_ref_list([goal.get("sourceRef")])
+            if goal_summary is None or goal_source_refs is None or len(goal_source_refs) != 1:
+                return None
+            criteria: list[PipelineActiveManagerLaneClarityCriterionV0View] = []
+            raw_criteria = raw.get("criteria")
+            if not isinstance(raw_criteria, list) or len(raw_criteria) > 24:
+                return None
+            for raw_criterion in raw_criteria:
+                if not isinstance(raw_criterion, dict):
+                    continue
+                criterion_id = self._dashboard_native_strict_ref_list([raw_criterion.get("criterionId")])
+                summary = self._dashboard_native_safe_metadata_text(raw_criterion.get("summary"), path="lane clarity criterion summary")
+                evidence_refs = self._dashboard_native_strict_ref_list(raw_criterion.get("evidenceRefs"))
+                if (
+                    criterion_id is None
+                    or len(criterion_id) != 1
+                    or summary is None
+                    or raw_criterion.get("disposition") not in {"met", "in_progress", "blocked", "not_assessed"}
+                    or evidence_refs is None
+                    or not evidence_refs
+                    or len(evidence_refs) > 20
+                ):
+                    continue
+                criteria.append(
+                    PipelineActiveManagerLaneClarityCriterionV0View(
+                        criterionId=criterion_id[0],
+                        summary=summary,
+                        disposition=raw_criterion["disposition"],
+                        evidenceRefs=evidence_refs,
+                    )
+                )
+            canonical_state = raw.get("canonicalState")
+            if not isinstance(canonical_state, dict):
+                return None
+            if canonical_state.get("phase") not in {
+                "queued", "leased", "running", "refilling", "completed", "failed", "expired", "blocked",
+                "needs_review", "closed", "manager_only", "unknown", "no_safe_work", "authoritative_backlog_exhausted",
+                "unverified", "simulated",
+            } or canonical_state.get("freshness") not in {"fresh", "stale", "unknown"} or canonical_state.get("evidenceFreshness") not in {"fresh", "stale", "missing", "unknown"}:
+                return None
+            next_gate = raw.get("nextGate")
+            if not isinstance(next_gate, dict):
+                return None
+            next_gate_summary = self._dashboard_native_safe_metadata_text(next_gate.get("summary"), path="lane clarity next gate summary")
+            next_gate_action = self._dashboard_native_safe_metadata_text(next_gate.get("nextSafeAction"), path="lane clarity next safe action")
+            if next_gate_summary is None or next_gate_action is None:
+                return None
+            posture = raw.get("posture")
+            if not isinstance(posture, dict) or posture.get("state") not in {"on_scope", "pivot_required", "not_assessed"}:
+                return None
+            posture_reason = self._dashboard_native_safe_metadata_text(posture.get("reason"), path="lane clarity posture reason")
+            posture_action = self._dashboard_native_safe_metadata_text(posture.get("nextSafeAction"), path="lane clarity posture action")
+            if posture_reason is None or posture_action is None:
+                return None
+            decision_ref = posture.get("decisionRef")
+            if decision_ref is not None:
+                decision_refs = self._dashboard_native_strict_ref_list([decision_ref])
+                if decision_refs is None or len(decision_refs) != 1:
+                    return None
+                decision_ref = decision_refs[0]
+            qualification = posture.get("qualification")
+            if qualification not in {None, "operator_drift_concern", "second_qualified_recovery_detour"}:
+                return None
+            return DashboardCanonicalManagerLaneClarityV1View(
+                goal=PipelineActiveManagerLaneClarityGoalV0View(
+                    summary=goal_summary,
+                    sourceRef=goal_source_refs[0],
+                ),
+                criteria=criteria,
+                canonicalState=PipelineActiveManagerLaneClarityCanonicalStateV0View(**canonical_state),
+                nextGate=PipelineActiveManagerLaneClarityNextGateV0View(
+                    summary=next_gate_summary,
+                    nextSafeAction=next_gate_action,
+                ),
+                posture=PipelineActiveManagerLaneClarityPostureV0View(
+                    state=posture["state"],
+                    reason=posture_reason,
+                    nextSafeAction=posture_action,
+                    decisionRef=decision_ref,
+                    qualification=qualification,
+                ),
+            )
+        except (ValidationError, TypeError, ValueError, AttributeError):
+            return None
+
+    def _dashboard_native_coordination_health(
+        self,
+        health: PipelineCoordinationHealthV0View | None,
+    ) -> PipelineCoordinationHealthV0View | None:
+        if health is None:
+            return None
+        try:
+            raw = health.model_dump()
+            run_ids = self._dashboard_native_strict_ref_list([raw.get("runId")])
+            next_safe_action = self._dashboard_native_safe_metadata_text(raw.get("nextSafeAction"), path="coordination next safe action", max_length=260)
+            evidence_refs = self._dashboard_native_strict_ref_list(raw.get("evidenceRefs"))
+            if run_ids is None or len(run_ids) != 1 or next_safe_action is None or evidence_refs is None or len(evidence_refs) > 8:
+                return None
+            required_ints = ("activeWorkCount", "staleOwnerTargetCount", "staleOwnerProjectedCount", "dirtyPreserveCount")
+            if any(isinstance(raw.get(field), bool) or not isinstance(raw.get(field), int) or raw.get(field) < 0 for field in required_ints):
+                return None
+            if raw.get("schemaVersion") != "manager-coordination-health/v0" or raw.get("source") != "manager_workspace_inventory":
+                return None
+            if raw.get("freshness") not in {"fresh", "unavailable"} or raw.get("availability") not in {"available", "incomplete", "unavailable"}:
+                return None
+            observed_at = self._ensure_aware(raw.get("observedAt"))
+            return PipelineCoordinationHealthV0View(
+                schemaVersion=raw["schemaVersion"],
+                runId=run_ids[0],
+                observedAt=observed_at,
+                source=raw["source"],
+                freshness=raw["freshness"],
+                availability=raw["availability"],
+                activeWorkCount=raw["activeWorkCount"],
+                staleOwnerTargetCount=raw["staleOwnerTargetCount"],
+                staleOwnerProjectedCount=raw["staleOwnerProjectedCount"],
+                dirtyPreserveCount=raw["dirtyPreserveCount"],
+                missingWorktreeJournalHold=raw["missingWorktreeJournalHold"],
+                nextSafeAction=next_safe_action,
+                evidenceRefs=evidence_refs,
+                metadataOnly=True,
+                rawPayloadRetained=False,
+            )
+        except (ValidationError, TypeError, ValueError, AttributeError):
+            return None
+
+    def _dashboard_native_packet_id(
+        self,
+        candidate: CandidateWork | None,
+        item: WorkItem | None,
+        *,
+        reserved_packet_ids: set[str] | None = None,
+    ) -> str:
+        if item:
+            packet_id = f"work_item:{item.id}"
+        elif candidate:
+            packet_id = f"candidate_work:{candidate.id}"
+        else:
+            packet_id = "work_packet:unknown"
+        reserved_safe_ids = {
+            self._safe_pipeline_projection_packet_id(value)
+            for value in (reserved_packet_ids or set())
+        }
+        if self._safe_pipeline_projection_packet_id(packet_id) not in reserved_safe_ids:
+            return packet_id
+        suffix = hashlib.sha256(packet_id.encode("utf8")).hexdigest()[:12]
+        disambiguated = f"{packet_id}:projection:{suffix}"
+        counter = 0
+        while self._safe_pipeline_projection_packet_id(disambiguated) in reserved_safe_ids:
+            counter += 1
+            disambiguated = f"{packet_id}:projection:{suffix}:{counter}"
+        return disambiguated
+
+    def _dashboard_native_validated_current_event(
+        self,
+        packet: AuthoritativeWorkPacketLifecycleView,
+    ) -> AuthoritativeWorkPacketLifecycleEventView | None:
+        current_index = next(
+            (index for index, event in enumerate(packet.history) if event.eventId == packet.currentEventId),
+            None,
+        )
+        if current_index is None or current_index != len(packet.history) - 1:
+            return None
+        current_event = packet.history[current_index]
+        if current_event.targetStage != packet.currentStage or current_event.status != packet.status:
+            return None
+        return current_event
+
+    def _dashboard_native_stage(self, stage: str) -> str:
+        if stage == "human_gate":
+            return "needs_approval"
+        if stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE:
+            return stage
+        return "capture"
+
+    def _dashboard_native_safe_evidence_refs(self, refs: object) -> list[str]:
+        if not isinstance(refs, (list, tuple)):
+            return []
+        safe_refs: list[str] = []
+        for ref in refs:
+            if not isinstance(ref, str) or not _is_safe_pipeline_evidence_ref(ref):
+                continue
+            safe_refs.extend(self._projection_safe_lifecycle_refs([ref]))
+        return list(dict.fromkeys(safe_refs))
+
+    def _dashboard_native_safe_verification_refs(self, refs: object) -> list[str]:
+        """Keep bounded verification commands while rejecting unsafe metadata."""
+        if not isinstance(refs, (list, tuple)):
+            return []
+        safe_refs: list[str] = []
+        for ref in self._projection_safe_lifecycle_refs([value for value in refs if isinstance(value, str)]):
+            try:
+                safe_refs.append(_validate_authoritative_metadata_text(ref, path="verification ref"))
+            except ValueError:
+                continue
+        return list(dict.fromkeys(safe_refs))
+
+    def _dashboard_native_safe_event_ref(self, event_id: object) -> str | None:
+        refs = self._dashboard_native_safe_evidence_refs(
+            [f"event:{event_id}"] if isinstance(event_id, str) and event_id else []
+        )
+        return refs[0] if refs else None
+
+    def _dashboard_native_safe_correlation_ids(self, correlation_ids: object) -> list[str]:
+        return self._dashboard_native_safe_evidence_refs(correlation_ids)
+
+    def _dashboard_native_ready_to_test(
+        self,
+        ready_to_test: WorkPacketReadyToTestV0View | None,
+    ) -> WorkPacketReadyToTestV0View | None:
+        if ready_to_test is None:
+            return None
+        safe_text = lambda value: (
+            value
+            if isinstance(value, str)
+            and _is_safe_pipeline_control_text(value)
+            else None
+        )
+        ready_id = safe_text(ready_to_test.readyId)
+        user_facing_summary = safe_text(ready_to_test.userFacingSummary)
+        testable_surface = safe_text(ready_to_test.testableSurface)
+        if not ready_id or not user_facing_summary or not testable_surface:
+            return None
+        verification_refs = self._dashboard_native_safe_verification_refs(ready_to_test.verificationRefs)
+        evidence_refs = self._dashboard_native_safe_evidence_refs(ready_to_test.evidenceRefs)
+        if len(verification_refs) != len(ready_to_test.verificationRefs):
+            return None
+        if len(evidence_refs) != len(ready_to_test.evidenceRefs):
+            return None
+        return ready_to_test.model_copy(
+            update={
+                "readyId": ready_id,
+                "userFacingSummary": user_facing_summary,
+                "testableSurface": testable_surface,
+                "verificationRefs": verification_refs,
+                "evidenceRefs": evidence_refs,
+            }
+        )
+
+    def _dashboard_native_source_ref(
+        self,
+        source_ref: AuthoritativePacketSourceRefView,
+    ) -> AuthoritativePacketSourceRefView:
+        raw_ref_id = source_ref.refId
+        safe_ref_id = (
+            raw_ref_id
+            if isinstance(raw_ref_id, str) and _is_safe_pipeline_evidence_ref(raw_ref_id)
+            else f"unavailable:source:{hashlib.sha256(str(raw_ref_id).encode('utf8')).hexdigest()}"
+        )
+        raw_path = source_ref.pathOrUrl
+        safe_path = self._dashboard_native_safe_source_path(raw_path)
+        safe_title = self._dashboard_native_safe_title(
+            source_ref.title,
+            fallback="Authoritative source",
+        )
+        safe_source_refs = (
+            self._dashboard_native_safe_evidence_refs(source_ref.sourceRefs)
+            if source_ref.sourceRefs is not None
+            else None
+        )
+        safe_evidence_refs = (
+            self._dashboard_native_safe_evidence_refs(source_ref.evidenceRefs)
+            if source_ref.evidenceRefs is not None
+            else None
+        )
+        return source_ref.model_copy(
+            update={
+                "refId": safe_ref_id,
+                "pathOrUrl": safe_path,
+                "title": safe_title,
+                "sourceRefs": safe_source_refs,
+                "evidenceRefs": safe_evidence_refs,
+            }
+        )
+
+    def _dashboard_native_safe_source_path(self, value: object) -> str | None:
+        if not isinstance(value, str) or not _is_safe_pipeline_control_text(value):
+            return None
+        try:
+            return _validate_authoritative_metadata_text(value, path="source path")[:500]
+        except ValueError:
+            return None
+
+    def _dashboard_native_safe_metadata_text(self, value: object, *, path: str, max_length: int = 500) -> str | None:
+        if not isinstance(value, str) or not _is_safe_pipeline_control_text(value):
+            return None
+        if EXECUTABLE_CONTROL_TEXT_RE.search(value):
+            return None
+        try:
+            return _validate_authoritative_metadata_text(value, path=path)[:max_length]
+        except ValueError:
+            return None
+
+    def _dashboard_native_safe_title(self, value: object, *, fallback: str) -> str:
+        if not isinstance(value, str) or not _is_safe_pipeline_control_text(value):
+            return fallback
+        try:
+            return _validate_authoritative_metadata_text(value, path="work title")[:255]
+        except ValueError:
+            return fallback
+
+    def _dashboard_native_learn_refill_text(self, metadata: object, key: str) -> str | None:
+        value = self._learn_refill_metadata_text(metadata, key) if isinstance(metadata, dict) else None
+        if value is None or not _is_safe_pipeline_control_text(value):
+            return None
+        try:
+            return _validate_authoritative_metadata_text(value, path=f"learnRefill.{key}")[:280]
+        except ValueError:
+            return None
+
+    def _dashboard_native_state(
+        self,
+        candidate: CandidateWork | None,
+        item: WorkItem | None,
+        routing_preview: RoutingPreviewView | None,
+        attempts: list[ExecutionAttemptView],
+        proposals: list[MemoryProposal],
+    ) -> tuple[str, str, str, list[str]]:
+        if item:
+            if item.state == WorkflowState.OPERATOR_OWNED.value:
+                return "capture", "operator", "deferred", ["work_item.operator_owned"]
+            if item.state == WorkflowState.DONE.value:
+                recipe = self._execution_recipe_for_item(item)
+                delivery = self._recipe_delivery_gate_payload(item, recipe) if recipe else {}
+                if delivery.get("readyForApproval") or delivery.get("pullRequestUrl"):
+                    owner = "github" if delivery.get("pullRequestUrl") else "kendall"
+                    return "deliver", owner, "complete", ["work_item.done", "delivery.evidence_present"]
+                return "deliver", "kendall", "complete", ["work_item.done", "delivery.evidence_missing"]
+
+        if attempts:
+            latest = attempts[0]
+            status = latest.status.value
+            if status == ExecutionAttemptStatus.COMPLETED.value and latest.failureReason:
+                return "execute", "blocked", "failed", self._execution_lane_reason_codes(
+                    latest.lane, "execution_attempt.verification_failed"
+                )
+            if status == ExecutionAttemptStatus.PLANNED.value:
+                return "shape", "kendall", "waiting", self._execution_lane_reason_codes(latest.lane, "execution_attempt.planned")
+            if status == ExecutionAttemptStatus.APPROVED.value:
+                return "human_gate", "operator", "waiting", self._execution_lane_reason_codes(latest.lane, "execution_attempt.approved")
+            if status in {ExecutionAttemptStatus.STARTING.value, ExecutionAttemptStatus.RUNNING.value}:
+                return "execute", self._owner_for_lane(latest.lane), "active", self._execution_lane_reason_codes(latest.lane, f"execution_attempt.{status}")
+            if status == ExecutionAttemptStatus.COMPLETED.value:
+                return "review", "kendall", "complete", self._execution_lane_reason_codes(latest.lane, "execution_attempt.completed")
+            if status == ExecutionAttemptStatus.CANCELLED.value:
+                return "execute", "blocked", "blocked", self._execution_lane_reason_codes(latest.lane, "execution_attempt.cancelled")
+            if status in {
+                ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+                ExecutionAttemptStatus.TIMED_OUT.value,
+                ExecutionAttemptStatus.FAILED.value,
+                ExecutionAttemptStatus.REJECTED.value,
+            }:
+                return "execute", "blocked", "failed", self._execution_lane_reason_codes(latest.lane, f"execution_attempt.{status}")
+
+        if proposals:
+            active = [proposal for proposal in proposals if proposal.status not in {"not_applicable", "rejected", "deferred"}]
+            if active:
+                return "learn", "memory_review", "waiting", ["memory_proposal.review_required"]
+
+        if item:
+            if item.state == WorkflowState.TRIAGED.value and routing_preview:
+                return "route", "kendall", "active", ["work_item.triaged", "routing_preview.present"]
+            state_map = {
+                "queued": ("capture", "kendall", "active"),
+                "triaged": ("classify", "kendall", "active"),
+                "ready": ("human_gate", "operator", "waiting"),
+                "implementing": ("execute", self._owner_for_lane(item.lane), "active"),
+                "validating": ("review", "kendall", "active"),
+                "reviewing": ("review", "kendall", "active"),
+                "awaiting_audit": ("review", "operator", "waiting"),
+                "needs_rework": ("shape", "kendall", "active"),
+                "blocked": ("human_gate", "blocked", "blocked"),
+            }
+            if item.state in state_map:
+                stage, owner, status = state_map[item.state]
+                return stage, owner, status, [f"work_item.{item.state}"]
+
+        if candidate:
+            if candidate.status == CandidateWorkStatus.APPROVED.value and not candidate.promoted_work_item_id:
+                return "promote", "operator", "waiting", ["candidate_work.approved", "candidate_work.not_promoted"]
+            if candidate.status == CandidateWorkStatus.APPROVED.value and candidate.promoted_work_item_id:
+                return "capture", "kendall", "waiting", ["candidate.promoted_missing_work_item"]
+            if candidate.status == CandidateWorkStatus.DEFERRED.value:
+                return "capture", "operator", "deferred", ["candidate_work.deferred"]
+            if candidate.status == CandidateWorkStatus.REJECTED.value:
+                return "capture", "operator", "deferred", ["candidate_work.rejected"]
+            return "capture", "kendall", "waiting", [f"candidate.{candidate.status}"]
+        return "capture", "kendall", "waiting", ["source.missing"]
+
+    def _dashboard_native_source_facts(
+        self,
+        candidate: CandidateWork | None,
+        item: WorkItem | None,
+    ) -> list[_DashboardNativeSourceFact]:
+        facts: list[_DashboardNativeSourceFact] = []
+        canonical_ref_ids = {
+            ref_id
+            for ref_id in (
+                f"candidate_work:{candidate.id}" if candidate else None,
+                f"work_item:{item.id}" if item else None,
+            )
+            if ref_id is not None
+        }
+
+        def canonical(ref_id: str, source_type: str, _label: str, path: object) -> _DashboardNativeSourceFact:
+            safe_label = {
+                "candidate_work": "Candidate work source",
+                "work_item": "Work item source",
+            }.get(source_type, "Canonical source")
+            path_value = self._dashboard_native_safe_source_path(path)
+            if isinstance(path, str) and path and path_value is None:
+                return _DashboardNativeSourceFact(
+                    ref_id,
+                    source_type,
+                    safe_label,
+                    None,
+                    "unknown",
+                    "blocked",
+                    True,
+                    "Canonical source metadata is invalid or unsafe.",
+                )
+            authority = self._planning_source_authority(path_value)
+            if authority["status"] == "superseded":
+                return _DashboardNativeSourceFact(
+                    ref_id, source_type, safe_label, None, "stale", "blocked", True,
+                    f"Canonical source is superseded by the {AUTHORITATIVE_PLANNING_SOURCE_LABEL} at {authority['superseded_by']}; hold or flag this packet for inspection before downstream planning.",
+                )
+            return _DashboardNativeSourceFact(ref_id, source_type, safe_label, path_value, "fresh", "allowed", True, None)
+
+        def metadata_facts(metadata: object) -> list[_DashboardNativeSourceFact]:
+            if not isinstance(metadata, dict):
+                return []
+            nested = metadata.get("importMetadata") if isinstance(metadata.get("importMetadata"), dict) else metadata
+            raw_refs = nested.get("workPacketSourceRefs") if isinstance(nested, dict) else None
+            if not isinstance(raw_refs, list):
+                return []
+            allowed_types = {"bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual", "candidate_work", "work_item"}
+            allowed_freshness = {"fresh", "stale", "unknown", "not_applicable"}
+            allowed_access = {"allowed", "excluded", "missing", "blocked"}
+            output: list[_DashboardNativeSourceFact] = []
+            for index, raw in enumerate(raw_refs):
+                if not isinstance(raw, dict):
+                    output.append(_DashboardNativeSourceFact(f"metadata_source:{index}", "manual", f"Blocked metadata source {index + 1}: malformed source ref", None, "unknown", "blocked", False, "malformed source ref"))
+                    continue
+                source_type = raw.get("sourceType")
+                freshness = raw.get("freshness")
+                access = raw.get("accessState")
+                summary_only = raw.get("summaryOnly")
+                invalid: list[str] = []
+                if source_type not in allowed_types:
+                    invalid.append("invalid source type")
+                if freshness not in allowed_freshness:
+                    invalid.append("invalid freshness")
+                if access not in allowed_access:
+                    invalid.append("invalid access state")
+                if summary_only is False or (summary_only is not None and summary_only is not True):
+                    invalid.append("unsafe non-summary source metadata" if summary_only is False else "invalid summary-only flag")
+                ref_id = raw.get("refId")
+                path = raw.get("pathOrUrl")
+                safe_ref_id = (
+                    ref_id
+                    if isinstance(ref_id, str)
+                    and _is_safe_pipeline_evidence_ref(ref_id)
+                    and not re.search(r"(?:prompt|completion|provider|secret|credential|token|raw[\s_-]*payload)", ref_id, re.IGNORECASE)
+                    else f"metadata_source:{index}"
+                )
+                if safe_ref_id in canonical_ref_ids:
+                    safe_ref_id = f"metadata_source:{index}"
+                    invalid.append("reserved canonical source identifier")
+                if safe_ref_id != ref_id:
+                    invalid.append("invalid source identifier")
+                safe_type = source_type if source_type in allowed_types else "manual"
+                safe_freshness = freshness if freshness in allowed_freshness else "unknown"
+                safe_access = "missing" if access == "unavailable" else access if access in allowed_access else "blocked"
+                if invalid and safe_access == "allowed":
+                    safe_access = "blocked"
+                safe_label = f"Metadata source {index + 1}"
+                path_value = self._dashboard_native_safe_source_path(path)
+                if isinstance(path, str) and path and path_value is None:
+                    invalid.append("unsafe source path")
+                authority = self._planning_source_authority(path_value)
+                blocked_reason = "Metadata source metadata is invalid." if invalid else None
+                contradiction_status = raw.get("contradictionStatus")
+                if contradiction_status not in {None, "", "none"}:
+                    invalid.append("contradictory source metadata")
+                    blocked_reason = "Metadata source metadata is contradictory."
+                    safe_access = "blocked"
+                if invalid or safe_access != "allowed":
+                    path_value = None
+                if authority["status"] == "superseded":
+                    safe_freshness, safe_access = "stale", "blocked"
+                    blocked_reason = "Metadata source is superseded by the authoritative planning source."
+                    path_value = None
+                output.append(_DashboardNativeSourceFact(
+                    safe_ref_id,
+                    safe_type, safe_label, path_value, safe_freshness, safe_access,
+                    bool(raw.get("canonical")) if isinstance(raw.get("canonical"), bool) else False,
+                    blocked_reason,
+                ))
+            return output
+
+        if candidate:
+            facts.append(canonical(f"candidate_work:{candidate.id}", "candidate_work", f"Candidate Work: {candidate.title}", candidate.source_artifact_path))
+            facts.extend(metadata_facts(candidate.import_metadata_json))
+        if item:
+            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+            facts.append(canonical(f"work_item:{item.id}", "work_item", f"Work Item: {item.title}", metadata.get("sourceArtifactPath")))
+            facts.extend(metadata_facts(metadata))
+        deduped: dict[str, _DashboardNativeSourceFact] = {}
+        for fact in facts:
+            existing = deduped.get(fact.ref_id)
+            if existing is None:
+                deduped[fact.ref_id] = fact
+                continue
+            material_existing = (
+                existing.source_type,
+                existing.path_or_url,
+                existing.freshness,
+                existing.access_state,
+                existing.canonical,
+                existing.blocked_reason,
+            )
+            material_fact = (
+                fact.source_type,
+                fact.path_or_url,
+                fact.freshness,
+                fact.access_state,
+                fact.canonical,
+                fact.blocked_reason,
+            )
+            if material_existing != material_fact:
+                deduped[fact.ref_id] = _DashboardNativeSourceFact(
+                    fact.ref_id,
+                    "manual",
+                    "Ambiguous source metadata",
+                    None,
+                    "unknown",
+                    "blocked",
+                    False,
+                    "Conflicting source facts were withheld.",
+                )
+        return list(deduped.values())
+
+    def _dashboard_native_evidence_facts(
+        self,
+        candidate: CandidateWork | None,
+        item: WorkItem | None,
+        routing_preview: RoutingPreviewView | None,
+        attempts: list[ExecutionAttemptView],
+        workflow_events: list[WorkflowEvent],
+    ) -> list[_DashboardNativeEvidenceFact]:
+        output: list[_DashboardNativeEvidenceFact] = []
+        for source in (candidate.import_metadata_json if candidate else None, item.metadata_json if item else None):
+            metadata = source if isinstance(source, dict) else {}
+            nested = metadata.get("importMetadata") if isinstance(metadata.get("importMetadata"), dict) else metadata
+            raw_refs = nested.get("evidenceRefs") if isinstance(nested, dict) else None
+            if isinstance(raw_refs, list):
+                output.extend(
+                    _DashboardNativeEvidenceFact(ref, "memory", "Approved Obsidian metadata evidence")
+                    for ref in self._dashboard_native_safe_evidence_refs(raw_refs)
+                )
+        if item:
+            recipe = self._execution_recipe_for_item(item)
+            delivery = self._recipe_delivery_gate_payload(item, recipe) if recipe else {}
+            if delivery.get("readyForApproval") or delivery.get("pullRequestUrl") or delivery.get("deliveryWaived"):
+                output.append(_DashboardNativeEvidenceFact(f"delivery:{item.id}", "gate", "Delivery readiness"))
+        if routing_preview:
+            output.append(_DashboardNativeEvidenceFact(f"route:{routing_preview.decision.decisionId}", "route", "Routing preview"))
+        for attempt in attempts:
+            output.append(_DashboardNativeEvidenceFact(f"attempt:{attempt.attemptId}", "attempt", f"Execution attempt {attempt.status.value}"))
+            for event_ref in attempt.eventRefs:
+                if isinstance(event_ref, dict) and isinstance(event_ref.get("eventId"), str):
+                    event_ref_id = f"event:{event_ref['eventId']}"
+                    if self._dashboard_native_safe_evidence_refs([event_ref_id]):
+                        output.append(_DashboardNativeEvidenceFact(event_ref_id, "event", "Workflow event"))
+        known = {fact.ref_id for fact in output}
+        for event in workflow_events:
+            ref_id = f"event:{event.id}"
+            if ref_id not in known and self._dashboard_native_safe_evidence_refs([ref_id]):
+                output.append(_DashboardNativeEvidenceFact(ref_id, "event", event.event_type))
+                known.add(ref_id)
+        return output
+
+    def _dashboard_native_learn_fact(
+        self,
+        packet_id: str,
+        candidate: CandidateWork | None,
+        item: WorkItem | None,
+        proposals: list[MemoryProposal],
+        source_refs: list[_DashboardNativeSourceFact],
+        evidence_refs: list[_DashboardNativeEvidenceFact],
+        workflow_events: list[WorkflowEvent],
+    ) -> _DashboardNativeLearnFact | None:
+        candidate_metadata = candidate.import_metadata_json if candidate and isinstance(candidate.import_metadata_json, dict) else {}
+        item_metadata = item.metadata_json if item and isinstance(item.metadata_json, dict) else {}
+        nested = item_metadata.get("importMetadata") if isinstance(item_metadata.get("importMetadata"), dict) else {}
+        metadata = {**candidate_metadata, **nested, **item_metadata}
+        raw = metadata.get("learnRefill") if isinstance(metadata.get("learnRefill"), dict) else {}
+        operator_exit = raw.get("operatorOwnedExit") is True or any(event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned", "workflow.operator_owned"} for event in workflow_events)
+        ready_raw = raw.get("readyToTest") if isinstance(raw.get("readyToTest"), dict) else {}
+        safe_ready_text = lambda key: self._dashboard_native_learn_refill_text(ready_raw, key)
+        ready_id = safe_ready_text("readyId")
+        ready_summary = safe_ready_text("userFacingSummary")
+        testable_surface = safe_ready_text("testableSurface")
+        raw_verification_value = ready_raw.get("verificationRefs")
+        raw_evidence_value = ready_raw.get("evidenceRefs")
+        ready_refs_have_safe_shape = all(
+            value is None
+            or (
+                isinstance(value, list)
+                and len(value) <= 20
+                and all(isinstance(ref, str) and bool(ref) for ref in value)
+            )
+            for value in (raw_verification_value, raw_evidence_value)
+        )
+        raw_verification_refs = self._metadata_string_list(ready_raw, "verificationRefs")
+        raw_evidence_refs = self._metadata_string_list(ready_raw, "evidenceRefs")
+        verification_refs = self._dashboard_native_safe_verification_refs(raw_verification_refs)
+        ready_evidence = self._dashboard_native_safe_evidence_refs(raw_evidence_refs)
+        has_ready = bool(
+            ready_id
+            and ready_summary
+            and testable_surface
+            and ready_refs_have_safe_shape
+            and len(verification_refs) == len(raw_verification_refs)
+            and len(ready_evidence) == len(raw_evidence_refs)
+        )
+        if not (raw or proposals or operator_exit or has_ready):
+            return None
+        source_ids = list(dict.fromkeys(ref.ref_id for ref in source_refs))
+        evidence_ids = list(dict.fromkeys(ref.ref_id for ref in evidence_refs))
+        state = raw.get("state") if raw.get("state") in {"healthy", "source_exhausted", "blocked", "refilling", "unknown"} else "refilling" if proposals else "blocked" if item and item.state == WorkflowState.BLOCKED.value else "healthy" if item and item.state == WorkflowState.DONE.value else "unknown"
+        labels = {"healthy": "Healthy empty", "source_exhausted": "Source exhausted", "blocked": "Refill blocked", "refilling": "Refill running", "unknown": "Unknown refill state"}
+        explanations = {"healthy": "The approved queue is empty because completed work has no unsafe follow-up.", "source_exhausted": "Approved source work is exhausted; this is healthy unless an approved source was expected.", "blocked": "Refill cannot continue until the named blocker is resolved.", "refilling": "Learn is creating or reviewing follow-up Candidate Work from metadata-only evidence.", "unknown": "No current refill source summary is available."}
+        safe_text = lambda data, key: self._dashboard_native_learn_refill_text(data, key)
+        if has_ready:
+            verification_refs = self._dashboard_native_safe_verification_refs(
+                self._metadata_string_list(ready_raw, "verificationRefs")
+            )
+            ready_evidence = self._dashboard_native_safe_evidence_refs(
+                self._metadata_string_list(ready_raw, "evidenceRefs")
+            )
+        else:
+            ready_id = None
+            ready_summary = None
+            testable_surface = None
+            verification_refs = []
+            ready_evidence = []
+        return _DashboardNativeLearnFact(
+            state=state,
+            label=labels[state],
+            explanation=safe_text(raw, "explanation") or explanations[state],
+            source_refs=source_ids,
+            evidence_refs=ready_evidence or evidence_ids,
+            source_exhausted=state == "source_exhausted",
+            source_exhaustion_summary=safe_text(raw, "sourceExhaustionSummary") or ("Approved source exhausted; queue is healthy until new approved source work appears." if state == "source_exhausted" else "Approved source still has refill or follow-up posture."),
+            ready_id=ready_id,
+            ready_summary=ready_summary,
+            testable_surface=testable_surface,
+            verification_refs=verification_refs,
+            next_safe_action=safe_text(raw, "nextSafeAction") or ("Show ready-to-test work and continue processing other safe packets." if has_ready else "Leave the queue healthy-empty until a new approved source appears." if state == "source_exhausted" else "Resolve the refill blocker before creating new work." if state == "blocked" else "Let refill finish and keep raw source content out of the dashboard." if state == "refilling" else "Inspect manager refill evidence before taking action."),
+        )
+
+    def _dashboard_native_candidate_by_work_item_id(
+        self,
+        candidates: list[CandidateWork],
+        items: list[WorkItem],
+    ) -> dict[str, CandidateWork | None]:
+        candidates_by_id = {candidate.id: candidate for candidate in candidates}
+        items_by_id = {item.id: item for item in items}
+        claims_by_item_id: dict[str, dict[str, CandidateWork]] = {}
+
+        def add_claim(item_id: object, candidate: CandidateWork) -> None:
+            if not isinstance(item_id, str) or not item_id:
+                return
+            if candidate.promoted_work_item_id != item_id:
+                return
+            claims_by_item_id.setdefault(item_id, {})[candidate.id] = candidate
+
+        for candidate in candidates:
+            if candidate.promoted_work_item_id:
+                item = items_by_id.get(candidate.promoted_work_item_id)
+                metadata = item.metadata_json if item and isinstance(item.metadata_json, dict) else {}
+                if metadata.get("candidateWorkId") == candidate.id:
+                    add_claim(item.id, candidate)
+        for item in items:
+            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+            candidate_id = metadata.get("candidateWorkId")
+            candidate = candidates_by_id.get(candidate_id) if isinstance(candidate_id, str) else None
+            if candidate:
+                add_claim(item.id, candidate)
+
+        item_ids_by_candidate_id: dict[str, set[str]] = {}
+        for item_id, claims in claims_by_item_id.items():
+            for candidate_id in claims:
+                item_ids_by_candidate_id.setdefault(candidate_id, set()).add(item_id)
+        return {
+            item_id: (
+                next(iter(claims.values()))
+                if len(claims) == 1
+                and len(item_ids_by_candidate_id[next(iter(claims))]) == 1
+                else None
+            )
+            for item_id, claims in claims_by_item_id.items()
+        }
+
+    def _dashboard_native_work_item_records(
+        self,
+        snapshot: _DashboardOperationalProjectionSnapshot,
+    ) -> list[_DashboardOperationalWorkItemRecord]:
+        """Build bounded candidate/work-item rows without a legacy WorkPacket view."""
+        candidate_by_work_item_id = self._dashboard_native_candidate_by_work_item_id(snapshot.candidates, snapshot.work_items)
+        emitted_candidate_ids: set[str] = set()
+        records: list[_DashboardOperationalWorkItemRecord] = []
+
+        def build_record(candidate: CandidateWork | None, item: WorkItem | None) -> None:
+            attempts = snapshot.execution_attempts_by_work_item_id.get(item.id, []) if item else []
+            routing_preview = snapshot.routing_previews_by_work_item_id.get(item.id) if item else None
+            proposals = snapshot.memory_proposals_by_work_item_id.get(item.id, []) if item else []
+            workflow_events = snapshot.workflow_events_by_work_item_id.get(item.id, []) if item else []
+            stage, _owner, status, _reason_codes = self._dashboard_native_state(
+                candidate=candidate,
+                item=item,
+                routing_preview=routing_preview,
+                attempts=attempts,
+                proposals=proposals,
+            )
+            source_facts = self._dashboard_native_source_facts(candidate, item)
+            source_refs = [
+                SourceRefV0View(
+                    refId=fact.ref_id,
+                    sourceType=fact.source_type,
+                    label=fact.label,
+                    pathOrUrl=fact.path_or_url,
+                    freshness=fact.freshness,
+                    accessState=fact.access_state,
+                    canonical=fact.canonical,
+                    summaryOnly=True,
+                    blockedReason=fact.blocked_reason,
+                )
+                for fact in source_facts
+            ]
+            evidence_facts = self._dashboard_native_evidence_facts(
+                candidate,
+                item,
+                routing_preview,
+                attempts,
+                workflow_events,
+            )
+            evidence_refs = [
+                EvidenceRefV0View(
+                    refId=fact.ref_id,
+                    evidenceType=fact.evidence_type,
+                    label=fact.label,
+                    retentionClass="metadata_only",
+                )
+                for fact in evidence_facts
+            ]
+            packet_id = self._dashboard_native_packet_id(
+                candidate,
+                item,
+                reserved_packet_ids={packet.packetId for packet in snapshot.authoritative_packets},
+            )
+            learn_refill = self._dashboard_native_learn_fact(
+                packet_id,
+                candidate,
+                item,
+                proposals,
+                source_facts,
+                evidence_facts,
+                workflow_events,
+            )
+            lineage = snapshot.lineage_by_work_item_id.get(item.id, {}) if item else {}
+            records.append(
+                _DashboardOperationalWorkItemRecord(
+                    packet_id=packet_id,
+                    title=self._dashboard_native_safe_title(
+                        item.title if item else candidate.title if candidate else None,
+                        fallback="Work Item metadata-only" if item else "Candidate Work metadata-only" if candidate else "Unknown Work Packet",
+                    ),
+                    current_stage=stage,
+                    status=status,
+                    source_refs=source_refs,
+                    evidence_refs=evidence_refs,
+                    learn_refill=learn_refill,
+                    updated_at=item.updated_at if item else candidate.updated_at if candidate else snapshot.generated_at,
+                    work_item_id=item.id if item else None,
+                    authoritative_packet_id=self._dashboard_native_authoritative_packet_link(item) if item else None,
+                    queue_lease=lineage.get("queueLease"),
+                    execution_attempts=list(lineage.get("executionAttempts", [])),
+                    correlation_ids=list(lineage.get("correlationIds", [])),
+                )
+            )
+
+        for item in snapshot.work_items:
+            candidate = candidate_by_work_item_id.get(item.id)
+            if candidate:
+                emitted_candidate_ids.add(candidate.id)
+            build_record(candidate, item)
+        for candidate in snapshot.candidates:
+            if candidate.id in emitted_candidate_ids:
+                continue
+            if self._candidate_is_projection_metadata_only(candidate):
+                continue
+            build_record(candidate, None)
+        return records
 
     def _dashboard_canonical_operational_projection_from_v0(
         self,
@@ -9835,6 +11787,73 @@ class SupervisorService:
                 emptyReason="backend_unavailable",
                 sourceExhausted=False,
                 summary=summary,
+            ),
+            evidenceRefs=[],
+        )
+
+    def _unavailable_dashboard_canonical_operational_projection(
+        self,
+        generated_at: datetime,
+        stale_after_seconds: int,
+    ) -> DashboardCanonicalOperationalProjectionV1View:
+        summary = "Backend WorkPacket projection is unavailable."
+        stage_summaries = [
+            PipelineStageSummaryV0View(
+                stage=stage,
+                label=AUTHORITATIVE_PACKET_STAGE_LABELS[stage],
+                packetCount=0,
+                sourceLabel="unavailable",
+                freshnessState="unavailable",
+                emptyReason="backend_unavailable",
+            )
+            for stage in AUTHORITATIVE_PACKET_STAGE_SEQUENCE
+        ]
+        return DashboardCanonicalOperationalProjectionV1View(
+            projectionId=f"dashboard-canonical-operational-projection:unavailable:{generated_at.isoformat()}",
+            generatedAt=generated_at,
+            sourceUpdatedAt=generated_at,
+            sourceLabel="unavailable",
+            freshnessState="unavailable",
+            staleAfterSeconds=stale_after_seconds,
+            backendReachability=PipelineBackendReachabilityV0View(state="unavailable", checkedAt=generated_at, reason="backend_unavailable", summary=summary),
+            fixtureMode=PipelineFixtureModeV0View(enabled=False, reason=None, allowedForEnvironment=False, visibleLabelRequired=True, canSatisfyLiveProof=False),
+            truthSummary=PipelineTruthSummaryV0View(label="unavailable", emptyReason="backend_unavailable", backendEmpty=False, backendUnavailable=True, fixtureBacked=False, stale=False, summary=summary),
+            stageSummaries=stage_summaries,
+            sourceStates=[],
+            workPackets=[],
+            selectedPacketDetails=[],
+            managerSummary=PipelineManagerSummaryV0View(
+                stateSource="unavailable", reliabilityState="unavailable", freshnessState="unavailable",
+                activeLeaseCount=None, activeWorkerCount=None, warmWorkerCount=None,
+                blockedQueueCount=None, dispatchableQueueCount=None, closedQueueCount=None,
+                healthySourceCount=None, exhaustedSourceCount=None, blockedSourceCount=None, gatedSourceCount=None,
+                staleSourceCount=None, unavailableSourceCount=None, refillingSourceCount=None, unknownSourceCount=None,
+                sourceExhausted=False, inactivityReason="backend_unavailable", evidenceRefs=[],
+                summary="Manager runtime state is unavailable because backend projection failed.", metadataOnly=True,
+            ),
+            activeManagerLaneClarity=None,
+            workerSummary=PipelineWorkerSummaryV0View(
+                stateSource="unavailable", freshnessState="unavailable", warmCount=None, activeCount=None,
+                waitingCount=None, stalledCount=None, failedCount=None, drainingCount=None, killedCount=None,
+                completeCount=None, unavailableCount=None, unknownCount=None, workerRefs=[], evidenceRefs=[],
+                summary="Worker runtime state is unavailable because backend projection failed.", metadataOnly=True,
+            ),
+            reliabilityProblems=[],
+            gatedControls=[],
+            runtimeReadiness=PipelineRuntimeReadinessV0View(
+                readinessState="unavailable", operationalMode="unavailable", freshnessState="unavailable",
+                capabilityState="unavailable", typedReason="runtime_unavailable", checkedAt=generated_at,
+                expiresAt=generated_at, summary="Operational runtime readiness is unavailable because the backend projection failed.",
+                actionCapabilities=[], actionCapabilitiesV1=[], evidenceRefs=["runtime:backend-unavailable"],
+                metadataOnly=True, rawPayloadRetained=False,
+            ),
+            actionCapabilities=[],
+            actionCapabilitiesV1=[],
+            executeAdmission=self._unavailable_execute_admission(),
+            queueSummary=PipelineQueueSummaryV0View(
+                activeCount=None, dispatchableCount=None, blockedCount=None, gatedCount=None,
+                closedCount=None, staleCount=None, refillingCount=None, unknownCount=None,
+                emptyReason="backend_unavailable", sourceExhausted=False, summary=summary,
             ),
             evidenceRefs=[],
         )
@@ -10147,7 +12166,12 @@ class SupervisorService:
             return "healthy_idle"
         return "unknown"
 
-    def _pipeline_projection_source_state_only_records(self, candidates: list[CandidateWork]) -> list[PipelineSourceStateV0View]:
+    def _pipeline_projection_source_state_only_records(
+        self,
+        candidates: list[CandidateWork],
+        *,
+        native_projection: bool = False,
+    ) -> list[PipelineSourceStateV0View]:
         source_states: list[PipelineSourceStateV0View] = []
         for candidate in candidates:
             if not self._candidate_is_pipeline_source_state_only(candidate):
@@ -10155,10 +12179,18 @@ class SupervisorService:
             if candidate.status in {CandidateWorkStatus.REJECTED.value, CandidateWorkStatus.DEFERRED.value}:
                 continue
             metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
-            source_state = self._pipeline_projection_source_state_from_metadata(
-                metadata.get("pipelineSourceState"),
-                fallback_source_id=f"candidate_work:{candidate.id}",
-                fallback_updated_at=self._ensure_aware(candidate.updated_at),
+            source_state = (
+                self._dashboard_native_source_state_from_metadata(
+                    metadata.get("pipelineSourceState"),
+                    fallback_source_id=f"candidate_work:{candidate.id}",
+                    fallback_updated_at=self._ensure_aware(candidate.updated_at),
+                )
+                if native_projection
+                else self._pipeline_projection_source_state_from_metadata(
+                    metadata.get("pipelineSourceState"),
+                    fallback_source_id=f"candidate_work:{candidate.id}",
+                    fallback_updated_at=self._ensure_aware(candidate.updated_at),
+                )
             )
             if source_state:
                 source_states.append(source_state)
@@ -10213,6 +12245,133 @@ class SupervisorService:
             rawPayloadRetained=False,
             retention="metadata_only_evidence_references",
         )
+
+    def _dashboard_native_review_route(
+        self,
+        raw_route: object,
+        *,
+        fallback_packet_id: str,
+    ) -> PipelineReviewRouteEvidenceV0View:
+        """Rebuild review-route metadata at the native V1 trust boundary.
+
+        The shared snapshot retains the validated V0 route for the retained V0
+        renderer. Native V1 reconstructs every client-visible field so a
+        malformed or unexpectedly legacy-shaped route cannot cross that
+        boundary as a nested V0 object.
+        """
+        unavailable = self._unavailable_pipeline_review_route(fallback_packet_id)
+        try:
+            raw = raw_route.model_dump(mode="json") if hasattr(raw_route, "model_dump") else raw_route
+        except (TypeError, ValueError):
+            return unavailable
+        if not isinstance(raw, dict):
+            return unavailable
+
+        packet_id = raw.get("packetId")
+        if (
+            not isinstance(packet_id, str)
+            or packet_id != fallback_packet_id
+            or not _is_safe_review_route_packet_id(packet_id)
+        ):
+            return unavailable
+        finding_summary = raw.get("findingSummary")
+        if not isinstance(finding_summary, dict):
+            return unavailable
+        raw_evidence_refs = finding_summary.get("evidenceRefs")
+        if not isinstance(raw_evidence_refs, list) or len(raw_evidence_refs) > 20:
+            return unavailable
+        evidence_refs: list[str] = []
+        for ref in raw_evidence_refs:
+            if not isinstance(ref, str) or not _is_safe_review_route_evidence_ref(ref):
+                return unavailable
+            evidence_refs.append(ref)
+
+        native_route = {
+            "schemaVersion": "pipeline-review-route-evidence/v0",
+            "availability": raw.get("availability"),
+            "packetId": packet_id,
+            "routeState": raw.get("routeState"),
+            "reasonCode": raw.get("reasonCode"),
+            "reason": raw.get("reason"),
+            "safeFallback": raw.get("safeFallback"),
+            "exactIdentity": raw.get("exactIdentity"),
+            "issuanceState": raw.get("issuanceState"),
+            "findingSummary": {
+                "count": finding_summary.get("count"),
+                "highestSeverity": finding_summary.get("highestSeverity"),
+                "evidenceRefs": evidence_refs,
+            },
+            "dataClass": "metadata_only",
+            "execution": "none",
+            "deliveryEvidenceEligible": False,
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+            "retention": "metadata_only_evidence_references",
+        }
+        try:
+            return PipelineReviewRouteEvidenceV0View.model_validate(native_route)
+        except (ValidationError, TypeError, ValueError):
+            return unavailable
+
+    def _dashboard_native_review_route_for_packet(
+        self,
+        routes_by_packet: dict[str, PipelineReviewRouteEvidenceV0View],
+        packet_id: str,
+    ) -> PipelineReviewRouteEvidenceV0View:
+        return self._dashboard_native_review_route(
+            routes_by_packet.get(packet_id, self._unavailable_pipeline_review_route(packet_id)),
+            fallback_packet_id=packet_id,
+        )
+
+    def _dashboard_native_source_state_from_metadata(
+        self,
+        raw_source_state: object,
+        *,
+        fallback_source_id: str,
+        fallback_updated_at: datetime,
+    ) -> PipelineSourceStateV0View | None:
+        """Rebuild one source-state-only row without trusting persisted metadata."""
+        if not isinstance(raw_source_state, dict):
+            return None
+        allowed_states = {"healthy", "exhausted", "blocked", "gated", "stale", "unavailable", "refilling", "unknown"}
+        raw_state = raw_source_state.get("state")
+        state = raw_state if isinstance(raw_state, str) and raw_state in allowed_states else "unknown"
+        raw_source_id = raw_source_state.get("sourceId")
+        source_ids = (
+            self._dashboard_native_strict_ref_list([raw_source_id])
+            if "sourceId" in raw_source_state
+            else self._dashboard_native_strict_ref_list([fallback_source_id])
+        )
+        if source_ids is None or len(source_ids) != 1:
+            return None
+        raw_source_ref = raw_source_state.get("sourceRef")
+        source_refs = (
+            self._dashboard_native_strict_ref_list([raw_source_ref])
+            if "sourceRef" in raw_source_state
+            else source_ids
+        )
+        if source_refs is None or len(source_refs) != 1:
+            return None
+        summary = self._dashboard_native_safe_metadata_text(
+            raw_source_state.get("summary"),
+            path="source state summary",
+        ) or "Source state projected from bounded supervisor metadata."
+        evidence_refs = self._dashboard_native_safe_evidence_refs(raw_source_state.get("evidenceRefs", []))
+        if state == "exhausted" and not evidence_refs:
+            return None
+        try:
+            return PipelineSourceStateV0View(
+                sourceId=source_ids[0],
+                sourceRef=source_refs[0],
+                sourceKind=self._pipeline_projection_source_kind(raw_source_state.get("sourceKind")),
+                state=state,
+                summary=summary,
+                evidenceRefs=evidence_refs,
+                updatedAt=fallback_updated_at,
+                metadataOnly=True,
+            )
+        except (ValidationError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def _safe_pipeline_projection_packet_id(packet_id: str) -> str:
@@ -10453,7 +12612,12 @@ class SupervisorService:
             or self._candidate_is_pipeline_gated_control_only(candidate)
         )
 
-    def _pipeline_projection_gated_controls(self, candidates: list[CandidateWork]) -> list[PipelineGatedControlV0View]:
+    def _pipeline_projection_gated_controls(
+        self,
+        candidates: list[CandidateWork],
+        *,
+        native_projection: bool = False,
+    ) -> list[PipelineGatedControlV0View]:
         controls: list[PipelineGatedControlV0View] = []
         for candidate in candidates:
             if not self._candidate_is_pipeline_gated_control_only(candidate):
@@ -10470,6 +12634,7 @@ class SupervisorService:
                 control = self._pipeline_projection_gated_control_from_metadata(
                     raw_control,
                     fallback_control_id=f"control:candidate-work:{candidate.id}:{index}",
+                    native_projection=native_projection,
                 )
                 if control:
                     controls.append(control)
@@ -10481,7 +12646,13 @@ class SupervisorService:
         raw_control: object,
         *,
         fallback_control_id: str,
+        native_projection: bool = False,
     ) -> PipelineGatedControlV0View | None:
+        if native_projection:
+            return self._dashboard_native_gated_control_from_metadata(
+                raw_control,
+                fallback_control_id=fallback_control_id,
+            )
         if not isinstance(raw_control, dict):
             return None
         allowed_operations = {
@@ -10520,7 +12691,12 @@ class SupervisorService:
             for ref in self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_control, "workerRefs"))
             if self._is_safe_worker_ref(ref)
         ]
-        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_control, "evidenceRefs"))
+        raw_evidence_refs = self._metadata_string_list(raw_control, "evidenceRefs")
+        evidence_refs = (
+            self._dashboard_native_safe_evidence_refs(raw_evidence_refs)
+            if native_projection
+            else self._projection_safe_lifecycle_refs(raw_evidence_refs)
+        )
         packet_id = raw_control.get("packetId")
         safe_packet_refs = self._projection_safe_lifecycle_refs([packet_id]) if isinstance(packet_id, str) else []
         return PipelineGatedControlV0View(
@@ -10536,7 +12712,106 @@ class SupervisorService:
             metadataOnly=True,
         )
 
-    def _pipeline_projection_worker_summary_records(self, candidates: list[CandidateWork]) -> list[dict[str, object]]:
+    def _dashboard_native_gated_control_from_metadata(
+        self,
+        raw_control: object,
+        *,
+        fallback_control_id: str,
+    ) -> PipelineGatedControlV0View | None:
+        """Rebuild one gated control from strictly bounded native metadata."""
+        if not isinstance(raw_control, dict):
+            return None
+        allowed_operations = {
+            "kill_worker",
+            "drain_worker",
+            "cleanup_workspace",
+            "takeover_workspace",
+            "provider_call",
+            "github_mutation",
+            "worker_launch",
+            "lease_mutation",
+            "source_mutation",
+            "terminal_access",
+            "raw_payload_retention",
+            "unknown",
+        }
+        allowed_statuses = {"gated", "action_needed", "blocked"}
+        operation = raw_control.get("operation")
+        status = raw_control.get("status")
+        if operation not in allowed_operations or status not in allowed_statuses:
+            return None
+
+        control_id_values = (
+            [raw_control["controlId"]]
+            if "controlId" in raw_control
+            else [fallback_control_id]
+        )
+        control_ids = self._dashboard_native_strict_ref_list(control_id_values)
+        if control_ids is None or not control_ids:
+            return None
+
+        safe_text: dict[str, str] = {}
+        for field in ("authorityFamily", "stopLine", "nextAction"):
+            value = raw_control.get(field)
+            if not isinstance(value, str) or not _is_safe_pipeline_control_text(value):
+                return None
+            if EXECUTABLE_CONTROL_TEXT_RE.search(value):
+                return None
+            try:
+                safe_text[field] = _validate_authoritative_metadata_text(value, path=f"gated control {field}")[:500]
+            except ValueError:
+                return None
+
+        raw_packet_id = raw_control.get("packetId")
+        if raw_packet_id is None:
+            packet_id = None
+        else:
+            packet_ids = self._dashboard_native_strict_ref_list([raw_packet_id])
+            if packet_ids is None or len(packet_ids) != 1:
+                return None
+            packet_id = packet_ids[0]
+
+        worker_refs = self._dashboard_native_strict_ref_list(raw_control.get("workerRefs", []))
+        if worker_refs is None or any(not self._is_safe_worker_ref(ref) for ref in worker_refs):
+            return None
+        evidence_refs = self._dashboard_native_strict_ref_list(raw_control.get("evidenceRefs", []))
+        if evidence_refs is None:
+            return None
+        try:
+            return PipelineGatedControlV0View(
+                controlId=control_ids[0],
+                operation=operation,
+                status=status,
+                authorityFamily=safe_text["authorityFamily"],
+                stopLine=safe_text["stopLine"],
+                nextAction=safe_text["nextAction"],
+                packetId=packet_id,
+                workerRefs=worker_refs,
+                evidenceRefs=evidence_refs,
+                metadataOnly=True,
+            )
+        except (ValidationError, TypeError, ValueError):
+            return None
+
+    def _dashboard_native_strict_ref_list(self, refs: object) -> list[str] | None:
+        if not isinstance(refs, (list, tuple)):
+            return None
+        safe_refs: list[str] = []
+        for ref in refs:
+            if not isinstance(ref, str) or not _is_safe_pipeline_evidence_ref(ref):
+                return None
+            validated = self._dashboard_native_safe_evidence_refs([ref])
+            if len(validated) != 1:
+                return None
+            safe_refs.append(validated[0])
+        return list(dict.fromkeys(safe_refs))
+
+    def _pipeline_projection_worker_summary_records(
+        self,
+        candidates: list[CandidateWork],
+        *,
+        native_projection: bool = False,
+    ) -> list[dict[str, object]]:
         records: list[dict[str, object]] = []
         for candidate in candidates:
             if not self._candidate_is_pipeline_worker_summary_only(candidate):
@@ -10552,6 +12827,7 @@ class SupervisorService:
             summary_record = self._pipeline_projection_worker_summary_record_from_metadata(
                 metadata.get("pipelineWorkerSummary"),
                 fallback_updated_at=self._ensure_aware(candidate.updated_at),
+                native_projection=native_projection,
             )
             if summary_record:
                 records.append(summary_record)
@@ -10559,6 +12835,7 @@ class SupervisorService:
                 record = self._pipeline_projection_worker_record_from_metadata(
                     raw_state,
                     fallback_updated_at=self._ensure_aware(candidate.updated_at),
+                    native_projection=native_projection,
                 )
                 if record:
                     records.append(record)
@@ -10569,6 +12846,7 @@ class SupervisorService:
         raw_worker_summary: object,
         *,
         fallback_updated_at: datetime,
+        native_projection: bool = False,
     ) -> dict[str, object] | None:
         if not isinstance(raw_worker_summary, dict):
             return None
@@ -10594,7 +12872,12 @@ class SupervisorService:
             for ref in self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_summary, "workerRefs"))
             if self._is_safe_worker_ref(ref)
         ]
-        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_summary, "evidenceRefs"))
+        raw_evidence_refs = self._metadata_string_list(raw_worker_summary, "evidenceRefs")
+        evidence_refs = (
+            self._dashboard_native_safe_evidence_refs(raw_evidence_refs)
+            if native_projection
+            else self._projection_safe_lifecycle_refs(raw_evidence_refs)
+        )
         if not counts and not worker_refs and not evidence_refs:
             return None
         if counts and not worker_refs and not evidence_refs:
@@ -10613,6 +12896,7 @@ class SupervisorService:
         raw_worker_state: object,
         *,
         fallback_updated_at: datetime,
+        native_projection: bool = False,
     ) -> dict[str, object] | None:
         if not isinstance(raw_worker_state, dict):
             return None
@@ -10628,7 +12912,12 @@ class SupervisorService:
         worker_refs = [ref for ref in self._projection_safe_lifecycle_refs(worker_ref_candidates) if self._is_safe_worker_ref(ref)]
         if not worker_refs:
             return None
-        evidence_refs = self._projection_safe_lifecycle_refs(self._metadata_string_list(raw_worker_state, "evidenceRefs"))
+        raw_evidence_refs = self._metadata_string_list(raw_worker_state, "evidenceRefs")
+        evidence_refs = (
+            self._dashboard_native_safe_evidence_refs(raw_evidence_refs)
+            if native_projection
+            else self._projection_safe_lifecycle_refs(raw_evidence_refs)
+        )
         return {
             "state": state,
             "worker_refs": worker_refs[:1],
@@ -10666,6 +12955,7 @@ class SupervisorService:
         *,
         generated_at: datetime,
         stale_after_seconds: int,
+        native_projection: bool = False,
     ) -> PipelineWorkerSummaryV0View:
         if not records:
             return PipelineWorkerSummaryV0View(
@@ -10710,21 +13000,35 @@ class SupervisorService:
                 count = counts.get(state)
                 if isinstance(count, int) and count >= 0:
                     summary_counts[state] += count
+        raw_worker_refs = [
+            ref
+            for record in records
+            for ref in record.get("worker_refs", [])
+            if isinstance(ref, str)
+        ]
         worker_refs = sorted(
             {
                 ref
-                for record in records
-                for ref in record.get("worker_refs", [])
-                if isinstance(ref, str)
+                for ref in (
+                    self._dashboard_native_safe_evidence_refs(raw_worker_refs)
+                    if native_projection
+                    else raw_worker_refs
+                )
+                if self._is_safe_worker_ref(ref)
             }
         )
+        raw_evidence_refs = [
+            ref
+            for record in records
+            for ref in record.get("evidence_refs", [])
+            if isinstance(ref, str)
+        ]
         evidence_refs = sorted(
-            {
-                ref
-                for record in records
-                for ref in record.get("evidence_refs", [])
-                if isinstance(ref, str)
-            }
+            set(
+                self._dashboard_native_safe_evidence_refs(raw_evidence_refs)
+                if native_projection
+                else raw_evidence_refs
+            )
         )
         return PipelineWorkerSummaryV0View(
             stateSource="manager_summary",
