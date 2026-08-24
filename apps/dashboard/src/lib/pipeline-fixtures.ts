@@ -1,5 +1,7 @@
 import type {
   AlphaMemorySourceStatusV0,
+  ArtifactRefV0,
+  EvidenceRefV0,
   HumanGateActionV0,
   HumanGateActionRequestV0,
   HumanGateActionRequestStatusV0,
@@ -8,9 +10,16 @@ import type {
   RecoveryActionV0,
   RecoveryActionTypeV0,
   SourceRefV0,
+  WorkPacketDeliveryEvidenceV0,
+  WorkPacketExecutionAttemptSummaryV0,
+  WorkPacketLearnOutcomeV0,
+  WorkPacketLearnRefillProjectionV0,
+  WorkPacketLoopStopStateV0,
   WorkPacketOwner,
-  WorkPacketV0View,
+  WorkPacketStageTransitionEventV0,
+  WorkPacketStatus,
 } from "@kendall/contracts";
+import type { PipelineFixturePacketV1 } from "./pipeline/pipeline-fixture-contract";
 import {
   PIPELINE_STATE_EVIDENCE_MATRIX_V0,
   PIPELINE_STATE_FIXTURE_CATALOG_V0,
@@ -29,33 +38,9 @@ export type PipelineFixtureKind =
   | "local-readiness"
   | "future-real-source";
 
-export type PipelineReadPacketContractV0 = WorkPacketV0View;
+type PipelineFixturePacket = PipelineFixturePacketV1;
 
-export type PipelineFixturePacket = PipelineReadPacketContractV0 & {
-  fixtureId: string;
-  fixtureKind: PipelineFixtureKind;
-  fixtureLabel: string;
-  summary: string;
-  nextAction: string;
-  confidenceLabel: string;
-  freshnessLabel: string;
-  sourceTrustState: PipelineSourceTrustState;
-  sourceTrustStates: PipelineSourceTrustState[];
-  sourceTrustSummary: string;
-  routeFork: PipelineRouteForkFixture;
-  lastEvent: string;
-  riskFlags: string[];
-  matrixRowIds: string[];
-  humanGateFixtureEvents: HumanGateFixtureEvent[];
-  recoveryFixtureEvents: RecoveryFixtureEvent[];
-  actionGuardFixtures: ActionGuardFixture[];
-  localModelHealth: LocalModelHealthV0 | null;
-  hermesJob: HermesJobPacketV0 | null;
-  codexWorker: CodexWorkerPacketV0 | null;
-  claudeReview: ClaudeReviewPacketV0 | null;
-};
-
-type WorkPacketExecutionAttemptSummary = WorkPacketV0View["executionAttempts"][number];
+type WorkPacketExecutionAttemptSummary = WorkPacketExecutionAttemptSummaryV0;
 
 type GovernedWorkerAttemptFixtureInput = {
   worker: "claude" | "hermes";
@@ -75,11 +60,11 @@ type GovernedWorkerAttemptFixtureOptions = Omit<GovernedWorkerAttemptFixtureInpu
   sourceEventRef?: string;
 };
 
-type LoopStopStateFixtureInput = Omit<WorkPacketV0View["loopStopStates"][number], "stopStateId" | "evidenceRefs"> & {
+type LoopStopStateFixtureInput = Omit<WorkPacketLoopStopStateV0, "stopStateId" | "evidenceRefs"> & {
   evidenceRefs?: string[];
 };
 
-type LearnRefillProjection = NonNullable<WorkPacketV0View["learnRefill"]>;
+type LearnRefillProjection = WorkPacketLearnRefillProjectionV0;
 type LearnRefillState = LearnRefillProjection["refillSourceState"]["state"];
 
 export type GovernedCopiedWorktreeExecutionEvidenceV0 = {
@@ -554,7 +539,7 @@ const recoveryActionTypes: RecoveryActionTypeV0[] = [
 
 export const pipelineFixtureMode = {
   label: "Fixture mode",
-  summary: "Static WorkPacketV0 fixtures only. No provider, worker, GitHub, or Obsidian calls are made by this route.",
+  summary: "Static dashboard-pipeline-fixture/v1 packets only. Named nested V0 detail contracts are retained as compatibility holds. No provider, worker, GitHub, or Obsidian calls are made by this route.",
   matrixRows: PIPELINE_STATE_EVIDENCE_MATRIX_V0.length,
   fixtureCatalogEntries: PIPELINE_STATE_FIXTURE_CATALOG_V0.length,
 };
@@ -1803,9 +1788,9 @@ function packetFixture(input: {
   requestedOutcome: string;
   currentStage: PipelineStage;
   currentOwner: WorkPacketOwner;
-  status: WorkPacketV0View["status"];
-  riskLevel: WorkPacketV0View["riskLevel"];
-  priority: WorkPacketV0View["priority"];
+  status: WorkPacketStatus;
+  riskLevel: "low" | "medium" | "high";
+  priority: "low" | "normal" | "high" | "urgent";
   fixtureId: string;
   matrixRowIds: string[];
   fixtureKind: PipelineFixtureKind;
@@ -1825,7 +1810,7 @@ function packetFixture(input: {
   claudeReviewState?: ClaudeReviewPacketV0["statusLabel"];
   governedWorkerAttempt?: GovernedWorkerAttemptFixtureOptions;
   loopStopStates?: LoopStopStateFixtureInput[];
-  deliveryEvidence?: WorkPacketV0View["deliveryEvidence"];
+  deliveryEvidence?: WorkPacketDeliveryEvidenceV0;
   learnRefillState?: LearnRefillState;
   learnRefillFollowUpOrigin?: NonNullable<LearnRefillProjection["followUpCandidates"][number]>["origin"];
   learnRefillOperatorOwnedExit?: boolean;
@@ -1900,7 +1885,7 @@ function packetFixture(input: {
       blockedReason: null,
     });
   }
-  const evidenceRefs: WorkPacketV0View["evidenceRefs"] = [
+  const evidenceRefs: EvidenceRefV0[] = [
     {
       refId: `${input.packetId}:evidence:fixture`,
       evidenceType: "fixture",
@@ -1927,12 +1912,12 @@ function packetFixture(input: {
         eventRef: governedAttemptEventRef,
       })
     : null;
-  const loopStopStates: WorkPacketV0View["loopStopStates"] = (input.loopStopStates ?? []).map((stopState, index) => ({
+  const loopStopStates: WorkPacketLoopStopStateV0[] = (input.loopStopStates ?? []).map((stopState, index) => ({
     ...stopState,
     stopStateId: `${input.packetId}:loop-stop:${String(index + 1).padStart(2, "0")}`,
     evidenceRefs: stopState.evidenceRefs ?? [`${input.packetId}:loop-stop:${String(index + 1).padStart(2, "0")}:evidence`],
   }));
-  const transitionEvents: WorkPacketV0View["transitionEvents"] = governedWorkerAttempt
+  const transitionEvents: WorkPacketStageTransitionEventV0[] = governedWorkerAttempt
     ? [
         {
           eventId: `${input.packetId}:transition:${governedWorkerAttempt.status}`,
@@ -2036,7 +2021,7 @@ function packetFixture(input: {
       });
     }
   }
-  const artifactRefs: WorkPacketV0View["artifactRefs"] = [
+  const artifactRefs: ArtifactRefV0[] = [
     {
       refId: `${input.packetId}:artifact:fixture`,
       artifactType: "fixture",
@@ -2086,8 +2071,11 @@ function packetFixture(input: {
   const learnRefill = buildLearnRefillProjection(input, memoryProposals, sourceRefs, evidenceRefs);
 
   return {
+    schemaVersion: "dashboard-pipeline-fixture/v1",
     packetId: input.packetId,
     fixtureId: input.fixtureId,
+    sourceKind: "demo-fixture",
+    sourceId: input.fixtureId,
     title: input.title,
     requestedOutcome: input.requestedOutcome,
     currentStage: input.currentStage,
@@ -2124,6 +2112,7 @@ function packetFixture(input: {
     deliveryEvidence: input.deliveryEvidence ?? null,
     learnOutcome,
     learnRefill,
+    gateStateValidation: null,
     routeSummary: {
       recommendation: rows[0]?.stage ?? input.currentStage,
       confidenceScore: input.confidenceLabel === "Low confidence" ? 0.36 : 0.82,
@@ -2260,8 +2249,8 @@ function buildLearnRefillProjection(
   },
   memoryProposals: MemoryProposalV0[],
   sourceRefs: SourceRefV0[],
-  evidenceRefs: WorkPacketV0View["evidenceRefs"]
-): WorkPacketV0View["learnRefill"] {
+  evidenceRefs: EvidenceRefV0[]
+): WorkPacketLearnRefillProjectionV0 | null {
   if (!input.learnRefillState && memoryProposals.length === 0 && !input.learnRefillReadyToTest && !input.learnRefillOperatorOwnedExit) {
     return null;
   }
@@ -2410,7 +2399,7 @@ function learnRefillNextSafeAction(state: LearnRefillState, hasFollowUp: boolean
 function buildLearnOutcome(
   packetId: string,
   memoryProposals: MemoryProposalV0[]
-): WorkPacketV0View["learnOutcome"] {
+): WorkPacketLearnOutcomeV0 | null {
   if (memoryProposals.length === 0) {
     return null;
   }
@@ -2529,7 +2518,7 @@ function isPullRequestArtifactRef(refId: string) {
 function buildAlphaMemorySourceStatus(
   packetId: string,
   sourceRefs: SourceRefV0[],
-  evidenceRefs: WorkPacketV0View["evidenceRefs"],
+  evidenceRefs: EvidenceRefV0[],
   memoryProposals: MemoryProposalV0[]
 ): AlphaMemorySourceStatusV0 | null {
   const alphaSourceRefs = sourceRefs.filter((ref) => ref.sourceType !== "candidate_work" && ref.sourceType !== "work_item");
@@ -3006,7 +2995,7 @@ function primaryLaneLabel(owner: WorkPacketOwner) {
 }
 
 function primaryLaneStatus(
-  status: WorkPacketV0View["status"],
+  status: WorkPacketStatus,
   codexWorker: CodexWorkerPacketV0 | null,
   claudeReview: ClaudeReviewPacketV0 | null
 ) {
@@ -3153,7 +3142,7 @@ function buildHumanGateActions(input: {
   packetId: string;
   currentStage: PipelineStage;
   currentOwner: WorkPacketOwner;
-  status: WorkPacketV0View["status"];
+  status: WorkPacketStatus;
   fixtureId: string;
   nextAction: string;
 }): HumanGateActionV0[] {
@@ -3641,7 +3630,7 @@ function buildRecoveryActions(input: {
   packetId: string;
   currentStage: PipelineStage;
   currentOwner: WorkPacketOwner;
-  status: WorkPacketV0View["status"];
+  status: WorkPacketStatus;
   fixtureId: string;
 }, rows: PipelineMatrixRow[], fixture: { recoveryActions: RecoveryActionTypeV0[] }): RecoveryActionV0[] {
   const evidenceRef = `${input.packetId}:evidence:fixture`;
@@ -3826,7 +3815,7 @@ function buildActionGuardFixtures(
     packetId: string;
     currentStage: PipelineStage;
     currentOwner: WorkPacketOwner;
-    status: WorkPacketV0View["status"];
+  status: WorkPacketStatus;
     fixtureId: string;
   },
   humanGateActions: HumanGateActionV0[],
@@ -4117,7 +4106,7 @@ function expectedStateForHumanGateAction(
   input: {
     currentStage: PipelineStage;
     currentOwner: WorkPacketOwner;
-    status: WorkPacketV0View["status"];
+  status: WorkPacketStatus;
     fixtureId: string;
   }
 ) {
@@ -4157,6 +4146,8 @@ function cloneDensityPacket(packet: PipelineFixturePacket, ordinal: number): Pip
   return {
     ...packet,
     packetId,
+    fixtureId: packetId,
+    sourceId: packetId,
     title: `Density ${ordinal}: ${packet.title}`,
     requestedOutcome: `Density ${ordinal}: ${packet.requestedOutcome}`,
     summary: `Density ${ordinal}: ${packet.summary}`,
@@ -4176,6 +4167,137 @@ function cloneDensityPacket(packet: PipelineFixturePacket, ordinal: number): Pip
       refId: remapId(ref.refId),
       label: `Density ${ordinal}: ${ref.label}`,
     })),
+    lifecycleState: {
+      ...packet.lifecycleState,
+      authoritativeRef: remapId(packet.lifecycleState.authoritativeRef),
+      derivedFromRefs: packet.lifecycleState.derivedFromRefs.map(remapId),
+      transitionEventRefs: packet.lifecycleState.transitionEventRefs.map(remapId),
+      latestTransitionEventRef: packet.lifecycleState.latestTransitionEventRef ? remapId(packet.lifecycleState.latestTransitionEventRef) : null,
+      attemptRef: packet.lifecycleState.attemptRef ? remapId(packet.lifecycleState.attemptRef) : null,
+    },
+    executionAttempts: packet.executionAttempts.map((attempt) => ({
+      ...attempt,
+      attemptId: remapId(attempt.attemptId),
+      workItemId: remapId(attempt.workItemId),
+      leaseId: attempt.leaseId ? remapId(attempt.leaseId) : null,
+      routeDecisionId: remapId(attempt.routeDecisionId),
+      workerId: remapId(attempt.workerId),
+      evidenceRefs: attempt.evidenceRefs.map(remapId),
+      artifactRefs: attempt.artifactRefs.map(remapId),
+    })),
+    candidateWork: packet.candidateWork ? {
+      ...packet.candidateWork,
+      id: remapId(packet.candidateWork.id),
+      promotedWorkItemId: packet.candidateWork.promotedWorkItemId ? remapId(packet.candidateWork.promotedWorkItemId) : null,
+      sourceSummary: packet.candidateWork.sourceSummary ? {
+        ...packet.candidateWork.sourceSummary,
+        sourceRef: remapId(packet.candidateWork.sourceSummary.sourceRef),
+        evidenceRefs: packet.candidateWork.sourceSummary.evidenceRefs.map(remapId),
+      } : null,
+    } : null,
+    workItem: packet.workItem ? {
+      ...packet.workItem,
+      id: remapId(packet.workItem.id),
+    } : null,
+    taskPacket: packet.taskPacket ? {
+      ...packet.taskPacket,
+      workItemId: remapId(packet.taskPacket.workItemId),
+    } : null,
+    routingPreview: packet.routingPreview ? {
+      profile: {
+        ...packet.routingPreview.profile,
+        workItemId: remapId(packet.routingPreview.profile.workItemId),
+      },
+      decision: {
+        ...packet.routingPreview.decision,
+        decisionId: remapId(packet.routingPreview.decision.decisionId),
+        workItemId: remapId(packet.routingPreview.decision.workItemId),
+        profileSnapshot: {
+          ...packet.routingPreview.decision.profileSnapshot,
+          workItemId: remapId(packet.routingPreview.decision.profileSnapshot.workItemId),
+        },
+      },
+    } : null,
+    deliveryEvidence: packet.deliveryEvidence ? {
+      ...packet.deliveryEvidence,
+      evidenceId: remapId(packet.deliveryEvidence.evidenceId),
+      evidenceRefs: packet.deliveryEvidence.evidenceRefs.map(remapId),
+      artifactRefs: packet.deliveryEvidence.artifactRefs.map(remapId),
+      retainedEvidence: packet.deliveryEvidence.retainedEvidence.map(remapId),
+      cleanupTarget: packet.deliveryEvidence.cleanupTarget ? remapId(packet.deliveryEvidence.cleanupTarget) : null,
+      recoveryPath: remapId(packet.deliveryEvidence.recoveryPath),
+      mergeGate: packet.deliveryEvidence.mergeGate ? {
+        ...packet.deliveryEvidence.mergeGate,
+        criteria: packet.deliveryEvidence.mergeGate.criteria.map((criterion) => ({
+          ...criterion,
+          criterionId: remapId(criterion.criterionId),
+          evidence: criterion.evidence.map(remapId),
+        })),
+        recoveryPath: remapId(packet.deliveryEvidence.mergeGate.recoveryPath),
+      } : null,
+      cleanupDryRunGate: packet.deliveryEvidence.cleanupDryRunGate ? {
+        ...packet.deliveryEvidence.cleanupDryRunGate,
+        expectedPr: packet.deliveryEvidence.cleanupDryRunGate.expectedPr ? remapId(packet.deliveryEvidence.cleanupDryRunGate.expectedPr) : null,
+        expectedOwner: packet.deliveryEvidence.cleanupDryRunGate.expectedOwner ? remapId(packet.deliveryEvidence.cleanupDryRunGate.expectedOwner) : null,
+        expectedWorktree: packet.deliveryEvidence.cleanupDryRunGate.expectedWorktree ? remapId(packet.deliveryEvidence.cleanupDryRunGate.expectedWorktree) : null,
+        expectedLocalBranch: packet.deliveryEvidence.cleanupDryRunGate.expectedLocalBranch ? remapId(packet.deliveryEvidence.cleanupDryRunGate.expectedLocalBranch) : null,
+        expectedRemoteBranch: packet.deliveryEvidence.cleanupDryRunGate.expectedRemoteBranch ? remapId(packet.deliveryEvidence.cleanupDryRunGate.expectedRemoteBranch) : null,
+        expectedHeadRevision: packet.deliveryEvidence.cleanupDryRunGate.expectedHeadRevision ? remapId(packet.deliveryEvidence.cleanupDryRunGate.expectedHeadRevision) : null,
+        blockedReasons: packet.deliveryEvidence.cleanupDryRunGate.blockedReasons.map(remapId),
+        recoveryPath: remapId(packet.deliveryEvidence.cleanupDryRunGate.recoveryPath),
+      } : null,
+    } : null,
+    learnOutcome: packet.learnOutcome ? {
+      ...packet.learnOutcome,
+      outcomeId: remapId(packet.learnOutcome.outcomeId),
+      evidenceRefs: packet.learnOutcome.evidenceRefs.map(remapId),
+      sourceRefs: packet.learnOutcome.sourceRefs.map(remapId),
+      decisionRecords: packet.learnOutcome.decisionRecords.map((record) => ({
+        ...record,
+        decisionId: remapId(record.decisionId),
+        proposalId: remapId(record.proposalId),
+        evidenceRefs: record.evidenceRefs.map(remapId),
+        recoveryPath: remapId(record.recoveryPath),
+      })),
+    } : null,
+    alphaMemorySourceStatus: packet.alphaMemorySourceStatus ? {
+      ...packet.alphaMemorySourceStatus,
+      statusId: remapId(packet.alphaMemorySourceStatus.statusId),
+      sourceRefs: packet.alphaMemorySourceStatus.sourceRefs.map(remapId),
+      evidenceRefs: packet.alphaMemorySourceStatus.evidenceRefs.map(remapId),
+      backupPath: remapId(packet.alphaMemorySourceStatus.backupPath),
+      rollbackPath: remapId(packet.alphaMemorySourceStatus.rollbackPath),
+      llmWikiReadiness: packet.alphaMemorySourceStatus.llmWikiReadiness ? {
+        ...packet.alphaMemorySourceStatus.llmWikiReadiness,
+        statusId: remapId(packet.alphaMemorySourceStatus.llmWikiReadiness.statusId),
+        sourceRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.sourceRefs.map(remapId),
+        evidenceRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.evidenceRefs.map(remapId),
+        memoryProposalRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.memoryProposalRefs.map(remapId),
+        allowedInputs: packet.alphaMemorySourceStatus.llmWikiReadiness.allowedInputs.map(remapId),
+        rebuildPreview: packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview ? {
+          ...packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview,
+          previewId: remapId(packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview.previewId),
+          inputRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview.inputRefs.map(remapId),
+          memoryProposalRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview.memoryProposalRefs.map(remapId),
+          derivedTargetFolder: remapId(packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview.derivedTargetFolder),
+        } : null,
+        rebuildDryRunPlan: packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan ? {
+          ...packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan,
+          planId: remapId(packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan.planId),
+          inputRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan.inputRefs.map(remapId),
+          memoryProposalRefs: packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan.memoryProposalRefs.map(remapId),
+          disposableTargetNamespace: remapId(packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan.disposableTargetNamespace),
+          derivedTargetFolder: remapId(packet.alphaMemorySourceStatus.llmWikiReadiness.rebuildDryRunPlan.derivedTargetFolder),
+        } : null,
+      } : null,
+    } : null,
+    gateStateValidation: packet.gateStateValidation ? {
+      ...packet.gateStateValidation,
+      refStates: packet.gateStateValidation.refStates.map((refState) => ({
+        ...refState,
+        refId: remapId(refState.refId),
+      })),
+    } : null,
     transitionEvents: (packet.transitionEvents ?? []).map((event) => ({
       ...event,
       eventId: remapId(event.eventId),
@@ -4355,7 +4477,7 @@ function rejectedRoutesFor(stage: PipelineStage) {
   return pipelineStages.filter((candidate) => candidate !== stage).slice(0, 3);
 }
 
-function riskFlagsFor(input: { riskLevel: WorkPacketV0View["riskLevel"]; freshnessLabel: string; fixtureKind: PipelineFixtureKind }) {
+function riskFlagsFor(input: { riskLevel: "low" | "medium" | "high"; freshnessLabel: string; fixtureKind: PipelineFixtureKind }) {
   const flags = [`${input.riskLevel} risk`];
   if (input.freshnessLabel !== "fresh") {
     flags.push(input.freshnessLabel);
@@ -4397,7 +4519,7 @@ function validatePacketMatrixRows(
     packetId: string;
     currentStage: PipelineStage;
     currentOwner: WorkPacketOwner;
-    status: WorkPacketV0View["status"];
+    status: WorkPacketStatus;
   },
   rows: PipelineMatrixRow[]
 ) {

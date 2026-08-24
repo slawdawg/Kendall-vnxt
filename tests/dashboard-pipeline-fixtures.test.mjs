@@ -23,6 +23,7 @@ const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
 const packetDetailPath = new URL("packet-detail-fixture-page.tsx", pipelineComponentsPath);
 const canonicalPacketDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
+const fixtureContractPath = new URL("../apps/dashboard/src/lib/pipeline/pipeline-fixture-contract.ts", import.meta.url);
 const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
 const pipelineSupervisorRuntimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
 const pipelineSupervisorProjectionPath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-projection.ts", import.meta.url);
@@ -1812,7 +1813,7 @@ test("fixture-as-live regressions are blocked by explicit projection truth predi
   );
 });
 
-test("/pipeline route uses canonical presentations and isolates explicit V0 demo fixtures", async () => {
+test("/pipeline route uses canonical presentations and isolates explicit V1 demo fixtures", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const demoRouteSource = await readFile(demoRoutePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
@@ -1822,6 +1823,7 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   const packetDetailSource = await readFile(packetDetailPath, "utf8");
   const cockpitSource = await readFile(cockpitPath, "utf8");
   const fixtureSource = await readFile(fixturesPath, "utf8");
+  const fixtureContractSource = await readFile(fixtureContractPath, "utf8");
   const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
   const pipelineSupervisorRuntimeSource = await readFile(pipelineSupervisorRuntimePath, "utf8");
   const dashboardSupervisorTransportSource = await readFile(new URL("../apps/dashboard/src/lib/dashboard-supervisor-transport.ts", import.meta.url), "utf8");
@@ -2880,10 +2882,11 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
     assert.match(fixtureSource, new RegExp(packetSurface));
   }
 
-  assert.match(fixtureSource, /WorkPacketV0View/);
-  assert.match(fixtureSource, /import type \{[\s\S]*WorkPacketV0View[\s\S]*\} from "@kendall\/contracts";/);
-  assert.match(fixtureSource, /export type PipelineReadPacketContractV0 = WorkPacketV0View;/);
-  assert.match(fixtureSource, /export type PipelineFixturePacket = PipelineReadPacketContractV0 & \{/);
+  assert.match(fixtureContractSource, /PIPELINE_FIXTURE_SCHEMA_VERSION/);
+  assert.match(fixtureContractSource, /dashboard-pipeline-fixture\/v1/);
+  assert.match(fixtureContractSource, /export type PipelineFixturePacketV1/);
+  assert.match(fixtureSource, /import type \{ PipelineFixturePacketV1 \} from "\.\/pipeline\/pipeline-fixture-contract";/);
+  assert.doesNotMatch(fixtureSource, /WorkPacketV0View|PipelineReadPacketContractV0/);
   assert.doesNotMatch(
     fixtureSource,
     /export type Pipeline(Read)?Packet(V0|View)?\s*=\s*\{/,
@@ -2897,10 +2900,13 @@ test("/pipeline route uses canonical presentations and isolates explicit V0 demo
   assert.match(cockpitSource, /import \{[\s\S]*projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*PipelineCanonicalPresentationPacketV1[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
   assert.match(cockpitSource, /type PipelineCanonicalCockpitPacket = PipelineCanonicalPresentationPacketV1 & PipelineCockpitPacket;/);
   assert.match(cockpitSource, /canonicalPresentation\.packets as PipelineCanonicalCockpitPacket\[\]/);
-  assert.match(cockpitSource, /type PipelineFixturePacket = PipelineCockpitPacket;/);
+  assert.match(cockpitSource, /import type \{ PipelineFixturePacketV1 \} from "\.\.\/\.\.\/lib\/pipeline\/pipeline-fixture-contract";/);
+  assert.match(cockpitSource, /packets\?: PipelineFixturePacketV1\[\];/);
+  assert.match(cockpitSource, /selectedPacket\?: PipelineFixturePacketV1 \| null;/);
   assert.doesNotMatch(cockpitSource, /import[^\n]*PipelineDashboardPacket/);
-  assert.match(packetDetailSource, /import type \{ PipelineDashboardPacket \} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
-  assert.match(packetDetailSource, /type PipelineFixturePacket = PipelineDashboardPacket;/);
+  assert.match(packetDetailSource, /import type \{ PipelineFixturePacketV1 \} from "\.\.\/\.\.\/lib\/pipeline\/pipeline-fixture-contract";/);
+  assert.match(packetDetailSource, /type PipelineFixturePacket = PipelineFixturePacketV1;/);
+  assert.doesNotMatch(packetDetailSource, /PipelineDashboardPacket|WorkPacketV0View/);
   const canonicalPacketDetailSource = await readFile(canonicalPacketDetailPath, "utf8");
   assert.match(canonicalPacketDetailSource, /const \{ authoritativeLifecycle: lifecycle, presentation \} = canonicalPacket/);
   assert.doesNotMatch(canonicalPacketDetailSource, /PipelineDashboardPacket|WorkPacketV0View|projectDashboardCanonicalPresentationsToCockpitPackets/);
@@ -3284,6 +3290,7 @@ test("pipeline import boundary follows shared dashboard-local runtime intermedia
     "apps/dashboard/src/components/static-module.ts": "export const staticModule = true;\n",
     "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx": '"use client";\nimport "../../lib/pipeline-supervisor-actions";\nexport function PipelineCockpit() {}\n',
     "apps/dashboard/src/components/pipeline/packet-detail-page.tsx": "export function PacketDetailPage() {}\n",
+    "apps/dashboard/src/lib/pipeline/pipeline-fixture-contract.ts": "export const fixtureContract = true;\n",
     "apps/dashboard/src/lib/pipeline-fixtures.ts": "export const fixtureCatalog = [];\n",
     "apps/dashboard/src/lib/pipeline-packet-loader.ts": 'import { getWorkPacket, getWorkPackets } from "./pipeline-supervisor-runtime";\nexport const loadPackets = () => [getWorkPacket, getWorkPackets];\n',
     "apps/dashboard/src/lib/pipeline-supervisor-runtime.ts": [
@@ -3699,6 +3706,256 @@ test("pipeline local model health fixtures cover readiness states without direct
       `${packet.packetId} local model lane should point at packet-local health evidence`
     );
     assert.match(packet.localModelHealth.evidenceRef, new RegExp(escapeRegExp(packet.packetId)), `${packet.packetId} local health evidence should be packet-local`);
+  }
+});
+
+test("dashboard demo packets satisfy the strict V1 fixture contract", async () => {
+  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
+  const { isPipelineFixturePacketV1, PIPELINE_FIXTURE_SCHEMA_VERSION } = await loadCompiledPipelineFixtureContract();
+
+  assert.equal(PIPELINE_FIXTURE_SCHEMA_VERSION, "dashboard-pipeline-fixture/v1");
+  assert.ok(pipelineFixturePackets.length > 0, "fixture catalog should provide packets");
+  for (const packet of pipelineFixturePackets) {
+    assert.equal(packet.schemaVersion, PIPELINE_FIXTURE_SCHEMA_VERSION);
+    assert.equal(packet.sourceKind, "demo-fixture");
+    assert.equal(isPipelineFixturePacketV1(packet), true, `${packet.packetId} should satisfy V1 fixture validation`);
+  }
+  for (const packet of pipelineCockpitPackets) {
+    assert.equal(isPipelineFixturePacketV1(packet), true, `${packet.packetId} cockpit packet should satisfy V1 fixture validation`);
+  }
+
+  const unknownRootField = { ...pipelineFixturePackets[0], unexpected: true };
+  assert.equal(isPipelineFixturePacketV1(unknownRootField), false, "unknown root fields must fail closed");
+  const invalidStatus = { ...pipelineFixturePackets[0], status: "running" };
+  assert.equal(isPipelineFixturePacketV1(invalidStatus), false, "unknown status values must fail closed");
+  const invalidRoute = { ...pipelineFixturePackets[0], routeFork: { ...pipelineFixturePackets[0].routeFork, selectedRoute: "" } };
+  assert.equal(isPipelineFixturePacketV1(invalidRoute), false, "blank route values must fail closed");
+  const unknownRouteField = { ...pipelineFixturePackets[0], routeFork: { ...pipelineFixturePackets[0].routeFork, unexpected: true } };
+  assert.equal(isPipelineFixturePacketV1(unknownRouteField), false, "unknown route fields must fail closed");
+  const fixture = pipelineFixturePackets[0];
+  const lifecycleStageMismatch = { ...fixture, lifecycleState: { ...fixture.lifecycleState, stage: fixture.currentStage === "learn" ? "capture" : "learn" } };
+  assert.equal(isPipelineFixturePacketV1(lifecycleStageMismatch), false, "lifecycle stage mismatches must fail closed");
+  const lifecycleOwnerMismatch = { ...fixture, lifecycleState: { ...fixture.lifecycleState, owner: fixture.currentOwner === "blocked" ? "kendall" : "blocked" } };
+  assert.equal(isPipelineFixturePacketV1(lifecycleOwnerMismatch), false, "lifecycle owner mismatches must fail closed");
+  const lifecycleStatusMismatch = { ...fixture, lifecycleState: { ...fixture.lifecycleState, status: fixture.status === "deferred" ? "active" : "deferred" } };
+  assert.equal(isPipelineFixturePacketV1(lifecycleStatusMismatch), false, "lifecycle status mismatches must fail closed");
+  const sourceIdMismatch = { ...fixture, sourceId: fixture.sourceId === "fixture:other-source" ? "fixture:another-source" : "fixture:other-source" };
+  assert.equal(isPipelineFixturePacketV1(sourceIdMismatch), false, "source identity mismatches must fail closed");
+  const unapprovedFixtureMapping = { ...fixture, fixtureId: "unapproved-fixture", sourceId: "unapproved-fixture" };
+  assert.equal(isPipelineFixturePacketV1(unapprovedFixtureMapping), false, "fixture identity mappings must use the approved catalog or clone-local packet identity");
+  const substringSourceRef = { ...fixture, sourceRefs: [{ ...fixture.sourceRefs[0], refId: `${fixture.packetId}foreign:evidence` }, ...fixture.sourceRefs.slice(1)] };
+  assert.equal(isPipelineFixturePacketV1(substringSourceRef), false, "packet-bound refs must reject substring identities");
+  const nestedSourceRefPayload = { ...fixture, sourceRefs: [{ ...fixture.sourceRefs[0], unexpected: true }, ...fixture.sourceRefs.slice(1)] };
+  assert.equal(isPipelineFixturePacketV1(nestedSourceRefPayload), false, "unknown nested compatibility fields must fail closed");
+  const unsafeAllowedSourceRef = { ...fixture, sourceRefs: [{ ...fixture.sourceRefs[0], pathOrUrl: { leaked: true } }, ...fixture.sourceRefs.slice(1)] };
+  assert.equal(isPipelineFixturePacketV1(unsafeAllowedSourceRef), false, "source refs must reject non-string paths and URLs");
+  const invalidEvidenceDiscriminator = { ...fixture, evidenceRefs: [{ ...fixture.evidenceRefs[0], retentionClass: "raw" }, ...fixture.evidenceRefs.slice(1)] };
+  assert.equal(isPipelineFixturePacketV1(invalidEvidenceDiscriminator), false, "evidence refs must reject unknown retention classes");
+  const invalidArtifactDiscriminator = { ...fixture, artifactRefs: [{ ...fixture.artifactRefs[0], artifactType: "raw_payload" }, ...fixture.artifactRefs.slice(1)] };
+  assert.equal(isPipelineFixturePacketV1(invalidArtifactDiscriminator), false, "artifact refs must reject unknown artifact types");
+  const actionPacket = pipelineCockpitPackets.find((packet) => packet.humanGateActions.length > 0);
+  if (actionPacket) {
+    const action = actionPacket.humanGateActions[0];
+    const foreignActionPacket = {
+      ...actionPacket,
+      humanGateActions: [{ ...action, payload: { ...action.payload, packetId: `${actionPacket.packetId}:foreign` } }, ...actionPacket.humanGateActions.slice(1)],
+    };
+    assert.equal(isPipelineFixturePacketV1(foreignActionPacket), false, "action payload packet identity must match the containing packet");
+  }
+  const deliveryPacket = pipelineCockpitPackets.find((packet) => packet.deliveryEvidence !== null);
+  if (deliveryPacket?.deliveryEvidence) {
+    const foreignDeliveryEvidence = {
+      ...deliveryPacket,
+      deliveryEvidence: { ...deliveryPacket.deliveryEvidence, evidenceId: "foreign-delivery-evidence" },
+    };
+    assert.equal(isPipelineFixturePacketV1(foreignDeliveryEvidence), false, "delivery evidence identity must match the containing packet");
+  }
+  const workerPacket = pipelineCockpitPackets.find((packet) => packet.hermesJob !== null);
+  if (workerPacket?.hermesJob) {
+    const unsafeWorker = { ...workerPacket, hermesJob: { ...workerPacket.hermesJob, networkPolicy: "kendall_gateway_only" } };
+    assert.equal(isPipelineFixturePacketV1(unsafeWorker), false, "Hermes fixture authority must remain network-none");
+    const foreignWorkerRef = { ...workerPacket, hermesJob: { ...workerPacket.hermesJob, inputRefs: ["fixture:foreign:source"] } };
+    assert.equal(isPipelineFixturePacketV1(foreignWorkerRef), false, "Hermes worker references must remain packet-local");
+  }
+  const routingPacket = pipelineCockpitPackets.find((packet) => packet.routingPreview !== null);
+  if (routingPacket?.routingPreview) {
+    const invalidRouting = {
+      ...routingPacket,
+      routingPreview: {
+        ...routingPacket.routingPreview,
+        decision: { ...routingPacket.routingPreview.decision, confidenceScore: "high" },
+      },
+    };
+    assert.equal(isPipelineFixturePacketV1(invalidRouting), false, "routing decision values must satisfy the V1 shape");
+  }
+  const alphaPacket = pipelineCockpitPackets.find((packet) => packet.alphaMemorySourceStatus?.llmWikiReadiness);
+  if (alphaPacket?.alphaMemorySourceStatus?.llmWikiReadiness) {
+    const invalidAlphaReadiness = {
+      ...alphaPacket,
+      alphaMemorySourceStatus: {
+        ...alphaPacket.alphaMemorySourceStatus,
+        llmWikiReadiness: { ...alphaPacket.alphaMemorySourceStatus.llmWikiReadiness, unexpected: true },
+      },
+    };
+    assert.equal(isPipelineFixturePacketV1(invalidAlphaReadiness), false, "nested source readiness must reject unknown fields");
+    const invalidRebuildPreview = {
+      ...alphaPacket,
+      alphaMemorySourceStatus: {
+        ...alphaPacket.alphaMemorySourceStatus,
+        llmWikiReadiness: {
+          ...alphaPacket.alphaMemorySourceStatus.llmWikiReadiness,
+          rebuildPreview: alphaPacket.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview
+            ? { ...alphaPacket.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview, unexpected: true }
+            : { operationMode: "read_only", unexpected: true },
+        },
+      },
+    };
+    assert.equal(isPipelineFixturePacketV1(invalidRebuildPreview), false, "rebuild previews must reject malformed nested fields");
+    const foreignAllowedInput = {
+      ...alphaPacket,
+      alphaMemorySourceStatus: {
+        ...alphaPacket.alphaMemorySourceStatus,
+        llmWikiReadiness: { ...alphaPacket.alphaMemorySourceStatus.llmWikiReadiness, allowedInputs: ["memory_proposal:fixture:foreign:proposal"] },
+      },
+    };
+    assert.equal(isPipelineFixturePacketV1(foreignAllowedInput), false, "LLM-Wiki allowed inputs must remain packet-local");
+    if (alphaPacket.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview) {
+      const foreignRebuildRef = {
+        ...alphaPacket,
+        alphaMemorySourceStatus: {
+          ...alphaPacket.alphaMemorySourceStatus,
+          llmWikiReadiness: {
+            ...alphaPacket.alphaMemorySourceStatus.llmWikiReadiness,
+            rebuildPreview: {
+              ...alphaPacket.alphaMemorySourceStatus.llmWikiReadiness.rebuildPreview,
+              inputRefs: ["fixture:foreign:input"],
+            },
+          },
+        },
+      };
+      assert.equal(isPipelineFixturePacketV1(foreignRebuildRef), false, "rebuild preview refs must remain packet-local");
+    }
+  }
+  const invalidAlphaMetadata = {
+    ...fixture,
+    alphaMemorySourceStatus: {
+      ...fixture.alphaMemorySourceStatus,
+      targetMetadata: { nested: { unbounded: true } },
+    },
+  };
+  assert.equal(isPipelineFixturePacketV1(invalidAlphaMetadata), false, "alpha target metadata must remain bounded scalar metadata");
+  const invalidAlphaNumber = {
+    ...fixture,
+    alphaMemorySourceStatus: {
+      ...fixture.alphaMemorySourceStatus,
+      targetMetadata: { score: Number.NaN },
+    },
+  };
+  assert.equal(isPipelineFixturePacketV1(invalidAlphaNumber), false, "alpha target metadata must reject non-finite numbers");
+  const invalidRouteSummary = {
+    ...fixture,
+    routeSummary: { ...fixture.routeSummary, confidenceScore: "high" },
+  };
+  assert.equal(isPipelineFixturePacketV1(invalidRouteSummary), false, "route summary confidence must be a finite number");
+  const boundedWorkItem = {
+    title: "Bounded work item",
+    requestedOutcome: "Validate nested work-item boundaries",
+    source: "fixture",
+    details: "metadata-only",
+    metadata: { label: "safe" },
+    id: `${fixture.packetId}:work-item`,
+    origin: "operator",
+    state: "queued",
+    lane: null,
+    assigneeId: null,
+    assigneeLabel: null,
+    ageMinutes: 0,
+    needsAttention: false,
+    attentionReason: null,
+    escalatedAt: null,
+    escalationReason: null,
+    escalatedByLabel: null,
+    statusSummary: "safe",
+    blockedReason: null,
+    nextStep: null,
+    selfDetectedIssue: false,
+    selfDetectedIssueCategory: null,
+    executionRecipe: null,
+    deliveryReadiness: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    lastEventAt: "2026-01-01T00:00:00.000Z",
+    requiresAudit: false,
+    auditMode: "none",
+  };
+  const hostileWorkItemMetadata = { ...fixture, workItem: { ...boundedWorkItem, metadata: { nested: { raw: true } } } };
+  assert.equal(isPipelineFixturePacketV1(hostileWorkItemMetadata), false, "work-item metadata must remain scalar bounded data");
+  const hostileWorkItemUnion = { ...fixture, workItem: { ...boundedWorkItem, state: "running" } };
+  assert.equal(isPipelineFixturePacketV1(hostileWorkItemUnion), false, "work-item state must use the declared workflow union");
+  const hostileWorkItemAge = { ...fixture, workItem: { ...boundedWorkItem, ageMinutes: Number.NaN } };
+  assert.equal(isPipelineFixturePacketV1(hostileWorkItemAge), false, "work-item age must be finite bounded metadata");
+  if (fixture.learnRefill) {
+    const foreignLearnRefill = {
+      ...fixture,
+      learnRefill: { ...fixture.learnRefill, projectionId: "fixture:foreign:learn-refill" },
+    };
+    assert.equal(isPipelineFixturePacketV1(foreignLearnRefill), false, "learn-refill projection identity must remain packet-local");
+    if (fixture.learnRefill.followUpCandidates.length > 0) {
+      const foreignLearnEvidence = {
+        ...fixture,
+        learnRefill: {
+          ...fixture.learnRefill,
+          followUpCandidates: [{ ...fixture.learnRefill.followUpCandidates[0], evidenceRefs: ["fixture:foreign:evidence"] }, ...fixture.learnRefill.followUpCandidates.slice(1)],
+        },
+      };
+      assert.equal(isPipelineFixturePacketV1(foreignLearnEvidence), false, "learn-refill descendant evidence must remain packet-local");
+    }
+  }
+  const foreignLifecycleRef = {
+    ...fixture,
+    lifecycleState: { ...fixture.lifecycleState, authoritativeRef: "fixture:foreign:authoritative" },
+  };
+  assert.equal(isPipelineFixturePacketV1(foreignLifecycleRef), false, "lifecycle references must remain packet-local");
+  const loopPacket = pipelineCockpitPackets.find((packet) => packet.loopStopStates.length > 0);
+  if (loopPacket) {
+    const invalidLoopDiscriminator = {
+      ...loopPacket,
+      loopStopStates: [{ ...loopPacket.loopStopStates[0], kind: "unknown_stop_kind" }, ...loopPacket.loopStopStates.slice(1)],
+    };
+    assert.equal(isPipelineFixturePacketV1(invalidLoopDiscriminator), false, "loop-stop kinds must use the declared discriminator union");
+    const foreignLoopRef = {
+      ...loopPacket,
+      loopStopStates: [{ ...loopPacket.loopStopStates[0], evidenceRefs: ["fixture:foreign:evidence"] }, ...loopPacket.loopStopStates.slice(1)],
+    };
+    assert.equal(isPipelineFixturePacketV1(foreignLoopRef), false, "loop-stop evidence must remain packet-local");
+  }
+  const missingTrustInclusion = { ...fixture, sourceTrustStates: fixture.sourceTrustStates.filter((state) => state !== fixture.sourceTrustState) };
+  assert.equal(isPipelineFixturePacketV1(missingTrustInclusion), false, "source trust state must be represented in the trust-state set");
+  for (const densityPacket of pipelineCockpitPackets.filter((candidate) => candidate.packetId.startsWith("fixture:density-"))) {
+    assert.equal(densityPacket.fixtureId, densityPacket.packetId, `${densityPacket.packetId} fixture identity should be clone-local`);
+    assert.equal(densityPacket.sourceId, densityPacket.packetId, `${densityPacket.packetId} source identity should be clone-local`);
+    assert.equal(densityPacket.lifecycleState.authoritativeRef.includes(densityPacket.packetId), true, `${densityPacket.packetId} lifecycle authority ref should be clone-local`);
+    assert.equal(densityPacket.lifecycleState.derivedFromRefs.every((ref) => !ref.includes("fixture:density-") || ref.includes(densityPacket.packetId)), true, `${densityPacket.packetId} derived refs should not cross density clones`);
+    for (const attempt of densityPacket.executionAttempts) {
+      assert.equal(attempt.attemptId.includes(densityPacket.packetId), true, `${densityPacket.packetId} attempt identity should be clone-local`);
+      assert.equal(attempt.evidenceRefs.every((ref) => ref.includes(densityPacket.packetId)), true, `${densityPacket.packetId} attempt evidence should be clone-local`);
+    }
+    if (densityPacket.deliveryEvidence) {
+      assert.equal(densityPacket.deliveryEvidence.evidenceId.includes(densityPacket.packetId), true, `${densityPacket.packetId} delivery evidence should be clone-local`);
+      assert.equal(densityPacket.deliveryEvidence.evidenceRefs.every((ref) => ref.includes(densityPacket.packetId)), true, `${densityPacket.packetId} delivery evidence refs should be clone-local`);
+    }
+    if (densityPacket.alphaMemorySourceStatus) {
+      assert.equal(densityPacket.alphaMemorySourceStatus.statusId.includes(densityPacket.packetId), true, `${densityPacket.packetId} alpha status should be clone-local`);
+      assert.equal(densityPacket.alphaMemorySourceStatus.sourceRefs.every((ref) => ref.includes(densityPacket.packetId)), true, `${densityPacket.packetId} alpha source refs should be clone-local`);
+      if (densityPacket.alphaMemorySourceStatus.llmWikiReadiness) {
+        assert.equal(densityPacket.alphaMemorySourceStatus.llmWikiReadiness.statusId.includes(densityPacket.packetId), true, `${densityPacket.packetId} LLM-Wiki readiness should be clone-local`);
+        assert.equal(densityPacket.alphaMemorySourceStatus.llmWikiReadiness.sourceRefs.every((ref) => ref.includes(densityPacket.packetId)), true, `${densityPacket.packetId} LLM-Wiki source refs should be clone-local`);
+        assert.equal(densityPacket.alphaMemorySourceStatus.llmWikiReadiness.allowedInputs.every((ref) => ref.includes(densityPacket.packetId)), true, `${densityPacket.packetId} LLM-Wiki allowed inputs should be clone-local`);
+      }
+    }
+    if (densityPacket.gateStateValidation) {
+      assert.equal(densityPacket.gateStateValidation.refStates.every((refState) => refState.refId.includes(densityPacket.packetId)), true, `${densityPacket.packetId} gate refs should be clone-local`);
+    }
   }
 });
 
@@ -4634,6 +4891,36 @@ async function loadCompiledDashboardFixtures() {
   );
 
   return import(pathToFileURL(compiledFixturePath).href);
+}
+
+async function loadCompiledPipelineFixtureContract() {
+  const outDir = await mkdtemp(join(tmpdir(), "dashboard-fixture-contract-"));
+  await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
+  const result = spawnSync(
+    "apps/dashboard/node_modules/.bin/tsc",
+    [
+      "--target",
+      "ES2022",
+      "--module",
+      "ESNext",
+      "--moduleResolution",
+      "Bundler",
+      "--strict",
+      "--types",
+      "node",
+      "--typeRoots",
+      "apps/dashboard/node_modules/@types",
+      "--verbatimModuleSyntax",
+      "--rootDir",
+      ".",
+      "--outDir",
+      outDir,
+      "apps/dashboard/src/lib/pipeline/pipeline-fixture-contract.ts",
+    ],
+    { encoding: "utf8" }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return import(pathToFileURL(join(outDir, "apps/dashboard/src/lib/pipeline/pipeline-fixture-contract.js")).href);
 }
 
 async function loadCompiledDashboardEvidenceSource() {

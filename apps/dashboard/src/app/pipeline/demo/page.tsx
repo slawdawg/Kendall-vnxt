@@ -3,6 +3,7 @@ import { PipelineCockpit } from "../../../components/pipeline/pipeline-cockpit";
 import { selectedManagerExecutionLaneSummary } from "../../../lib/pipeline/manager-execution-lane-summary";
 import { pipelineCockpitPackets } from "../../../lib/pipeline-fixtures";
 import { dashboardDemoRoutesEnabled } from "../../../lib/dashboard-demo-routes";
+import type { PipelineFixturePacketV1 } from "../../../lib/pipeline/pipeline-fixture-contract";
 import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -18,11 +19,7 @@ const demoSourceState = {
 
 export default function PipelineDemoPage() {
   if (!dashboardDemoRoutesEnabled()) notFound();
-  const packets = pipelineCockpitPackets.map((packet) => ({
-    ...packet,
-    sourceKind: "demo-fixture" as const,
-    sourceId: packet.fixtureId,
-  }));
+  const packets: PipelineFixturePacketV1[] = pipelineCockpitPackets;
   return (
     <Shell compactHeader realtimeRefresh={false} wide>
       <PipelineCockpit

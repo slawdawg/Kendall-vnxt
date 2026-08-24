@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { LocalDogfoodAttestationPanel } from "./local-dogfood-attestation-panel";
-import type { PipelineDashboardPacket } from "../../lib/pipeline-supervisor-projector";
+import type { PipelineFixturePacketV1 } from "../../lib/pipeline/pipeline-fixture-contract";
 import type { PipelineRuntimeSourceState } from "../../lib/pipeline-packet-loader";
 import type { DashboardCanonicalWorkGraphEvidenceV1 } from "../../lib/pipeline/canonical-operational-projection";
 
-type PipelineFixturePacket = PipelineDashboardPacket;
+type PipelineFixturePacket = PipelineFixturePacketV1;
 type PipelineGoldenPathSnapshot = {
   whatHappensNext: string;
   whatPacketIs: string;
@@ -22,7 +22,7 @@ type SourceBoundaryDeclarationV0 = {
   retentionClass: string;
 };
 
-/** Explicit V0 demo-fixture renderer; normal packet detail never imports this component. */
+/** Explicit V1 demo-fixture renderer; normal packet detail never imports this component. */
 export function PacketDetailFixturePage({
   packet = null,
   snapshot = null,
@@ -30,7 +30,7 @@ export function PacketDetailFixturePage({
   sourceState,
   workGraph = null,
 }: {
-  /** Explicit demo/fixture compatibility input only. */
+  /** Explicit demo/fixture V1 input only. */
   packet?: PipelineFixturePacket | null;
   snapshot?: PipelineGoldenPathSnapshot | null;
   sourceBoundaries?: SourceBoundaryDeclarationV0[];
@@ -40,17 +40,9 @@ export function PacketDetailFixturePage({
   if (!packet) {
     throw new Error("Demo packet detail fixture is missing.");
   }
-  const isDemoPacket = packet.sourceKind === "demo-fixture" || (
-    packet.sourceKind === undefined && packet.fixtureKind !== undefined
-  );
-  const fixtureWarning = isDemoPacket ? "Demo fixture; cannot satisfy live proof." : null;
-  const sourceLabel = packet.sourceKind === "supervisor-runtime"
-    ? "Supervisor runtime"
-    : packet.sourceKind === "projection"
-      ? "Backend projection"
-      : isDemoPacket
-        ? "Demo fixture"
-        : packet.fixtureLabel;
+  const isDemoPacket = true;
+  const fixtureWarning = "Demo fixture; cannot satisfy live proof.";
+  const sourceLabel = "Demo fixture";
   const backHref = sourceState?.kind === "demo" ? "/pipeline/demo" : "/pipeline";
   return (
     <main className="grid max-w-full min-w-0 gap-4" aria-label="Packet detail">

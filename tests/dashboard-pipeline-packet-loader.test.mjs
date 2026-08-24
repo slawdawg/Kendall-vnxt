@@ -1293,11 +1293,11 @@ test("explicit demo route is the only fixture catalog boundary", async () => {
   assert.match(demoRouteSource, /manager-execution-lane-summary/);
   assert.match(demoRouteSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
   assert.match(demoDetailRouteSource, /pipeline-fixtures/);
+  assert.match(demoRouteSource, /PipelineFixturePacketV1/);
+  assert.match(demoDetailRouteSource, /PipelineFixturePacketV1/);
   assert.doesNotMatch(loaderSource, /pipeline-fixtures|fixture fallback|fixture_fallback/i);
   assert.match(demoRouteSource, /kind: "demo"/);
-  assert.match(demoRouteSource, /sourceKind: "demo-fixture"/);
   assert.match(demoRouteSource, /label: "Demo fixtures"/);
-  assert.match(demoDetailRouteSource, /sourceKind: "demo-fixture"/);
   assert.match(demoDetailRouteSource, /cannot satisfy live proof or invoke supervisor authority/);
   assert.match(demoRouteSource, /dashboardDemoRoutesEnabled\(\)/);
   assert.match(demoDetailRouteSource, /dashboardDemoRoutesEnabled\(\)/);

@@ -55,8 +55,9 @@ import type {
   DashboardCanonicalOperationalProjectionTruthV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "../../lib/pipeline/canonical-operational-projection";
+import type { PipelineFixturePacketV1 } from "../../lib/pipeline/pipeline-fixture-contract";
 
-/** Demo fixtures retain the legacy packet model; normal runtime uses this canonical packet DTO. */
+/** Demo fixtures use the dashboard-owned V1 fixture DTO; normal runtime uses canonical packets. */
 type PipelineCockpitPacket = {
   packetId: string;
   title: string;
@@ -171,14 +172,14 @@ export function PipelineCockpit({
   canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
   /** Versioned canonical truth for action gating. */
   operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
-  /** Explicit-demo V0 fixtures only. Normal runtime callers pass canonicalPackets. */
-  packets?: PipelineFixturePacket[];
+  /** Explicit-demo V1 fixtures only. Normal runtime callers pass canonicalPackets. */
+  packets?: PipelineFixturePacketV1[];
   /** Independently reconstructed dashboard-owned active-board model. */
   activeBoardProjection?: DashboardCanonicalActiveBoardProjectionV1 | null;
   /** Strict canonical board model; no V0 projection envelope crosses this boundary. */
   operationalProjection?: DashboardCanonicalOperationalProjectionV1 | null;
   projectionError?: string | null;
-  selectedPacket?: PipelineFixturePacket | null;
+  selectedPacket?: PipelineFixturePacketV1 | null;
 }) {
   const presentationPackets = useMemo<PipelineCockpitPacket[]>(() => {
     if (!canonicalPackets) return packets ?? [];
