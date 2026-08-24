@@ -27,6 +27,7 @@ const fixtureContractPath = new URL("../apps/dashboard/src/lib/pipeline/pipeline
 const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
 const pipelineSupervisorRuntimePath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-runtime.ts", import.meta.url);
 const pipelineSupervisorProjectionPath = new URL("../apps/dashboard/src/lib/pipeline-supervisor-projection.ts", import.meta.url);
+const coordinationHealthPath = new URL("../apps/dashboard/src/lib/pipeline/coordination-health.ts", import.meta.url);
 const pipelineContractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
 const projectionTruthPath = new URL("../apps/dashboard/src/lib/pipeline/projection-truth.ts", import.meta.url);
 const activeBoardViewModelPath = new URL("../apps/dashboard/src/lib/pipeline/active-board-view-model.ts", import.meta.url);
@@ -89,7 +90,7 @@ function loadProjectionTruthModule(source) {
   return context.module.exports;
 }
 
-function loadPipelineSupervisorProjectionModule(source) {
+async function loadPipelineSupervisorProjectionModule(source) {
   const ts = dashboardRequire("typescript");
   const output = ts.transpileModule(source, {
     compilerOptions: {
@@ -98,6 +99,24 @@ function loadPipelineSupervisorProjectionModule(source) {
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
+  const coordinationSource = await readFile(coordinationHealthPath, "utf8");
+  const coordinationOutput = ts.transpileModule(coordinationSource, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const coordinationContext = {
+    exports: {},
+    module: { exports: {} },
+    require: (specifier) => {
+      if (specifier === "@kendall/contracts") return {};
+      throw new Error(`Unexpected coordination-health import: ${specifier}`);
+    },
+  };
+  coordinationContext.exports = coordinationContext.module.exports;
+  vm.runInNewContext(coordinationOutput, coordinationContext, { filename: "coordination-health.ts" });
   const context = {
     exports: {},
     module: { exports: {} },
@@ -109,6 +128,7 @@ function loadPipelineSupervisorProjectionModule(source) {
           isPipelineProductModeMappingV0: () => true,
         };
       }
+      if (specifier === "./pipeline/coordination-health") return coordinationContext.module.exports;
       throw new Error(`Unexpected projection import: ${specifier}`);
     },
   };
@@ -343,14 +363,6 @@ function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardVie
       }
       if (specifier === "../../lib/pipeline/active-board-view-model") {
         return activeBoardViewModelModule;
-      }
-      if (specifier === "../../lib/pipeline-supervisor-projector") {
-        return {
-          projectDashboardCanonicalPresentationsToCockpitPackets: (packets) => ({
-            kind: "runtime",
-            packets: packets.map((packet) => ({ ...packet, sourceKind: "supervisor-runtime", sourceId: packet.packetId })),
-          }),
-        };
       }
       if (specifier === "../../lib/supervisor") {
         return {
@@ -666,7 +678,7 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
 
 test("selected projection details reject synthetic and blank nested references", async () => {
   const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
-  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const projectionModule = await loadPipelineSupervisorProjectionModule(source);
   const cleanProjection = validDashboardProjection();
   assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
 
@@ -772,7 +784,7 @@ test("selected projection details reject synthetic and blank nested references",
 
 test("active manager lane clarity rejects credential text and empty assessed evidence", async () => {
   const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
-  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const projectionModule = await loadPipelineSupervisorProjectionModule(source);
   const projection = validDashboardProjection();
   projection.activeManagerLaneClarity = {
     schemaVersion: "manager-lane-clarity/v0",
@@ -807,7 +819,7 @@ test("active manager lane clarity rejects credential text and empty assessed evi
 
 test("coordination health is validated as canonical bounded metadata and legacy projections fail closed", async () => {
   const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
-  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const projectionModule = await loadPipelineSupervisorProjectionModule(source);
   const projection = validDashboardProjection();
   projection.coordinationHealth = {
     schemaVersion: "manager-coordination-health/v0",
@@ -866,7 +878,7 @@ test("Review route remains supervisor-backed Packet Detail evidence and rejects 
     readFile(new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url), "utf8"),
     readFile(pipelineSupervisorProjectionPath, "utf8"),
   ]);
-  const projectionModule = loadPipelineSupervisorProjectionModule(projectionSource);
+  const projectionModule = await loadPipelineSupervisorProjectionModule(projectionSource);
   const miniPacketSource = extractFunctionSource(cockpitSource, "PacketMiniCard");
   const cleanProjection = validDashboardProjection();
   assert.equal(projectionModule.isPipelineDashboardProjection(cleanProjection), true);
@@ -936,7 +948,7 @@ test("Review route remains supervisor-backed Packet Detail evidence and rejects 
 
 test("projection counts reject contradictory active and empty states while preserving unknown counts", async () => {
   const source = await readFile(pipelineSupervisorProjectionPath, "utf8");
-  const projectionModule = loadPipelineSupervisorProjectionModule(source);
+  const projectionModule = await loadPipelineSupervisorProjectionModule(source);
   const emptyProjection = validDashboardProjection();
   emptyProjection.workPackets = [];
   emptyProjection.selectedPacketDetails = [];
@@ -1970,12 +1982,12 @@ test("/pipeline route uses canonical presentations and isolates explicit V1 demo
   assert.match(pipelinePacketLoaderSource, /projectionError: projectionResult\.error/);
   assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
   assert.match(cockpitSource, /projectionToCockpitPackets/);
-  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
-  assert.match(cockpitSource, /projectionToCockpitPackets\(currentActiveBoardProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
+  assert.match(cockpitSource, /canonicalPackets\?\.map\(\(packet\) => \(\{ packetId: packet\.presentation\.packetId \}\)\)/);
+  assert.match(cockpitSource, /projectionToCockpitPackets\(currentActiveBoardProjection, presentationPackets, canonicalPacketIdentities, currentProjectionError, activeBoardViewModel, fixtureMode\)/);
   assert.doesNotMatch(cockpitSource, /projectionToCockpitPackets\(currentProjection,/);
   assert.match(cockpitSource, /activeManagerLaneClarity = currentActiveBoardProjection\?\.activeManagerLaneClarity \?\? null/);
   assert.doesNotMatch(cockpitSource, /activeManagerLaneClarity = currentProjection\?\.activeManagerLaneClarity/);
-  assert.match(cockpitSource, /runtimePacketIds = new Set\(runtimePackets\.map/);
+  assert.match(cockpitSource, /runtimePacketIds = new Set\(canonicalPacketIdentities\.map/);
   assert.match(cockpitSource, /!runtimePacketIds\.has\(card\.packetId\)/);
   assert.match(cockpitSource, /selectedDetailByPacketId = new Map<string, ActiveBoardSelectedPacketDetail>\(projection\.selectedPacketDetails\.map/);
   assert.match(cockpitSource, /selectedDetailByPacketId\.get\(packet\.packetId\)/);
@@ -2897,9 +2909,8 @@ test("/pipeline route uses canonical presentations and isolates explicit V1 demo
     /export interface Pipeline(Read)?Packet(V0|View)?\s*\{/,
     "dashboard fixtures should not define a parallel dashboard model"
   );
-  assert.match(cockpitSource, /import \{[\s\S]*projectDashboardCanonicalPresentationsToCockpitPackets[\s\S]*PipelineCanonicalPresentationPacketV1[\s\S]*\} from "\.\.\/\.\.\/lib\/pipeline-supervisor-projector";/);
-  assert.match(cockpitSource, /type PipelineCanonicalCockpitPacket = PipelineCanonicalPresentationPacketV1 & PipelineCockpitPacket;/);
-  assert.match(cockpitSource, /canonicalPresentation\.packets as PipelineCanonicalCockpitPacket\[\]/);
+  assert.doesNotMatch(cockpitSource, /pipeline-supervisor-projector/);
+  assert.match(cockpitSource, /canonicalPackets\?\.map\(\(packet\) => \(\{ packetId: packet\.presentation\.packetId \}\)\)/);
   assert.match(cockpitSource, /import type \{ PipelineFixturePacketV1 \} from "\.\.\/\.\.\/lib\/pipeline\/pipeline-fixture-contract";/);
   assert.match(cockpitSource, /packets\?: PipelineFixturePacketV1\[\];/);
   assert.match(cockpitSource, /selectedPacket\?: PipelineFixturePacketV1 \| null;/);

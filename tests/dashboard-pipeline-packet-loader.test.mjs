@@ -1320,6 +1320,7 @@ test("dedicated runtime delegates timeout and LAN-auth policy to shared transpor
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return {
           normalizePipelineDashboardProjection: (projection) => projection,
@@ -1369,6 +1370,12 @@ test("canonical operational runtime requires the exact endpoint and rejects exte
     exports: {}, module: { exports: {} }, process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return {
+        isDashboardCoordinationHealthInput: (value) => value?.schemaVersion === "manager-coordination-health/v0"
+          || (value?.source === "manager_workspace_inventory"
+            && value?.availability !== "impossible"
+            && value?.metadataOnly === true),
+      };
       if (specifier === "./pipeline-supervisor-projection") return {
         normalizePipelineDashboardProjection: (value) => value,
         isPipelineDashboardProjection: () => true,
@@ -1538,7 +1545,7 @@ test("runtime plus loader converts malformed optional review-route evidence to u
   }).outputText;
   const context = { exports: {}, module: { exports: {} }, process: { env: {} }, require: (specifier) => {
     if (specifier === "@kendall/contracts") return runtimeContractValidators;
-    if (specifier === "./pipeline-supervisor-projection") return { isDashboardCoordinationHealthInput: () => true };
+    if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
     if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
     if (specifier === "./dashboard-supervisor-transport") return { requestSupervisorJson: async () => projection };
     throw new Error(`Unexpected runtime import: ${specifier}`);
@@ -1570,6 +1577,7 @@ test("dedicated runtime surfaces canonical list and detail 404s without legacy r
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1619,6 +1627,7 @@ test("dedicated runtime fails closed on canonical 404 for authoritative identity
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1672,6 +1681,7 @@ test("dashboard WorkItem memory review binds its requested identity and rejects 
     exports: {}, module: { exports: {} }, process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
         requestSupervisorJson: async (path) => {
@@ -1743,6 +1753,7 @@ test("dedicated runtime projects consistent authoritative list and detail withou
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -1828,6 +1839,7 @@ test("dashboard canonical DTO carries validated extensions and resolves WorkItem
           validatePipelineEpic25EvidenceChainV1: (value) => isSupervisorEvidenceChainBase(value) ? [] : ["invalid supervisor evidence-chain base"],
         };
       }
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") {
@@ -1909,6 +1921,7 @@ test("dashboard canonical DTO rejects extension provenance and mode cross-bindin
         validatePipelineEpic25EvidenceChainV0: () => ["evidence chain omitted"],
         validatePipelineEpic25EvidenceChainV1: () => ["evidence chain omitted"],
       };
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
@@ -1968,6 +1981,7 @@ test("dashboard canonical DTO accepts a structurally valid stale supervisor evid
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return contracts;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       if (specifier === "./pipeline-supervisor-projector") return { isWorkPacketV0View: () => true };
       if (specifier === "./dashboard-supervisor-transport") return {
@@ -2035,6 +2049,7 @@ test("dedicated runtime sanitizes unsafe canonical lifecycle summaries and evide
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2347,6 +2362,7 @@ test("dedicated runtime treats a successful empty canonical list as authoritativ
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2390,6 +2406,7 @@ test("dedicated runtime rejects malformed canonical list actors without legacy r
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2446,6 +2463,7 @@ test("dedicated runtime rejects malformed canonical ready-to-test evidence witho
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2497,6 +2515,7 @@ test("dedicated runtime does not legacy-fallback unsafe slash-containing packet 
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2537,6 +2556,7 @@ test("dedicated runtime fails closed without legacy fallback when canonical pack
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2575,6 +2595,7 @@ test("dedicated runtime surfaces malformed canonical list results without legacy
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -2614,6 +2635,7 @@ test("dedicated runtime rejects V0-shaped canonical lists without legacy merge",
     process: { env: {} },
     require: (specifier) => {
       if (specifier === "@kendall/contracts") return runtimeContractValidators;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: () => true };
       if (specifier === "./pipeline-supervisor-projection") {
         return { normalizePipelineDashboardProjection: (projection) => projection, isPipelineDashboardProjection: () => true };
       }
@@ -3569,6 +3591,7 @@ async function loadPipelinePacketLoader(fixtures, supervisorOverrides, { lanAuth
         return projectorModule;
       }
       if (specifier === "./pipeline-supervisor-runtime") return supervisor;
+      if (specifier === "./pipeline/coordination-health") return { isDashboardCoordinationHealthInput: supervisor.isDashboardCoordinationHealthInput };
       if (specifier === "./pipeline-supervisor-projection") return {
         isDashboardCoordinationHealthInput: supervisor.isDashboardCoordinationHealthInput,
       };

@@ -15,7 +15,7 @@ import {
   type DashboardCanonicalPresentationV1,
   type DashboardCanonicalWorkPacketV1,
 } from "./pipeline-supervisor-runtime";
-import { isDashboardCoordinationHealthInput } from "./pipeline-supervisor-projection";
+import { isDashboardCoordinationHealthInput } from "./pipeline/coordination-health";
 
 /** The only canonical form that is allowed to cross the dashboard client boundary. */
 export type DashboardCanonicalWorkPacketClientV1 = {

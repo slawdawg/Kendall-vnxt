@@ -16,7 +16,7 @@ import type {
   DashboardCanonicalManagerLaneClarityV1,
   DashboardCanonicalOperationalProjectionV1,
 } from "./pipeline/canonical-operational-projection";
-import { isDashboardCoordinationHealthInput } from "./pipeline-supervisor-projection";
+import { isDashboardCoordinationHealthInput } from "./pipeline/coordination-health";
 import { requestSupervisorJson, type SupervisorReadOptions } from "./dashboard-supervisor-transport";
 
 function requestJson<T>(path: string, options: SupervisorReadOptions = {}): Promise<T> {

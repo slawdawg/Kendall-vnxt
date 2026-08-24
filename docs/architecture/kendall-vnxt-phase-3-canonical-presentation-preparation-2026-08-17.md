@@ -35,6 +35,12 @@ V0 packet renderer is isolated to the explicit demo route as
 explicitly inventoried V0 board values remain compatibility surfaces until
 their own replacement and readback proofs land.
 
+Slice5A also removes the normal cockpit's V1-to-V0-shaped presentation adapter:
+the cockpit uses canonical packet identities with the V1 active-board model,
+while the V0 projection validator/projector remain only for explicit fixture
+and direct-detail evidence holds. Coordination Health validation is isolated
+in its dashboard-owned standalone validator.
+
 The disposable Lane Clarity dogfood proof now reads that same canonical
 operational boundary for its bounded `activeManagerLaneClarity` readback. It
 does not read `/pipeline-control-plane/projection`; its fresh/stale supervisor
