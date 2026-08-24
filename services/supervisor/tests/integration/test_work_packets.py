@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import inspect
 import os
 import shutil
 import socket
@@ -6922,6 +6923,9 @@ def test_canonical_operational_projection_and_work_items_cover_blocked_and_done_
         assert "superseded by the July 4 pipeline execution-loop reliability PRD" in blocked_packet["blocker"]
         assert blocked_detail["workItemId"] == blocked_item["id"]
         assert blocked_detail["metadataOnly"] is True
+        source_states = {state["sourceId"]: state for state in projection["sourceStates"]}
+        assert source_states[f"work_item:{blocked_item['id']}"]["state"] == "blocked"
+        assert source_states["fixture:source:blocked"]["state"] == "blocked"
         assert done_packet["currentStage"] == "deliver"
         assert done_packet["status"] == "complete"
         assert done_detail["workItemId"] == done_item["id"]
@@ -6959,6 +6963,28 @@ def test_dashboard_canonical_operational_projection_reconstructs_safe_v1_rows(tm
     with _client(tmp_path, monkeypatch, db_name) as client:
         work_item = _create_work_item(client, title="Canonical operational projection packet")
 
+        from supervisor.api import main
+
+        async def forbidden_v0_projection(*_args, **_kwargs):
+            raise AssertionError("canonical V1 must not invoke the V0 projection materializer")
+
+        async def forbidden_work_packet_list(*_args, **_kwargs):
+            raise AssertionError("canonical V1 must not invoke list_work_packets")
+
+        async def forbidden_per_record_attempt_query(*_args, **_kwargs):
+            raise AssertionError("canonical V1 must use the snapshot attempt batch")
+
+        async def forbidden_per_record_proposal_query(*_args, **_kwargs):
+            raise AssertionError("canonical V1 must use the snapshot proposal batch")
+
+        async def forbidden_per_record_routing_query(*_args, **_kwargs):
+            raise AssertionError("canonical V1 must use the snapshot routing batch")
+
+        monkeypatch.setattr(main.service, "get_pipeline_dashboard_projection", forbidden_v0_projection)
+        monkeypatch.setattr(main.service, "list_work_packets", forbidden_work_packet_list)
+        monkeypatch.setattr(main.service, "list_execution_attempts", forbidden_per_record_attempt_query)
+        monkeypatch.setattr(main.service, "list_memory_proposals", forbidden_per_record_proposal_query)
+        monkeypatch.setattr(main.service, "get_routing_preview", forbidden_per_record_routing_query)
         response = client.get("/pipeline-control-plane/canonical-operational-projection")
         assert response.status_code == 200
         projection = response.json()["data"]
@@ -6976,6 +7002,1280 @@ def test_dashboard_canonical_operational_projection_reconstructs_safe_v1_rows(tm
         assert "actionResultsV1" not in detail
         assert detail["workGraph"]["schemaVersion"] == "dashboard-canonical-work-graph/v1"
         assert detail["workGraph"]["rawPayloadRetained"] is False
+        assert packet["queueLease"] is None
+        assert packet["executionAttempts"] == []
+        assert packet["correlationIds"]
+
+
+def test_native_v1_projection_builder_has_no_legacy_materialization_dependencies() -> None:
+    from supervisor.application.service import SupervisorService
+
+    native_builder_source = inspect.getsource(SupervisorService._dashboard_native_work_item_records)
+    native_projection_source = inspect.getsource(SupervisorService.get_dashboard_canonical_operational_projection)
+    forbidden = (
+        "_map_work_packet_state",
+        "_work_packet_id",
+        "_work_packet_source_refs",
+        "_work_packet_evidence_refs",
+        "_work_packet_learn_refill_projection",
+        "_assemble_work_packet",
+        "get_pipeline_dashboard_projection",
+        "list_work_packets",
+        "_dashboard_canonical_operational_projection_from_v0",
+        "_legacy_pipeline_projection_stage",
+    )
+    for helper_name in forbidden:
+        assert helper_name not in native_builder_source
+        assert helper_name not in native_projection_source
+    native_renderer_source = inspect.getsource(SupervisorService._dashboard_canonical_operational_projection_native)
+    assert "_operational_action_result_view(" not in native_renderer_source
+    assert "snapshot.review_route_by_packet.get(" not in native_renderer_source
+    assert "_pipeline_review_route_from_metadata(" not in native_renderer_source
+
+
+def test_native_v1_review_route_reconstruction_rejects_unsafe_metadata() -> None:
+    from supervisor.api import main
+
+    packet_id = "manager-source-review-route"
+    review_ref = "review-evidence:sha256:" + ("a" * 64)
+    base_route = {
+        "schemaVersion": "pipeline-review-route-evidence/v0",
+        "availability": "available",
+        "packetId": packet_id,
+        "routeState": "simulated",
+        "reasonCode": "simulated_completed",
+        "reason": "Simulation preparation is recorded without an execution action.",
+        "safeFallback": "Re-evaluate bounded review evidence before any later promotion.",
+        "exactIdentity": "current",
+        "issuanceState": "active",
+        "findingSummary": {"count": 1, "highestSeverity": "info", "evidenceRefs": [review_ref]},
+        "dataClass": "metadata_only",
+        "execution": "none",
+        "deliveryEvidenceEligible": False,
+        "metadataOnly": True,
+        "rawPayloadRetained": False,
+        "retention": "metadata_only_evidence_references",
+    }
+
+    safe = main.service._dashboard_native_review_route(
+        SimpleNamespace(model_dump=lambda mode=None: base_route),
+        fallback_packet_id=packet_id,
+    )
+    assert safe.availability == "available"
+    assert safe.findingSummary.evidenceRefs == [review_ref]
+
+    for unsafe_reason, unsafe_refs in (
+        ("Authorization: Bearer abcdefghijklmnopqrstuvwxyz", [review_ref]),
+        ("Simulation preparation is recorded without an execution action.\x00", [review_ref]),
+        (base_route["reason"], [review_ref, "sk-live-review-route-secret"]),
+    ):
+        malformed = {**base_route, "reason": unsafe_reason, "findingSummary": {**base_route["findingSummary"], "evidenceRefs": unsafe_refs}}
+        projected = main.service._dashboard_native_review_route(
+            SimpleNamespace(model_dump=lambda mode=None, malformed=malformed: malformed),
+            fallback_packet_id=packet_id,
+        )
+        assert projected.availability == "unavailable"
+        assert projected.routeState == "unavailable"
+        assert projected.findingSummary.evidenceRefs == []
+
+
+def test_native_v1_nested_source_state_and_lineage_carriers_fail_closed() -> None:
+    from supervisor.api import main
+
+    updated_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
+    source_state = main.service._dashboard_native_source_state_from_metadata(
+        {
+            "sourceId": "source:native-safe",
+            "sourceRef": "source:native-safe",
+            "sourceKind": "manual",
+            "state": "blocked",
+            "summary": "Source is blocked pending bounded review.",
+            "evidenceRefs": ["evidence:native-source-safe", "sk-live-native-source-secret"],
+        },
+        fallback_source_id="candidate_work:native-source",
+        fallback_updated_at=updated_at,
+    )
+    assert source_state is not None
+    assert source_state.sourceId == "source:native-safe"
+    assert source_state.evidenceRefs == ["evidence:native-source-safe"]
+    assert main.service._dashboard_native_source_state_from_metadata(
+        {
+            "sourceId": "sk-live-native-source-id",
+            "sourceRef": "source:native-safe",
+            "state": "healthy",
+            "summary": "Safe-looking source metadata.",
+        },
+        fallback_source_id="candidate_work:native-source",
+        fallback_updated_at=updated_at,
+    ) is None
+
+    malformed_lease = SimpleNamespace(
+        id="sk-live-native-lease-secret",
+        work_item_id="work-item:native-lineage",
+        attempt_count=1,
+        heartbeat_at=updated_at,
+        lease_expires_at=updated_at,
+        fencing_token=1,
+        active=True,
+    )
+    assert main.service._dashboard_native_queue_lease_view(
+        malformed_lease,
+        expected_work_item_id="work-item:native-lineage",
+        now=updated_at,
+    ) is None
+
+    malformed_attempt = SimpleNamespace(
+        attemptId="attempt:native-lineage",
+        workItemId="work-item:native-lineage",
+        leaseId=None,
+        fencingToken=1,
+        routeDecisionId="route:native-lineage",
+        workerId="sk-live-native-worker-secret",
+        lane="local_patch_draft",
+        status="running",
+        eventRefs=[{"eventId": "event:native-lineage"}],
+        artifactRefs=[],
+    )
+    assert main.service._dashboard_native_execution_attempt_lineage_view(
+        malformed_attempt,
+        expected_work_item_id="work-item:native-lineage",
+    ) is None
+
+
+def test_native_v1_manager_handoff_carriers_fail_closed_on_unsafe_nested_values() -> None:
+    from supervisor.api import main
+
+    unsafe_health = SimpleNamespace(
+        model_dump=lambda: {
+            "schemaVersion": "manager-coordination-health/v0",
+            "runId": "run:native-coordination",
+            "observedAt": datetime(2026, 8, 23, tzinfo=timezone.utc),
+            "source": "manager_workspace_inventory",
+            "freshness": "fresh",
+            "availability": "available",
+            "activeWorkCount": 1,
+            "staleOwnerTargetCount": 0,
+            "staleOwnerProjectedCount": 0,
+            "dirtyPreserveCount": 0,
+            "missingWorktreeJournalHold": False,
+            "nextSafeAction": "Inspect the bounded manager handoff.",
+            "evidenceRefs": ["evidence:native-coordination", "sk-live-native-coordination-secret"],
+            "metadataOnly": True,
+            "rawPayloadRetained": False,
+        }
+    )
+    assert main.service._dashboard_native_coordination_health(unsafe_health) is None
+
+    unsafe_lane = SimpleNamespace(
+        model_dump=lambda: {
+            "runId": "sk-live-native-lane-secret",
+            "eventWatermark": "event:native-lane",
+            "sourceCursor": "cursor:native-lane",
+            "goal": {"summary": "Bounded lane clarity.", "sourceRef": "source:native-lane"},
+            "criteria": [],
+            "canonicalState": {"phase": "manager_only", "freshness": "unknown", "evidenceFreshness": "unknown"},
+            "nextGate": {"summary": "Bounded next gate.", "nextSafeAction": "Inspect bounded evidence."},
+            "posture": {"state": "not_assessed", "reason": "No safe assessment.", "nextSafeAction": "Wait for bounded handoff.", "decisionRef": None, "qualification": None},
+        }
+    )
+    assert main.service._dashboard_canonical_manager_lane_clarity_v1(unsafe_lane) is None
+
+
+def test_native_v1_legacy_nested_carriers_reject_bearer_and_token_content() -> None:
+    from supervisor.api import main
+    from supervisor.api.schemas import PipelineWorkGraphEvidenceV0View
+
+    assert main.service._dashboard_native_safe_metadata_text(
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        path="latest movement summary",
+    ) is None
+    worker_summary = main.service._pipeline_projection_worker_summary(
+        [
+            {
+                "state": "active",
+                "worker_refs": ["worker:Bearer abcdefghijklmnopqrstuvwxyz"],
+                "evidence_refs": ["evidence:native-worker-safe", "sk-live-native-worker-secret"],
+            }
+        ],
+        generated_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+        stale_after_seconds=300,
+        native_projection=True,
+    )
+    assert worker_summary.workerRefs == []
+    assert worker_summary.evidenceRefs == ["evidence:native-worker-safe"]
+
+    unsafe_graph = PipelineWorkGraphEvidenceV0View.model_construct(
+        packetId="packet:native-graph",
+        executionJobId="job:native-graph",
+        reportIdentity="report:native-graph",
+        generatedAt=None,
+        availability="available",
+        freshnessState="live",
+        waveMembership="selected",
+        dependencyState="clear",
+        reservation={
+            "status": "advisory_reserved",
+            "owner": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+            "reasonCode": "reserved",
+        },
+        capacity={"posture": "normal", "reasonCode": "capacity_ok"},
+        reason="Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        nextSafeAction="Inspect bounded work graph evidence.",
+        evidenceRefs=["evidence:native-graph", "sk-live-native-graph-secret"],
+        metadataOnly=True,
+        rawPayloadRetained=False,
+        retention="metadata_only_evidence_references",
+    )
+    projected_graph = main.service._dashboard_canonical_work_graph_v1(unsafe_graph)
+    assert projected_graph.availability == "unavailable"
+    assert "Bearer" not in projected_graph.reason
+    assert "sk-live-native-graph-secret" not in projected_graph.model_dump_json()
+
+
+def test_native_v1_projection_preserves_bounded_source_evidence_refill_and_ready_state(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-facts-behavior.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(
+            client,
+            title="Native bounded facts packet",
+            metadata={
+                "workPacketSourceRefs": [
+                    {
+                        "refId": "native:approved-source",
+                        "sourceType": "manual",
+                        "label": "Approved metadata source",
+                        "pathOrUrl": "docs/native-source.md",
+                        "freshness": "fresh",
+                        "accessState": "allowed",
+                        "summaryOnly": True,
+                    }
+                ],
+                "evidenceRefs": ["evidence:native-facts"],
+                "learnRefill": {
+                    "state": "refilling",
+                    "explanation": "Bounded refill evidence is under review.",
+                    "readyToTest": {
+                        "readyId": "ready:native-facts",
+                        "userFacingSummary": "Native facts are ready to test.",
+                        "testableSurface": "bounded dashboard facts",
+                        "verificationRefs": ["verification:native-facts"],
+                        "evidenceRefs": ["evidence:native-facts"],
+                    },
+                },
+            },
+        )
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        assert packet["readyToTest"]["readyId"] == "ready:native-facts"
+        assert "evidence:native-facts" in packet["evidenceRefs"]
+        source_states = {state["sourceId"]: state for state in projection["sourceStates"]}
+        assert source_states["native:approved-source"]["state"] == "refilling"
+        assert "evidence:native-facts" in source_states["native:approved-source"]["evidenceRefs"]
+
+
+def test_native_v1_nested_worker_and_control_evidence_refs_are_strictly_sanitized(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-nested-evidence-safety.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        worker_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Native worker evidence safety",
+                "requestedOutcome": "Project worker metadata without unsafe evidence refs.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {"projectionVisibility": "worker_summary_only"},
+            },
+        )
+        assert worker_response.status_code == 200
+        worker_id = worker_response.json()["data"]["id"]
+        _update_candidate_fixture(
+            db_path,
+            worker_id,
+            import_metadata_json={
+                "projectionVisibility": "worker_summary_only",
+                "pipelineWorkerSummary": {
+                    "activeCount": 1,
+                    "workerRefs": ["worker:native-summary"],
+                    "evidenceRefs": [
+                        "evidence:native-summary-safe",
+                        "sk-live-native-summary-secret",
+                    ],
+                },
+                "pipelineWorkerState": {
+                    "workerId": "native-safe-worker",
+                    "state": "active",
+                    "evidenceRefs": [
+                        "evidence:native-worker-safe",
+                        "sk-live-native-worker-secret",
+                    ],
+                },
+            },
+        )
+        control_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Native control evidence safety",
+                "requestedOutcome": "Project gated control metadata without unsafe evidence refs.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/operator-note.md",
+                "sourceArtifactType": "manual_note",
+                "riskLevel": "low",
+                "priority": "normal",
+                "importMetadata": {"projectionVisibility": "gated_control_only"},
+            },
+        )
+        assert control_response.status_code == 200
+        control_id = control_response.json()["data"]["id"]
+        _update_candidate_fixture(
+            db_path,
+            control_id,
+            import_metadata_json={
+                "projectionVisibility": "gated_control_only",
+                "pipelineGatedControl": {
+                    "controlId": "control:native-evidence-safety",
+                    "operation": "worker_launch",
+                    "status": "gated",
+                    "authorityFamily": "worker-process-control",
+                    "stopLine": "Worker launch remains gated by explicit operator approval.",
+                    "nextAction": "Request worker-launch approval before any execution.",
+                    "evidenceRefs": ["evidence:native-control-safe"],
+                },
+                "pipelineGatedControls": [
+                    {
+                        "controlId": "control:native-control-char",
+                        "operation": "worker_launch",
+                        "status": "gated",
+                        "authorityFamily": "worker\x00process-control",
+                        "stopLine": "Worker launch remains gated by explicit operator approval.",
+                        "nextAction": "Request worker-launch approval before any execution.",
+                        "evidenceRefs": ["evidence:native-control-char"],
+                    },
+                    {
+                        "controlId": "sk-live-native-control-id",
+                        "operation": "worker_launch",
+                        "status": "gated",
+                        "authorityFamily": "worker-process-control",
+                        "stopLine": "Worker launch remains gated by explicit operator approval.",
+                        "nextAction": "Request worker-launch approval before any execution.",
+                        "evidenceRefs": ["evidence:native-control-token"],
+                    },
+                ],
+            },
+        )
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        assert projection["workerSummary"]["evidenceRefs"] == [
+            "evidence:native-summary-safe",
+            "evidence:native-worker-safe",
+        ]
+        projected_control = next(
+            control
+            for control in projection["gatedControls"]
+            if control["controlId"] == "control:native-evidence-safety"
+        )
+        assert projected_control["evidenceRefs"] == ["evidence:native-control-safe"]
+        assert {
+            control["controlId"] for control in projection["gatedControls"]
+        } == {"control:native-evidence-safety"}
+        serialized_projection = json.dumps(projection)
+        assert "sk-live-native-summary-secret" not in serialized_projection
+        assert "sk-live-native-worker-secret" not in serialized_projection
+        assert "sk-live-native-control-id" not in serialized_projection
+        assert "native-control-char" not in serialized_projection
+        assert "evidence:native-worker-safe" in projection["evidenceRefs"]
+        assert "evidence:native-summary-safe" in projection["evidenceRefs"]
+        assert "evidence:native-control-safe" in projection["evidenceRefs"]
+
+
+def test_native_v1_source_redaction_contradiction_and_stage_mapping_fail_closed() -> None:
+    from supervisor.api import main
+
+    item = SimpleNamespace(
+        id="native-source-safety-item",
+        title="Native source safety fixture",
+        metadata_json={
+            "workPacketSourceRefs": [
+                {
+                    "refId": "native:blocked-path",
+                    "sourceType": "manual",
+                    "label": "Blocked source",
+                    "pathOrUrl": "https://blocked.example/source",
+                    "freshness": "fresh",
+                    "accessState": "blocked",
+                    "summaryOnly": True,
+                },
+                {
+                    "refId": "native:invalid-path",
+                    "sourceType": "private_dump",
+                    "label": "Invalid source",
+                    "pathOrUrl": "file:///private/raw",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "summaryOnly": True,
+                },
+                {
+                    "refId": "native:confirmed-contradiction",
+                    "sourceType": "manual",
+                    "label": "Contradictory source",
+                    "pathOrUrl": "docs/contradiction.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "summaryOnly": True,
+                    "contradictionStatus": "confirmed",
+                },
+                {
+                    "refId": "raw-provider-payload",
+                    "sourceType": "manual",
+                    "label": "Unsafe raw provider payload identifier",
+                    "freshness": "fresh",
+                    "accessState": "blocked",
+                    "summaryOnly": True,
+                },
+                {
+                    "refId": "provider-response",
+                    "sourceType": "manual",
+                    "label": "Unsafe provider identifier",
+                    "freshness": "fresh",
+                    "accessState": "blocked",
+                    "summaryOnly": True,
+                },
+                {
+                    "refId": "secret-token",
+                    "sourceType": "manual",
+                    "label": "Unsafe secret identifier",
+                    "freshness": "fresh",
+                    "accessState": "blocked",
+                    "summaryOnly": True,
+                },
+                {
+                    "refId": "prompt-content",
+                    "sourceType": "manual",
+                    "label": "Unsafe prompt identifier",
+                    "freshness": "fresh",
+                    "accessState": "blocked",
+                    "summaryOnly": True,
+                },
+            ]
+        },
+    )
+
+    facts = main.service._dashboard_native_source_facts(None, item)
+    facts_by_id = {fact.ref_id: fact for fact in facts}
+    for ref_id in ("native:blocked-path", "native:invalid-path", "native:confirmed-contradiction"):
+        assert facts_by_id[ref_id].path_or_url is None
+        assert facts_by_id[ref_id].access_state == "blocked"
+    assert facts_by_id["native:confirmed-contradiction"].blocked_reason == "Metadata source metadata is contradictory."
+    for index in range(3, 7):
+        assert facts_by_id[f"metadata_source:{index}"].access_state == "blocked"
+        assert facts_by_id[f"metadata_source:{index}"].blocked_reason == "Metadata source metadata is invalid."
+    for fact in facts:
+        assert "Contradictory source" not in fact.label
+        assert "confirmed" not in (fact.blocked_reason or "")
+
+    assert main.service._dashboard_native_stage("human_gate") == "needs_approval"
+    assert main.service._dashboard_native_stage("review") == "review"
+    assert main.service._dashboard_native_stage("unexpected_stage") == "capture"
+
+
+def test_native_v1_readiness_and_source_identity_safety_fail_closed() -> None:
+    from supervisor.api import main
+    from supervisor.api.schemas import AuthoritativePacketSourceRefView, WorkPacketReadyToTestV0View
+
+    malformed_ready = WorkPacketReadyToTestV0View(
+        readyId="",
+        userFacingSummary="Affirmative readiness must not be synthesized.",
+        testableSurface="dashboard",
+    )
+    assert main.service._dashboard_native_ready_to_test(malformed_ready) is None
+    unsafe_ready_refs = WorkPacketReadyToTestV0View(
+        readyId="ready:unsafe-ref",
+        userFacingSummary="Safe bounded summary.",
+        testableSurface="dashboard",
+        evidenceRefs=["sk-live-native-secret"],
+    )
+    assert main.service._dashboard_native_ready_to_test(unsafe_ready_refs) is None
+
+    item = SimpleNamespace(
+        id="native-canonical-source-item",
+        title="Canonical source identity fixture",
+        metadata_json={
+            "sourceArtifactPath": "docs/canonical-source.md",
+            "workPacketSourceRefs": [
+                {
+                    "refId": "work_item:native-canonical-source-item",
+                    "sourceType": "manual",
+                    "pathOrUrl": "docs/metadata-shadow.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "summaryOnly": True,
+                }
+            ],
+        },
+    )
+    facts = main.service._dashboard_native_source_facts(None, item)
+    canonical = next(fact for fact in facts if fact.ref_id == "work_item:native-canonical-source-item")
+    metadata = next(fact for fact in facts if fact.ref_id == "metadata_source:0")
+    assert canonical.canonical is True
+    assert metadata.canonical is False
+    assert metadata.access_state == "blocked"
+
+    unsafe_candidate = SimpleNamespace(
+        id="native-unsafe-candidate-path",
+        title="Candidate path fixture",
+        source_artifact_path="https://example.invalid/source?token=sk-live-candidate-secret",
+        import_metadata_json={},
+    )
+    unsafe_item = SimpleNamespace(
+        id="native-unsafe-item-path",
+        title="Work item path fixture",
+        metadata_json={"sourceArtifactPath": "docs/provider-token-secret.md"},
+    )
+    unsafe_facts = main.service._dashboard_native_source_facts(unsafe_candidate, unsafe_item)
+    candidate_fact = next(fact for fact in unsafe_facts if fact.ref_id == "candidate_work:native-unsafe-candidate-path")
+    item_fact = next(fact for fact in unsafe_facts if fact.ref_id == "work_item:native-unsafe-item-path")
+    assert candidate_fact.path_or_url is None
+    assert candidate_fact.access_state == "blocked"
+    assert item_fact.path_or_url is None
+    assert item_fact.access_state == "blocked"
+
+    conflicting_item = SimpleNamespace(
+        id="native-conflicting-source-facts",
+        title="Conflicting source facts",
+        metadata_json={
+            "workPacketSourceRefs": [
+                {
+                    "refId": "source:duplicate-safe-id",
+                    "sourceType": "manual",
+                    "pathOrUrl": "docs/first-source.md",
+                    "freshness": "fresh",
+                    "accessState": "allowed",
+                    "summaryOnly": True,
+                },
+                {
+                    "refId": "source:duplicate-safe-id",
+                    "sourceType": "manual",
+                    "pathOrUrl": "docs/second-source.md",
+                    "freshness": "stale",
+                    "accessState": "blocked",
+                    "summaryOnly": True,
+                },
+            ]
+        },
+    )
+    conflicting_facts = main.service._dashboard_native_source_facts(None, conflicting_item)
+    ambiguous = next(fact for fact in conflicting_facts if fact.ref_id == "source:duplicate-safe-id")
+    assert ambiguous.path_or_url is None
+    assert ambiguous.access_state == "blocked"
+    assert ambiguous.freshness == "unknown"
+    assert ambiguous.blocked_reason == "Conflicting source facts were withheld."
+
+    unsafe_source = AuthoritativePacketSourceRefView(
+        refId="sk-live-authoritative-secret",
+        sourceType="repo_doc",
+        pathOrUrl="docs/provider-token-secret.md",
+        title="Safe source title",
+    )
+    safe_source = main.service._dashboard_native_source_ref(unsafe_source)
+    assert safe_source.refId.startswith("unavailable:source:")
+    assert safe_source.pathOrUrl is None
+    credential_url_source = AuthoritativePacketSourceRefView(
+        refId="repo_doc:safe-source-id",
+        sourceType="repo_doc",
+        pathOrUrl="https://example.invalid/source?api_key=sk-live-authoritative-secret",
+        title="Safe source title",
+    )
+    assert main.service._dashboard_native_source_ref(credential_url_source).pathOrUrl is None
+    assert main.service._dashboard_native_safe_title(
+        "provider: raw payload sk-live-candidate-secret",
+        fallback="Candidate Work metadata-only",
+    ) == "Candidate Work metadata-only"
+    assert main.service._dashboard_native_learn_refill_text(
+        {"userFacingSummary": "provider: raw payload sk-live-learn-secret"},
+        "userFacingSummary",
+    ) is None
+
+
+def test_v0_projection_keeps_legacy_runtime_readiness_path_isolated(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-v0-runtime-readiness-isolation.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api import main
+
+        original_v0_readiness = main.service._pipeline_runtime_readiness
+        seen_mutation_access: list[bool] = []
+
+        async def record_v0_readiness(session, generated_at, *, mutation_access=True):
+            seen_mutation_access.append(mutation_access)
+            return await original_v0_readiness(session, generated_at, mutation_access=mutation_access)
+
+        async def forbidden_native_readiness(*_args, **_kwargs):
+            raise AssertionError("retained V0 projection must not consume native runtime readiness")
+
+        def forbidden_native_routing(*_args, **_kwargs):
+            raise AssertionError("retained V0 projection must not compute native routing previews")
+
+        async def forbidden_native_lineage(*_args, **_kwargs):
+            raise AssertionError("retained V0 projection must not compute native lineage")
+
+        monkeypatch.setattr(main.service, "_pipeline_runtime_readiness", record_v0_readiness)
+        monkeypatch.setattr(main.service, "_dashboard_native_runtime_readiness", forbidden_native_readiness)
+        monkeypatch.setattr(main.service, "_dashboard_native_routing_preview", forbidden_native_routing)
+        monkeypatch.setattr(main.service, "_dashboard_native_lineage", forbidden_native_lineage)
+        response = client.get("/pipeline-control-plane/projection")
+        assert response.status_code == 200
+        assert seen_mutation_access == [True]
+
+
+def test_native_v1_malformed_learn_ready_state_does_not_emit_affirmative_readiness(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-malformed-ready-state.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(
+            client,
+            title="Malformed Learn readiness",
+            metadata={
+                "learnRefill": {
+                    "state": "refilling",
+                    "readyToTest": {
+                        "readyId": "",
+                        "userFacingSummary": "This malformed record must not become affirmative.",
+                        "testableSurface": "dashboard",
+                    },
+                }
+            },
+        )
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        packet = next(
+            packet
+            for packet in response.json()["data"]["workPackets"]
+            if packet["packetId"] == f"work_item:{work_item['id']}"
+        )
+        assert packet["readyToTest"] is None
+
+
+def test_native_v1_mixed_ready_verification_or_evidence_refs_fail_closed() -> None:
+    from supervisor.api import main
+
+    for field, values in (
+        ("verificationRefs", ["test:native-ready", "terminal-output:unsafe-ref"]),
+        ("evidenceRefs", ["evidence:native-ready", "tmux-stdout:unsafe-ref"]),
+    ):
+        candidate = SimpleNamespace(
+            import_metadata_json={
+                "learnRefill": {
+                    "state": "source_exhausted",
+                    "readyToTest": {
+                        "readyId": "ready:native-mixed-ref",
+                        "userFacingSummary": "Mixed refs must not claim readiness.",
+                        "testableSurface": "native projection",
+                        "verificationRefs": ["test:native-ready"],
+                        "evidenceRefs": ["evidence:native-ready"],
+                        field: values,
+                    },
+                }
+            }
+        )
+        fact = main.service._dashboard_native_learn_fact(
+            "candidate_work:native-mixed-ref",
+            candidate,
+            None,
+            [],
+            [],
+            [],
+            [],
+        )
+        assert fact is not None
+        assert fact.ready_id is None
+
+    oversized_candidate = SimpleNamespace(
+        import_metadata_json={
+            "learnRefill": {
+                "readyToTest": {
+                    "readyId": "ready:oversized-ref-list",
+                    "userFacingSummary": "Oversized refs must not claim readiness.",
+                    "testableSurface": "native projection",
+                    "verificationRefs": ["test:bounded-ref"] * 20 + ["sk-live-tail-secret"],
+                    "evidenceRefs": ["evidence:bounded-ref"],
+                }
+            }
+        }
+    )
+    oversized_fact = main.service._dashboard_native_learn_fact(
+        "candidate_work:oversized-ref-list",
+        oversized_candidate,
+        None,
+        [],
+        [],
+        [],
+        [],
+    )
+    assert oversized_fact is not None
+    assert oversized_fact.ready_id is None
+
+
+def test_native_v1_unsafe_authoritative_source_ref_is_redacted_in_output(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-unsafe-authoritative-source.db"
+    packet_id = "native-unsafe-authoritative-source"
+    unsafe_packet_title = "provider: raw payload sk-live-packet-title-secret"
+    unsafe_source_title = "provider: raw payload sk-live-source-title-secret"
+    unsafe_operator_note = "provider: raw payload sk-live-operator-note-secret"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": packet_id,
+                "title": "Unsafe authoritative source fixture",
+                "sourceRef": {
+                    "refId": "sk-live-authoritative-secret",
+                    "sourceType": "repo_doc",
+                    "pathOrUrl": "docs/provider-token-secret.md",
+                    "title": "Unsafe source fixture",
+                },
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-unsafe-authoritative-source",
+                "payloadSummary": "Verify native authoritative source redaction.",
+            },
+        )
+        assert create_response.status_code == 200
+        with sqlite3.connect(_db_path(tmp_path, db_name)) as connection:
+            connection.execute(
+                "update authoritative_work_packets set title = ?, source_ref_json = ?, operator_test_note = ?, lineage_kind = ? where id = ?",
+                (
+                    unsafe_packet_title,
+                    json.dumps({
+                        "refId": "repo_doc:safe-source-title",
+                        "sourceType": "repo_doc",
+                        "title": "Safe persisted source title",
+                    }),
+                    unsafe_operator_note,
+                    "provider-secret-lineage",
+                    packet_id,
+                ),
+            )
+            connection.commit()
+        from supervisor.api import main
+        from supervisor.api.schemas import AuthoritativePacketSourceRefView
+        unsafe_source_view = AuthoritativePacketSourceRefView(
+            refId="repo_doc:safe-source-title",
+            sourceType="repo_doc",
+            title="Safe source title",
+        ).model_copy(update={"title": unsafe_source_title})
+        assert main.service._dashboard_native_source_ref(unsafe_source_view).title == "Authoritative source"
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == packet_id)
+        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet_id)
+        assert packet["title"] == "Authoritative Work Packet"
+        assert packet["sourceRef"]["title"] == "Safe persisted source title"
+        assert detail["lineageKind"] == "root"
+        assert detail["operatorTestNote"] is None
+        assert unsafe_packet_title not in response.text
+        assert unsafe_source_title not in response.text
+        assert unsafe_operator_note not in response.text
+        assert packet["sourceRef"]["refId"] != "sk-live-authoritative-secret"
+        assert packet["sourceRef"]["pathOrUrl"] is None
+        assert detail["sourceRefs"][0]["refId"] == packet["sourceRef"]["refId"]
+        assert detail["sourceRefs"][0]["pathOrUrl"] is None
+        assert all(state["sourceId"] != "sk-live-authoritative-secret" for state in projection["sourceStates"])
+
+
+def test_native_v1_unsafe_candidate_title_is_replaced_with_bounded_label(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-unsafe-candidate-title.db"
+    unsafe_title = "provider: raw payload sk-live-candidate-secret"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        candidate = _create_candidate(client, title=unsafe_title)
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        packet = next(
+            packet
+            for packet in projection["workPackets"]
+            if packet["packetId"] == f"candidate_work:{candidate['id']}"
+        )
+        assert packet["title"] == "Candidate Work metadata-only"
+        assert unsafe_title not in response.text
+
+
+def test_native_v1_malformed_renderer_fails_closed_as_unavailable(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-malformed-renderer.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api import main
+
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "native-malformed-renderer-packet",
+                "title": "Malformed renderer packet",
+                "sourceRef": {"refId": "repo_doc:malformed-renderer", "sourceType": "repo_doc", "title": "Renderer"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-malformed-renderer-packet",
+                "payloadSummary": "Exercise native DTO fallback.",
+            },
+        )
+        assert create_response.status_code == 200
+
+        def malformed_source_ref(_source_ref):
+            raise TypeError("malformed persisted row")
+
+        monkeypatch.setattr(main.service, "_dashboard_native_source_ref", malformed_source_ref)
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        assert projection["sourceLabel"] == "unavailable"
+        assert projection["backendReachability"]["state"] == "unavailable"
+        assert projection["truthSummary"]["backendUnavailable"] is True
+
+
+def test_native_v1_normal_and_lan_reads_do_not_create_control_or_update_admission_lock(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-read-only-runtime.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        with sqlite3.connect(db_path) as connection:
+            generation_before = connection.execute(
+                "select generation from admission_locks where scope = 'execute'"
+            ).fetchone()[0]
+
+        existing_control_response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert existing_control_response.status_code == 200
+        existing_projection = existing_control_response.json()["data"]
+        mutable_action_ids = {
+            "mark_tested",
+            "request_rework",
+            "retry_verification",
+            "requeue",
+            "pause",
+            "drain",
+            "reassign",
+            "reject",
+        }
+        assert all(
+            capability["capabilityState"] != "available"
+            for capability in existing_projection["actionCapabilities"]
+            if capability["actionId"] in mutable_action_ids
+        )
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "select generation from admission_locks where scope = 'execute'"
+            ).fetchone()[0] == generation_before
+
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("delete from supervisor_control where id = 1")
+            connection.commit()
+
+        normal_response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert normal_response.status_code == 200
+        normal_projection = normal_response.json()["data"]
+        assert normal_projection["runtimeReadiness"]["readinessState"] == "unavailable"
+
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute("select count(*) from supervisor_control where id = 1").fetchone()[0] == 0
+            assert connection.execute(
+                "select generation from admission_locks where scope = 'execute'"
+            ).fetchone()[0] == generation_before
+
+        from supervisor.api import main
+        from supervisor.infrastructure.db.database import SessionLocal
+
+        async def lan_read() -> None:
+            async with SessionLocal() as session:
+                projection = await main.service.get_dashboard_canonical_operational_projection(
+                    session,
+                    mutation_access=False,
+                )
+                assert projection.runtimeReadiness.readinessState == "unavailable"
+
+        asyncio_run(lan_read())
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute("select count(*) from supervisor_control where id = 1").fetchone()[0] == 0
+            assert connection.execute(
+                "select generation from admission_locks where scope = 'execute'"
+            ).fetchone()[0] == generation_before
+
+
+def test_native_v1_promoted_candidate_keeps_candidate_only_blocked_source_fact(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-promoted-candidate-source-facts.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        candidate = _create_candidate(client, title="Promoted candidate source fact")
+        _update_candidate_fixture(
+            db_path,
+            candidate["id"],
+            import_metadata_json={
+                "workPacketSourceRefs": [
+                    {
+                        "refId": "candidate:blocked-source",
+                        "sourceType": "manual",
+                        "label": "Candidate-only blocked source",
+                        "pathOrUrl": "docs/candidate-blocked.md",
+                        "freshness": "stale",
+                        "accessState": "blocked",
+                        "summaryOnly": True,
+                    }
+                ]
+            },
+        )
+        assert client.patch(f"/candidate-work/{candidate['id']}", json={"status": "approved"}).status_code == 200
+        promotion = client.post(f"/candidate-work/{candidate['id']}/promote")
+        assert promotion.status_code == 200
+        work_item = promotion.json()["data"]["workItem"]
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            metadata_json={
+                "sourceArtifactPath": "docs/promoted-item.md",
+                "candidateWorkId": candidate["id"],
+            },
+        )
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        source_states = {state["sourceId"]: state for state in response.json()["data"]["sourceStates"]}
+        assert source_states["candidate:blocked-source"]["state"] == "blocked"
+        assert source_states["candidate:blocked-source"]["summary"] == "Metadata source 1"
+
+
+def test_native_v1_candidate_claimed_by_multiple_work_items_is_withheld() -> None:
+    from supervisor.api import main
+
+    candidate = SimpleNamespace(id="candidate-one-to-many", promoted_work_item_id=None)
+    items = [
+        SimpleNamespace(id="work-item-one", metadata_json={"candidateWorkId": candidate.id}),
+        SimpleNamespace(id="work-item-two", metadata_json={"candidateWorkId": candidate.id}),
+    ]
+    claims = main.service._dashboard_native_candidate_by_work_item_id([candidate], items)
+    assert "work-item-one" not in claims
+    assert "work-item-two" not in claims
+
+
+def test_native_v1_invalid_reciprocal_candidate_link_keeps_bounded_standalone_candidate(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-invalid-reciprocal-candidate-link.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        candidate = _create_candidate(client, title="Invalid reciprocal candidate link")
+        assert client.patch(f"/candidate-work/{candidate['id']}", json={"status": "approved"}).status_code == 200
+        promotion = client.post(f"/candidate-work/{candidate['id']}/promote")
+        assert promotion.status_code == 200
+        promoted_item = promotion.json()["data"]["workItem"]
+
+        # Break the persisted reverse link on the promoted item, then claim the
+        # candidate from a different item. Native grouping must neither merge
+        # the candidate into the wrong item nor suppress its bounded row.
+        _update_work_item_fixture(
+            db_path,
+            promoted_item["id"],
+            metadata_json={"sourceArtifactPath": "docs/promoted-item.md"},
+        )
+        other_item = _create_work_item(
+            client,
+            title="Conflicting candidate claimant",
+            metadata={"candidateWorkId": candidate["id"]},
+        )
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        packets = response.json()["data"]["workPackets"]
+        packets_by_id = {packet["packetId"]: packet for packet in packets}
+        assert f"candidate_work:{candidate['id']}" in packets_by_id
+        assert packets_by_id[f"candidate_work:{candidate['id']}"]["title"] == candidate["title"]
+        assert packets_by_id[f"work_item:{promoted_item['id']}"]["title"] == promoted_item["title"]
+        assert packets_by_id[f"work_item:{other_item['id']}"]["title"] == other_item["title"]
+
+
+def test_native_v1_reconstructed_identity_disambiguates_authoritative_packet_ids(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-identity-collision.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Unlinked WorkItem identity collision")
+        candidate = _create_candidate(client, title="Unlinked Candidate identity collision")
+        work_item_packet_id = f"work_item:{work_item['id']}"
+        candidate_packet_id = f"candidate_work:{candidate['id']}"
+        for packet_id, title, idempotency_key in (
+            (work_item_packet_id, "Authoritative WorkItem collision", "native-identity-work-item"),
+            (candidate_packet_id, "Authoritative Candidate collision", "native-identity-candidate"),
+        ):
+            response = client.post(
+                "/pipeline-control-plane/work-packets",
+                json={
+                    "packetId": packet_id,
+                    "title": title,
+                    "sourceRef": {"refId": f"repo_doc:{idempotency_key}", "sourceType": "repo_doc", "title": title},
+                    "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                    "idempotencyKey": idempotency_key,
+                    "payloadSummary": "Prove reconstructed identity remains visible beside an authoritative packet.",
+                },
+            )
+            assert response.status_code == 200
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        rows = response.json()["data"]["workPackets"]
+        work_item_row = next(row for row in rows if row["workItemId"] == work_item["id"])
+        candidate_row = next(row for row in rows if row["packetId"].startswith("candidate_work:") and row["packetId"] != candidate_packet_id)
+        assert work_item_row["packetId"] != work_item_packet_id
+        assert work_item_row["packetId"].startswith("work_item:")
+        assert candidate_row["packetId"] != candidate_packet_id
+        assert candidate_row["packetId"].startswith("candidate_work:")
+
+
+def test_native_v1_movement_requires_current_event_consistency() -> None:
+    from supervisor.api import main
+
+    current = SimpleNamespace(eventId="event-current", targetStage="review", status="active")
+    later = SimpleNamespace(eventId="event-later", targetStage="review", status="active")
+    mismatched = SimpleNamespace(
+        history=[SimpleNamespace(eventId="event-mismatch", targetStage="capture", status="waiting")],
+        currentEventId="event-mismatch",
+        currentStage="review",
+        status="active",
+    )
+    assert main.service._dashboard_native_validated_current_event(mismatched) is None
+    stale_cursor = SimpleNamespace(
+        history=[current, later],
+        currentEventId="event-current",
+        currentStage="review",
+        status="active",
+    )
+    assert main.service._dashboard_native_validated_current_event(stale_cursor) is None
+    valid = SimpleNamespace(
+        history=[current],
+        currentEventId="event-current",
+        currentStage="review",
+        status="active",
+    )
+    assert main.service._dashboard_native_validated_current_event(valid) is current
+
+
+def test_native_v1_missing_current_event_fails_closed_for_latest_movement(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-malformed-authoritative-history.db"
+    db_path = _db_path(tmp_path, db_name)
+    packet_id = "native-malformed-current-event-packet"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        create_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": packet_id,
+                "title": "Malformed authoritative history packet",
+                "initialStage": "capture",
+                "status": "waiting",
+                "truthLabel": "source_owned",
+                "sourceRef": {"refId": "repo_doc:native-history", "sourceType": "repo_doc", "title": "History"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-malformed-current-event-packet",
+                "payloadSummary": "Create bounded malformed-history fixture.",
+            },
+        )
+        assert create_response.status_code == 200
+        current_event_id = create_response.json()["data"]["currentEventId"]
+        transition_response = client.post(
+            f"/pipeline-control-plane/work-packets/{packet_id}/transitions",
+            json={
+                "targetStage": "classify",
+                "expectedCurrentEventId": current_event_id,
+                "status": "active",
+                "truthLabel": "source_owned",
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-malformed-current-event-transition",
+                "causationId": current_event_id,
+                "payloadSummary": "A real movement that must not survive a missing current event.",
+            },
+        )
+        assert transition_response.status_code == 200
+        from supervisor.api import main
+
+        original_list_authoritative = main.service.list_authoritative_work_packets
+
+        async def malformed_authoritative_history(session):
+            packets = await original_list_authoritative(session)
+            return [
+                packet.model_copy(update={"currentEventId": "missing-current-event"})
+                if packet.packetId == packet_id
+                else packet
+                for packet in packets
+            ]
+
+        monkeypatch.setattr(main.service, "list_authoritative_work_packets", malformed_authoritative_history)
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet_id)
+        assert detail["latestTransitionEventRef"] is None
+        assert detail["latestMovementSummary"] is None
+        assert detail["recentTransitionEventRefs"]
+
+
+def test_native_canonical_lineage_preserves_oldest_correlation_order(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-lineage-order.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Native lineage event order")
+        for event_id, created_at in (
+            ("native-lineage-oldest", "2026-06-28 00:00:00.000000"),
+            ("native-lineage-middle", "2026-06-28 00:01:00.000000"),
+            ("native-lineage-newest", "2026-06-28 00:02:00.000000"),
+        ):
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type="work_item.lineage_test",
+                summary="Native lineage ordering fixture.",
+                payload={},
+                created_at=created_at,
+            )
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        packet = next(
+            packet
+            for packet in response.json()["data"]["workPackets"]
+            if packet["packetId"] == f"work_item:{work_item['id']}"
+        )
+        assert packet["correlationIds"][:3] == [
+            "corr-native-lineage-oldest",
+            "corr-native-lineage-middle",
+            "corr-native-lineage-newest",
+        ]
+
+
+def test_native_canonical_lineage_fails_closed_on_conflicting_packet_links(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-lineage-conflict.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "native-lineage-conflict-packet",
+                "title": "Native lineage conflict packet",
+                "sourceRef": {"refId": "repo:native-lineage-conflict", "sourceType": "repo_doc", "title": "Conflict"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-lineage-conflict-packet",
+                "payloadSummary": "Fail closed when persisted packet links disagree.",
+            },
+        )
+        assert packet_response.status_code == 200
+        work_item = _create_work_item(client, title="Conflicting native packet link")
+        metadata_only_work_item = _create_work_item(client, title="Metadata-only native packet link")
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            authoritative_packet_id="native-lineage-conflict-packet",
+            metadata_json={"authoritativePacketId": "native-lineage-other-packet"},
+        )
+        _update_work_item_fixture(
+            db_path,
+            metadata_only_work_item["id"],
+            metadata_json={"authoritativePacketId": "native-lineage-conflict-packet"},
+        )
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            authoritative_packet_id=None,
+        )
+        invalid_metadata_item = _create_work_item(client, title="Invalid metadata packet link")
+        for metadata_json in (
+            {"authoritativePacketId": ""},
+            {"authoritativePacketId": 123},
+            {"authoritativePacketId": " native-lineage-conflict-packet"},
+        ):
+            _update_work_item_fixture(
+                db_path,
+                invalid_metadata_item["id"],
+                authoritative_packet_id="native-lineage-conflict-packet",
+                metadata_json=metadata_json,
+            )
+            invalid_response = client.get("/pipeline-control-plane/canonical-operational-projection")
+            assert invalid_response.status_code == 200
+            invalid_projection_packet = next(
+                candidate
+                for candidate in invalid_response.json()["data"]["workPackets"]
+                if candidate["packetId"] == "native-lineage-conflict-packet"
+            )
+            assert invalid_projection_packet["workItemId"] is None
+            assert invalid_projection_packet["queueLease"] is None
+            assert invalid_projection_packet["executionAttempts"] == []
+            assert invalid_projection_packet["correlationIds"] == []
+            _update_work_item_fixture(
+                db_path,
+                invalid_metadata_item["id"],
+                authoritative_packet_id=None,
+                metadata_json={},
+            )
+        from supervisor.api import main
+
+        for metadata_json in (["native-lineage-conflict-packet"], "native-lineage-conflict-packet"):
+            assert main.service._dashboard_native_authoritative_packet_link(
+                SimpleNamespace(
+                    authoritative_packet_id="native-lineage-conflict-packet",
+                    metadata_json=metadata_json,
+                )
+            ) is None
+
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+        packet = next(
+            packet
+            for packet in projection["workPackets"]
+            if packet["packetId"] == "native-lineage-conflict-packet"
+        )
+        assert packet["workItemId"] is None
+        assert packet["queueLease"] is None
+        assert packet["executionAttempts"] == []
+        assert packet["correlationIds"] == []
+
+
+def test_native_canonical_lineage_fails_closed_on_duplicate_packet_claims(tmp_path, monkeypatch) -> None:
+    db_name = "dashboard-native-lineage-duplicate-claims.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        packet_response = client.post(
+            "/pipeline-control-plane/work-packets",
+            json={
+                "packetId": "native-lineage-duplicate-packet",
+                "title": "Native duplicate lineage packet",
+                "sourceRef": {"refId": "repo:native-lineage-duplicate", "sourceType": "repo_doc", "title": "Duplicate"},
+                "actor": {"actorType": "manager", "actorId": "manager-test", "actorLabel": "Manager"},
+                "idempotencyKey": "native-lineage-duplicate-packet",
+                "payloadSummary": "Fail closed when more than one WorkItem claims one packet.",
+            },
+        )
+        assert packet_response.status_code == 200
+        work_item = _create_work_item(client, title="Duplicate native packet claim")
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            authoritative_packet_id="native-lineage-duplicate-packet",
+            metadata_json={"authoritativePacketId": "native-lineage-duplicate-packet"},
+        )
+        from supervisor.api import main
+
+        original_list_work_items = main.service.list_work_items
+
+        async def duplicate_work_item_claims(session):
+            items = await original_list_work_items(session)
+            linked = next(item for item in items if item.id == work_item["id"])
+            return [*items, linked]
+
+        monkeypatch.setattr(main.service, "list_work_items", duplicate_work_item_claims)
+        response = client.get("/pipeline-control-plane/canonical-operational-projection")
+        assert response.status_code == 200
+        packet = next(
+            packet
+            for packet in response.json()["data"]["workPackets"]
+            if packet["packetId"] == "native-lineage-duplicate-packet"
+        )
+        assert packet["workItemId"] is None
+        assert packet["queueLease"] is None
+        assert packet["executionAttempts"] == []
+        assert packet["correlationIds"] == []
 
 def test_work_item_events_persist_transition_and_subscription_launch_evidence(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-transition-event-replay.db"
@@ -7363,13 +8663,8 @@ def test_promoted_work_item_preserves_linkage_and_canonical_ready_to_test_metada
             if detail["packetId"] == canonical_packet["packetId"]
         )
         ready_to_test = canonical_packet["readyToTest"]
-        assert ready_to_test["userFacingSummary"] == "Promoted Learn/refill projection is ready to test."
-        assert ready_to_test["testableSurface"] == "/pipeline selected packet"
-        assert ready_to_test["verificationRefs"] == ["pytest tests/integration/test_work_packets.py"]
-        assert ready_to_test["evidenceRefs"] == ["evidence:promoted-ready"]
-        assert "terminal-output:must-not-project" not in json.dumps(ready_to_test)
-        assert "tmux-stdout:must-not-project" not in json.dumps(ready_to_test)
-        assert canonical_detail["readyToTest"] == ready_to_test
+        assert ready_to_test is None
+        assert canonical_detail["readyToTest"] is None
 
 
 def test_operational_actions_are_idempotent_and_preserve_ready_to_test_lineage(tmp_path, monkeypatch) -> None:

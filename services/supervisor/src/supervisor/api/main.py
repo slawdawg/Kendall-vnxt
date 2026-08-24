@@ -864,7 +864,7 @@ async def authenticated_packet_detail(
         await record_auth_audit(session, "packet_detail_read", "unavailable")
         return {"schemaVersion": "dashboard-canonical-lan-packet-detail/v1", "state": "unavailable"}
     try:
-        projection = await service.get_pipeline_dashboard_projection(session, mutation_access=False)
+        projection = await service.get_dashboard_canonical_operational_projection(session, mutation_access=False)
     except Exception:
         await record_auth_audit(session, "packet_detail_read", "unavailable")
         return _packet_detail_error(503, "Packet detail is unavailable.")
