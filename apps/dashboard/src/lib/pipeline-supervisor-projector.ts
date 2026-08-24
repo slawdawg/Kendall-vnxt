@@ -286,16 +286,6 @@ export function projectDashboardCanonicalPresentationsToCockpitPackets(
   };
 }
 
-/** Explicit Phase 3 hold for the WorkItem memory-review panel until its own canonical DTO lands. */
-export function projectDashboardCanonicalPresentationForWorkItemHold(
-  presentation: DashboardCanonicalPresentationV1,
-): WorkPacketV0View {
-  if (!isDashboardCanonicalPresentationV1(presentation)) {
-    throw new TypeError("Dashboard canonical presentation is malformed.");
-  }
-  return canonicalPresentationBase(presentation);
-}
-
 function isDashboardCanonicalPresentationV1(value: unknown): value is DashboardCanonicalPresentationV1 {
   return isRecord(value) &&
     value.schemaVersion === "dashboard-canonical-presentation/v1" &&
@@ -441,64 +431,6 @@ function sourceTrustSummaryForCanonicalPresentation(presentation: DashboardCanon
   if (blocked > 0) return `${blocked} canonical source${blocked === 1 ? "" : "s"} unavailable`;
   if (stale > 0) return `${stale} canonical source${stale === 1 ? "" : "s"} stale`;
   return "canonical source metadata included";
-}
-
-function canonicalPresentationBase(presentation: DashboardCanonicalPresentationV1): WorkPacketV0View {
-  return {
-    packetId: presentation.packetId,
-    title: presentation.title,
-    requestedOutcome: presentation.requestedOutcome,
-    currentStage: presentation.currentStage,
-    currentOwner: presentation.currentOwner,
-    status: presentation.status,
-    lifecycleState: presentation.lifecycleState,
-    riskLevel: presentation.riskLevel,
-    priority: presentation.priority,
-    candidateWork: null,
-    workItem: null,
-    taskPacket: null,
-    routingPreview: null,
-    routeSummary: null,
-    executionAttempts: [],
-    transitionEvents: presentation.transitionEvents,
-    sourceRefs: presentation.sourceRefs.map((ref) => ref.accessState === "allowed"
-      ? {
-          refId: ref.refId,
-          sourceType: ref.sourceType,
-          label: ref.label,
-          pathOrUrl: ref.pathOrUrl,
-          freshness: ref.freshness,
-          accessState: "allowed" as const,
-          canonical: true,
-          summaryOnly: true,
-          blockedReason: null,
-        }
-      : {
-          refId: ref.refId,
-          sourceType: ref.sourceType,
-          label: ref.label,
-          pathOrUrl: null,
-          freshness: ref.freshness,
-          accessState: "blocked" as const,
-          canonical: true,
-          summaryOnly: true,
-          blockedReason: ref.blockedReason ?? "Canonical source is unavailable.",
-        }),
-    evidenceRefs: presentation.evidenceRefs,
-    artifactRefs: [],
-    humanGateActions: [],
-    humanGateActionRequests: [],
-    laneCards: [],
-    memoryProposals: [],
-    deliveryEvidence: null,
-    learnOutcome: null,
-    learnRefill: null,
-    alphaMemorySourceStatus: null,
-    gateStateValidation: null,
-    loopStopStates: [],
-    reviewSummaries: [],
-    recoveryActions: [],
-  };
 }
 
 function projectCanonicalBaseToCockpitPacket(packet: WorkPacketV0View): PipelineRuntimePacket {

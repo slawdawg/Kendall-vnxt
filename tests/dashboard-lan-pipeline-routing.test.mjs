@@ -44,8 +44,8 @@ test("normal and LAN cockpit callers carry canonical packets and the dashboard-o
   assert.doesNotMatch(loaderSource, /packet: PipelineRuntimePacket \| null/);
   assert.doesNotMatch(loaderSource, /payloadSummary: lifecycle\.history/);
   assert.doesNotMatch(loaderSource, /evidenceRefs: lifecycle\.history/);
-  assert.match(cockpitSource, /canonicalPackets\.map\(\(packet\) => packet\.presentation\)/);
-  assert.match(cockpitSource, /projectDashboardCanonicalPresentationsToCockpitPackets/);
+  assert.match(cockpitSource, /canonicalPackets\?\.map\(\(packet\) => \(\{ packetId: packet\.presentation\.packetId \}\)\)/);
+  assert.doesNotMatch(cockpitSource, /projectDashboardCanonicalPresentationsToCockpitPackets/);
   assert.match(cockpitSource, /operationalProjection\?: DashboardCanonicalOperationalProjectionV1 \| null/);
   assert.match(detailSource, /const \{ fixtureMode, canonicalPacket, workGraph \}/);
   assert.match(detailSource, /<PacketDetailPage canonicalPacket=\{canonicalPacket\}/);

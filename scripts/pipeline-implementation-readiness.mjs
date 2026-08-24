@@ -165,11 +165,11 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     status: "satisfied",
     failureClass: "blocker",
     requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures"],
-    sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/lib/pipeline-packet-loader.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
+    sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/lib/pipeline-packet-loader.ts", "apps/dashboard/src/lib/pipeline/coordination-health.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
       { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["getWorkPackets", "Persisted supervisor canonical packet rows only", "no demo packets are substituted"] },
-      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
+      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board", "canonicalPacketIdentities"] },
       { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Authoritative lifecycle", "Canonical boundary"] },
       { file: "apps/dashboard/src/components/pipeline/packet-detail-fixture-page.tsx", tokens: ["Gate, memory, recovery"] },
       { file: "tests/dashboard-pipeline-packet-loader.test.mjs", tokens: ["explicit demo route is the only fixture catalog boundary", "pipeline-fixtures"] },

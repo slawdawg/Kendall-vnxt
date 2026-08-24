@@ -12,10 +12,6 @@ import type {
   PipelineStage,
 } from "@kendall/contracts";
 import {
-  projectDashboardCanonicalPresentationsToCockpitPackets,
-  type PipelineCanonicalPresentationPacketV1,
-} from "../../lib/pipeline-supervisor-projector";
-import {
   projectionDisplayLabels,
   projectionEffectiveLabels,
   projectionHasRenderableBackendPackets,
@@ -94,8 +90,7 @@ type PipelineCockpitPacket = {
 };
 
 type PipelineFixturePacket = PipelineCockpitPacket;
-/** The normal path reaches this component only through the canonical presentation projector below. */
-type PipelineCanonicalCockpitPacket = PipelineCanonicalPresentationPacketV1 & PipelineCockpitPacket;
+type PipelinePacketIdentity = Pick<PipelineCockpitPacket, "packetId">;
 
 const pipelineStages: PipelineStage[] = [
   "capture",
@@ -168,7 +163,7 @@ export function PipelineCockpit({
   managerExecutionLane?: PipelineManagerExecutionLaneState | null;
   /** Fixed test_viewer sessions can inspect truth but never receive action affordances. */
   readOnly?: boolean;
-  /** Client-safe canonical runtime rows; this boundary owns the canonical presentation projector. */
+  /** Client-safe canonical runtime rows; normal rendering uses their packet identities and the V1 active-board model. */
   canonicalPackets?: readonly DashboardCanonicalWorkPacketClientV1[];
   /** Versioned canonical truth for action gating. */
   operationalTruth?: DashboardCanonicalOperationalProjectionTruthV1 | null;
@@ -181,15 +176,11 @@ export function PipelineCockpit({
   projectionError?: string | null;
   selectedPacket?: PipelineFixturePacketV1 | null;
 }) {
-  const presentationPackets = useMemo<PipelineCockpitPacket[]>(() => {
-    if (!canonicalPackets) return packets ?? [];
-    const canonicalPresentation = projectDashboardCanonicalPresentationsToCockpitPackets(
-      canonicalPackets.map((packet) => packet.presentation),
-    );
-    return canonicalPresentation.kind === "runtime"
-      ? canonicalPresentation.packets as PipelineCanonicalCockpitPacket[]
-      : [];
-  }, [canonicalPackets, packets]);
+  const presentationPackets = useMemo<PipelineCockpitPacket[]>(() => packets ?? [], [packets]);
+  const canonicalPacketIdentities = useMemo<PipelinePacketIdentity[]>(
+    () => canonicalPackets?.map((packet) => ({ packetId: packet.presentation.packetId })) ?? presentationPackets,
+    [canonicalPackets, presentationPackets],
+  );
   const [selectedItem, setSelectedItem] = useState<SelectedMapItem>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedStage, setFocusedStage] = useState<PipelineStage>("capture");
@@ -221,8 +212,8 @@ export function PipelineCockpit({
     [currentActiveBoardProjection]
   );
   const dashboardPackets = useMemo(
-    () => projectionToCockpitPackets(currentActiveBoardProjection, presentationPackets, currentProjectionError, activeBoardViewModel, fixtureMode),
-    [activeBoardViewModel, presentationPackets, currentActiveBoardProjection, currentProjectionError, fixtureMode]
+    () => projectionToCockpitPackets(currentActiveBoardProjection, presentationPackets, canonicalPacketIdentities, currentProjectionError, activeBoardViewModel, fixtureMode),
+    [activeBoardViewModel, canonicalPacketIdentities, presentationPackets, currentActiveBoardProjection, currentProjectionError, fixtureMode]
   );
   const stageSummaryByStage = useMemo(
     () => buildStageSummaryByStage(currentActiveBoardProjection, currentProjectionError, fixtureMode),
@@ -1126,7 +1117,8 @@ function buildStageSummaryByStage(
 
 function projectionToCockpitPackets(
   projection: DashboardCanonicalActiveBoardProjectionV1 | null,
-  runtimePackets: PipelineFixturePacket[],
+  runtimePackets: readonly PipelineCockpitPacket[],
+  canonicalPacketIdentities: readonly PipelinePacketIdentity[],
   projectionError: string | null,
   activeBoardViewModel: PipelineActiveBoardViewModel | null,
   sourceState: PipelineRuntimeSourceState
@@ -1141,7 +1133,7 @@ function projectionToCockpitPackets(
     return [];
   }
   const activeBoardCards = activeBoardViewModel.activeBoard.stageLanes.flatMap((lane) => lane.packetCards);
-  const runtimePacketIds = new Set(runtimePackets.map((packet) => packet.packetId));
+  const runtimePacketIds = new Set(canonicalPacketIdentities.map((packet) => packet.packetId));
   const activeBoardCardByPacketId = new Map(activeBoardCards.map((card) => [card.packetId, card]));
   const projectionPacketById = new Map(projection.workPackets.map((packet) => [packet.packetId, packet]));
   const selectedDetailByPacketId = new Map<string, ActiveBoardSelectedPacketDetail>(projection.selectedPacketDetails.map((detail) => [detail.packetId, detail]));
@@ -3849,13 +3841,13 @@ function plainStatusLabel(packet: PipelineFixturePacket) {
   return "Waiting";
 }
 
-function findTopBlockedPacket(packets: PipelineFixturePacket[]) {
+function findTopBlockedPacket(packets: readonly PipelineFixturePacket[]) {
   return packets
     .filter((packet) => packet.status === "blocked" || packet.currentStage === "human_gate")
     .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];
 }
 
-function findTopAttentionPacket(packets: PipelineFixturePacket[]) {
+function findTopAttentionPacket(packets: readonly PipelineFixturePacket[]) {
   return packets
     .filter((packet) => packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate")
     .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];

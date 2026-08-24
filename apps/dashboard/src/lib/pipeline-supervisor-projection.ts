@@ -5,7 +5,16 @@ import {
   validatePipelineOperationalActionCapabilityV1,
 } from "@kendall/contracts";
 import type { PipelineDashboardProjectionV0, PipelineReviewRouteEvidenceV0, PipelineWorkGraphEvidenceV0 } from "@kendall/contracts";
-import type { DashboardCanonicalCoordinationHealthV1 } from "./pipeline/canonical-operational-projection";
+import {
+  isDashboardCanonicalCoordinationHealth,
+  isDashboardCoordinationHealthInput,
+  isPipelineCoordinationHealth,
+} from "./pipeline/coordination-health";
+export {
+  isDashboardCanonicalCoordinationHealth,
+  isDashboardCoordinationHealthInput,
+  isPipelineCoordinationHealth,
+} from "./pipeline/coordination-health";
 
 export function normalizePipelineDashboardProjection(projection: Partial<PipelineDashboardProjectionV0>): Partial<PipelineDashboardProjectionV0> {
   if (!projection || typeof projection !== "object") {
@@ -976,52 +985,6 @@ function isActiveManagerLaneClarity(value: unknown) {
       ? (typeof clarity.posture.decisionRef === "string" && clarity.posture.qualification !== null && clarity.posture.qualification !== undefined)
       : ((clarity.posture?.decisionRef === null || clarity.posture?.decisionRef === undefined) && (clarity.posture?.qualification === null || clarity.posture?.qualification === undefined))) &&
     clarity.metadataOnly === true && clarity.rawPayloadRetained === false;
-}
-
-export function isPipelineCoordinationHealth(value: unknown) {
-  if (!value || typeof value !== "object") return false;
-  const health = value as NonNullable<PipelineDashboardProjectionV0["coordinationHealth"]>;
-  return health.schemaVersion === "manager-coordination-health/v0" &&
-    isSafeEvidenceRef(health.runId) && isTimestampString(health.observedAt) &&
-    health.source === "manager_workspace_inventory" &&
-    (health.freshness === "fresh" || health.freshness === "unavailable") &&
-    (health.availability === "available" || health.availability === "incomplete" || health.availability === "unavailable") &&
-    [health.activeWorkCount, health.staleOwnerTargetCount, health.staleOwnerProjectedCount, health.dirtyPreserveCount]
-      .every((count) => Number.isSafeInteger(count) && count >= 0) &&
-    health.staleOwnerProjectedCount <= health.staleOwnerTargetCount &&
-    (health.staleOwnerProjectedCount === health.staleOwnerTargetCount || health.availability === "incomplete") &&
-    typeof health.missingWorktreeJournalHold === "boolean" &&
-    isSafeProjectionText(health.nextSafeAction) &&
-    Array.isArray(health.evidenceRefs) && health.evidenceRefs.length <= 8 && health.evidenceRefs.every(isSafeEvidenceRef) &&
-    health.metadataOnly === true && health.rawPayloadRetained === false;
-}
-
-const CANONICAL_COORDINATION_HEALTH_KEYS = new Set([
-  "observedAt", "source", "freshness", "availability", "activeWorkCount", "staleOwnerTargetCount",
-  "staleOwnerProjectedCount", "dirtyPreserveCount", "missingWorktreeJournalHold", "nextSafeAction", "metadataOnly",
-]);
-
-/** Validate the compact proxy DTO independently from the upstream V0 receipt. */
-export function isDashboardCanonicalCoordinationHealth(value: unknown): value is DashboardCanonicalCoordinationHealthV1 {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const health = value as Record<string, unknown>;
-  if (!Object.keys(health).every((key) => CANONICAL_COORDINATION_HEALTH_KEYS.has(key))) return false;
-  const counts = [health.activeWorkCount, health.staleOwnerTargetCount, health.staleOwnerProjectedCount, health.dirtyPreserveCount];
-  return isTimestampString(health.observedAt)
-    && health.source === "manager_workspace_inventory"
-    && (health.freshness === "fresh" || health.freshness === "unavailable")
-    && (health.availability === "available" || health.availability === "incomplete" || health.availability === "unavailable")
-    && counts.every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)
-    && (health.staleOwnerProjectedCount as number) <= (health.staleOwnerTargetCount as number)
-    && ((health.staleOwnerProjectedCount === health.staleOwnerTargetCount) || health.availability === "incomplete")
-    && typeof health.missingWorktreeJournalHold === "boolean"
-    && isSafeProjectionText(health.nextSafeAction)
-    && health.metadataOnly === true;
-}
-
-/** Validate either the direct V0 supervisor receipt or the compact LAN DTO. */
-export function isDashboardCoordinationHealthInput(value: unknown): boolean {
-  return isPipelineCoordinationHealth(value) || isDashboardCanonicalCoordinationHealth(value);
 }
 
 function isWorkerSummary(value: unknown) {

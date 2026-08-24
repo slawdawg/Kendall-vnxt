@@ -8,6 +8,13 @@ metadata-only manager workspace-inventory receipt. It is not a second tracker,
 does not inspect worktrees in the browser, and does not grant execution,
 cleanup, delivery, or provider authority.
 
+The dashboard implementation validates the retained supervisor receipt through
+the standalone `apps/dashboard/src/lib/pipeline/coordination-health.ts`
+boundary. Normal cockpit rendering consumes canonical packet identities and the
+dashboard-owned V1 active-board model; the V0 projection validator/projector
+remain explicit compatibility holds for direct-detail evidence and fixture
+coverage, not normal runtime fallback.
+
 ## What the panel means
 
 - **Active work** is the canonical manager assignment count.
