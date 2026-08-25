@@ -16149,11 +16149,11 @@ function discardRecoverableStalePartialCheckPacket(manifest, manifestPath, packe
   } else {
     validateStalePartialCheckPacketForDiscard(packet, expected);
   }
-  if (
+  if (!successorAdmission && (
     packet.head === expected.head
     && packet.plan_digest === expected.plan.digest
     && packet.staged_input_digest === expected.stagedInputDigest
-  ) return false;
+  )) return false;
   appendTaskEvent(
     manifest,
     "check_verification_packet_discarded",
@@ -16192,24 +16192,124 @@ function prepareTakeoverStalePartialCheckPacketAdmission(state, manifest, option
     packet.owner !== predecessorOwner || options.takeOwnership !== true || options.stageAll !== true ||
     options.noVerify === true || options.verify !== "check" || options.retryEnvironmentPreflight === true
   ) return null;
-  const predecessor = lock?.priorLease;
+  const lockingPredecessor = lock?.priorLease;
   if (
-    !predecessor || predecessor.owner !== predecessorOwner || predecessor.status !== "released" ||
-    !isUuid(predecessor.generation) || !Number.isInteger(predecessor.pid) || predecessor.pid <= 0 ||
-    typeof predecessor.processStartIdentity !== "string" || predecessor.processStartIdentity.length === 0
+    !lockingPredecessor || lockingPredecessor.status !== "released" ||
+    !isUuid(lockingPredecessor.generation) || !Number.isInteger(lockingPredecessor.pid) || lockingPredecessor.pid <= 0 ||
+    typeof lockingPredecessor.processStartIdentity !== "string" || lockingPredecessor.processStartIdentity.length === 0
   ) {
     throw new Error("successor stale partial packet discard requires an exact released predecessor lease; refusing verification or delivery.");
   }
+  const lineage = takeoverStalePartialReleasedLineage(
+    state,
+    manifest.task_id,
+    predecessorOwner,
+    successorOwner,
+    lockingPredecessor,
+    lock.generation,
+  );
   return {
     predecessorOwner,
     successorOwner,
-    priorLease: predecessor,
+    priorLease: lineage.predecessor,
+    lockingPriorLease: lockingPredecessor,
+    lineageFingerprint: takeoverStalePartialLeaseLineageFingerprint(lineage),
     packetFingerprint: takeoverStalePartialCheckPacketFingerprint(packet),
   };
 }
 
 function takeoverStalePartialCheckPacketFingerprint(packet) {
   return createHash("sha256").update(JSON.stringify(packet)).digest("hex");
+}
+
+function takeoverStalePartialLeaseIdentity(record) {
+  return {
+    generation: record.generation,
+    owner: record.owner,
+    pid: record.pid,
+    processStartIdentity: record.processStartIdentity,
+  };
+}
+
+function takeoverStalePartialLeaseLineageFingerprint(lineage) {
+  return createHash("sha256").update(JSON.stringify(lineage.entries)).digest("hex");
+}
+
+function takeoverStalePartialReleasedLineage(state, taskId, predecessorOwner, successorOwner, lockingPredecessor, activeGeneration) {
+  const root = readRegularJson(taskLeaseRootRecordPath(state, taskId));
+  if (!validTaskLeaseRootRecord(root, taskId) || !lockingPredecessor?.generation || !activeGeneration) {
+    throw new Error("successor stale partial packet released predecessor lineage is not provable; refusing verification or delivery.");
+  }
+  let generation = root.initial_generation;
+  let epoch = 0;
+  let segmentDepth = 0;
+  let predecessor = null;
+  const entries = [];
+  const seen = new Set();
+  const maximumTraversedGenerations = taskLeaseMaximumGenerationChainLength * (taskLeaseMaximumEpochCount + 1);
+  for (let traversed = 0; traversed < maximumTraversedGenerations; traversed += 1) {
+    if (seen.has(generation)) throw new Error("successor stale partial packet released predecessor lineage is cyclic; refusing verification or delivery.");
+    seen.add(generation);
+    const record = leaseRecord(state, taskId, generation);
+    if (!validTaskLeaseRecord(record, taskId)) {
+      throw new Error("successor stale partial packet released predecessor lineage is invalid; refusing verification or delivery.");
+    }
+    const tokenDigest = taskLeaseTokenDigest(record.token);
+    if (unresolvedTaskLeaseExternalIntent(state, taskId, record, tokenDigest)) {
+      throw new Error("successor stale partial packet predecessor has an unresolved external intent; refusing verification or delivery.");
+    }
+    const releasePath = taskLeasePath(state, taskId, "releases", generation);
+    const release = existsSync(releasePath) ? readRegularJson(releasePath) : null;
+    if (!validTaskLeaseRelease(release, taskId, generation, tokenDigest)) {
+      throw new Error("successor stale partial packet released predecessor lineage is incomplete; refusing verification or delivery.");
+    }
+    const handoffPath = taskLeasePath(state, taskId, "handoffs", generation);
+    const epochPath = taskLeasePath(state, taskId, "epochs", generation);
+    const handoff = existsSync(handoffPath) ? readRegularJson(handoffPath) : null;
+    const epochRecord = handoff ? null : (existsSync(epochPath) ? readRegularJson(epochPath) : null);
+    let nextGeneration = null;
+    if (handoff) {
+      if (!validTaskLeaseHandoff(handoff, taskId, generation, tokenDigest) || handoff.reason !== "released") {
+        throw new Error("successor stale partial packet released predecessor lineage is invalid; refusing verification or delivery.");
+      }
+      if (segmentDepth + 1 >= taskLeaseMaximumGenerationChainLength) {
+        throw new Error("successor stale partial packet released predecessor lineage exceeds its bounded depth; refusing verification or delivery.");
+      }
+      nextGeneration = handoff.to_generation;
+    } else {
+      if (!validTaskLeaseEpoch(epochRecord, taskId, generation, tokenDigest, epoch) || epochRecord.reason !== "released") {
+        throw new Error("successor stale partial packet released predecessor lineage is invalid; refusing verification or delivery.");
+      }
+      if (epoch >= taskLeaseMaximumEpochCount) {
+        throw new Error("successor stale partial packet released predecessor lineage exceeds its bounded epoch capacity; refusing verification or delivery.");
+      }
+      nextGeneration = epochRecord.to_generation;
+    }
+    const identity = takeoverStalePartialLeaseIdentity({
+      generation,
+      owner: record.owner,
+      pid: record.pid,
+      processStartIdentity: record.process_start_identity,
+    });
+    if (!predecessor && record.owner === predecessorOwner) predecessor = identity;
+    else if (predecessor && record.owner !== successorOwner) {
+      throw new Error("successor stale partial packet released predecessor lineage changed owners before retry; refusing verification or delivery.");
+    }
+    entries.push(identity);
+    if (generation === lockingPredecessor.generation) {
+      if (!predecessor || nextGeneration !== activeGeneration) {
+        throw new Error("successor stale partial packet released predecessor lineage is not an exact successor handoff; refusing verification or delivery.");
+      }
+      return { predecessor, entries };
+    }
+    generation = nextGeneration;
+    if (handoff) segmentDepth += 1;
+    else {
+      epoch += 1;
+      segmentDepth = 0;
+    }
+  }
+  throw new Error("successor stale partial packet released predecessor lineage exceeds its bounded depth; refusing verification or delivery.");
 }
 
 function assertTakeoverStalePartialCheckPacketAdmissionBeforeDiscard(state, manifest, packet, expected, admission, lock = {}) {
@@ -16228,6 +16328,31 @@ function assertTakeoverStalePartialCheckPacketAdmissionBeforeDiscard(state, mani
   ) {
     throw new Error("successor stale partial packet lease ownership changed before discard; refusing verification or delivery.");
   }
+  if (
+    lock?.priorLease?.generation !== admission.lockingPriorLease?.generation ||
+    lock.priorLease?.owner !== admission.lockingPriorLease?.owner ||
+    lock.priorLease?.pid !== admission.lockingPriorLease?.pid ||
+    lock.priorLease?.processStartIdentity !== admission.lockingPriorLease?.processStartIdentity
+  ) {
+    throw new Error("successor stale partial packet locking predecessor changed before discard; refusing verification or delivery.");
+  }
+  const lineage = takeoverStalePartialReleasedLineage(
+    state,
+    manifest.task_id,
+    admission.predecessorOwner,
+    admission.successorOwner,
+    admission.lockingPriorLease,
+    lock.generation,
+  );
+  if (
+    lineage.predecessor.generation !== admission.priorLease.generation ||
+    lineage.predecessor.owner !== admission.priorLease.owner ||
+    lineage.predecessor.pid !== admission.priorLease.pid ||
+    lineage.predecessor.processStartIdentity !== admission.priorLease.processStartIdentity ||
+    takeoverStalePartialLeaseLineageFingerprint(lineage) !== admission.lineageFingerprint
+  ) {
+    throw new Error("successor stale partial packet predecessor lineage changed before discard; refusing verification or delivery.");
+  }
   const prior = leaseRecord(state, manifest.task_id, admission.priorLease.generation);
   if (
     !validTaskLeaseRecord(prior, manifest.task_id) || prior.owner !== admission.predecessorOwner ||
@@ -16243,17 +16368,6 @@ function assertTakeoverStalePartialCheckPacketAdmissionBeforeDiscard(state, mani
   }
   if (unresolvedTaskLeaseExternalIntent(state, manifest.task_id, prior, tokenDigest)) {
     throw new Error("successor stale partial packet predecessor has an unresolved external intent; refusing verification or delivery.");
-  }
-  const handoffPath = taskLeasePath(state, manifest.task_id, "handoffs", prior.generation);
-  const epochPath = taskLeasePath(state, manifest.task_id, "epochs", prior.generation);
-  const handoff = existsSync(handoffPath)
-    ? readRegularJson(handoffPath)
-    : existsSync(epochPath) ? readRegularJson(epochPath) : null;
-  if (
-    !validTaskLeaseHandoff(handoff, manifest.task_id, prior.generation, tokenDigest) ||
-    handoff.reason !== "released" || handoff.to_generation !== lock.generation
-  ) {
-    throw new Error("successor stale partial packet released lease chain changed before discard; refusing verification or delivery.");
   }
 }
 
@@ -16693,7 +16807,11 @@ function validateAssignment(assignment, path) {
 function currentLaneOwner(options = {}) {
   const configured = options.owner || process.env.CODEX_WORKSPACE_OWNER || process.env.CODEX_THREAD_ID;
   const owner = configured ? String(configured).trim() : `${process.env.USER || "unknown"}@${hostname() || "unknown-host"}`;
-  return owner || "unknown-owner";
+  const bounded = owner || "unknown-owner";
+  if (bounded.length > 240) {
+    throw new Error("Lane owner must be no longer than 240 characters before task-lease publication.");
+  }
+  return bounded;
 }
 
 function laneOwnerWarning(manifest, options = {}) {
@@ -20312,7 +20430,7 @@ function validTaskLeaseRecord(record, taskId) {
       record.schema_version === taskLeaseSchemaVersion &&
       record.task_id === taskId &&
       isUuid(record.generation) &&
-      typeof record.owner === "string" && record.owner.trim() &&
+      typeof record.owner === "string" && record.owner.trim() && record.owner.length <= 240 &&
       Number.isInteger(record.pid) && record.pid > 0 &&
       typeof record.process_start_identity === "string" && record.process_start_identity &&
       isIsoTimestamp(record.acquired_at) &&
@@ -21340,7 +21458,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
     schema_version: taskLeaseSchemaVersion,
     task_id: taskId,
     generation: randomUUID(),
-    owner: String(options.owner || currentLaneOwner(options)),
+    owner: currentLaneOwner(options),
     pid: process.pid,
     process_start_identity: processStart,
     acquired_at: new Date().toISOString(),
