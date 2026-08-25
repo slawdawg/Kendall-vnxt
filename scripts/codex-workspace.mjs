@@ -9608,6 +9608,7 @@ function closeNoSource(argv) {
 
 function applyCloseNoSourceTestMutationBeforeLockedProof(state, taskId) {
   if (process.env.CODEX_WORKSPACE_TEST_MODE !== "1" || process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_MUTATE_BEFORE_LOCK !== "1") return;
+  if (!isTemporaryWorkspaceTestState(state.root)) return;
   const record = findCloseNoSourceManifestByExactTaskId(state, taskId);
   record.manifest.events = [...copyJsonArray(record.manifest.events), taskEvent("cleanup_started", "test-only concurrent lifecycle evidence")];
   writeManifest(record.path, record.manifest);

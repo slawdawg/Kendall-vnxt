@@ -20525,14 +20525,27 @@ try {
         expected: "base_ref_unresolved_hold",
       },
       {
-        name: "active task lock",
+        name: "legacy retained task lock",
         prepare: ({ fixture }) => { writeFixtureTaskLock(fixture, fixtureTaskLockMetadata(fixture.taskId)); },
         expected: "task_lock_legacy_retained",
       },
       {
-        name: "ambiguous task lock",
+        name: "malformed legacy task lock",
         prepare: ({ fixture }) => { writeFileSync(join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`), "{}\n"); },
         expected: "task_lock_legacy_retained",
+      },
+      {
+        name: "active versioned task lease",
+        prepare: ({ fixture }) => { writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId)); },
+        expected: "task_lock_active",
+      },
+      {
+        name: "ambiguous versioned task lease",
+        prepare: ({ fixture }) => {
+          writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId));
+          writeFileSync(join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "root.json"), "{}\n");
+        },
+        expected: "task_lock_ambiguous",
       },
     ];
     for (const scenario of scenarios) {
