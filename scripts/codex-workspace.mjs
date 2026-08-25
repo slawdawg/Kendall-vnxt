@@ -1305,7 +1305,7 @@ function deriveWorkspaceLifecycleState(manifest, lane, context, commitEvidence, 
     };
   }
   if (manifest.status === "merged") {
-    const cleanupReadiness = lifecycleMergedCleanupReadiness(manifest, state);
+    const cleanupReadiness = lifecycleMergedCleanupReadiness(manifest, state, context);
     if (cleanupReadiness.ready) {
       return {
         derivedState: "cleanup_ready",
@@ -1370,8 +1370,9 @@ function deriveWorkspaceLifecycleState(manifest, lane, context, commitEvidence, 
   };
 }
 
-function lifecycleMergedCleanupReadiness(manifest, state) {
+function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
   try {
+    assertLaneOwner(manifest, { owner: context.currentOwner });
     const target = assertCleanupWorktreeForMerged(manifest, state);
     const pr = prView(manifest);
     if (!pr?.mergedAt) return { ready: false, reasonCode: "cleanup_pr_merged_unproven", reason: "live merged PR evidence is unavailable" };
@@ -9654,7 +9655,11 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   const linkedAssignments = readAssignments(state).filter(({ assignment }) => assignment.branch === manifest.branch && assignment.status !== "closed");
   add(linkedAssignments.length === 0, "linked_active_assignment_present");
   const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet"];
-  const evidencePresent = evidenceKeys.filter((key) => manifest[key] !== undefined && manifest[key] !== null && manifest[key] !== false);
+  const lifecycleEvidenceField = /(?:^|_)(?:pr|delivery|merge|merged|cleanup|supersession|closeout)(?:_|$)/i;
+  const evidencePresent = [...new Set([
+    ...evidenceKeys,
+    ...Object.keys(manifest).filter((key) => lifecycleEvidenceField.test(key)),
+  ])].filter((key) => manifest[key] !== undefined && manifest[key] !== null && manifest[key] !== false);
   const eventResidue = Array.isArray(manifest.events)
     ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout)/i.test(type))
     : ["events_unreadable"];

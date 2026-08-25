@@ -20469,6 +20469,7 @@ try {
       const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
       const manifest = readJson(manifestPath);
       delete manifest.source_assignment_id;
+      manifest.cleanup_error = "prior cleanup requires governed recovery";
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const before = readFileSync(manifestPath, "utf8");
       const linked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
@@ -20478,6 +20479,9 @@ try {
       const foreign = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-b", "--state-root", fixture.stateRoot]);
       assert(foreign.code === 0, foreign.stderr || foreign.stdout);
       assert(JSON.parse(foreign.stdout).ready === false, foreign.stdout || foreign.stderr);
+      const residue = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(residue.code === 0, residue.stderr || residue.stdout);
+      assert(JSON.parse(residue.stdout).blockers.some((blocker) => blocker.includes("cleanup_error")), residue.stdout || residue.stderr);
       writeFileSync(join(fixture.worktree, "uncommitted.txt"), "retain\n");
       const dirty = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
       assert(dirty.code === 0, dirty.stderr || dirty.stdout);
@@ -20498,6 +20502,11 @@ try {
       const row = JSON.parse(result.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
       assert(row?.derivedState === "cleanup_ready", result.stdout || result.stderr);
       assert(row?.reasonCode === "cleanup_preconditions_proven", result.stdout || result.stderr);
+      const foreignOwner = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-b", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(foreignOwner.code === 0, foreignOwner.stderr || foreignOwner.stdout);
+      const foreignOwnerRow = JSON.parse(foreignOwner.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(foreignOwnerRow?.derivedState === "hold_attention_required", foreignOwner.stdout || foreignOwner.stderr);
+      assert(foreignOwnerRow?.reasonCode === "cleanup_prerequisites_unproven", foreignOwner.stdout || foreignOwner.stderr);
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
