@@ -20469,6 +20469,32 @@ try {
     }
   });
 
+  test("verify-no-source records supported verification evidence for an otherwise empty lane", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-verification-task", baseBranch: "dev" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture, { verification: false });
+      const before = readFileSync(manifestPath, "utf8");
+      const blocked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      assert(JSON.parse(blocked.stdout).blockers.includes("successful scoped verification evidence is required"), blocked.stdout || blocked.stderr);
+      installFixtureNoSourceVerificationNode(fixture);
+      const dryRun = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "preflight", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "verify-no-source dry-run mutated manifest");
+      const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "preflight", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(verified.code === 0, verified.stderr || verified.stdout);
+      const manifest = readJson(manifestPath);
+      assert(manifest.last_verification_result?.exitCode === 0, JSON.stringify(manifest));
+      assert(manifest.last_verification_result?.baseRef === manifest.base_ref, JSON.stringify(manifest));
+      assert(manifest.events.some((event) => event.type === "verified"), JSON.stringify(manifest.events));
+      const ready = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(ready.code === 0, ready.stderr || ready.stdout);
+      assert(JSON.parse(ready.stdout).ready === true, ready.stdout || ready.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("close-no-source refuses foreign ownership, linked assignments, and dirty worktree evidence without mutation", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-refusal-task", baseBranch: "dev" });
     try {
@@ -20495,6 +20521,38 @@ try {
       assert(readFileSync(manifestPath, "utf8") === before, "close-no-source refusal mutated manifest");
       assert(existsSync(fixture.worktree), "close-no-source refusal removed worktree");
     } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source holds the assignment index and rejects remote source evidence", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-assignment-lock", baseBranch: "dev" });
+    let fd;
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const before = readFileSync(manifestPath, "utf8");
+      const refs = refSnapshot(fixture.root);
+      fd = openSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock"), "wx");
+      const locked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(locked.code !== 0, locked.stderr || locked.stdout);
+      assert(locked.stderr.includes("Assignment index is locked"), locked.stderr || locked.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "held assignment index mutated manifest");
+      assert(refSnapshot(fixture.root) === refs, "held assignment index changed refs");
+      closeSync(fd);
+      fd = undefined;
+
+      createRemoteOnlySourceCommit(fixture);
+      const remoteSourceRefs = refSnapshot(fixture.root);
+      const remoteSource = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(remoteSource.code === 0, remoteSource.stderr || remoteSource.stdout);
+      const packet = JSON.parse(remoteSource.stdout);
+      assert(packet.ready === false, remoteSource.stdout || remoteSource.stderr);
+      assert(packet.blockers.includes("remote branch contains source or differs from the current base"), remoteSource.stdout || remoteSource.stderr);
+      assert(packet.proof.remoteBranch.state === "different_from_base", remoteSource.stdout || remoteSource.stderr);
+      assert(readFileSync(manifestPath, "utf8") === before, "remote source evidence mutated manifest");
+      assert(refSnapshot(fixture.root) === remoteSourceRefs, "remote source evidence changed local refs");
+    } finally {
+      if (fd !== undefined) closeSync(fd);
       cleanupIntegratedCleanupFixture(fixture);
     }
   });
@@ -20721,24 +20779,45 @@ try {
   rmSync(stateRoot, { recursive: true, force: true });
 }
 
-function prepareNoSourceFixture(fixture) {
+function prepareNoSourceFixture(fixture, options = {}) {
   const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
   const manifest = readJson(manifestPath);
   delete manifest.source_assignment_id;
-  const baseSha = runGit(fixture.worktree, ["rev-parse", manifest.base_ref]).stdout;
-  manifest.last_verified_at = "2026-08-25T00:00:00.000Z";
-  manifest.last_verification_command = "fixture scoped verification";
-  manifest.last_verification_result = {
-    schemaVersion: 1,
-    command: manifest.last_verification_command,
-    exitCode: 0,
-    baseRef: manifest.base_ref,
-    baseSha,
-    verifiedAt: manifest.last_verified_at,
-  };
+  if (options.verification !== false) {
+    const baseSha = runGit(fixture.worktree, ["rev-parse", manifest.base_ref]).stdout;
+    manifest.last_verified_at = "2026-08-25T00:00:00.000Z";
+    manifest.last_verification_command = "fixture scoped verification";
+    manifest.last_verification_result = {
+      schemaVersion: 1,
+      command: manifest.last_verification_command,
+      exitCode: 0,
+      baseRef: manifest.base_ref,
+      baseSha,
+      verifiedAt: manifest.last_verified_at,
+    };
+  }
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
   return { manifestPath, manifest };
+}
+
+function installFixtureNoSourceVerificationNode(fixture) {
+  const nodePath = join(fixture.fakeBin, "node");
+  writeFileSync(nodePath, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"./scripts/preflight.mjs\" ]; then exit 0; fi",
+    `exec ${JSON.stringify(process.execPath)} \"$@\"`,
+    "",
+  ].join("\n"));
+  chmodSync(nodePath, 0o755);
+}
+
+function createRemoteOnlySourceCommit(fixture) {
+  const branch = "fixture-remote-only-source";
+  runGit(fixture.root, ["switch", "-q", "-c", branch, fixture.baseBranch]);
+  commitFile(fixture.root, "remote-only-source.txt", "remote source\n", "remote-only source");
+  runGit(fixture.root, ["push", "-q", "origin", `HEAD:refs/heads/${fixture.branch}`]);
+  runGit(fixture.root, ["switch", "-q", fixture.baseBranch]);
 }
 
 function injectCloseNoSourceRaceFixture(fixture) {
