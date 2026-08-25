@@ -20593,8 +20593,9 @@ try {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-reproof" });
     try {
       const { manifestPath } = prepareNoSourceFixture(fixture);
+      injectCloseNoSourceRaceFixture(fixture);
       const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
-        env: { ...fixture.env, CODEX_WORKSPACE_TEST_MODE: "1", CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_MUTATE_BEFORE_LOCK: "1" },
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_MUTATE_BEFORE_LOCK: "1" },
       });
       assert(result.code !== 0, result.stderr || result.stdout);
       const manifest = readJson(manifestPath);
@@ -20642,6 +20643,21 @@ function prepareNoSourceFixture(fixture) {
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
   return { manifestPath, manifest };
+}
+
+function injectCloseNoSourceRaceFixture(fixture) {
+  const marker = "    const lockedRecord = findCloseNoSourceManifestByExactTaskId(state, taskId);";
+  const source = readFileSync(fixture.script, "utf8");
+  assert(source.split(marker).length === 2, "close-no-source fixture injection marker changed");
+  const injected = [
+    "    if (process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_MUTATE_BEFORE_LOCK === \"1\") {",
+    "      const testRecord = findCloseNoSourceManifestByExactTaskId(state, taskId);",
+    "      testRecord.manifest.events = [...copyJsonArray(testRecord.manifest.events), taskEvent(\"cleanup_started\", \"fixture-only concurrent lifecycle evidence\")];",
+    "      writeManifest(testRecord.path, testRecord.manifest);",
+    "    }",
+    marker,
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(marker, injected));
 }
 
 function run(args, options = {}) {

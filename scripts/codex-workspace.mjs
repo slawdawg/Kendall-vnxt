@@ -9565,7 +9565,6 @@ function closeNoSource(argv) {
   }
   let appliedPacket = null;
   withManifestLock(state, taskId, ({ token, generation }) => {
-    applyCloseNoSourceTestMutationBeforeLockedProof(state, taskId);
     const lockedRecord = findCloseNoSourceManifestByExactTaskId(state, taskId);
     const lockedPacket = buildCloseNoSourcePacket(lockedRecord, state, {
       options,
@@ -9604,14 +9603,6 @@ function closeNoSource(argv) {
     "no worktree, branch, remote branch, PR, assignment, or task-lock resource was mutated",
     `recovery: ${appliedPacket?.authorityDecision?.recoveryPath || "restore manifest status from receipt"}`,
   ]);
-}
-
-function applyCloseNoSourceTestMutationBeforeLockedProof(state, taskId) {
-  if (process.env.CODEX_WORKSPACE_TEST_MODE !== "1" || process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_MUTATE_BEFORE_LOCK !== "1") return;
-  if (!isTemporaryWorkspaceTestState(state.root)) return;
-  const record = findCloseNoSourceManifestByExactTaskId(state, taskId);
-  record.manifest.events = [...copyJsonArray(record.manifest.events), taskEvent("cleanup_started", "test-only concurrent lifecycle evidence")];
-  writeManifest(record.path, record.manifest);
 }
 
 function assertCloseNoSourceOptionSyntax(argv) {
