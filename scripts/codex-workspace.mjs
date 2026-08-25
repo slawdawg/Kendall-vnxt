@@ -854,7 +854,7 @@ close-no-source <task> options:
   --reason <text>           Required with --apply; at least 10 non-whitespace characters.
 
 verify-no-source <task> options:
-  --verify <profile>        Required verification profile; records only a successful bounded result.
+  --verify scoped           Required scoped verification profile; records a task-bound no-source receipt only after success.
   --dry-run                 Print the verification plan without running it or changing the manifest.
 
 cleanup-branches options:
@@ -9602,8 +9602,7 @@ function verifyNoSource(argv) {
     if (!allowedOptions.has(key)) throw new Error(`verify-no-source does not accept --${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}.`);
   }
   if (positional.length !== 1) throw new Error("verify-no-source requires exactly one explicit task id.");
-  if (typeof options.verify !== "string" || !options.verify.trim()) throw new Error("verify-no-source requires an explicit --verify profile.");
-  assertKnownVerificationProfile(options.verify);
+  if (options.verify !== "scoped") throw new Error("verify-no-source requires the exact --verify scoped profile.");
   const taskId = positional[0];
   assertSafeTaskId(taskId);
   const state = workspaceState(options);
@@ -9644,6 +9643,29 @@ function verifyNoSource(argv) {
       baseRef: manifest.base_ref,
       baseSha: finalPacket.proof.base.sha,
       verifiedAt,
+    };
+    manifest.no_source_verification_receipt = {
+      schemaVersion: 1,
+      taskId: manifest.task_id,
+      profile: lockedPlan.profile,
+      resolvedProfile: lockedPlan.resolvedProfile,
+      command: manifest.last_verification_command,
+      exitCode: 0,
+      baseRef: manifest.base_ref,
+      baseSha: finalPacket.proof.base.sha,
+      verifiedAt,
+      proof: {
+        worktree: {
+          registered: finalPacket.proof.worktree.registered,
+          clean: finalPacket.proof.worktree.clean,
+          branch: manifest.branch,
+        },
+        base: {
+          ref: finalPacket.proof.base.ref,
+          sha: finalPacket.proof.base.sha,
+          localOnlyCommits: finalPacket.proof.base.localOnlyCommits,
+        },
+      },
     };
     manifest.updated_at = verifiedAt;
     appendTaskEvent(manifest, "verified", `${manifest.last_verification_command} (no-source verification)`);
@@ -9721,7 +9743,7 @@ function closeNoSource(argv) {
     return;
   }
   let appliedPacket = null;
-  withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token, generation }) => {
+  withBranchOwnershipLock(state, record.manifest.branch, () => withAssignmentsIndexLock(state, () => withManifestLock(state, taskId, ({ token, generation, heartbeat }) => {
     const lockedRecord = findCloseNoSourceManifestByExactTaskId(state, taskId);
     const lockedPacket = buildCloseNoSourcePacket(lockedRecord, state, {
       options,
@@ -9733,6 +9755,19 @@ function closeNoSource(argv) {
     });
     if (!lockedPacket.ready) throw new Error(`No-source closeout changed under lock: ${lockedPacket.blockers.join("; ")}`);
     const manifest = lockedRecord.manifest;
+    // External providers cannot join the local assignment or manifest locks.
+    // Re-read both sources at the last possible point before the durable
+    // closeout write, under the local locks that serialize protocol-owned work.
+    heartbeat();
+    const finalExternalEvidence = closeNoSourceExternalEvidence(manifest, true, {
+      timeout: noSourceCloseoutExternalRequestTimeoutMs,
+      killSignal: "SIGKILL",
+    });
+    if (!finalExternalEvidence.ready) {
+      throw new Error(`No-source closeout external evidence changed before durable close: ${finalExternalEvidence.blockers.join("; ")}`);
+    }
+    heartbeat();
+    lockedPacket.proof.finalExternalEvidence = finalExternalEvidence;
     const closedAt = new Date().toISOString();
     manifest.no_source_closeout = {
       schemaVersion: 1,
@@ -9753,7 +9788,7 @@ function closeNoSource(argv) {
     appendTaskEvent(manifest, "closed", "approved no-source metadata-only closeout");
     writeManifest(lockedRecord.path, manifest);
     appliedPacket = lockedPacket;
-  }, { recoverStale: false, owner: currentLaneOwner(options) }));
+  }, { recoverStale: false, owner: currentLaneOwner(options) })));
   printApplied("close-no-source", [
     `closed manifest ${taskId}`,
     "recorded bounded no-source receipt and authority evidence",
@@ -9815,17 +9850,16 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   const externalProbeOptions = context.applying
     ? { timeout: noSourceCloseoutExternalRequestTimeoutMs, killSignal: "SIGKILL" }
     : {};
-  const prEvidence = worktree ? sourceBranchPullRequestProof(manifest.branch, manifest.worktree_path, externalProbeOptions) : { status: "blocked", count: null, reason: "live PR absence is unavailable without a proven worktree" };
-  add(prEvidence.status === "matched", prEvidence.reason);
-  const remoteBranch = worktree ? closeNoSourceRemoteBranchEvidence(manifest, externalProbeOptions) : { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: "live remote branch evidence is unavailable without a proven worktree" };
-  add(remoteBranch.status === "matched", remoteBranch.reason);
+  const externalEvidence = closeNoSourceExternalEvidence(manifest, Boolean(worktree), externalProbeOptions);
+  const { pullRequests: prEvidence, remoteBranch } = externalEvidence;
+  for (const blocker of externalEvidence.blockers) blockers.push(blocker);
   const verification = closeNoSourceVerificationEvidence(manifest);
   add(verification.status === "matched", verification.reason);
   const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet", "check_verification_packet"];
   const lifecycleEvidenceField = /(?:^|_)(?:pr|delivery|merge|merged|cleanup|supersession|closeout|verify|verification)(?:_|$)/i;
   const evidencePresent = [...new Set([
     ...evidenceKeys,
-    ...Object.keys(manifest).filter((key) => lifecycleEvidenceField.test(key) && !["last_verified_at", "last_verification_command", "last_verification_result"].includes(key)),
+    ...Object.keys(manifest).filter((key) => lifecycleEvidenceField.test(key) && !["last_verified_at", "last_verification_command", "last_verification_result", "no_source_verification_receipt"].includes(key)),
   ])].filter((key) => manifest[key] !== undefined && manifest[key] !== null && manifest[key] !== false);
   const eventResidue = Array.isArray(manifest.events)
     ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout|verify)/i.test(type) && type !== "verified")
@@ -9856,12 +9890,57 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
 }
 
 function closeNoSourceVerificationEvidence(manifest) {
-  const evidence = manifest.last_verification_result;
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return { status: "blocked", reason: "successful scoped verification evidence is required" };
+  const evidence = manifest.no_source_verification_receipt;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return { status: "blocked", reason: "task-bound no-source scoped verification receipt is required" };
+  let worktreeStatus;
+  try {
+    worktreeStatus = parseStatus(manifest.worktree_path);
+  } catch (error) {
+    return { status: "blocked", reason: `no-source verification receipt cannot inspect the worktree: ${safeMetadataText(error.message || error, 200)}` };
+  }
+  const expectedPlan = resolveVerificationPlan("scoped", manifest, worktreeStatus);
   const expectedBase = git(["rev-parse", manifest.base_ref], { cwd: manifest.worktree_path });
   const baseSha = expectedBase.code === 0 ? expectedBase.stdout.trim() : null;
-  if (!String(evidence.command || "").trim() || evidence.exitCode !== 0 || !exactGitObjectIdOrNull(evidence.baseSha) || evidence.baseSha !== baseSha || evidence.baseRef !== manifest.base_ref) return { status: "blocked", reason: "successful scoped verification evidence is incomplete or does not match the current base" };
-  return { status: "matched", command: evidence.command, exitCode: 0, baseRef: evidence.baseRef, baseSha: evidence.baseSha, verifiedAt: evidence.verifiedAt || null };
+  const expectedCommand = expectedPlan.command.join(" ");
+  const receiptProof = evidence.proof;
+  if (
+    evidence.schemaVersion !== 1 ||
+    evidence.taskId !== manifest.task_id ||
+    evidence.profile !== "scoped" ||
+    evidence.resolvedProfile !== expectedPlan.resolvedProfile ||
+    evidence.command !== expectedCommand ||
+    evidence.exitCode !== 0 ||
+    !isIsoTimestamp(evidence.verifiedAt) ||
+    !exactGitObjectIdOrNull(evidence.baseSha) ||
+    evidence.baseSha !== baseSha ||
+    evidence.baseRef !== manifest.base_ref ||
+    receiptProof?.worktree?.registered !== true ||
+    receiptProof.worktree.clean !== true ||
+    receiptProof.worktree.branch !== manifest.branch ||
+    receiptProof?.base?.ref !== manifest.base_ref ||
+    receiptProof.base.sha !== baseSha ||
+    receiptProof.base.localOnlyCommits !== 0
+  ) return { status: "blocked", reason: "task-bound no-source scoped verification receipt is incomplete or does not match the current proof" };
+  return { status: "matched", command: evidence.command, exitCode: 0, baseRef: evidence.baseRef, baseSha: evidence.baseSha, verifiedAt: evidence.verifiedAt };
+}
+
+function closeNoSourceExternalEvidence(manifest, worktreeProven, options = {}) {
+  if (!worktreeProven) {
+    const reason = "live no-source external evidence is unavailable without a proven worktree";
+    return {
+      ready: false,
+      blockers: [reason],
+      pullRequests: { status: "blocked", count: null, reason },
+      remoteBranch: { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason },
+    };
+  }
+  const pullRequests = sourceBranchPullRequestProof(manifest.branch, manifest.worktree_path, options);
+  const remoteBranch = closeNoSourceRemoteBranchEvidence(manifest, options);
+  const blockers = [
+    ...(pullRequests.status === "matched" ? [] : [pullRequests.reason]),
+    ...(remoteBranch.status === "matched" ? [] : [remoteBranch.reason]),
+  ];
+  return { ready: blockers.length === 0, blockers, pullRequests, remoteBranch };
 }
 
 function closeNoSourceRemoteBranchEvidence(manifest, options = {}) {
