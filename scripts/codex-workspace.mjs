@@ -328,6 +328,15 @@ const pr723NonAncestralRefreshException = Object.freeze({
 const args = process.argv.slice(2);
 const command = args[0];
 const commandArgs = args.slice(1);
+const workspaceLifecycleStates = Object.freeze([
+  "fresh_active",
+  "stale_attention_required",
+  "delivery_attention_required",
+  "cleanup_ready",
+  "missing_worktree_reconciliation_required",
+  "hold_attention_required",
+  "closed",
+]);
 
 if (!command || command === "--help" || command === "-h") {
   printHelp();
@@ -349,6 +358,9 @@ try {
       break;
     case "coordination-report":
       coordinationReport(commandArgs);
+      break;
+    case "lifecycle-health":
+      lifecycleHealth(commandArgs);
       break;
     case "assignment-report":
       assignmentReport(commandArgs);
@@ -437,6 +449,9 @@ try {
     case "close-missing-worktree":
       closeMissingWorktree(commandArgs);
       break;
+    case "close-no-source":
+      closeNoSource(commandArgs);
+      break;
     case "cleanup-superseded":
       cleanupSuperseded(commandArgs);
       break;
@@ -473,6 +488,7 @@ Commands:
   start <description>       Create a task manifest, branch, and worktree.
   list                      Show known Codex workspaces.
   coordination-report       Show a read-only workspace coordination packet.
+  lifecycle-health          Show a read-only derived lifecycle-health packet.
   assignment-report         Show read-only runner assignment inventory and blockers.
   claim-next                Preview the next claimable runner assignment lane.
   heartbeat <query>         Update owner-only runner heartbeat evidence.
@@ -497,6 +513,7 @@ Commands:
   cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-integrated [query] Remove clean integrated worktrees with no PR, or one explicitly approved non-open PR record.
   close-missing-worktree <task-id> Close one allowlisted stale manifest whose managed worktree and branch refs are proven absent.
+  close-no-source <task-id> Close one exact-owner clean no-source manifest without removing resources.
   cleanup-superseded <task> Remove one clean no-PR worktree carried forward by a named merged PR.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
@@ -537,6 +554,11 @@ list options:
 coordination-report options:
   --json                    Print the coordination packet as JSON for automation.
   --summary-json            Print a bounded JSON summary for quick runner scans.
+  --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
+
+lifecycle-health options:
+  --json                    Print the complete lifecycle-health packet as JSON.
+  --summary-json            Print the complete lifecycle-health summary JSON.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 assignment-report options:
@@ -812,6 +834,11 @@ close-missing-worktree options:
   --summary-json            Without --apply, print a compact JSON recovery packet.
   --approval <text>         Required with --apply; at least 10 non-whitespace characters.
   --stale-after-seconds <n> Owner-heartbeat age required for stale-owner proof. Defaults to 86400.
+
+close-no-source <task> options:
+  --apply                   Record a metadata-only no-source terminal receipt. Without this, preview only.
+  --summary-json            Without --apply, print a compact JSON eligibility packet.
+  --reason <text>           Required with --apply; at least 10 non-whitespace characters.
 
 cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -1162,6 +1189,250 @@ function coordinationReport(argv) {
   printCoordinationReport(packet);
 }
 
+function lifecycleHealth(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (positional.length > 0) throw new Error("lifecycle-health does not accept a task query.");
+  if (options.apply !== undefined || options.dryRun !== undefined) {
+    throw new Error("lifecycle-health is read-only and does not accept --apply or --dry-run.");
+  }
+  const packet = buildWorkspaceLifecycleHealth(options);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildWorkspaceLifecycleHealthSummary(packet), null, 2));
+    return;
+  }
+  if (options.json) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  printWorkspaceLifecycleHealth(packet);
+}
+
+function buildWorkspaceLifecycleHealth(options = {}, input = {}) {
+  const state = input.state || workspaceState(options);
+  const generatedAt = input.context?.generatedAt || new Date();
+  const staleAfterSeconds = input.context?.staleAfterSeconds || positiveInteger(options.staleAfterSeconds, 86_400);
+  const context = input.context || { currentOwner: currentLaneOwner(options), generatedAt, staleAfterSeconds };
+  const stateCounts = Object.fromEntries(workspaceLifecycleStates.map((status) => [status, 0]));
+  const reasonCodeCounts = {};
+  const rows = (input.manifests || readManifests(state).map(({ manifest }) => manifest))
+    .filter((manifest) => manifest.status !== "closed")
+    .map((manifest) => lifecycleHealthRow(manifest, context, state));
+  for (const row of rows) {
+    stateCounts[row.derivedState] += 1;
+    reasonCodeCounts[row.reasonCode] = (reasonCodeCounts[row.reasonCode] || 0) + 1;
+  }
+  return {
+    schemaVersion: "workspace-lifecycle-health/v0",
+    generatedAt: generatedAt.toISOString(),
+    stateRoot: state.root,
+    currentOwner: context.currentOwner,
+    staleAfterSeconds,
+    counts: { total: rows.length, states: stateCounts },
+    reasonCodeCounts,
+    rows,
+    mutation: "none; summary only",
+  };
+}
+
+function lifecycleHealthRow(manifest, context, state) {
+  let lane;
+  try {
+    lane = coordinationLanePacket(manifest, context);
+  } catch (error) {
+    return {
+      taskId: manifest.task_id,
+      observedStatus: manifest.status || "unknown",
+      owner: manifest.owner || null,
+      lastHeartbeatAt: manifest.last_heartbeat_at || manifest.owner_updated_at || null,
+      heartbeatAgeSeconds: null,
+      worktreeExists: Boolean(manifest.worktree_path && existsSync(manifest.worktree_path)),
+      derivedState: "hold_attention_required",
+      reasonCode: "worktree_inspection_unavailable",
+      reason: "worktree inspection is unavailable",
+      nextAction: "preserve the lane and repair read-only inspection evidence before lifecycle action",
+    };
+  }
+  const commitEvidence = inspectCommitsAheadOfBase(manifest);
+  const classification = deriveWorkspaceLifecycleState(manifest, lane, context, commitEvidence, state);
+  const heartbeatTimestamp = Date.parse(lane.lastHeartbeatAt || "");
+  return {
+    taskId: lane.taskId,
+    observedStatus: lane.status || "unknown",
+    owner: lane.owner || null,
+    lastHeartbeatAt: lane.lastHeartbeatAt || null,
+    heartbeatAgeSeconds: Number.isFinite(heartbeatTimestamp)
+      ? Math.max(0, Math.floor((context.generatedAt.getTime() - heartbeatTimestamp) / 1000))
+      : null,
+    worktreeExists: lane.worktreeExists,
+    derivedState: classification.derivedState,
+    reasonCode: classification.reasonCode,
+    reason: classification.reason,
+    nextAction: classification.nextAction,
+  };
+}
+
+function deriveWorkspaceLifecycleState(manifest, lane, context, commitEvidence, state) {
+  if (!lane.worktreeExists) {
+    return {
+      derivedState: "missing_worktree_reconciliation_required",
+      reasonCode: "worktree_path_missing",
+      reason: "worktree path is missing",
+      nextAction: "run workspace doctor and preserve the manifest until explicit reconciliation evidence exists",
+    };
+  }
+  if (!commitEvidence.known) {
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: commitEvidence.reasonCode,
+      reason: commitEvidence.reason,
+      nextAction: "preserve the lane and restore base-ref inspection evidence before lifecycle action",
+    };
+  }
+  if (manifest.dirty_superseded_preservation || manifest.dirty_superseded_snapshot_intent) {
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: "dirty_superseded_preservation_hold",
+      reason: "lane retains superseded dirty-work preservation evidence",
+      nextAction: "preserve the retained snapshot evidence and use its governed recovery path before lifecycle action",
+    };
+  }
+  if (lane.dirty || commitEvidence.count > 0 || String(manifest.status || "").startsWith("blocked_authority") || !lane.owner) {
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: lane.dirty ? "dirty_worktree_hold" : commitEvidence.count > 0 ? "local_only_commits_hold" : !lane.owner ? "owner_missing_hold" : "manifest_authority_hold",
+      reason: lane.dirty ? "worktree has uncommitted paths" : commitEvidence.count > 0 ? "worktree has local-only commits" : !lane.owner ? "manifest has no owner" : "manifest is authority-blocked",
+      nextAction: "preserve current evidence and resolve the bounded hold before any lifecycle mutation",
+    };
+  }
+  if (manifest.status === "merged") {
+    const cleanupReadiness = lifecycleMergedCleanupReadiness(manifest, state);
+    if (cleanupReadiness.ready) {
+      return {
+        derivedState: "cleanup_ready",
+        reasonCode: "cleanup_preconditions_proven",
+        reason: "existing merged cleanup prerequisites are currently proven",
+        nextAction: "run cleanup-merged --summary-json to obtain the governed cleanup plan before any apply",
+      };
+    }
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: cleanupReadiness.reasonCode,
+      reason: cleanupReadiness.reason,
+      nextAction: "run cleanup-merged --summary-json to inspect and resolve the reported blocker",
+    };
+  }
+  if (manifest.status === "cleanup_partial") {
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: "cleanup_partial_recovery_required",
+      reason: "partial cleanup requires its existing exact recovery path",
+      nextAction: "run cleanup-merged --summary-json to inspect and resolve the reported blocker",
+    };
+  }
+  if (manifest.status === "pr_open") {
+    return {
+      derivedState: "delivery_attention_required",
+      reasonCode: "pr_open_delivery",
+      reason: "PR is open or delivery evidence remains unverified",
+      nextAction: "audit exact head, checks, reviews, and merge state before delivery action",
+    };
+  }
+  const ownerTimestamp = Date.parse(manifest.last_heartbeat_at || manifest.owner_updated_at || manifest.updated_at || manifest.created_at || "");
+  if (Number.isFinite(ownerTimestamp) && ownerTimestamp > context.generatedAt.getTime()) {
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: "owner_heartbeat_future_hold",
+      reason: "owner heartbeat timestamp is later than the report clock",
+      nextAction: "preserve the lane and reconcile bounded clock evidence before lifecycle action",
+    };
+  }
+  if (laneOwnerIsStale(manifest, context)) {
+    return {
+      derivedState: "stale_attention_required",
+      reasonCode: "owner_heartbeat_stale",
+      reason: `owner heartbeat is older than ${context.staleAfterSeconds} seconds or unavailable`,
+      nextAction: "prepare governed takeover or reconciliation evidence; do not infer liveness or delete resources",
+    };
+  }
+  if (manifest.status !== "active") {
+    return {
+      derivedState: "hold_attention_required",
+      reasonCode: "manifest_status_unrecognized",
+      reason: "manifest status is not a recognized active lifecycle status",
+      nextAction: "preserve the lane and reconcile its manifest status before lifecycle action",
+    };
+  }
+  return {
+    derivedState: "fresh_active",
+    reasonCode: "fresh_owner_evidence",
+    reason: "nonterminal lane has fresh owner evidence",
+    nextAction: "continue work or refresh heartbeat evidence through the existing owner-only command",
+  };
+}
+
+function lifecycleMergedCleanupReadiness(manifest, state) {
+  try {
+    const target = assertCleanupWorktreeForMerged(manifest, state);
+    const pr = prView(manifest);
+    if (!pr?.mergedAt) return { ready: false, reasonCode: "cleanup_pr_merged_unproven", reason: "live merged PR evidence is unavailable" };
+    if (pr.baseRefName && pr.baseRefName !== manifest.base_branch) return { ready: false, reasonCode: "cleanup_pr_base_mismatch", reason: "live PR base does not match the manifest base" };
+    const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, target);
+    if (worktreeCleanupStatus(manifest, cleanupCwd).dirty) return { ready: false, reasonCode: "cleanup_worktree_dirty", reason: "worktree is not clean for merged cleanup" };
+    try { preflightCleanupBranchHeads(manifest, cleanupCwd, requireCleanupHeadSha(manifest, pr), false); } catch (error) {
+      return { ready: false, reasonCode: "cleanup_head_unproven", reason: safeMetadataText(error.message || error, 240) };
+    }
+    const remoteBlocker = cleanupRemoteResumeBlocker(manifest, false);
+    if (remoteBlocker) return { ready: false, reasonCode: "cleanup_remote_resume_required", reason: safeMetadataText(remoteBlocker, 240) };
+    const auditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr, { options: {} });
+    if (auditBlocker) return { ready: false, reasonCode: "cleanup_delivery_audit_unproven", reason: safeMetadataText(auditBlocker, 240) };
+    return { ready: true };
+  } catch (error) {
+    return { ready: false, reasonCode: "cleanup_prerequisites_unproven", reason: safeMetadataText(error.message || error, 240) };
+  }
+}
+
+function buildWorkspaceLifecycleHealthSummary(packet) {
+  return {
+    schemaVersion: packet.schemaVersion,
+    generatedAt: packet.generatedAt,
+    stateRoot: packet.stateRoot,
+    currentOwner: packet.currentOwner,
+    staleAfterSeconds: packet.staleAfterSeconds,
+    counts: packet.counts,
+    reasonCodeCounts: packet.reasonCodeCounts,
+    rows: packet.rows,
+    mutation: packet.mutation,
+  };
+}
+
+function buildWorkspaceLifecycleHealthRollup(packet, rowLimit = 10) {
+  return {
+    schemaVersion: packet.schemaVersion,
+    generatedAt: packet.generatedAt,
+    stateRoot: packet.stateRoot,
+    currentOwner: packet.currentOwner,
+    staleAfterSeconds: packet.staleAfterSeconds,
+    counts: packet.counts,
+    reasonCodeCounts: packet.reasonCodeCounts,
+    rows: packet.rows.slice(0, rowLimit),
+    rowsTruncated: packet.rows.length > rowLimit,
+    mutation: packet.mutation,
+  };
+}
+
+function printWorkspaceLifecycleHealth(packet) {
+  console.log("Workspace Lifecycle Health");
+  console.log(`- Counts: ${workspaceLifecycleStates.map((state) => `${state}=${packet.counts.states[state]}`).join(" ")}`);
+  if (packet.rows.length === 0) {
+    console.log("- Rows: none");
+    return;
+  }
+  console.log("- Rows:");
+  for (const row of packet.rows) {
+    console.log(`  - ${row.taskId} | observed=${row.observedStatus} | state=${row.derivedState} | reason_code=${row.reasonCode} | next=${row.nextAction}`);
+  }
+}
+
 function buildCoordinationReportSummary(packet) {
   return {
     generatedAt: packet.generatedAt,
@@ -1187,6 +1458,7 @@ function buildCoordinationReportSummary(packet) {
     backlogStatusCounts: countByField(packet.backlogSummary, "status"),
     backlogClassificationStatusCounts: countByField(packet.backlogClassificationSummary, "status"),
     activeManagedWorktrees: packet.activeManagedWorktrees.map(summaryLane),
+    lifecycleHealth: buildWorkspaceLifecycleHealthRollup(packet.lifecycleHealth),
     workspaceCloseoutReadiness: summarizeWorkspaceCloseoutReadiness(packet.workspaceCloseoutReadiness),
     prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.map(summaryLane),
     prStateReconciliation: packet.prStateReconciliation.slice(0, 10).map(summaryLane),
@@ -1295,6 +1567,7 @@ function buildCoordinationReportPacket(options = {}) {
   const assignments = readAssignments(state).map(({ assignment }) => assignment);
   const activeManifests = manifests.filter((manifest) => manifest.status !== "closed");
   const context = { currentOwner, generatedAt, staleAfterSeconds };
+  const lifecycleHealth = buildWorkspaceLifecycleHealth(options, { state, manifests, context });
   const rootStatus = parseStatus(repoRoot);
   const checkout = currentCheckoutPacket(repoRoot);
   const activeLanes = activeManifests.map((manifest) => coordinationLanePacket(manifest, context));
@@ -1355,6 +1628,7 @@ function buildCoordinationReportPacket(options = {}) {
       pathCount: rootStatus.lines.length,
     },
     activeManagedWorktrees: activeLanes,
+    lifecycleHealth,
     workspaceCloseoutReadiness,
     prsWaitingAtMergeGate: prWaitingAtMergeGate,
     prStateReconciliation,
@@ -1406,6 +1680,7 @@ function printCoordinationReport(packet) {
   console.log(`- Current checkout: ${packet.currentCheckout.branch || "unknown"} at ${packet.currentCheckout.shortHead || "unknown"} (${packet.currentCheckout.path})`);
   console.log(`- Root status: ${packet.rootStatus.dirty ? `dirty (${packet.rootStatus.pathCount} path(s))` : "clean"}`);
   printCoordinationRows("- Active managed worktrees:", packet.activeManagedWorktrees, formatCoordinationLane);
+  console.log(`- Lifecycle health: ${workspaceLifecycleStates.map((state) => `${state}=${packet.lifecycleHealth.counts.states[state]}`).join(" ")}`);
   printWorkspaceCloseoutReadiness(packet.workspaceCloseoutReadiness);
   printCoordinationRows("- PRs waiting at merge gate:", packet.prsWaitingAtMergeGate, formatCoordinationLane);
   printCoordinationRows(
@@ -1675,17 +1950,25 @@ function currentCheckoutPacket(cwd) {
 }
 
 function commitsAheadOfBase(manifest) {
+  const evidence = inspectCommitsAheadOfBase(manifest);
+  return evidence.known ? evidence.count : 0;
+}
+
+function inspectCommitsAheadOfBase(manifest) {
   const baseRef = String(manifest.base_ref || manifest.base_branch || "").trim();
   if (!baseRef) {
-    return 0;
+    return { known: false, count: null, reasonCode: "base_ref_missing_hold", reason: "manifest has no inspectable base ref" };
   }
   const base = git(["rev-parse", "--verify", "--quiet", baseRef], { cwd: manifest.worktree_path });
   if (base.code !== 0 || !base.stdout.trim()) {
-    return 0;
+    return { known: false, count: null, reasonCode: "base_ref_unresolved_hold", reason: "manifest base ref cannot be resolved in the worktree" };
   }
   const ahead = git(["rev-list", "--count", `${baseRef}..HEAD`], { cwd: manifest.worktree_path });
   const count = Number.parseInt(ahead.stdout.trim(), 10);
-  return ahead.code === 0 && Number.isFinite(count) ? count : 0;
+  if (ahead.code !== 0 || !Number.isFinite(count)) {
+    return { known: false, count: null, reasonCode: "base_commit_count_unavailable_hold", reason: "local-only commit count cannot be proven" };
+  }
+  return { known: true, count };
 }
 
 function coordinationReportStopLines() {
@@ -9244,6 +9527,166 @@ function closeMissingWorktree(argv) {
   ]);
 }
 
+function closeNoSource(argv) {
+  assertCloseNoSourceOptionSyntax(argv);
+  const { positional, options } = parseOptions(argv);
+  const allowedOptions = new Set(["apply", "dryRun", "summaryJson", "reason", "owner", "stateRoot"]);
+  for (const key of Object.keys(options)) {
+    if (!allowedOptions.has(key)) throw new Error(`close-no-source does not accept --${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}.`);
+  }
+  if (positional.length !== 1) throw new Error("close-no-source requires exactly one explicit task id.");
+  if (options.takeOwnership !== undefined || options.takeoverReason !== undefined) throw new Error("close-no-source requires the exact current owner and does not accept takeover options.");
+  if (options.apply && options.dryRun) throw new Error("close-no-source accepts either --dry-run or --apply, not both.");
+  if (options.summaryJson && options.apply) throw new Error("close-no-source --summary-json is only supported without --apply.");
+  const taskId = positional[0];
+  assertSafeTaskId(taskId);
+  const reason = normalizedCloseNoSourceReason(options.reason);
+  if (options.apply && !reason) throw new Error("close-no-source --apply requires --reason with at least 10 non-whitespace characters.");
+  const state = workspaceState(options);
+  const record = findCloseNoSourceManifestByExactTaskId(state, taskId);
+  const packet = buildCloseNoSourcePacket(record, state, { options, reason });
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  if (!packet.ready) {
+    printBlocked("close-no-source", packet.blockers);
+    throw new Error(`No-source closeout is blocked: ${packet.blockers.join("; ")}`);
+  }
+  if (!options.apply) {
+    printPlan("close-no-source", [
+      `exact task ${taskId}`,
+      "all local no-source evidence is currently proven",
+      "no worktree, branch, PR, assignment, or task-lock resource mutation is planned",
+      "pass --apply with explicit --reason to close only the manifest metadata",
+    ]);
+    return;
+  }
+  let appliedPacket = null;
+  withManifestLock(state, taskId, ({ token, generation }) => {
+    const lockedRecord = findCloseNoSourceManifestByExactTaskId(state, taskId);
+    const lockedPacket = buildCloseNoSourcePacket(lockedRecord, state, {
+      options,
+      reason,
+      applying: true,
+      preLockEvidence: packet.proof.taskLock,
+      heldLockToken: token,
+      heldLockGeneration: generation,
+    });
+    if (!lockedPacket.ready) throw new Error(`No-source closeout changed under lock: ${lockedPacket.blockers.join("; ")}`);
+    const manifest = lockedRecord.manifest;
+    const closedAt = new Date().toISOString();
+    manifest.no_source_closeout = {
+      schemaVersion: 1,
+      appliedAt: closedAt,
+      taskId,
+      reason,
+      proof: lockedPacket.proof,
+      authorityDecision: lockedPacket.authorityDecision,
+      mutation: "manifest metadata and status only; no worktree, branch, remote branch, PR, assignment, or lock deletion",
+      recoveryPath: "Restore manifest status only after separate governed review; no resource was removed by this closeout.",
+    };
+    appendAuthorityDecision(manifest, lockedPacket.authorityDecision);
+    manifest.status = "closed";
+    manifest.closed_at = closedAt;
+    manifest.updated_at = closedAt;
+    manifest.closed_reason = "approved no-source metadata-only closeout";
+    appendTaskEvent(manifest, "no_source_closeout_verified", "no-source prerequisites re-proven under exact manifest lock");
+    appendTaskEvent(manifest, "closed", "approved no-source metadata-only closeout");
+    writeManifest(lockedRecord.path, manifest);
+    appliedPacket = lockedPacket;
+  }, { recoverStale: false, owner: currentLaneOwner(options) });
+  printApplied("close-no-source", [
+    `closed manifest ${taskId}`,
+    "recorded bounded no-source receipt and authority evidence",
+    "no worktree, branch, remote branch, PR, assignment, or task-lock resource was mutated",
+    `recovery: ${appliedPacket?.authorityDecision?.recoveryPath || "restore manifest status from receipt"}`,
+  ]);
+}
+
+function assertCloseNoSourceOptionSyntax(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const option = ["--apply", "--dry-run", "--summary-json"].find((name) => arg === name || arg.startsWith(`${name}=`));
+    if (!option) continue;
+    if (arg !== option || (index + 1 < argv.length && !argv[index + 1].startsWith("--"))) throw new Error(`close-no-source ${option} must be a bare flag without a value.`);
+  }
+}
+
+function normalizedCloseNoSourceReason(value) {
+  if (value === undefined || value === true || typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.replace(/\s/g, "").length >= 10 ? normalized.slice(0, 256) : null;
+}
+
+function findCloseNoSourceManifestByExactTaskId(state, taskId) {
+  assertSafeTaskId(taskId);
+  const path = manifestPath(state, taskId);
+  if (!existsSync(path)) throw new Error(`close-no-source requires the exact manifest ${taskId}.`);
+  const manifest = readManifest(path);
+  validateManifest(manifest, path);
+  if (manifest.task_id !== taskId) throw new Error(`close-no-source manifest identity mismatch for ${taskId}.`);
+  return { path, manifest };
+}
+
+function buildCloseNoSourcePacket(record, state, context = {}) {
+  const { manifest } = record;
+  const blockers = [];
+  const add = (condition, reason) => { if (!condition) blockers.push(reason); };
+  try { assertExactReconciliationOwner(manifest, context.options); } catch (error) { blockers.push(safeMetadataText(error.message || error, 240)); }
+  add(manifest.status === "active", `manifest_status_not_active:${safeMetadataText(manifest.status, 80) || "missing"}`);
+  let worktree = null;
+  let gitStatus = null;
+  try {
+    worktree = assertRegisteredManagedWorktree(manifest, state);
+    gitStatus = parseStatus(manifest.worktree_path);
+    add(!gitStatus.any, "worktree_dirty");
+  } catch (error) { blockers.push(`worktree_unproven:${safeMetadataText(error.message || error, 200)}`); }
+  const commits = worktree ? inspectCommitsAheadOfBase(manifest) : { known: false, count: null, reasonCode: "base_unproven" };
+  add(commits.known && commits.count === 0, commits.reasonCode || "local_only_commits_present");
+  const taskLock = inspectTaskLock(state, manifest.task_id);
+  if (context.applying) {
+    add(context.preLockEvidence?.status === "absent", "pre_lock_task_lock_not_absent");
+    add(taskLock.status === "active" && taskLock.generation === context.heldLockGeneration && taskLock.metadata?.token === context.heldLockToken, "held_task_lock_unproven");
+  } else {
+    add(taskLock.status === "absent", `task_lock_${taskLock.status}`);
+  }
+  const linkedAssignments = readAssignments(state).filter(({ assignment }) => assignment.branch === manifest.branch && assignment.status !== "closed");
+  add(linkedAssignments.length === 0, "linked_active_assignment_present");
+  const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet"];
+  const evidencePresent = evidenceKeys.filter((key) => manifest[key] !== undefined && manifest[key] !== null && manifest[key] !== false);
+  const eventResidue = Array.isArray(manifest.events)
+    ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout)/i.test(type))
+    : ["events_unreadable"];
+  add(evidencePresent.length === 0 && eventResidue.length === 0 && !hasStrictCloseoutEvidence(manifest), evidencePresent.length ? `delivery_or_cleanup_evidence:${evidencePresent.join(",")}` : eventResidue.length ? `delivery_or_cleanup_events:${eventResidue.join(",")}` : "strict_closeout_evidence_present");
+  const authorityDecision = {
+    operation: "close-no-source",
+    status: blockers.length === 0 ? "approved" : "blocked",
+    taskId: manifest.task_id,
+    owner: manifest.owner || null,
+    reasonCode: blockers.length === 0 ? "no_source_proven" : "no_source_proof_blocked",
+    recoveryPath: "preserve retained resources and inspect the no-source receipt before any separate governed cleanup.",
+  };
+  return {
+    schemaVersion: "workspace-close-no-source/v0",
+    taskId: manifest.task_id,
+    ready: blockers.length === 0,
+    blockers,
+    proof: {
+      owner: manifest.owner || null,
+      worktree: { registered: Boolean(worktree), clean: gitStatus ? !gitStatus.any : false },
+      base: { known: Boolean(commits.known), localOnlyCommits: commits.count ?? null, reasonCode: commits.reasonCode || null },
+      taskLock: { status: taskLock.status, reason: taskLock.reason || null, owner: taskLock.metadata?.owner || null, generation: taskLock.generation || null, intentClear: taskLock.status === "absent" || taskLock.status === "active" },
+      linkedAssignments: linkedAssignments.map(({ assignment }) => assignment.assignment_id),
+      evidenceKeys: evidencePresent,
+      eventResidue,
+      preLockEvidence: context.preLockEvidence || null,
+    },
+    authorityDecision,
+    mutation: "none; dry-run eligibility only",
+  };
+}
+
 function assertMissingWorktreeCloseoutMainCheckout() {
   const expected = canonicalExistingPath(mainWorktreePath());
   const current = canonicalExistingPath(currentGitRoot());
@@ -14877,13 +15320,18 @@ function doctor(argv) {
       `${manifest.task_id}: worktree path missing for non-closed task.`,
     );
   }
+  const lifecycleHealth = buildWorkspaceLifecycleHealth(options, {
+    state,
+    manifests: manifests.map(({ manifest }) => manifest),
+  });
 
   if (options.summaryJson) {
-    console.log(JSON.stringify(buildDoctorSummary({ state, findings, baseCheckoutRecovery, recoveryMutation }), null, 2));
+    console.log(JSON.stringify(buildDoctorSummary({ state, findings, baseCheckoutRecovery, recoveryMutation, lifecycleHealth }), null, 2));
   } else {
     for (const finding of findings) {
       console.log(`${finding.ok ? "OK" : finding.optional ? "WARN" : "FAIL"}: ${finding.message}`);
     }
+    console.log(`Lifecycle health: ${workspaceLifecycleStates.map((status) => `${status}=${lifecycleHealth.counts.states[status]}`).join(" ")}`);
     if (baseCheckoutRecovery.status === "recovery_required") {
       console.log(`WARN: Base Checkout recovery needed: ${baseCheckoutRecovery.reasonCode}. ${baseCheckoutRecovery.nextSafeAction}`);
     } else if (baseCheckoutRecovery.status === "inspection_unknown") {
@@ -14896,7 +15344,7 @@ function doctor(argv) {
   }
 }
 
-function buildDoctorSummary({ state, findings, baseCheckoutRecovery = null, recoveryMutation = "none; inspection only" }) {
+function buildDoctorSummary({ state, findings, baseCheckoutRecovery = null, recoveryMutation = "none; inspection only", lifecycleHealth = null }) {
   const failures = findings.filter((finding) => !finding.ok && !finding.optional);
   const warnings = findings.filter((finding) => !finding.ok && finding.optional);
   const ok = findings.filter((finding) => finding.ok);
@@ -14917,6 +15365,7 @@ function buildDoctorSummary({ state, findings, baseCheckoutRecovery = null, reco
     okFindings: ok.slice(0, 10),
     okFindingsTruncated: ok.length > 10,
     baseCheckoutRecovery,
+    lifecycleHealth: lifecycleHealth ? buildWorkspaceLifecycleHealthRollup(lifecycleHealth) : null,
     mutation: recoveryMutation === "none; inspection only" ? "none; summary only" : recoveryMutation,
   };
 }

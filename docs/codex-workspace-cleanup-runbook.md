@@ -154,6 +154,54 @@ task proof, merged/integrated evidence, clean worktree result, and the
 applicable owner and independent-audit gates described below. Always create a
 fresh dry-run packet before an `--apply` cleanup command.
 
+### Lifecycle health during normal operations
+
+Use the read-only lifecycle report before deciding whether a retained manifest
+is live work or lifecycle debt:
+
+```bash
+node ./scripts/codex-workspace.mjs lifecycle-health --summary-json
+node ./scripts/codex-workspace.mjs coordination-report --summary-json
+node ./scripts/codex-workspace.mjs doctor --summary-json
+```
+
+Use the reported task id for a state-specific read-only route:
+
+| State | Inspect next | Stop line |
+| --- | --- | --- |
+| `fresh_active` | Keep the manifest under its existing owner; rerun `lifecycle-health --summary-json` when coordinating. | Do not infer completion from a fresh heartbeat. |
+| `stale_attention_required` | `node ./scripts/codex-workspace.mjs inspect-task-lock <task-id> --summary-json` | Staleness is not deletion, takeover, or liveness authority. |
+| `delivery_attention_required` | `node ./scripts/codex-workspace.mjs verify-pr-gates <task-id> --summary-json` | Do not merge, resolve review threads, or mutate delivery evidence from health output. |
+| merged/cleanup hold | `node ./scripts/codex-workspace.mjs reconcile-merged-pr <task-id> --summary-json`, then `node ./scripts/codex-workspace.mjs cleanup-merged <task-id> --summary-json` | Do not apply cleanup or delete any resource without a fresh governed proof packet. |
+| `missing_worktree_reconciliation_required` | `node ./scripts/codex-workspace.mjs doctor --summary-json` and preserve the manifest for the existing exact recovery path. | Never delete, recreate, take over, or close it by path. |
+| `hold_attention_required` | Preserve the retained evidence and follow the row’s `nextAction`. | Never normalize an unproven hold to clean, stale, or closed. |
+
+These reports are observational only and do not renew heartbeats, change
+ownership, reconcile PRs, or clean resources.
+
+### Close a proven no-source lane
+
+Only the exact current owner may close an `active` lane that has a registered
+clean worktree, a provable zero-ahead base, no delivery or cleanup evidence,
+no active assignment, and no task lock. Inspect first:
+
+```bash
+node ./scripts/codex-workspace.mjs close-no-source <task-id> --summary-json
+```
+
+If the packet is ready, the owner may record a metadata-only terminal receipt:
+
+```bash
+node ./scripts/codex-workspace.mjs close-no-source <task-id> --apply \
+  --reason "bounded explanation of why this lane produced no source"
+```
+
+This does not delete the worktree, any branch, a PR, task-lock history,
+assignment, or retained evidence. The closed manifest therefore prevents the
+ordinary merged cleanup path from deleting these retained resources; any later
+resource change requires a separate governed cleanup route. Refusals preserve
+everything and name the evidence that must be reconciled first.
+
 ## Reconcile a merged PR before cleanup
 
 If a managed lane's PR is already merged but its manifest lacks current merged

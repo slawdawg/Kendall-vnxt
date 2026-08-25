@@ -174,6 +174,7 @@ try {
       assert(Array.isArray(packet.okFindings), result.stdout || result.stderr);
       assert(Array.isArray(packet.warnings), result.stdout || result.stderr);
       assert(Array.isArray(packet.failures), result.stdout || result.stderr);
+      assert(packet.lifecycleHealth?.counts?.states?.fresh_active === 0, result.stdout || result.stderr);
       assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
     } finally {
       rmSync(doctorStateRoot, { recursive: true, force: true });
@@ -302,10 +303,192 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("Workspace Coordination Report"), result.stdout || result.stderr);
       assert(result.stdout.includes("- Active managed worktrees:"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- Lifecycle health: fresh_active=0"), result.stdout || result.stderr);
+      assert(result.stdout.includes("hold_attention_required=0"), result.stdout || result.stderr);
       assert(result.stdout.includes("- Next safe slice:"), result.stdout || result.stderr);
       assert(result.stdout.includes("- Stop lines:"), result.stdout || result.stderr);
     } finally {
       rmSync(emptyStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("lifecycle-health classifies every nonclosed manifest exactly once without mutation", () => {
+    const lifecycleStateRoot = mkdtempSync(join(tmpdir(), "codex-lifecycle-health-"));
+    const worktrees = [];
+    try {
+      const tasksDir = join(lifecycleStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const uninspectableWorktree = join(lifecycleStateRoot, "non-git-worktree");
+      mkdirSync(uninspectableWorktree, { recursive: true });
+      const freshWorktree = createCoordinationReportGitWorktree("codex-lifecycle-fresh-");
+      const staleWorktree = createCoordinationReportGitWorktree("codex-lifecycle-stale-");
+      const deliveryWorktree = createCoordinationReportGitWorktree("codex-lifecycle-delivery-");
+      const cleanupWorktree = createCoordinationReportGitWorktree("codex-lifecycle-cleanup-");
+      const holdWorktree = createCoordinationReportGitWorktree("codex-lifecycle-hold-");
+      worktrees.push(freshWorktree, staleWorktree, deliveryWorktree, cleanupWorktree, holdWorktree);
+      const freshHeartbeat = new Date().toISOString();
+      const staleHeartbeat = "2026-07-01T18:00:00.000Z";
+      const cleanupHead = runGit(cleanupWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      runGit(cleanupWorktree, ["branch", "codex/lifecycle-cleanup", cleanupHead]);
+      const manifests = [
+        {
+          task_id: "lifecycle-fresh",
+          title: "Lifecycle fresh",
+          branch: "codex/lifecycle-fresh",
+          base_branch: "dev",
+          base_ref: "HEAD",
+          status: "active",
+          owner: "runner-a",
+          worktree_path: freshWorktree,
+          last_heartbeat_at: freshHeartbeat,
+        },
+        {
+          task_id: "lifecycle-stale",
+          title: "Lifecycle stale",
+          branch: "codex/lifecycle-stale",
+          base_branch: "dev",
+          base_ref: "HEAD",
+          status: "active",
+          owner: "runner-b",
+          worktree_path: staleWorktree,
+          last_heartbeat_at: staleHeartbeat,
+        },
+        {
+          task_id: "lifecycle-delivery",
+          title: "Lifecycle delivery",
+          branch: "codex/lifecycle-delivery",
+          base_branch: "dev",
+          base_ref: "HEAD",
+          status: "pr_open",
+          owner: "runner-a",
+          worktree_path: deliveryWorktree,
+          last_heartbeat_at: freshHeartbeat,
+          pr_number: 321,
+        },
+        {
+          task_id: "lifecycle-cleanup",
+          title: "Lifecycle cleanup",
+          branch: "codex/lifecycle-cleanup",
+          base_branch: "dev",
+          base_ref: "HEAD",
+          status: "merged",
+          owner: "runner-a",
+          worktree_path: cleanupWorktree,
+          last_heartbeat_at: freshHeartbeat,
+          pr_number: 322,
+          merged_at: freshHeartbeat,
+          pr_delivery_head_sha: cleanupHead,
+          delivery_subagent_audit: {
+            status: "cleanup-ready",
+            agent: "fixture-auditor",
+            summary: "fixture cleanup audit passed",
+            headSha: cleanupHead,
+          },
+        },
+        {
+          task_id: "lifecycle-missing",
+          title: "Lifecycle missing",
+          branch: "codex/lifecycle-missing",
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-a",
+          worktree_path: join(lifecycleStateRoot, "missing-worktree"),
+          last_heartbeat_at: freshHeartbeat,
+        },
+        {
+          task_id: "lifecycle-hold",
+          title: "Lifecycle hold",
+          branch: "codex/lifecycle-hold",
+          base_branch: "dev",
+          base_ref: "HEAD",
+          status: "blocked_authority",
+          owner: "runner-a",
+          worktree_path: holdWorktree,
+          last_heartbeat_at: freshHeartbeat,
+        },
+        {
+          task_id: "lifecycle-uninspectable",
+          title: "Lifecycle uninspectable",
+          branch: "codex/lifecycle-uninspectable",
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-a",
+          worktree_path: uninspectableWorktree,
+          last_heartbeat_at: freshHeartbeat,
+        },
+        {
+          task_id: "lifecycle-unresolved-base",
+          title: "Lifecycle unresolved base",
+          branch: "codex/lifecycle-unresolved-base",
+          base_branch: "dev",
+          base_ref: "refs/heads/lifecycle-base-not-present",
+          status: "active",
+          owner: "runner-a",
+          worktree_path: freshWorktree,
+          last_heartbeat_at: freshHeartbeat,
+        },
+        {
+          task_id: "lifecycle-future-heartbeat",
+          title: "Lifecycle future heartbeat",
+          branch: "codex/lifecycle-future-heartbeat",
+          base_branch: "dev",
+          base_ref: "HEAD",
+          status: "active",
+          owner: "runner-a",
+          worktree_path: freshWorktree,
+          last_heartbeat_at: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      ];
+      for (const manifest of manifests) {
+        writeFileSync(join(tasksDir, `${manifest.task_id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
+      }
+      const before = taskSnapshot(tasksDir);
+
+      const summary = run([
+        "lifecycle-health",
+        "--summary-json",
+        "--state-root",
+        lifecycleStateRoot,
+        "--owner",
+        "runner-a",
+        "--stale-after-seconds",
+        "86400",
+      ]);
+
+      assert(summary.code === 0, summary.stderr || summary.stdout);
+      assert(!summary.stdout.includes("Lifecycle Health"), "summary-json stdout must not include text output");
+      const packet = JSON.parse(summary.stdout);
+      assert(packet.mutation === "none; summary only", summary.stdout || summary.stderr);
+      assert(packet.rows.length === manifests.length, summary.stdout || summary.stderr);
+      assert(packet.counts.total === manifests.length, summary.stdout || summary.stderr);
+      assert(packet.counts.states.fresh_active === 1, summary.stdout || summary.stderr);
+      assert(packet.counts.states.stale_attention_required === 1, summary.stdout || summary.stderr);
+      assert(packet.counts.states.delivery_attention_required === 1, summary.stdout || summary.stderr);
+      assert(packet.counts.states.cleanup_ready === 0, summary.stdout || summary.stderr);
+      assert(packet.counts.states.missing_worktree_reconciliation_required === 1, summary.stdout || summary.stderr);
+      assert(packet.counts.states.hold_attention_required === 5, summary.stdout || summary.stderr);
+      assert(packet.counts.states.closed === 0, summary.stdout || summary.stderr);
+      assert(Object.values(packet.counts.states).reduce((total, count) => total + count, 0) === manifests.length, summary.stdout || summary.stderr);
+      assert(packet.rows.every((row) => row.observedStatus && row.derivedState && row.reasonCode && row.nextAction), summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-missing")?.derivedState === "missing_worktree_reconciliation_required", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-stale")?.derivedState === "stale_attention_required", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-cleanup")?.reasonCode === "cleanup_prerequisites_unproven", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-uninspectable")?.reasonCode === "worktree_inspection_unavailable", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-unresolved-base")?.reasonCode === "base_ref_unresolved_hold", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-future-heartbeat")?.reasonCode === "owner_heartbeat_future_hold", summary.stdout || summary.stderr);
+      assert(taskSnapshot(tasksDir) === before, "lifecycle-health must not mutate manifests");
+
+      const text = run(["lifecycle-health", "--state-root", lifecycleStateRoot, "--owner", "runner-a"]);
+      assert(text.code === 0, text.stderr || text.stdout);
+      assert(text.stdout.includes("Workspace Lifecycle Health"), text.stdout || text.stderr);
+      assert(text.stdout.includes("fresh_active=1"), text.stdout || text.stderr);
+      assert(text.stdout.includes("closed=0"), text.stdout || text.stderr);
+      assert(taskSnapshot(tasksDir) === before, "lifecycle-health text report must not mutate manifests");
+    } finally {
+      rmSync(lifecycleStateRoot, { recursive: true, force: true });
+      for (const worktree of worktrees) {
+        rmSync(worktree, { recursive: true, force: true });
+      }
     }
   });
 
@@ -338,6 +521,9 @@ try {
       assert(packet.activeManagedWorktrees[0].taskId === "active-report-lane", result.stdout || result.stderr);
       assert(packet.activeManagedWorktrees[0].assignmentStatus === "active", result.stdout || result.stderr);
       assert(packet.activeManagedWorktrees[0].worktreeExists === true, result.stdout || result.stderr);
+      assert(packet.lifecycleHealth.counts.total === 1, result.stdout || result.stderr);
+      assert(packet.lifecycleHealth.rows.length === 1, result.stdout || result.stderr);
+      assert(packet.lifecycleHealth.rows[0].taskId === "active-report-lane", result.stdout || result.stderr);
       assert(["claimable", "none"].includes(packet.nextSafeSlice.status), result.stdout || result.stderr);
       assert(typeof packet.nextSafeSlice.action === "string", result.stdout || result.stderr);
       assert(packet.stopLines.includes("Merge a PR."), result.stdout || result.stderr);
@@ -421,6 +607,26 @@ try {
           2,
         ),
       );
+      for (let index = 0; index < 11; index += 1) {
+        writeFileSync(
+          join(tasksDir, `lifecycle-summary-lane-${index}.json`),
+          JSON.stringify(
+            {
+              task_id: `lifecycle-summary-lane-${index}`,
+              title: `Lifecycle summary lane ${index}`,
+              branch: `codex/lifecycle-summary-lane-${index}`,
+              base_branch: "dev",
+              base_ref: "origin/dev",
+              status: "active",
+              owner: "runner-a",
+              worktree_path: rootDir,
+              updated_at: "2026-06-27T00:00:00.000Z",
+            },
+            null,
+            2,
+          ),
+        );
+      }
       for (let index = 0; index < 12; index += 1) {
         writeFileSync(
           join(tasksDir, `closed-summary-lane-${index}.json`),
@@ -448,7 +654,7 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
-      assert(packet.counts.activeManagedWorktrees === 2, result.stdout || result.stderr);
+      assert(packet.counts.activeManagedWorktrees === 13, result.stdout || result.stderr);
       assert(packet.counts.prsWaitingAtMergeGate === 1, result.stdout || result.stderr);
       assert(packet.counts.prStateReconciliation === 1, result.stdout || result.stderr);
       assert(packet.counts.closedButRetainedLanes === 12, result.stdout || result.stderr);
@@ -459,6 +665,9 @@ try {
       assert(packet.backlogClassificationStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(!("closedButRetainedLanes" in packet), result.stdout || result.stderr);
       assert(packet.activeManagedWorktrees[0].taskId === "active-summary-lane", result.stdout || result.stderr);
+      assert(packet.lifecycleHealth.counts.total === 13, result.stdout || result.stderr);
+      assert(packet.lifecycleHealth.rows.length === 10, result.stdout || result.stderr);
+      assert(packet.lifecycleHealth.rowsTruncated === true, result.stdout || result.stderr);
       assert(packet.prStateReconciliation[0].taskId === "merged-evidence-pr-open-lane", result.stdout || result.stderr);
       assert(packet.prStateReconciliation[0].prState === "merged_evidence_present", result.stdout || result.stderr);
       assert(typeof packet.prStateReconciliation[0].prStateNextAction === "string", result.stdout || result.stderr);
@@ -20226,6 +20435,74 @@ try {
       rmSync(isolatedStateRoot, { recursive: true, force: true });
     }
   });
+  test("close-no-source closes only a proven owner lane and retains every resource", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-task", baseBranch: "dev" });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
+      const manifest = readJson(manifestPath);
+      delete manifest.source_assignment_id;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
+      const beforeManifest = readFileSync(manifestPath, "utf8");
+      const beforeRefs = refSnapshot(fixture.root);
+      const preview = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(JSON.parse(preview.stdout).ready === true, preview.stdout || preview.stderr);
+      assert(readFileSync(manifestPath, "utf8") === beforeManifest, "close-no-source preview mutated manifest");
+      const applied = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const closed = readJson(manifestPath);
+      assert(closed.status === "closed", JSON.stringify(closed));
+      assert(closed.no_source_closeout?.reason === "operator confirmed no source was produced", JSON.stringify(closed));
+      assert(closed.events.some((event) => event.type === "no_source_closeout_verified"), JSON.stringify(closed.events));
+      assert(existsSync(fixture.worktree), "close-no-source removed the worktree");
+      assert(branchExists(fixture.root, fixture.branch), "close-no-source removed the branch");
+      assert(refSnapshot(fixture.root) === beforeRefs, "close-no-source changed refs");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source refuses foreign ownership, linked assignments, and dirty worktree evidence without mutation", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-refusal-task", baseBranch: "dev" });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
+      const manifest = readJson(manifestPath);
+      delete manifest.source_assignment_id;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(manifestPath, "utf8");
+      const linked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(linked.code === 0, linked.stderr || linked.stdout);
+      assert(JSON.parse(linked.stdout).blockers.includes("linked_active_assignment_present"), linked.stdout || linked.stderr);
+      rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
+      const foreign = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-b", "--state-root", fixture.stateRoot]);
+      assert(foreign.code === 0, foreign.stderr || foreign.stdout);
+      assert(JSON.parse(foreign.stdout).ready === false, foreign.stdout || foreign.stderr);
+      writeFileSync(join(fixture.worktree, "uncommitted.txt"), "retain\n");
+      const dirty = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(dirty.code === 0, dirty.stderr || dirty.stdout);
+      assert(JSON.parse(dirty.stdout).blockers.includes("worktree_dirty"), dirty.stdout || dirty.stderr);
+      assert(readFileSync(manifestPath, "utf8") === before, "close-no-source refusal mutated manifest");
+      assert(existsSync(fixture.worktree), "close-no-source refusal removed worktree");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health marks a merged lane cleanup-ready only after existing cleanup preconditions are proven", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      markFixtureAssignmentClosed(fixture);
+      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const row = JSON.parse(result.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(row?.derivedState === "cleanup_ready", result.stdout || result.stderr);
+      assert(row?.reasonCode === "cleanup_preconditions_proven", result.stdout || result.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   if (executedTestCount === 0) {
     if (testFilter) throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
     if (workspaceTestProfile !== "all") throw new Error(`CODEX_WORKSPACE_TEST_PROFILE matched no tests: ${workspaceTestProfile}`);
