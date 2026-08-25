@@ -40,6 +40,11 @@ const defaultBaseBranch = "dev";
 const MAX_BASE_BRANCH_LENGTH = 250;
 const MAX_BASE_REF_LENGTH = 257;
 const defaultVerificationTimeoutMs = 120_000;
+// Lifecycle reporting is a read-only coordination aid.  It must not make a
+// routine report wait for the generic verification allowance once for every
+// retained merged lane when GitHub is slow or unavailable.
+const lifecycleReportGithubRequestTimeoutMs = 5_000;
+const lifecycleReportGithubBudgetMs = 15_000;
 // The complete governed workspace suite exercises delivery, review, merge,
 // and cleanup fixtures end-to-end.  It has a distinct bounded allowance from
 // ordinary profiles: on a healthy workspace it can exceed fifteen minutes.
@@ -1212,12 +1217,23 @@ function buildWorkspaceLifecycleHealth(options = {}, input = {}) {
   const state = input.state || workspaceState(options);
   const generatedAt = input.context?.generatedAt || new Date();
   const staleAfterSeconds = input.context?.staleAfterSeconds || positiveInteger(options.staleAfterSeconds, 86_400);
-  const context = input.context || { currentOwner: currentLaneOwner(options), generatedAt, staleAfterSeconds };
+  const context = {
+    ...(input.context || {}),
+    currentOwner: input.context?.currentOwner || currentLaneOwner(options),
+    generatedAt,
+    staleAfterSeconds,
+    lifecycleGithubDeadlineAt: Number.isFinite(input.context?.lifecycleGithubDeadlineAt)
+      ? input.context.lifecycleGithubDeadlineAt
+      : generatedAt.getTime() + lifecycleReportGithubBudgetMs,
+  };
   const stateCounts = Object.fromEntries(workspaceLifecycleStates.map((status) => [status, 0]));
   const reasonCodeCounts = {};
-  const rows = (input.manifests || readManifests(state).map(({ manifest }) => manifest))
-    .filter((manifest) => manifest.status !== "closed")
-    .map((manifest) => lifecycleHealthRow(manifest, context, state));
+  const records = input.manifestRecords || (input.manifests
+    ? input.manifests.map((manifest) => ({ path: null, manifest }))
+    : readManifestRecords(state));
+  const rows = records
+    .map((record) => lifecycleHealthRecordRow(record, context, state))
+    .filter(Boolean);
   for (const row of rows) {
     stateCounts[row.derivedState] += 1;
     reasonCodeCounts[row.reasonCode] = (reasonCodeCounts[row.reasonCode] || 0) + 1;
@@ -1232,6 +1248,34 @@ function buildWorkspaceLifecycleHealth(options = {}, input = {}) {
     reasonCodeCounts,
     rows,
     mutation: "none; summary only",
+  };
+}
+
+function lifecycleHealthRecordRow(record, context, state) {
+  if (record.error) return invalidManifestLifecycleHealthRow(record);
+  try {
+    validateManifest(record.manifest, record.path || "lifecycle manifest");
+    reconcileManifest(record.manifest);
+  } catch (error) {
+    return invalidManifestLifecycleHealthRow({ ...record, error });
+  }
+  if (record.manifest.status === "closed") return null;
+  return lifecycleHealthRow(record.manifest, context, state);
+}
+
+function invalidManifestLifecycleHealthRow(record) {
+  return {
+    taskId: null,
+    manifestFile: record.path ? basename(record.path) : null,
+    observedStatus: "invalid",
+    owner: null,
+    lastHeartbeatAt: null,
+    heartbeatAgeSeconds: null,
+    worktreeExists: false,
+    derivedState: "hold_attention_required",
+    reasonCode: "manifest_invalid",
+    reason: "workspace manifest could not be parsed or validated",
+    nextAction: "preserve the manifest file and repair or reconcile its bounded metadata before lifecycle action",
   };
 }
 
@@ -1354,7 +1398,15 @@ function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
   try {
     assertLaneOwner(manifest, { owner: context.currentOwner });
     const target = assertCleanupWorktreeForMerged(manifest, state);
-    const pr = prView(manifest);
+    const githubTimeout = lifecycleGithubTimeout(context);
+    if (githubTimeout <= 0) {
+      return {
+        ready: false,
+        reasonCode: "cleanup_github_budget_exhausted",
+        reason: "bounded GitHub evidence budget is exhausted for this lifecycle report",
+      };
+    }
+    const pr = prView(manifest, null, { timeout: githubTimeout, killSignal: "SIGKILL" });
     if (!pr?.mergedAt) return { ready: false, reasonCode: "cleanup_pr_merged_unproven", reason: "live merged PR evidence is unavailable" };
     if (pr.baseRefName && pr.baseRefName !== manifest.base_branch) return { ready: false, reasonCode: "cleanup_pr_base_mismatch", reason: "live PR base does not match the manifest base" };
     const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, target);
@@ -1366,10 +1418,21 @@ function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
     if (remoteBlocker) return { ready: false, reasonCode: "cleanup_remote_resume_required", reason: safeMetadataText(remoteBlocker, 240) };
     const auditBlocker = cleanupDeliverySubagentAuditBlocker(manifest, pr, { options: {} });
     if (auditBlocker) return { ready: false, reasonCode: "cleanup_delivery_audit_unproven", reason: safeMetadataText(auditBlocker, 240) };
+    try {
+      preflightAssignmentClosureForCleanedManifest(state, manifest, {});
+    } catch (error) {
+      return { ready: false, reasonCode: "cleanup_assignment_closure_unproven", reason: safeMetadataText(error.message || error, 240) };
+    }
     return { ready: true };
   } catch (error) {
     return { ready: false, reasonCode: "cleanup_prerequisites_unproven", reason: safeMetadataText(error.message || error, 240) };
   }
+}
+
+function lifecycleGithubTimeout(context = {}) {
+  const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();
+  if (!Number.isFinite(remaining) || remaining <= 0) return 0;
+  return Math.max(1, Math.min(lifecycleReportGithubRequestTimeoutMs, remaining));
 }
 
 function buildWorkspaceLifecycleHealthSummary(packet) {
@@ -1544,11 +1607,12 @@ function buildCoordinationReportPacket(options = {}) {
   const currentOwner = currentLaneOwner(options);
   const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
   const generatedAt = new Date();
+  const manifestRecords = readManifestRecords(state);
   const manifests = readManifests(state).map(({ manifest }) => manifest);
   const assignments = readAssignments(state).map(({ assignment }) => assignment);
   const activeManifests = manifests.filter((manifest) => manifest.status !== "closed");
   const context = { currentOwner, generatedAt, staleAfterSeconds };
-  const lifecycleHealth = buildWorkspaceLifecycleHealth(options, { state, manifests, context });
+  const lifecycleHealth = buildWorkspaceLifecycleHealth(options, { state, manifestRecords, context });
   const rootStatus = parseStatus(repoRoot);
   const checkout = currentCheckoutPacket(repoRoot);
   const activeLanes = activeManifests.map((manifest) => coordinationLanePacket(manifest, context));
@@ -15326,6 +15390,7 @@ function doctor(argv) {
     true,
   );
 
+  const manifestRecords = readManifestRecords(state);
   const manifests = readManifests(state);
   for (const { manifest } of manifests) {
     const worktreeOk = existsSync(manifest.worktree_path);
@@ -15338,7 +15403,7 @@ function doctor(argv) {
   }
   const lifecycleHealth = buildWorkspaceLifecycleHealth(options, {
     state,
-    manifests: manifests.map(({ manifest }) => manifest),
+    manifestRecords,
   });
 
   if (options.summaryJson) {
@@ -22375,12 +22440,14 @@ function assertCleanManagedResolutionWorktree(manifest) {
   }
 }
 
-function prView(manifest, repository = null) {
+function prView(manifest, repository = null, options = {}) {
   const selector = manifest.pr_number ? String(manifest.pr_number) : manifest.branch;
   const args = ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName,headRefName,headRefOid"];
   if (repository?.owner && repository?.name) args.push("--repo", `${repository.owner}/${repository.name}`);
   const result = run("gh", args, {
     cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
+    timeout: options.timeout,
+    killSignal: options.killSignal,
   });
   if (result.code !== 0) {
     return null;

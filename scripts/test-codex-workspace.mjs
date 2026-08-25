@@ -442,6 +442,11 @@ try {
       for (const manifest of manifests) {
         writeFileSync(join(tasksDir, `${manifest.task_id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
       }
+      writeFileSync(join(tasksDir, "lifecycle-malformed.json"), "{ this is not valid JSON\n");
+      writeFileSync(
+        join(tasksDir, "lifecycle-schema-invalid.json"),
+        `${JSON.stringify({ task_id: "lifecycle-schema-invalid", status: "active" }, null, 2)}\n`,
+      );
       const before = taskSnapshot(tasksDir);
 
       const summary = run([
@@ -459,16 +464,16 @@ try {
       assert(!summary.stdout.includes("Lifecycle Health"), "summary-json stdout must not include text output");
       const packet = JSON.parse(summary.stdout);
       assert(packet.mutation === "none; summary only", summary.stdout || summary.stderr);
-      assert(packet.rows.length === manifests.length, summary.stdout || summary.stderr);
-      assert(packet.counts.total === manifests.length, summary.stdout || summary.stderr);
+      assert(packet.rows.length === manifests.length + 2, summary.stdout || summary.stderr);
+      assert(packet.counts.total === manifests.length + 2, summary.stdout || summary.stderr);
       assert(packet.counts.states.fresh_active === 1, summary.stdout || summary.stderr);
       assert(packet.counts.states.stale_attention_required === 1, summary.stdout || summary.stderr);
       assert(packet.counts.states.delivery_attention_required === 1, summary.stdout || summary.stderr);
       assert(packet.counts.states.cleanup_ready === 0, summary.stdout || summary.stderr);
       assert(packet.counts.states.missing_worktree_reconciliation_required === 1, summary.stdout || summary.stderr);
-      assert(packet.counts.states.hold_attention_required === 5, summary.stdout || summary.stderr);
+      assert(packet.counts.states.hold_attention_required === 7, summary.stdout || summary.stderr);
       assert(packet.counts.states.closed === 0, summary.stdout || summary.stderr);
-      assert(Object.values(packet.counts.states).reduce((total, count) => total + count, 0) === manifests.length, summary.stdout || summary.stderr);
+      assert(Object.values(packet.counts.states).reduce((total, count) => total + count, 0) === manifests.length + 2, summary.stdout || summary.stderr);
       assert(packet.rows.every((row) => row.observedStatus && row.derivedState && row.reasonCode && row.nextAction), summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-missing")?.derivedState === "missing_worktree_reconciliation_required", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-stale")?.derivedState === "stale_attention_required", summary.stdout || summary.stderr);
@@ -476,6 +481,11 @@ try {
       assert(packet.rows.find((row) => row.taskId === "lifecycle-uninspectable")?.reasonCode === "worktree_inspection_unavailable", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-unresolved-base")?.reasonCode === "base_ref_unresolved_hold", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-future-heartbeat")?.reasonCode === "owner_heartbeat_future_hold", summary.stdout || summary.stderr);
+      const invalidRows = packet.rows.filter((row) => row.reasonCode === "manifest_invalid");
+      assert(invalidRows.length === 2, summary.stdout || summary.stderr);
+      assert(invalidRows.every((row) => row.taskId === null && row.derivedState === "hold_attention_required"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.manifestFile === "lifecycle-malformed.json"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.manifestFile === "lifecycle-schema-invalid.json"), summary.stdout || summary.stderr);
       assert(taskSnapshot(tasksDir) === before, "lifecycle-health must not mutate manifests");
 
       const text = run(["lifecycle-health", "--state-root", lifecycleStateRoot, "--owner", "runner-a"]);
@@ -20618,6 +20628,85 @@ try {
       const foreignOwnerRow = JSON.parse(foreignOwner.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
       assert(foreignOwnerRow?.derivedState === "hold_attention_required", foreignOwner.stdout || foreignOwner.stderr);
       assert(foreignOwnerRow?.reasonCode === "cleanup_prerequisites_unproven", foreignOwner.stdout || foreignOwner.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health refuses cleanup-ready when linked assignment closure cannot be preflighted", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+      const assignment = readJson(assignmentPath);
+      assignment.branch = "codex/other-cleanup-lane";
+      assignment.source_backlog_item.branch_name = assignment.branch;
+      writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+      const beforeManifest = readFileSync(join(fixture.stateRoot, "tasks", "cleanup-task.json"), "utf8");
+      const beforeAssignment = readFileSync(assignmentPath, "utf8");
+
+      const blocked = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      const blockedRow = JSON.parse(blocked.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(blockedRow?.derivedState === "hold_attention_required", blocked.stdout || blocked.stderr);
+      assert(blockedRow?.reasonCode === "cleanup_assignment_closure_unproven", blocked.stdout || blocked.stderr);
+      assert(readFileSync(join(fixture.stateRoot, "tasks", "cleanup-task.json"), "utf8") === beforeManifest, "lifecycle health mutated the manifest");
+      assert(readFileSync(assignmentPath, "utf8") === beforeAssignment, "lifecycle health mutated the assignment");
+
+      markFixtureAssignmentClosed(fixture);
+      const closed = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(closed.code === 0, closed.stderr || closed.stdout);
+      const closedRow = JSON.parse(closed.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(closedRow?.derivedState === "cleanup_ready", closed.stdout || closed.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health bounds aggregate GitHub latency for merged-lane reports", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const lifecycleReportGithubRequestTimeoutMs = 5_000;"), "lifecycle GitHub request timeout seam changed");
+      assert(source.includes("const lifecycleReportGithubBudgetMs = 15_000;"), "lifecycle GitHub budget seam changed");
+      writeFileSync(
+        fixture.script,
+        source
+          .replace("const lifecycleReportGithubRequestTimeoutMs = 5_000;", "const lifecycleReportGithubRequestTimeoutMs = 100;")
+          .replace("const lifecycleReportGithubBudgetMs = 15_000;", "const lifecycleReportGithubBudgetMs = 250;"),
+      );
+      const tasksDir = join(fixture.stateRoot, "tasks");
+      const primary = readJson(join(tasksDir, "cleanup-task.json"));
+      for (const suffix of ["a", "b"]) {
+        const duplicate = { ...primary, task_id: `cleanup-task-${suffix}`, title: `Cleanup task ${suffix}` };
+        writeFileSync(join(tasksDir, `${duplicate.task_id}.json`), `${JSON.stringify(duplicate, null, 2)}\n`);
+      }
+      writeFileSync(
+        join(fixture.fakeBin, "gh"),
+        [
+          "#!/bin/sh",
+          "sleep 60",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(join(fixture.stateRoot, "assignments"));
+      const started = Date.now();
+      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      const elapsedMs = Date.now() - started;
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      // The nested fixture process can spend a short handoff interval closing
+      // inherited pipes after its hard-killed GitHub child.  The assertion
+      // still proves the report is bounded rather than waiting for the
+      // fixture's 60-second command, while the packet proves the shared
+      // lifecycle budget stopped additional GitHub calls.
+      assert(elapsedMs < 3_000, `lifecycle health exceeded its bounded GitHub report budget: ${elapsedMs}ms`);
+      const rows = JSON.parse(result.stdout).rows;
+      assert(rows.some((row) => row.reasonCode === "cleanup_github_budget_exhausted"), result.stdout || result.stderr);
+      assert(rows.every((row) => row.derivedState === "hold_attention_required"), result.stdout || result.stderr);
+      assert(taskSnapshot(tasksDir) === beforeTasks, "lifecycle health mutated manifests during GitHub timeout");
+      assert(taskSnapshot(join(fixture.stateRoot, "assignments")) === beforeAssignments, "lifecycle health mutated assignments during GitHub timeout");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
