@@ -20438,11 +20438,7 @@ try {
   test("close-no-source closes only a proven owner lane and retains every resource", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-task", baseBranch: "dev" });
     try {
-      const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
-      const manifest = readJson(manifestPath);
-      delete manifest.source_assignment_id;
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
+      const { manifestPath } = prepareNoSourceFixture(fixture);
       const beforeManifest = readFileSync(manifestPath, "utf8");
       const beforeRefs = refSnapshot(fixture.root);
       const preview = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
@@ -20640,6 +20636,17 @@ function prepareNoSourceFixture(fixture) {
   const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
   const manifest = readJson(manifestPath);
   delete manifest.source_assignment_id;
+  const baseSha = runGit(fixture.worktree, ["rev-parse", manifest.base_ref]).stdout;
+  manifest.last_verified_at = "2026-08-25T00:00:00.000Z";
+  manifest.last_verification_command = "fixture scoped verification";
+  manifest.last_verification_result = {
+    schemaVersion: 1,
+    command: manifest.last_verification_command,
+    exitCode: 0,
+    baseRef: manifest.base_ref,
+    baseSha,
+    verifiedAt: manifest.last_verified_at,
+  };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
   return { manifestPath, manifest };

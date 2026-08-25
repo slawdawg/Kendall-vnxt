@@ -1023,6 +1023,7 @@ function startWorkspace(argv) {
     updated_at: new Date().toISOString(),
     last_verified_at: null,
     last_verification_command: null,
+    last_verification_result: null,
     last_commit: null,
     events: [taskEvent("created", "workspace manifest created")],
   };
@@ -3174,6 +3175,14 @@ function finishPr(argv) {
       lock.heartbeat();
       manifest.last_verified_at = new Date().toISOString();
       manifest.last_verification_command = verifyCommand.join(" ");
+      manifest.last_verification_result = {
+        schemaVersion: 1,
+        command: manifest.last_verification_command,
+        exitCode: 0,
+        baseRef: manifest.base_ref,
+        baseSha: git(["rev-parse", manifest.base_ref], { cwd: manifest.worktree_path }).stdout.trim(),
+        verifiedAt: manifest.last_verified_at,
+      };
       appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
       worktreeStatus = parseStatus(manifest.worktree_path);
     }
@@ -9635,14 +9644,16 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   add(assignmentEvidence.status === "matched", assignmentEvidence.reason);
   const prEvidence = worktree ? sourceBranchPullRequestProof(manifest.branch, manifest.worktree_path) : { status: "blocked", count: null, reason: "live PR absence is unavailable without a proven worktree" };
   add(prEvidence.status === "matched", prEvidence.reason);
-  const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet", "last_verified_at", "last_verification_command", "check_verification_packet"];
+  const verification = closeNoSourceVerificationEvidence(manifest);
+  add(verification.status === "matched", verification.reason);
+  const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet", "check_verification_packet"];
   const lifecycleEvidenceField = /(?:^|_)(?:pr|delivery|merge|merged|cleanup|supersession|closeout|verify|verification)(?:_|$)/i;
   const evidencePresent = [...new Set([
     ...evidenceKeys,
-    ...Object.keys(manifest).filter((key) => lifecycleEvidenceField.test(key)),
+    ...Object.keys(manifest).filter((key) => lifecycleEvidenceField.test(key) && !["last_verified_at", "last_verification_command", "last_verification_result"].includes(key)),
   ])].filter((key) => manifest[key] !== undefined && manifest[key] !== null && manifest[key] !== false);
   const eventResidue = Array.isArray(manifest.events)
-    ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout|verify)/i.test(type))
+    ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout|verify)/i.test(type) && type !== "verified")
     : ["events_unreadable"];
   add(evidencePresent.length === 0 && eventResidue.length === 0 && !hasStrictCloseoutEvidence(manifest), evidencePresent.length ? `delivery_or_cleanup_evidence:${evidencePresent.join(",")}` : eventResidue.length ? `delivery_or_cleanup_events:${eventResidue.join(",")}` : "strict_closeout_evidence_present");
   const authorityDecision = shapeAuthorityDecisionEvidence({ operation: "close-no-source", authorityFamily: "metadata-only-no-source-closeout", decision: blockers.length === 0 ? (context.applying ? "applied" : "ready_for_apply") : "blocked", allowed: blockers.length === 0, requiredGates: ["exact owner", "clean registered worktree", "zero local commits", "no linked assignment", "live GitHub PR absence", "no delivery cleanup or verification evidence"], satisfiedGates: blockers.length === 0 ? ["exact owner", "clean registered worktree", "zero local commits", "no linked assignment", "live GitHub PR absence", "no delivery cleanup or verification evidence"] : [], blockedReasons: blockers, stopLines: ["never close on ambiguous assignment, GitHub, or lifecycle evidence", "apply re-proves evidence under the existing manifest lock", "never delete resources"], evidenceRefs: [`task:${manifest.task_id}`, `owner:${manifest.owner || "unknown"}`, "github:no-pr"], nextSafeAction: blockers.length === 0 ? "Apply only with a bounded reason." : "Preserve resources and resolve the listed blockers.", recoveryPath: "preserve retained resources and inspect the no-source receipt before any separate governed cleanup." });
@@ -9658,6 +9669,7 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
       taskLock: { status: taskLock.status, reason: taskLock.reason || null, owner: taskLock.metadata?.owner || null, generation: taskLock.generation || null, intentClear: taskLock.status === "absent" || taskLock.status === "active" },
       assignments: assignmentEvidence,
       pullRequests: prEvidence,
+      verification,
       evidenceKeys: evidencePresent,
       eventResidue,
       preLockEvidence: context.preLockEvidence || null,
@@ -9665,6 +9677,15 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
     authorityDecision,
     mutation: "none; dry-run eligibility only",
   };
+}
+
+function closeNoSourceVerificationEvidence(manifest) {
+  const evidence = manifest.last_verification_result;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return { status: "blocked", reason: "successful scoped verification evidence is required" };
+  const expectedBase = git(["rev-parse", manifest.base_ref], { cwd: manifest.worktree_path });
+  const baseSha = expectedBase.code === 0 ? expectedBase.stdout.trim() : null;
+  if (!String(evidence.command || "").trim() || evidence.exitCode !== 0 || !exactGitObjectIdOrNull(evidence.baseSha) || evidence.baseSha !== baseSha || evidence.baseRef !== manifest.base_ref) return { status: "blocked", reason: "successful scoped verification evidence is incomplete or does not match the current base" };
+  return { status: "matched", command: evidence.command, exitCode: 0, baseRef: evidence.baseRef, baseSha: evidence.baseSha, verifiedAt: evidence.verifiedAt || null };
 }
 
 function closeNoSourceAssignmentEvidence(state, manifest) {
