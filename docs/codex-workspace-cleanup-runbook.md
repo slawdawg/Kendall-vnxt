@@ -184,7 +184,7 @@ ownership, reconcile PRs, or clean resources.
 Only the exact current owner may close an `active` lane that has a registered
 clean worktree, a provable zero-ahead base, no delivery or cleanup evidence,
 no active assignment, no active task lock, and a remote branch that is absent or
-exactly matches the current base. First record verification through the
+exactly matches the freshly read remote base branch. First record verification through the
 supported no-source path; do not edit manifest evidence manually:
 
 ```bash

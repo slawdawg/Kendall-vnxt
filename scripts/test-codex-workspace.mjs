@@ -20557,6 +20557,90 @@ try {
     }
   });
 
+  test("close-no-source compares a retained remote branch with the freshly read remote base", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-remote-base-drift" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const localBaseSha = runGit(fixture.worktree, ["rev-parse", "origin/main"]).stdout;
+      commitFile(fixture.root, "advanced-base.txt", "advanced remote base\n", "advance remote base only");
+      const remoteBaseSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["push", "-q", "origin", "main"]);
+      // Keep the managed worktree's base snapshot intentionally stale. The
+      // remote branch still equals that old snapshot, so local-only proof
+      // would incorrectly accept it.
+      runGit(fixture.root, ["update-ref", "refs/remotes/origin/main", localBaseSha]);
+      assert(runGit(fixture.worktree, ["rev-parse", "origin/main"]).stdout === localBaseSha, "fixture did not retain a stale local base ref");
+      assert(localBaseSha !== remoteBaseSha, "fixture did not advance the remote base");
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.includes("remote branch contains source or differs from the current remote base"), result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.sha === localBaseSha, result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.baseSha === remoteBaseSha, result.stdout || result.stderr);
+      assert(readJson(manifestPath).status === "active", "remote-base proof mutated the manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source bounds GitHub and remote probes while the assignment index is locked", () => {
+    const scenarios = ["github", "remote"];
+    for (const scenario of scenarios) {
+      const fixture = createIntegratedCleanupFixture({ taskId: `no-source-bounded-${scenario}` });
+      try {
+        prepareNoSourceFixture(fixture);
+        const source = readFileSync(fixture.script, "utf8");
+        assert(source.includes("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;"), "no-source external timeout seam changed");
+        writeFileSync(fixture.script, source.replace("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;", "const noSourceCloseoutExternalRequestTimeoutMs = 100;"));
+        const counterPath = join(fixture.fakeBin, `${scenario}-probe-count`);
+        if (scenario === "github") {
+          writeFileSync(join(fixture.fakeBin, "gh"), [
+            `#!${process.execPath}`,
+            "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+            "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+            "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+            "writeFileSync(counterPath, String(count + 1));",
+            "if (count > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
+            "console.log('[]');",
+            "",
+          ].join("\n"));
+          chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+        } else {
+          const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+          writeFileSync(join(fixture.fakeBin, "git"), [
+            `#!${process.execPath}`,
+            "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+            "import { spawnSync } from 'node:child_process';",
+            "const args = process.argv.slice(2);",
+            "if (args[0] === 'ls-remote') {",
+            "  const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+            "  const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+            "  writeFileSync(counterPath, String(count + 1));",
+            "  if (count >= 2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
+            "}",
+            `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
+            "process.exit(result.status ?? 1);",
+            "",
+          ].join("\n"));
+          chmodSync(join(fixture.fakeBin, "git"), 0o755);
+        }
+
+        const started = Date.now();
+        const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+          env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath },
+        });
+        const elapsedMs = Date.now() - started;
+        assert(result.code !== 0, `${scenario} probe unexpectedly allowed closeout: ${result.stdout || result.stderr}`);
+        assert(elapsedMs < 3_000, `${scenario} probe held the assignment index too long: ${elapsedMs}ms`);
+        assert(!existsSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock")), `${scenario} timeout left the assignment index locked`);
+      } finally {
+        cleanupIntegratedCleanupFixture(fixture);
+      }
+    }
+  });
+
   test("close-no-source rejects syntax and retained lifecycle proof blockers without mutation", () => {
     const scenarios = [
       {
@@ -20720,6 +20804,30 @@ try {
     }
   });
 
+  test("lifecycle-health blocks unlinked active assignment records that match a merged lane", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.source_assignment_id;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const blocked = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      const blockedRow = JSON.parse(blocked.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(blockedRow?.derivedState === "hold_attention_required", blocked.stdout || blocked.stderr);
+      assert(blockedRow?.reasonCode === "cleanup_assignment_closure_unproven", blocked.stdout || blocked.stderr);
+
+      markFixtureAssignmentClosed(fixture);
+      const closed = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(closed.code === 0, closed.stderr || closed.stdout);
+      const closedRow = JSON.parse(closed.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(closedRow?.derivedState === "cleanup_ready", closed.stdout || closed.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("lifecycle-health bounds aggregate GitHub latency for merged-lane reports", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -20765,6 +20873,33 @@ try {
       assert(rows.every((row) => row.derivedState === "hold_attention_required"), result.stdout || result.stderr);
       assert(taskSnapshot(tasksDir) === beforeTasks, "lifecycle health mutated manifests during GitHub timeout");
       assert(taskSnapshot(join(fixture.stateRoot, "assignments")) === beforeAssignments, "lifecycle health mutated assignments during GitHub timeout");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health starts the GitHub budget at the first GitHub request", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      markFixtureAssignmentClosed(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const lifecycleReportGithubBudgetMs = 15_000;"), "lifecycle GitHub budget seam changed");
+      assert(source.includes("const target = assertCleanupWorktreeForMerged(manifest, state);"), "lifecycle pre-request seam changed");
+      writeFileSync(
+        fixture.script,
+        source
+          .replace("const lifecycleReportGithubBudgetMs = 15_000;", "const lifecycleReportGithubBudgetMs = 100;")
+          .replace(
+            "const target = assertCleanupWorktreeForMerged(manifest, state);",
+            "const target = assertCleanupWorktreeForMerged(manifest, state);\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);",
+          ),
+      );
+
+      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const row = JSON.parse(result.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(row?.derivedState === "cleanup_ready", result.stdout || result.stderr);
+      assert(row?.reasonCode === "cleanup_preconditions_proven", result.stdout || result.stderr);
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }

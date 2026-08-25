@@ -45,6 +45,10 @@ const defaultVerificationTimeoutMs = 120_000;
 // retained merged lane when GitHub is slow or unavailable.
 const lifecycleReportGithubRequestTimeoutMs = 5_000;
 const lifecycleReportGithubBudgetMs = 15_000;
+// No-source closeout holds the assignment index only for its final re-proof.
+// Keep its live remote evidence bounded so one unavailable provider cannot
+// stall all assignment ownership changes behind that index lock.
+const noSourceCloseoutExternalRequestTimeoutMs = 5_000;
 // The complete governed workspace suite exercises delivery, review, merge,
 // and cleanup fixtures end-to-end.  It has a distinct bounded allowance from
 // ordinary profiles: on a healthy workspace it can exceed fifteen minutes.
@@ -1232,7 +1236,7 @@ function buildWorkspaceLifecycleHealth(options = {}, input = {}) {
     staleAfterSeconds,
     lifecycleGithubDeadlineAt: Number.isFinite(input.context?.lifecycleGithubDeadlineAt)
       ? input.context.lifecycleGithubDeadlineAt
-      : generatedAt.getTime() + lifecycleReportGithubBudgetMs,
+      : null,
   };
   const stateCounts = Object.fromEntries(workspaceLifecycleStates.map((status) => [status, 0]));
   const reasonCodeCounts = {};
@@ -1438,6 +1442,9 @@ function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
 }
 
 function lifecycleGithubTimeout(context = {}) {
+  if (!Number.isFinite(context.lifecycleGithubDeadlineAt)) {
+    context.lifecycleGithubDeadlineAt = Date.now() + lifecycleReportGithubBudgetMs;
+  }
   const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) return 0;
   return Math.max(1, Math.min(lifecycleReportGithubRequestTimeoutMs, remaining));
@@ -9805,9 +9812,12 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   }
   const assignmentEvidence = closeNoSourceAssignmentEvidence(state, manifest);
   add(assignmentEvidence.status === "matched", assignmentEvidence.reason);
-  const prEvidence = worktree ? sourceBranchPullRequestProof(manifest.branch, manifest.worktree_path) : { status: "blocked", count: null, reason: "live PR absence is unavailable without a proven worktree" };
+  const externalProbeOptions = context.applying
+    ? { timeout: noSourceCloseoutExternalRequestTimeoutMs, killSignal: "SIGKILL" }
+    : {};
+  const prEvidence = worktree ? sourceBranchPullRequestProof(manifest.branch, manifest.worktree_path, externalProbeOptions) : { status: "blocked", count: null, reason: "live PR absence is unavailable without a proven worktree" };
   add(prEvidence.status === "matched", prEvidence.reason);
-  const remoteBranch = worktree ? closeNoSourceRemoteBranchEvidence(manifest) : { status: "blocked", state: "unavailable", sha: null, reason: "live remote branch evidence is unavailable without a proven worktree" };
+  const remoteBranch = worktree ? closeNoSourceRemoteBranchEvidence(manifest, externalProbeOptions) : { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: "live remote branch evidence is unavailable without a proven worktree" };
   add(remoteBranch.status === "matched", remoteBranch.reason);
   const verification = closeNoSourceVerificationEvidence(manifest);
   add(verification.status === "matched", verification.reason);
@@ -9854,19 +9864,23 @@ function closeNoSourceVerificationEvidence(manifest) {
   return { status: "matched", command: evidence.command, exitCode: 0, baseRef: evidence.baseRef, baseSha: evidence.baseSha, verifiedAt: evidence.verifiedAt || null };
 }
 
-function closeNoSourceRemoteBranchEvidence(manifest) {
-  const base = git(["rev-parse", "--verify", "--quiet", manifest.base_ref], { cwd: manifest.worktree_path });
-  const baseSha = base.code === 0 ? exactGitObjectIdOrNull(base.stdout.trim()) : null;
-  if (!baseSha) return { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: "remote branch base evidence is unavailable" };
+function closeNoSourceRemoteBranchEvidence(manifest, options = {}) {
   let remoteSha;
   try {
-    remoteSha = originBranchSha(manifest.branch, manifest.worktree_path) || null;
+    remoteSha = originBranchSha(manifest.branch, manifest.worktree_path, options) || null;
   } catch (error) {
-    return { status: "blocked", state: "unavailable", sha: null, baseSha, reason: `remote branch evidence is unavailable: ${safeMetadataText(error.message || error, 240)}` };
+    return { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: `remote branch evidence is unavailable: ${safeMetadataText(error.message || error, 240)}` };
   }
-  if (!remoteSha) return { status: "matched", state: "absent", sha: null, baseSha, reason: "remote branch is absent" };
-  if (remoteSha !== baseSha) return { status: "blocked", state: "different_from_base", sha: remoteSha, baseSha, reason: "remote branch contains source or differs from the current base" };
-  return { status: "matched", state: "exact_base", sha: remoteSha, baseSha, reason: "remote branch exactly matches the current base" };
+  if (!remoteSha) return { status: "matched", state: "absent", sha: null, baseSha: null, reason: "remote branch is absent" };
+  let baseSha;
+  try {
+    baseSha = originBranchSha(manifest.base_branch, manifest.worktree_path, options) || null;
+  } catch (error) {
+    return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: `remote base branch evidence is unavailable: ${safeMetadataText(error.message || error, 240)}` };
+  }
+  if (!baseSha) return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: "remote base branch evidence is unavailable" };
+  if (remoteSha !== baseSha) return { status: "blocked", state: "different_from_base", sha: remoteSha, baseSha, reason: "remote branch contains source or differs from the current remote base" };
+  return { status: "matched", state: "exact_base", sha: remoteSha, baseSha, reason: "remote branch exactly matches the current remote base" };
 }
 
 function closeNoSourceAssignmentEvidence(state, manifest) {
@@ -10838,8 +10852,16 @@ function cleanupWorktreeSummary(worktreeStatus) {
 
 function preflightAssignmentClosureForCleanedManifest(state, manifest, options = {}) {
   const assignmentId = String(manifest.source_assignment_id || "").trim();
+  const activeMatches = activeAssignmentsMatchingManifest(state, manifest);
   if (!assignmentId) {
+    if (activeMatches.length) {
+      throw new Error(`Active assignment records match ${manifest.task_id} without a source_assignment_id: ${activeMatches.map((assignment) => assignment.assignment_id).join(",")}.`);
+    }
     return null;
+  }
+  const unexpectedMatches = activeMatches.filter((assignment) => assignment.assignment_id !== assignmentId);
+  if (unexpectedMatches.length) {
+    throw new Error(`Unexpected active assignment records match ${manifest.task_id}: ${unexpectedMatches.map((assignment) => assignment.assignment_id).join(",")}.`);
   }
   assertSafeTaskId(assignmentId);
   const path = assignmentPath(state, assignmentId);
@@ -10876,6 +10898,22 @@ function preflightAssignmentClosureForCleanedManifest(state, manifest, options =
     }
   }
   return { closeable: true, assignmentId };
+}
+
+function activeAssignmentsMatchingManifest(state, manifest) {
+  if (!existsSync(state.assignmentsDir)) return [];
+  const matches = [];
+  for (const name of readdirSync(state.assignmentsDir).filter((entry) => entry.endsWith(".json")).sort()) {
+    const path = join(state.assignmentsDir, name);
+    const assignment = readAssignment(path);
+    validateAssignment(assignment, path);
+    const matchesManifest = assignment.task_id === manifest.task_id ||
+      assignment.source_backlog_item?.item_id === manifest.task_id ||
+      assignment.branch === manifest.branch ||
+      samePath(assignment.worktree_path, manifest.worktree_path);
+    if (matchesManifest && assignment.status !== "closed") matches.push(assignment);
+  }
+  return matches;
 }
 
 function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
@@ -14017,10 +14055,14 @@ function supersededSourceHasPrEvidence(manifest) {
   ].some((value) => value !== null && value !== undefined && String(value).trim() !== "") || ["pr_open", "merged"].includes(String(manifest.status || ""));
 }
 
-function sourceBranchPullRequestProof(branch, cwd) {
+function sourceBranchPullRequestProof(branch, cwd, options = {}) {
   // This is an existence proof, not an inventory: one matching PR is enough
   // to block cleanup, so a one-record bound cannot hide a nonzero result.
-  const result = run("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "number", "--limit", "1"], { cwd });
+  const result = run("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", "number", "--limit", "1"], {
+    cwd,
+    timeout: options.timeout,
+    killSignal: options.killSignal,
+  });
   if (result.code !== 0) {
     return { status: "blocked", count: null, reason: `source branch PR evidence is unavailable: ${result.stderr || result.stdout || "GitHub CLI failed"}` };
   }
@@ -16160,13 +16202,17 @@ function branchSha(branch, cwd = repoRoot) {
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-function originBranchSha(branch, cwd = repoRoot) {
-  return remoteBranchShaAt("origin", branch, cwd, "origin");
+function originBranchSha(branch, cwd = repoRoot, options = {}) {
+  return remoteBranchShaAt("origin", branch, cwd, "origin", options);
 }
 
-function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote) {
+function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote, options = {}) {
   const exactRef = `refs/heads/${branch}`;
-  const result = git(["ls-remote", "--heads", remote, exactRef], { cwd });
+  const result = git(["ls-remote", "--heads", remote, exactRef], {
+    cwd,
+    timeout: options.timeout,
+    killSignal: options.killSignal,
+  });
   if (result.code !== 0) {
     throw new Error(result.stderr || `Could not inspect remote branch: ${label}/${branch}`);
   }
