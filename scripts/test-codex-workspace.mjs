@@ -20474,7 +20474,7 @@ try {
       const before = readFileSync(manifestPath, "utf8");
       const linked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
       assert(linked.code === 0, linked.stderr || linked.stdout);
-      assert(JSON.parse(linked.stdout).blockers.includes("linked_active_assignment_present"), linked.stdout || linked.stderr);
+      assert(JSON.parse(linked.stdout).blockers.some((blocker) => blocker.includes("linked active assignment evidence")), linked.stdout || linked.stderr);
       rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
       const foreign = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-b", "--state-root", fixture.stateRoot]);
       assert(foreign.code === 0, foreign.stderr || foreign.stdout);

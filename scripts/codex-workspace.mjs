@@ -1280,6 +1280,18 @@ function deriveWorkspaceLifecycleState(manifest, lane, context, commitEvidence, 
       nextAction: "run workspace doctor and preserve the manifest until explicit reconciliation evidence exists",
     };
   }
+  if (manifest.status === "pr_open") {
+    return { derivedState: "delivery_attention_required", reasonCode: "pr_open_delivery", reason: "PR is open or delivery evidence remains unverified", nextAction: "audit exact head, checks, reviews, and merge state before delivery action" };
+  }
+  if (manifest.status === "merged") {
+    const cleanupReadiness = lifecycleMergedCleanupReadiness(manifest, state, context);
+    return cleanupReadiness.ready
+      ? { derivedState: "cleanup_ready", reasonCode: "cleanup_preconditions_proven", reason: "existing merged cleanup prerequisites are currently proven", nextAction: "run cleanup-merged --summary-json to obtain the governed cleanup plan before any apply" }
+      : { derivedState: "hold_attention_required", reasonCode: cleanupReadiness.reasonCode, reason: cleanupReadiness.reason, nextAction: "run cleanup-merged --summary-json to inspect and resolve the reported blocker" };
+  }
+  if (manifest.status === "cleanup_partial") {
+    return { derivedState: "hold_attention_required", reasonCode: "cleanup_partial_recovery_required", reason: "partial cleanup requires its existing exact recovery path", nextAction: "run cleanup-merged --summary-json to inspect and resolve the reported blocker" };
+  }
   if (!commitEvidence.known) {
     return {
       derivedState: "hold_attention_required",
@@ -1302,39 +1314,6 @@ function deriveWorkspaceLifecycleState(manifest, lane, context, commitEvidence, 
       reasonCode: lane.dirty ? "dirty_worktree_hold" : commitEvidence.count > 0 ? "local_only_commits_hold" : !lane.owner ? "owner_missing_hold" : "manifest_authority_hold",
       reason: lane.dirty ? "worktree has uncommitted paths" : commitEvidence.count > 0 ? "worktree has local-only commits" : !lane.owner ? "manifest has no owner" : "manifest is authority-blocked",
       nextAction: "preserve current evidence and resolve the bounded hold before any lifecycle mutation",
-    };
-  }
-  if (manifest.status === "merged") {
-    const cleanupReadiness = lifecycleMergedCleanupReadiness(manifest, state, context);
-    if (cleanupReadiness.ready) {
-      return {
-        derivedState: "cleanup_ready",
-        reasonCode: "cleanup_preconditions_proven",
-        reason: "existing merged cleanup prerequisites are currently proven",
-        nextAction: "run cleanup-merged --summary-json to obtain the governed cleanup plan before any apply",
-      };
-    }
-    return {
-      derivedState: "hold_attention_required",
-      reasonCode: cleanupReadiness.reasonCode,
-      reason: cleanupReadiness.reason,
-      nextAction: "run cleanup-merged --summary-json to inspect and resolve the reported blocker",
-    };
-  }
-  if (manifest.status === "cleanup_partial") {
-    return {
-      derivedState: "hold_attention_required",
-      reasonCode: "cleanup_partial_recovery_required",
-      reason: "partial cleanup requires its existing exact recovery path",
-      nextAction: "run cleanup-merged --summary-json to inspect and resolve the reported blocker",
-    };
-  }
-  if (manifest.status === "pr_open") {
-    return {
-      derivedState: "delivery_attention_required",
-      reasonCode: "pr_open_delivery",
-      reason: "PR is open or delivery evidence remains unverified",
-      nextAction: "audit exact head, checks, reviews, and merge state before delivery action",
     };
   }
   const ownerTimestamp = Date.parse(manifest.last_heartbeat_at || manifest.owner_updated_at || manifest.updated_at || manifest.created_at || "");
@@ -9652,26 +9631,21 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   } else {
     add(taskLock.status === "absent", `task_lock_${taskLock.status}`);
   }
-  const linkedAssignments = readAssignments(state).filter(({ assignment }) => assignment.branch === manifest.branch && assignment.status !== "closed");
-  add(linkedAssignments.length === 0, "linked_active_assignment_present");
-  const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet"];
-  const lifecycleEvidenceField = /(?:^|_)(?:pr|delivery|merge|merged|cleanup|supersession|closeout)(?:_|$)/i;
+  const assignmentEvidence = closeNoSourceAssignmentEvidence(state, manifest);
+  add(assignmentEvidence.status === "matched", assignmentEvidence.reason);
+  const prEvidence = worktree ? sourceBranchPullRequestProof(manifest.branch, manifest.worktree_path) : { status: "blocked", count: null, reason: "live PR absence is unavailable without a proven worktree" };
+  add(prEvidence.status === "matched", prEvidence.reason);
+  const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet", "last_verified_at", "last_verification_command", "check_verification_packet"];
+  const lifecycleEvidenceField = /(?:^|_)(?:pr|delivery|merge|merged|cleanup|supersession|closeout|verify|verification)(?:_|$)/i;
   const evidencePresent = [...new Set([
     ...evidenceKeys,
     ...Object.keys(manifest).filter((key) => lifecycleEvidenceField.test(key)),
   ])].filter((key) => manifest[key] !== undefined && manifest[key] !== null && manifest[key] !== false);
   const eventResidue = Array.isArray(manifest.events)
-    ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout)/i.test(type))
+    ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout|verify)/i.test(type))
     : ["events_unreadable"];
   add(evidencePresent.length === 0 && eventResidue.length === 0 && !hasStrictCloseoutEvidence(manifest), evidencePresent.length ? `delivery_or_cleanup_evidence:${evidencePresent.join(",")}` : eventResidue.length ? `delivery_or_cleanup_events:${eventResidue.join(",")}` : "strict_closeout_evidence_present");
-  const authorityDecision = {
-    operation: "close-no-source",
-    status: blockers.length === 0 ? "approved" : "blocked",
-    taskId: manifest.task_id,
-    owner: manifest.owner || null,
-    reasonCode: blockers.length === 0 ? "no_source_proven" : "no_source_proof_blocked",
-    recoveryPath: "preserve retained resources and inspect the no-source receipt before any separate governed cleanup.",
-  };
+  const authorityDecision = shapeAuthorityDecisionEvidence({ operation: "close-no-source", authorityFamily: "metadata-only-no-source-closeout", decision: blockers.length === 0 ? (context.applying ? "applied" : "ready_for_apply") : "blocked", allowed: blockers.length === 0, requiredGates: ["exact owner", "clean registered worktree", "zero local commits", "no linked assignment", "live GitHub PR absence", "no delivery cleanup or verification evidence"], satisfiedGates: blockers.length === 0 ? ["exact owner", "clean registered worktree", "zero local commits", "no linked assignment", "live GitHub PR absence", "no delivery cleanup or verification evidence"] : [], blockedReasons: blockers, stopLines: ["never close on ambiguous assignment, GitHub, or lifecycle evidence", "apply re-proves evidence under the existing manifest lock", "never delete resources"], evidenceRefs: [`task:${manifest.task_id}`, `owner:${manifest.owner || "unknown"}`, "github:no-pr"], nextSafeAction: blockers.length === 0 ? "Apply only with a bounded reason." : "Preserve resources and resolve the listed blockers.", recoveryPath: "preserve retained resources and inspect the no-source receipt before any separate governed cleanup." });
   return {
     schemaVersion: "workspace-close-no-source/v0",
     taskId: manifest.task_id,
@@ -9682,7 +9656,8 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
       worktree: { registered: Boolean(worktree), clean: gitStatus ? !gitStatus.any : false },
       base: { known: Boolean(commits.known), localOnlyCommits: commits.count ?? null, reasonCode: commits.reasonCode || null },
       taskLock: { status: taskLock.status, reason: taskLock.reason || null, owner: taskLock.metadata?.owner || null, generation: taskLock.generation || null, intentClear: taskLock.status === "absent" || taskLock.status === "active" },
-      linkedAssignments: linkedAssignments.map(({ assignment }) => assignment.assignment_id),
+      assignments: assignmentEvidence,
+      pullRequests: prEvidence,
       evidenceKeys: evidencePresent,
       eventResidue,
       preLockEvidence: context.preLockEvidence || null,
@@ -9690,6 +9665,21 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
     authorityDecision,
     mutation: "none; dry-run eligibility only",
   };
+}
+
+function closeNoSourceAssignmentEvidence(state, manifest) {
+  if (!existsSync(state.assignmentsDir)) return manifest.source_assignment_id ? { status: "blocked", reason: "source assignment record is missing" } : { status: "matched", ids: [] };
+  const ids = [];
+  try {
+    for (const name of readdirSync(state.assignmentsDir).filter((entry) => entry.endsWith(".json")).sort()) {
+      const assignment = readAssignment(join(state.assignmentsDir, name));
+      validateAssignment(assignment, join(state.assignmentsDir, name));
+      const matches = assignment.assignment_id === manifest.source_assignment_id || assignment.task_id === manifest.task_id || assignment.source_backlog_item?.item_id === manifest.task_id || assignment.branch === manifest.branch || samePath(assignment.worktree_path, manifest.worktree_path);
+      if (matches && assignment.status !== "closed") ids.push(assignment.assignment_id);
+    }
+  } catch (error) { return { status: "blocked", reason: `assignment inventory is ambiguous: ${safeMetadataText(error.message || error, 200)}` }; }
+  if (manifest.source_assignment_id && !ids.includes(manifest.source_assignment_id)) return { status: "blocked", reason: "source assignment record is missing or closed" };
+  return ids.length ? { status: "blocked", ids, reason: `linked active assignment evidence: ${ids.join(",")}` } : { status: "matched", ids: [] };
 }
 
 function assertMissingWorktreeCloseoutMainCheckout() {
