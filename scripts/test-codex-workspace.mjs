@@ -20493,6 +20493,107 @@ try {
     }
   });
 
+  test("close-no-source rejects syntax and retained lifecycle proof blockers without mutation", () => {
+    const scenarios = [
+      {
+        name: "retained event",
+        prepare: ({ manifest }) => { manifest.events.push({ type: "pr_open" }); },
+        expected: "delivery_or_cleanup_events:pr_open",
+      },
+      {
+        name: "missing worktree",
+        prepare: ({ fixture }) => { rmSync(fixture.worktree, { recursive: true, force: true }); },
+        expected: "worktree_unproven:",
+      },
+      {
+        name: "unregistered worktree",
+        prepare: ({ fixture, manifest }) => {
+          const unregistered = join(fixture.stateRoot, "worktrees", "unregistered-no-source");
+          mkdirSync(unregistered, { recursive: true });
+          manifest.worktree_path = unregistered;
+        },
+        expected: "worktree_unproven:",
+      },
+      {
+        name: "local-only commit",
+        fixtureOptions: { diverged: true },
+        expected: "local_only_commits_present",
+      },
+      {
+        name: "unresolved base",
+        prepare: ({ manifest }) => { manifest.base_ref = "refs/heads/no-source-missing-base"; },
+        expected: "base_ref_unresolved_hold",
+      },
+      {
+        name: "active task lock",
+        prepare: ({ fixture }) => { writeFixtureTaskLock(fixture, fixtureTaskLockMetadata(fixture.taskId)); },
+        expected: "task_lock_legacy_retained",
+      },
+      {
+        name: "ambiguous task lock",
+        prepare: ({ fixture }) => { writeFileSync(join(fixture.stateRoot, "tasks", `${fixture.taskId}.lock`), "{}\n"); },
+        expected: "task_lock_legacy_retained",
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createIntegratedCleanupFixture({ taskId: `no-source-${scenario.name.replace(/[^a-z]+/gi, "-")}`, ...(scenario.fixtureOptions || {}) });
+      try {
+        const { manifestPath, manifest } = prepareNoSourceFixture(fixture);
+        scenario.prepare?.({ fixture, manifest });
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        const refs = refSnapshot(fixture.root);
+        const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+        assert(result.code === 0, `${scenario.name}: ${result.stderr || result.stdout}`);
+        assert(JSON.parse(result.stdout).blockers.some((blocker) => blocker.includes(scenario.expected)), `${scenario.name}: ${result.stdout || result.stderr}`);
+        assert(readFileSync(manifestPath, "utf8") === before, `${scenario.name}: preview mutated manifest`);
+        assert(existsSync(fixture.worktree) === (scenario.name !== "missing worktree"), `${scenario.name}: worktree changed`);
+        assert(branchExists(fixture.root, fixture.branch), `${scenario.name}: branch changed`);
+        assert(refSnapshot(fixture.root) === refs, `${scenario.name}: refs changed`);
+      } finally {
+        cleanupIntegratedCleanupFixture(fixture);
+      }
+    }
+
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-invalid-command" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const before = readFileSync(manifestPath, "utf8");
+      const refs = refSnapshot(fixture.root);
+      for (const args of [
+        ["--apply", "--reason", "short"],
+        ["--apply=1", "--reason", "sufficient bounded closeout reason"],
+        ["--summary-json", "--bogus"],
+        ["--apply", "--summary-json", "--reason", "sufficient bounded closeout reason"],
+      ]) {
+        const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, ...args, "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+        assert(result.code !== 0, `invalid command unexpectedly succeeded: ${args.join(" ")}`);
+        assert(readFileSync(manifestPath, "utf8") === before, `invalid command mutated manifest: ${args.join(" ")}`);
+        assert(refSnapshot(fixture.root) === refs, `invalid command changed refs: ${args.join(" ")}`);
+      }
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source re-proves retained evidence after its lock is acquired", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-reproof" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_MODE: "1", CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_MUTATE_BEFORE_LOCK: "1" },
+      });
+      assert(result.code !== 0, result.stderr || result.stdout);
+      const manifest = readJson(manifestPath);
+      assert(manifest.status === "active", JSON.stringify(manifest));
+      assert(manifest.events.some((event) => event.type === "cleanup_started"), JSON.stringify(manifest.events));
+      assert(existsSync(fixture.worktree), "late evidence re-proof removed worktree");
+      assert(branchExists(fixture.root, fixture.branch), "late evidence re-proof removed branch");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("lifecycle-health marks a merged lane cleanup-ready only after existing cleanup preconditions are proven", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -20519,6 +20620,15 @@ try {
   console.log(`WORKSPACE_TEST_PROFILE_SUMMARY=${JSON.stringify({ profile: workspaceTestProfile, executedTestCount })}`);
 } finally {
   rmSync(stateRoot, { recursive: true, force: true });
+}
+
+function prepareNoSourceFixture(fixture) {
+  const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
+  const manifest = readJson(manifestPath);
+  delete manifest.source_assignment_id;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
+  return { manifestPath, manifest };
 }
 
 function run(args, options = {}) {
