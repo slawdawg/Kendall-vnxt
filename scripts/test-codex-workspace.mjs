@@ -20501,6 +20501,27 @@ try {
     }
   });
 
+  test("close-no-source reads source and base refs from one coherent remote snapshot", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-coherent-remote-snapshot" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const invocationLog = join(fixture.root, "coherent-remote-snapshot.log");
+      installFixtureRemoteSnapshotLogger(fixture, invocationLog);
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      const invocations = readFileSync(invocationLog, "utf8").trim().split(/\r?\n/).filter(Boolean);
+      assert(invocations.length === 1, `remote source/base proof was not a single snapshot: ${invocations.join("\\n")}`);
+      assert(invocations[0].includes(`refs/heads/${fixture.branch}`), invocations[0]);
+      assert(invocations[0].includes(`refs/heads/${fixture.baseBranch}`), invocations[0]);
+      assert(readFileSync(manifestPath, "utf8") === before, "coherent remote snapshot preview mutated manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("verify-no-source records only a task-bound scoped receipt for an otherwise empty lane", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-verification-task", baseBranch: "dev" });
     try {
@@ -20802,11 +20823,11 @@ try {
       rmSync(deadlineMarker, { force: true });
       const finalCounterPath = join(fixture.fakeBin, "final-external-probe-count");
       const finalResult = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
-        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: finalCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "8" },
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: finalCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "5" },
       });
       assert(finalResult.code !== 0, `final external proof deadline unexpectedly allowed closeout: ${finalResult.stdout || finalResult.stderr}`);
       assert(finalResult.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), finalResult.stderr || finalResult.stdout);
-      assert(Number(readFileSync(finalCounterPath, "utf8")) === 9, `final external proof did not reach the post-command deadline guard: ${finalResult.stdout || finalResult.stderr}`);
+      assert(Number(readFileSync(finalCounterPath, "utf8")) === 6, `final external proof did not reach the post-command deadline guard: ${finalResult.stdout || finalResult.stderr}`);
       assert(readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`)).status === "active", "final external proof deadline wrote durable closeout state");
     } finally {
       cleanupIntegratedCleanupFixture(fixture);
@@ -21079,7 +21100,9 @@ try {
       assert(source.includes("context.lifecycleGithubDeadlineAt = lifecycleReportMonotonicNow() + BigInt(lifecycleReportGithubBudgetMs) * 1_000_000n;"), "lifecycle GitHub deadline seam changed");
       assert(source.includes("const remainingNs = context.lifecycleGithubDeadlineAt - lifecycleReportMonotonicNow();"), "lifecycle GitHub clock seam changed");
       assert(source.includes("const githubTimeout = lifecycleGithubTimeout(context);"), "lifecycle GitHub timeout seam changed");
-      assert(source.includes('beforeSpawn: () => lifecycleGithubTimeout(context) >= githubTimeout,'), "lifecycle GitHub pre-spawn deadline seam changed");
+      assert(source.includes("const githubLaunchTimeout = Math.max(1, githubTimeout - 1);"), "lifecycle GitHub launch-timeout seam changed");
+      assert(source.includes("timeout: githubLaunchTimeout,"), "lifecycle GitHub launch timeout must be bounded by the aggregate deadline");
+      assert(source.includes('beforeSpawn: () => lifecycleGithubTimeout(context) >= githubLaunchTimeout,'), "lifecycle GitHub pre-spawn deadline seam changed");
       assert(source.includes("beforeSpawn: options.beforeSpawn,"), "prView must forward the lifecycle GitHub pre-spawn guard");
       writeFileSync(
         fixture.script,
@@ -21089,7 +21112,10 @@ try {
             "const lifecycleReportGithubBudgetMs = 15_000;",
             [
               "const lifecycleReportGithubBudgetMs = 250;",
-              "const lifecycleFixtureNowValues = [0n, 0n, 0n, 250_500_000n, 250_500_000n];",
+              // The pre-spawn read is one millisecond later than the initial
+              // floored timeout read. A strict comparison against the stale
+              // timeout would reject this still-budgeted request.
+              "const lifecycleFixtureNowValues = [0n, 0n, 1_000_000n, 250_500_000n, 250_500_000n];",
               "let lifecycleFixtureNowIndex = 0;",
               "const lifecycleFixtureNow = () => lifecycleFixtureNowValues[Math.min(lifecycleFixtureNowIndex++, lifecycleFixtureNowValues.length - 1)];",
             ].join("\n"),
@@ -22600,6 +22626,26 @@ function installFixtureOriginIdentityProxy(root, fakeBin, originUrls = ["git@git
   );
   chmodSync(fakeGit, 0o755);
   return fakeGit;
+}
+
+function installFixtureRemoteSnapshotLogger(fixture, invocationLog) {
+  const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+  const fakeGit = join(fixture.fakeBin, "git");
+  writeFileSync(
+    fakeGit,
+    [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === '--all' && args[4] === 'origin') { console.log('git@github.com:slawdawg/Kendall-vnxt.git'); process.exit(0); }",
+      `if (args[0] === "ls-remote") appendFileSync(${JSON.stringify(invocationLog)}, \`${"${args.join(\" \")}"}\\n\`);`,
+      `const result = spawnSync("git", args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: "inherit" });`,
+      "process.exit(result.status ?? 1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGit, 0o755);
 }
 
 function installFixtureGitProxy(fixture, failureCondition, failureMessage, options = {}) {

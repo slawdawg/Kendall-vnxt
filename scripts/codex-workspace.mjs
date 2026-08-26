@@ -1418,10 +1418,15 @@ function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
         reason: "bounded GitHub evidence budget is exhausted for this lifecycle report",
       };
     }
+    // lifecycleGithubTimeout floors its monotonic remainder to milliseconds.
+    // Reserve one millisecond so the pre-spawn check can tolerate ordinary
+    // elapsed-time granularity while still requiring the exact launched
+    // process timeout to fit within the live aggregate deadline.
+    const githubLaunchTimeout = Math.max(1, githubTimeout - 1);
     const pr = prView(manifest, null, {
-      timeout: githubTimeout,
+      timeout: githubLaunchTimeout,
       killSignal: "SIGKILL",
-      beforeSpawn: () => lifecycleGithubTimeout(context) >= githubTimeout,
+      beforeSpawn: () => lifecycleGithubTimeout(context) >= githubLaunchTimeout,
     });
     if (!pr?.mergedAt) return { ready: false, reasonCode: "cleanup_pr_merged_unproven", reason: "live merged PR evidence is unavailable" };
     if (pr.baseRefName && pr.baseRefName !== manifest.base_branch) return { ready: false, reasonCode: "cleanup_pr_base_mismatch", reason: "live PR base does not match the manifest base" };
@@ -10013,23 +10018,17 @@ function closeNoSourceExternalEvidence(manifest, worktreeProven, options = {}) {
 }
 
 function closeNoSourceRemoteBranchEvidence(manifest, options = {}) {
-  const branchProbeOptions = noSourceCloseoutRemainingProbeOptions(options);
-  if (!branchProbeOptions) return { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: "no-source external proof deadline exhausted before remote source branch proof" };
-  let remoteSha;
+  const snapshotProbeOptions = noSourceCloseoutRemainingProbeOptions(options);
+  if (!snapshotProbeOptions) return { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: "no-source external proof deadline exhausted before remote source/base snapshot proof" };
+  let remoteSnapshot;
   try {
-    remoteSha = originBranchSha(manifest.branch, manifest.worktree_path, branchProbeOptions) || null;
+    remoteSnapshot = originBranchSnapshot([manifest.branch, manifest.base_branch], manifest.worktree_path, snapshotProbeOptions);
   } catch (error) {
     return { status: "blocked", state: "unavailable", sha: null, baseSha: null, reason: `remote branch evidence is unavailable: ${safeMetadataText(error.message || error, 240)}` };
   }
+  const remoteSha = remoteSnapshot[manifest.branch] || null;
   if (!remoteSha) return { status: "matched", state: "absent", sha: null, baseSha: null, reason: "remote branch is absent" };
-  const baseProbeOptions = noSourceCloseoutRemainingProbeOptions(options);
-  if (!baseProbeOptions) return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: "no-source external proof deadline exhausted before remote base branch proof" };
-  let baseSha;
-  try {
-    baseSha = originBranchSha(manifest.base_branch, manifest.worktree_path, baseProbeOptions) || null;
-  } catch (error) {
-    return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: `remote base branch evidence is unavailable: ${safeMetadataText(error.message || error, 240)}` };
-  }
+  const baseSha = remoteSnapshot[manifest.base_branch] || null;
   if (!baseSha) return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: "remote base branch evidence is unavailable" };
   if (options.expectedBaseSha && baseSha !== options.expectedBaseSha) {
     return { status: "blocked", state: "base_changed_since_verification", sha: remoteSha, baseSha, reason: "remote base no longer matches the scoped verification checkout" };
@@ -16395,6 +16394,31 @@ function branchSha(branch, cwd = repoRoot) {
 
 function originBranchSha(branch, cwd = repoRoot, options = {}) {
   return remoteBranchShaAt("origin", branch, cwd, "origin", options);
+}
+
+function originBranchSnapshot(branches, cwd = repoRoot, options = {}) {
+  const uniqueBranches = [...new Set(branches.map((branch) => String(branch || "").trim()).filter(Boolean))];
+  if (uniqueBranches.length === 0) throw new Error("Could not inspect an empty remote branch snapshot");
+  const refs = uniqueBranches.map((branch) => branch === "HEAD" ? "HEAD" : `refs/heads/${branch}`);
+  const result = git(["ls-remote", "origin", ...refs], {
+    cwd,
+    timeout: options.timeout,
+    killSignal: options.killSignal,
+    beforeSpawn: () => noSourceCloseoutRemainingProbeOptions(options) !== null,
+  });
+  if (result.errorCode === "EDEADLINE") throw new Error("no-source external proof deadline exhausted immediately before coherent remote source/base snapshot");
+  if (result.code !== 0) throw new Error(result.stderr || "Could not inspect remote source/base snapshot");
+  const branchByRef = new Map(uniqueBranches.map((branch) => [branch === "HEAD" ? "HEAD" : `refs/heads/${branch}`, branch]));
+  const snapshot = Object.fromEntries(uniqueBranches.map((branch) => [branch, null]));
+  for (const row of result.stdout.trim().split("\n").filter(Boolean)) {
+    const [sha, ref] = row.split(/\s+/);
+    const branch = branchByRef.get(ref);
+    if (!branch) continue;
+    if (!exactGitObjectIdOrNull(sha)) throw new Error(`Could not exactly inspect remote branch snapshot ref: ${ref}`);
+    if (snapshot[branch] && snapshot[branch] !== sha) throw new Error(`Could not uniquely inspect remote branch snapshot ref: ${ref}`);
+    snapshot[branch] = sha;
+  }
+  return snapshot;
 }
 
 function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote, options = {}) {
