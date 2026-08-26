@@ -20505,10 +20505,60 @@ try {
       assert(manifest.no_source_verification_receipt?.resolvedProfile === "check-fast", JSON.stringify(manifest));
       assert(manifest.no_source_verification_receipt?.command === "pnpm run check:fast", JSON.stringify(manifest));
       assert(manifest.no_source_verification_receipt?.proof?.base?.sha === manifest.last_verification_result?.baseSha, JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.verifiedHeadSha === runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout, JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.verifiedHeadSha === manifest.last_verification_result?.verifiedHeadSha, JSON.stringify(manifest));
       assert(manifest.events.some((event) => event.type === "verified"), JSON.stringify(manifest.events));
       const ready = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
       assert(ready.code === 0, ready.stderr || ready.stdout);
       assert(JSON.parse(ready.stdout).ready === true, ready.stdout || ready.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("verify-no-source rejects a stale checkout and close-no-source rejects a changed receipt head", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-head-binding", baseBranch: "dev" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture, { verification: false });
+      installFixtureNoSourceVerificationPnpm(fixture);
+      const staleHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      commitFile(fixture.root, "advanced-base.txt", "advanced base\n", "advance base past managed checkout");
+      const advancedBase = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["push", "-q", "origin", "dev"]);
+      runGit(fixture.worktree, ["fetch", "-q", "origin", "dev"]);
+      assert(runGit(fixture.worktree, ["rev-parse", "origin/dev"]).stdout === advancedBase, "fixture did not advance the managed base ref");
+      assert(staleHead !== advancedBase, "fixture did not retain the stale checkout HEAD");
+
+      const before = readFileSync(manifestPath, "utf8");
+      const stale = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(stale.code !== 0, stale.stderr || stale.stdout);
+      assert(stale.stderr.includes("checkout_head_does_not_match_base_hold"), stale.stderr || stale.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "stale checkout verification wrote a receipt");
+
+      const manifest = readJson(manifestPath);
+      manifest.no_source_verification_receipt = {
+        schemaVersion: 1,
+        taskId: manifest.task_id,
+        profile: "scoped",
+        resolvedProfile: "check-fast",
+        command: "pnpm run check:fast",
+        exitCode: 0,
+        baseRef: manifest.base_ref,
+        baseSha: advancedBase,
+        verifiedHeadSha: advancedBase,
+        verifiedAt: "2026-08-25T00:00:00.000Z",
+        proof: {
+          worktree: { registered: true, clean: true, branch: manifest.branch, headSha: advancedBase },
+          base: { ref: manifest.base_ref, sha: advancedBase, localOnlyCommits: 0 },
+        },
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const close = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(close.code === 0, close.stderr || close.stdout);
+      const packet = JSON.parse(close.stdout);
+      assert(packet.ready === false, close.stdout || close.stderr);
+      assert(packet.blockers.includes("task-bound no-source scoped verification receipt is incomplete or does not match the current proof"), close.stdout || close.stderr);
+      assert(readJson(manifestPath).status === "active", "receipt head mismatch mutated the manifest");
     } finally {
       cleanupIntegratedCleanupFixture(fixture);
     }
@@ -20604,59 +20654,117 @@ try {
     }
   });
 
-  test("close-no-source bounds GitHub and remote probes while the assignment index is locked", () => {
-    const scenarios = ["github", "remote"];
-    for (const scenario of scenarios) {
-      const fixture = createIntegratedCleanupFixture({ taskId: `no-source-bounded-${scenario}` });
-      try {
-        prepareNoSourceFixture(fixture);
-        const source = readFileSync(fixture.script, "utf8");
-        assert(source.includes("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;"), "no-source external timeout seam changed");
-        writeFileSync(fixture.script, source.replace("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;", "const noSourceCloseoutExternalRequestTimeoutMs = 100;"));
-        const counterPath = join(fixture.fakeBin, `${scenario}-probe-count`);
-        if (scenario === "github") {
-          writeFileSync(join(fixture.fakeBin, "gh"), [
-            `#!${process.execPath}`,
-            "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
-            "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
-            "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
-            "writeFileSync(counterPath, String(count + 1));",
-            "if (count > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
-            "console.log('[]');",
-            "",
-          ].join("\n"));
-          chmodSync(join(fixture.fakeBin, "gh"), 0o755);
-        } else {
-          const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
-          writeFileSync(join(fixture.fakeBin, "git"), [
-            `#!${process.execPath}`,
-            "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
-            "import { spawnSync } from 'node:child_process';",
-            "const args = process.argv.slice(2);",
-            "if (args[0] === 'ls-remote') {",
-            "  const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
-            "  const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
-            "  writeFileSync(counterPath, String(count + 1));",
-            "  if (count >= 2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
+  test("close-no-source shares one external proof deadline across locked proof and final reproof", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-bounded-external-proof" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;"), "no-source external timeout seam changed");
+      const monotonicClock = [
+        "function noSourceCloseoutMonotonicNow() {",
+        "  return process.hrtime.bigint();",
+        "}",
+      ].join("\n");
+      assert(source.includes(monotonicClock), "no-source monotonic proof clock seam changed");
+      const deadlineMarker = join(fixture.fakeBin, "external-proof-deadline-expired");
+      writeFileSync(
+        fixture.script,
+        source
+          .replace("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;", "const noSourceCloseoutExternalRequestTimeoutMs = 500;")
+          .replace(monotonicClock, [
+            "function noSourceCloseoutMonotonicNow() {",
+            "  const marker = process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER;",
+            "  return marker && existsSync(marker) ? 2_000_000_000n : 1_000_000_000n;",
             "}",
-            `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
-            "process.exit(result.status ?? 1);",
-            "",
-          ].join("\n"));
-          chmodSync(join(fixture.fakeBin, "git"), 0o755);
-        }
+          ].join("\n")),
+      );
+      const counterPath = join(fixture.fakeBin, "external-probe-count");
+      const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "console.log('[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+      writeFileSync(join(fixture.fakeBin, "git"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "import { spawnSync } from 'node:child_process';",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === 'ls-remote') {",
+        "  const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "  const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "  writeFileSync(counterPath, String(count + 1));",
+        "  if (count === Number(process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT)) {",
+        "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);",
+        "    writeFileSync(process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER, 'expired');",
+        "  }",
+        "}",
+        `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
+        "process.exit(result.status ?? 1);",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "git"), 0o755);
 
-        const started = Date.now();
-        const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
-          env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath },
-        });
-        const elapsedMs = Date.now() - started;
-        assert(result.code !== 0, `${scenario} probe unexpectedly allowed closeout: ${result.stdout || result.stderr}`);
-        assert(elapsedMs < 3_000, `${scenario} probe held the assignment index too long: ${elapsedMs}ms`);
-        assert(!existsSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock")), `${scenario} timeout left the assignment index locked`);
-      } finally {
-        cleanupIntegratedCleanupFixture(fixture);
-      }
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "5" },
+      });
+      assert(result.code !== 0, `external proof deadline unexpectedly allowed closeout: ${result.stdout || result.stderr}`);
+      assert(result.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), result.stderr || result.stdout);
+      assert(Number(readFileSync(counterPath, "utf8")) === 6, `final reproof started a probe after the aggregate deadline: ${result.stdout || result.stderr}`);
+      assert(!existsSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock")), "external proof deadline left the assignment index locked");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+      assert(manifest.status === "active" && !manifest.no_source_closeout, "external proof deadline wrote durable closeout state");
+
+      rmSync(deadlineMarker, { force: true });
+      const finalCounterPath = join(fixture.fakeBin, "final-external-probe-count");
+      const finalResult = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: finalCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "8" },
+      });
+      assert(finalResult.code !== 0, `final external proof deadline unexpectedly allowed closeout: ${finalResult.stdout || finalResult.stderr}`);
+      assert(finalResult.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), finalResult.stderr || finalResult.stdout);
+      assert(Number(readFileSync(finalCounterPath, "utf8")) === 9, `final external proof did not reach the post-command deadline guard: ${finalResult.stdout || finalResult.stderr}`);
+      assert(readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`)).status === "active", "final external proof deadline wrote durable closeout state");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source releases its locks after a bounded external proof timeout", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-bounded-github-timeout" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;"), "no-source external timeout seam changed");
+      writeFileSync(fixture.script, source.replace("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;", "const noSourceCloseoutExternalRequestTimeoutMs = 500;"));
+      const counterPath = join(fixture.fakeBin, "github-timeout-probe-count");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "if (count >= 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
+        "console.log('[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath },
+      });
+      assert(result.code !== 0, `external proof timeout unexpectedly allowed closeout: ${result.stdout || result.stderr}`);
+      assert(result.stderr.includes("ETIMEDOUT"), result.stderr || result.stdout);
+      assert(Number(readFileSync(counterPath, "utf8")) === 2, `unexpected external probe count after timeout: ${result.stdout || result.stderr}`);
+      assert(!existsSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock")), "external proof timeout left the assignment index locked");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+      assert(manifest.status === "active" && !manifest.no_source_closeout, "external proof timeout wrote durable closeout state");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
     }
   });
 
@@ -20969,6 +21077,7 @@ function prepareNoSourceFixture(fixture, options = {}) {
   delete manifest.source_assignment_id;
   if (options.verification !== false) {
     const baseSha = runGit(fixture.worktree, ["rev-parse", manifest.base_ref]).stdout;
+    const verifiedHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
     const verifiedAt = "2026-08-25T00:00:00.000Z";
     manifest.no_source_verification_receipt = {
       schemaVersion: 1,
@@ -20979,9 +21088,10 @@ function prepareNoSourceFixture(fixture, options = {}) {
       exitCode: 0,
       baseRef: manifest.base_ref,
       baseSha,
+      verifiedHeadSha,
       verifiedAt,
       proof: {
-        worktree: { registered: true, clean: true, branch: manifest.branch },
+        worktree: { registered: true, clean: true, branch: manifest.branch, headSha: verifiedHeadSha },
         base: { ref: manifest.base_ref, sha: baseSha, localOnlyCommits: 0 },
       },
     };
