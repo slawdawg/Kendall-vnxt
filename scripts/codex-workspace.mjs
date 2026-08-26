@@ -1234,7 +1234,7 @@ function buildWorkspaceLifecycleHealth(options = {}, input = {}) {
     currentOwner: input.context?.currentOwner || currentLaneOwner(options),
     generatedAt,
     staleAfterSeconds,
-    lifecycleGithubDeadlineAt: Number.isFinite(input.context?.lifecycleGithubDeadlineAt)
+    lifecycleGithubDeadlineAt: typeof input.context?.lifecycleGithubDeadlineAt === "bigint"
       ? input.context.lifecycleGithubDeadlineAt
       : null,
   };
@@ -1277,8 +1277,8 @@ function lifecycleHealthRecordRow(record, context, state) {
 
 function invalidManifestLifecycleHealthRow(record) {
   return {
-    taskId: null,
-    manifestFile: record.path ? basename(record.path) : null,
+    taskId: safeLifecycleTextIdentity(record?.manifest?.task_id),
+    manifestFile: safeLifecycleTextIdentity(record?.path ? basename(record.path) : null),
     observedStatus: "invalid",
     owner: null,
     lastHeartbeatAt: null,
@@ -1418,7 +1418,11 @@ function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
         reason: "bounded GitHub evidence budget is exhausted for this lifecycle report",
       };
     }
-    const pr = prView(manifest, null, { timeout: githubTimeout, killSignal: "SIGKILL" });
+    const pr = prView(manifest, null, {
+      timeout: githubTimeout,
+      killSignal: "SIGKILL",
+      beforeSpawn: () => lifecycleGithubTimeout(context) >= githubTimeout,
+    });
     if (!pr?.mergedAt) return { ready: false, reasonCode: "cleanup_pr_merged_unproven", reason: "live merged PR evidence is unavailable" };
     if (pr.baseRefName && pr.baseRefName !== manifest.base_branch) return { ready: false, reasonCode: "cleanup_pr_base_mismatch", reason: "live PR base does not match the manifest base" };
     const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path, state, target);
@@ -1442,12 +1446,20 @@ function lifecycleMergedCleanupReadiness(manifest, state, context = {}) {
 }
 
 function lifecycleGithubTimeout(context = {}) {
-  if (!Number.isFinite(context.lifecycleGithubDeadlineAt)) {
-    context.lifecycleGithubDeadlineAt = Date.now() + lifecycleReportGithubBudgetMs;
+  if (typeof context.lifecycleGithubDeadlineAt !== "bigint") {
+    context.lifecycleGithubDeadlineAt = lifecycleReportMonotonicNow() + BigInt(lifecycleReportGithubBudgetMs) * 1_000_000n;
   }
-  const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();
-  if (!Number.isFinite(remaining) || remaining <= 0) return 0;
+  const remainingNs = context.lifecycleGithubDeadlineAt - lifecycleReportMonotonicNow();
+  // Process timeouts are integer milliseconds. Do not round a fractional
+  // remainder up, because that could launch a request after the aggregate
+  // deadline has already passed.
+  if (remainingNs < 1_000_000n) return 0;
+  const remaining = Number(remainingNs / 1_000_000n);
   return Math.max(1, Math.min(lifecycleReportGithubRequestTimeoutMs, remaining));
+}
+
+function lifecycleReportMonotonicNow() {
+  return process.hrtime.bigint();
 }
 
 function buildWorkspaceLifecycleHealthSummary(packet) {
@@ -1488,7 +1500,8 @@ function printWorkspaceLifecycleHealth(packet) {
   }
   console.log("- Rows:");
   for (const row of packet.rows) {
-    console.log(`  - ${row.taskId} | observed=${row.observedStatus} | state=${row.derivedState} | reason_code=${row.reasonCode} | next=${row.nextAction}`);
+    const identity = row.taskId || row.manifestFile || "unknown";
+    console.log(`  - ${identity} | observed=${row.observedStatus} | state=${row.derivedState} | reason_code=${row.reasonCode} | next=${row.nextAction}`);
   }
 }
 
@@ -7769,6 +7782,11 @@ function safeMetadataText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function safeLifecycleTextIdentity(value) {
+  const text = safeMetadataText(value, 160);
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(text) ? text : null;
+}
+
 function evidenceText(value, maxLength) {
   return typeof value === "string" ? safeMetadataText(value, maxLength) : "";
 }
@@ -9628,7 +9646,7 @@ function verifyNoSource(argv) {
     lock.heartbeat();
     runBoundedVerification(lockedPlan, {
       cwd: manifest.worktree_path,
-      diagnosticContext: { state, taskId: manifest.task_id, lockToken: lock.token },
+      diagnosticContext: { state, taskId: manifest.task_id, lockToken: lock.token, operation: "verify-no-source" },
     });
     lock.heartbeat();
     const finalPacket = buildNoSourceVerificationPacket(verificationRecord, state, options);
@@ -9732,8 +9750,10 @@ function closeNoSource(argv) {
   if (options.apply && !reason) throw new Error("close-no-source --apply requires --reason with at least 10 non-whitespace characters.");
   const state = workspaceState(options);
   const record = findCloseNoSourceManifestByExactTaskId(state, taskId);
-  const externalProofBudget = options.apply ? createNoSourceCloseoutExternalProofBudget() : null;
-  const packet = buildCloseNoSourcePacket(record, state, { options, reason, externalProofBudget });
+  // Bound pre-lock provider reads, but do not let them consume the separate
+  // aggregate deadline that protects the two proofs while local locks are held.
+  const initialExternalProofBudget = createNoSourceCloseoutExternalProofBudget();
+  const packet = buildCloseNoSourcePacket(record, state, { options, reason, externalProofBudget: initialExternalProofBudget });
   if (options.summaryJson) {
     console.log(JSON.stringify(packet, null, 2));
     return;
@@ -9761,7 +9781,7 @@ function closeNoSource(argv) {
       preLockEvidence: packet.proof.taskLock,
       heldLockToken: token,
       heldLockGeneration: generation,
-      externalProofBudget,
+      externalProofBudget: createNoSourceCloseoutExternalProofBudget(),
     };
     const lockedPacket = buildCloseNoSourcePacket(lockedRecord, state, closeoutContext);
     if (!lockedPacket.ready) throw new Error(`No-source closeout changed under lock: ${lockedPacket.blockers.join("; ")}`);
@@ -9770,8 +9790,13 @@ function closeNoSource(argv) {
     // Re-read both sources at the last possible point before the durable
     // closeout write, under the local locks that serialize protocol-owned work.
     heartbeat();
+    const finalVerification = closeNoSourceVerificationEvidence(manifest);
+    if (finalVerification.status !== "matched") {
+      throw new Error(`No-source closeout local evidence changed before final external proof: ${finalVerification.reason}`);
+    }
     const finalExternalEvidence = closeNoSourceExternalEvidence(manifest, true, {
       externalProofBudget: closeoutContext.externalProofBudget,
+      expectedBaseSha: finalVerification.baseSha,
       killSignal: "SIGKILL",
     });
     if (!finalExternalEvidence.ready) {
@@ -9866,15 +9891,15 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   if (context.applying && !context.externalProofBudget) {
     context.externalProofBudget = createNoSourceCloseoutExternalProofBudget();
   }
+  const verification = closeNoSourceVerificationEvidence(manifest);
   const externalProbeOptions = context.externalEvidence
     ? null
     : context.externalProofBudget
-    ? { externalProofBudget: context.externalProofBudget, killSignal: "SIGKILL" }
+    ? { externalProofBudget: context.externalProofBudget, expectedBaseSha: verification.baseSha || null, killSignal: "SIGKILL" }
     : {};
   const externalEvidence = context.externalEvidence || closeNoSourceExternalEvidence(manifest, Boolean(worktree), externalProbeOptions);
   const { pullRequests: prEvidence, remoteBranch } = externalEvidence;
   for (const blocker of externalEvidence.blockers) blockers.push(blocker);
-  const verification = closeNoSourceVerificationEvidence(manifest);
   add(verification.status === "matched", verification.reason);
   const evidenceKeys = ["pr_url", "pr_number", "pr_delivery_head_sha", "pr_delivery_evidence", "pr_gate_evidence", "delivery_subagent_audit", "merged_at", "pr_merged_at", "merged_pr_reconciliation", "cleanup_started_at", "cleanup_completed_at", "cleanup_target_evidence", "cleanup_authority", "cleanup_authority_decision", "cleanup_supersession_evidence", "supersession_closeout_evidence", "dirty_superseded_preservation", "dirty_superseded_snapshot_intent", "authority_decisions", "lane_evidence_packet", "check_verification_packet"];
   const lifecycleEvidenceField = /(?:^|_)(?:pr|delivery|merge|merged|cleanup|supersession|closeout|verify|verification)(?:_|$)/i;
@@ -10006,6 +10031,9 @@ function closeNoSourceRemoteBranchEvidence(manifest, options = {}) {
     return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: `remote base branch evidence is unavailable: ${safeMetadataText(error.message || error, 240)}` };
   }
   if (!baseSha) return { status: "blocked", state: "unavailable", sha: remoteSha, baseSha: null, reason: "remote base branch evidence is unavailable" };
+  if (options.expectedBaseSha && baseSha !== options.expectedBaseSha) {
+    return { status: "blocked", state: "base_changed_since_verification", sha: remoteSha, baseSha, reason: "remote base no longer matches the scoped verification checkout" };
+  }
   if (remoteSha !== baseSha) return { status: "blocked", state: "different_from_base", sha: remoteSha, baseSha, reason: "remote branch contains source or differs from the current remote base" };
   return { status: "matched", state: "exact_base", sha: remoteSha, baseSha, reason: "remote branch exactly matches the current remote base" };
 }
@@ -16370,8 +16398,11 @@ function originBranchSha(branch, cwd = repoRoot, options = {}) {
 }
 
 function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote, options = {}) {
-  const exactRef = `refs/heads/${branch}`;
-  const result = git(["ls-remote", "--heads", remote, exactRef], {
+  const symbolicHead = branch === "HEAD";
+  const exactRef = symbolicHead ? "HEAD" : `refs/heads/${branch}`;
+  const result = git(symbolicHead
+    ? ["ls-remote", "--exit-code", remote, exactRef]
+    : ["ls-remote", "--heads", remote, exactRef], {
     cwd,
     timeout: options.timeout,
     killSignal: options.killSignal,
@@ -17276,13 +17307,14 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
   if (!context?.state || !context?.taskId) return { status: "unavailable" };
   try {
     assertSafeTaskId(context.taskId);
+    const operation = context.operation === "verify-no-source" ? "verify-no-source" : "finish-pr-verification";
     const diagnosticsDir = join(context.state.tasksDir, ".diagnostics");
     mkdirSync(diagnosticsDir, { recursive: true });
     const child = boundedVerificationDiagnosticChild(profile, result);
     const record = {
       schema_version: verificationDiagnosticSchemaVersion,
       recorded_at: new Date().toISOString(),
-      operation: "finish-pr-verification",
+      operation,
       task_id: context.taskId,
       profile,
       command: command.map((value) => String(value)),
@@ -22776,6 +22808,7 @@ function prView(manifest, repository = null, options = {}) {
     cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
     timeout: options.timeout,
     killSignal: options.killSignal,
+    beforeSpawn: options.beforeSpawn,
   });
   if (result.code !== 0) {
     return null;

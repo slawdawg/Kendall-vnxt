@@ -483,8 +483,9 @@ try {
       assert(packet.rows.find((row) => row.taskId === "lifecycle-future-heartbeat")?.reasonCode === "owner_heartbeat_future_hold", summary.stdout || summary.stderr);
       const invalidRows = packet.rows.filter((row) => row.reasonCode === "manifest_invalid");
       assert(invalidRows.length === 2, summary.stdout || summary.stderr);
-      assert(invalidRows.every((row) => row.taskId === null && row.derivedState === "hold_attention_required"), summary.stdout || summary.stderr);
-      assert(invalidRows.some((row) => row.manifestFile === "lifecycle-malformed.json"), summary.stdout || summary.stderr);
+      assert(invalidRows.every((row) => row.derivedState === "hold_attention_required"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.taskId === "lifecycle-schema-invalid"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.taskId === null && row.manifestFile === "lifecycle-malformed.json"), summary.stdout || summary.stderr);
       assert(invalidRows.some((row) => row.manifestFile === "lifecycle-schema-invalid.json"), summary.stdout || summary.stderr);
       assert(taskSnapshot(tasksDir) === before, "lifecycle-health must not mutate manifests");
 
@@ -493,6 +494,8 @@ try {
       assert(text.stdout.includes("Workspace Lifecycle Health"), text.stdout || text.stderr);
       assert(text.stdout.includes("fresh_active=1"), text.stdout || text.stderr);
       assert(text.stdout.includes("closed=0"), text.stdout || text.stderr);
+      assert(text.stdout.includes("lifecycle-malformed.json | observed=invalid"), text.stdout || text.stderr);
+      assert(!text.stdout.includes("- null | observed=invalid"), text.stdout || text.stderr);
       assert(taskSnapshot(tasksDir) === before, "lifecycle-health text report must not mutate manifests");
     } finally {
       rmSync(lifecycleStateRoot, { recursive: true, force: true });
@@ -20469,6 +20472,35 @@ try {
     }
   });
 
+  test("close-no-source compares a retained remote branch with symbolic remote HEAD evidence", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-symbolic-head" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      runGit(fixture.remoteRoot, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+      runGit(fixture.worktree, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = "HEAD";
+      manifest.base_ref = "origin/HEAD";
+      const baseSha = runGit(fixture.worktree, ["rev-parse", "origin/HEAD"]).stdout;
+      manifest.no_source_verification_receipt.baseRef = manifest.base_ref;
+      manifest.no_source_verification_receipt.baseSha = baseSha;
+      manifest.no_source_verification_receipt.verifiedHeadSha = baseSha;
+      manifest.no_source_verification_receipt.proof.worktree.headSha = baseSha;
+      manifest.no_source_verification_receipt.proof.base.ref = manifest.base_ref;
+      manifest.no_source_verification_receipt.proof.base.sha = baseSha;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.state === "exact_base", result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.baseSha === runGit(fixture.worktree, ["rev-parse", "origin/main"]).stdout, result.stdout || result.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("verify-no-source records only a task-bound scoped receipt for an otherwise empty lane", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-verification-task", baseBranch: "dev" });
     try {
@@ -20511,6 +20543,32 @@ try {
       const ready = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
       assert(ready.code === 0, ready.stderr || ready.stdout);
       assert(JSON.parse(ready.stdout).ready === true, ready.stdout || ready.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("verify-no-source records its own bounded verification diagnostic", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-verification-diagnostic" });
+    try {
+      prepareNoSourceFixture(fixture, { verification: false });
+      fixture.env = { ...fixture.env, npm_execpath: "/opt/hostedtoolcache/pnpm/bin/pnpm.cjs" };
+      installFixtureNoSourceVerificationPnpm(fixture);
+      writeFileSync(join(fixture.fakeBin, "pnpm"), [
+        "#!/bin/sh",
+        "exit 1",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "pnpm"), 0o755);
+
+      const result = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code !== 0, result.stderr || result.stdout);
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const diagnosticFiles = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(diagnosticFiles.length === 1, `expected one no-source diagnostic: ${diagnosticFiles.join(",")}`);
+      const diagnostic = readJson(join(diagnosticsDir, diagnosticFiles[0]));
+      assert(diagnostic.operation === "verify-no-source", JSON.stringify(diagnostic));
+      assert(diagnostic.task_id === fixture.taskId, JSON.stringify(diagnostic));
     } finally {
       cleanupIntegratedCleanupFixture(fixture);
     }
@@ -20626,7 +20684,7 @@ try {
     }
   });
 
-  test("close-no-source compares a retained remote branch with the freshly read remote base", () => {
+  test("close-no-source rejects a retained remote branch when the remote base changed since verification", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-remote-base-drift" });
     try {
       const { manifestPath } = prepareNoSourceFixture(fixture);
@@ -20645,7 +20703,8 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.ready === false, result.stdout || result.stderr);
-      assert(packet.blockers.includes("remote branch contains source or differs from the current remote base"), result.stdout || result.stderr);
+      assert(packet.blockers.includes("remote base no longer matches the scoped verification checkout"), result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.state === "base_changed_since_verification", result.stdout || result.stderr);
       assert(packet.proof.remoteBranch.sha === localBaseSha, result.stdout || result.stderr);
       assert(packet.proof.remoteBranch.baseSha === remoteBaseSha, result.stdout || result.stderr);
       assert(readJson(manifestPath).status === "active", "remote-base proof mutated the manifest");
@@ -20709,6 +20768,26 @@ try {
         "",
       ].join("\n"));
       chmodSync(join(fixture.fakeBin, "git"), 0o755);
+
+      const previewCounterPath = join(fixture.fakeBin, "preview-external-probe-count");
+      const preview = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: previewCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "1" },
+      });
+      assert(preview.code !== 0, `preview external proof deadline unexpectedly allowed closeout: ${preview.stdout || preview.stderr}`);
+      assert(preview.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), preview.stderr || preview.stdout);
+      assert(Number(readFileSync(previewCounterPath, "utf8")) === 2, `preview continued external proof after its deadline: ${preview.stdout || preview.stderr}`);
+      rmSync(deadlineMarker, { force: true });
+
+      const summaryCounterPath = join(fixture.fakeBin, "summary-external-probe-count");
+      const summary = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: summaryCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "1" },
+      });
+      assert(summary.code === 0, summary.stderr || summary.stdout);
+      const summaryPacket = JSON.parse(summary.stdout);
+      assert(summaryPacket.ready === false, summary.stdout || summary.stderr);
+      assert(summaryPacket.blockers.includes("no-source external proof deadline exhausted after remote branch proof"), summary.stdout || summary.stderr);
+      assert(Number(readFileSync(summaryCounterPath, "utf8")) === 2, `summary continued external proof after its deadline: ${summary.stdout || summary.stderr}`);
+      rmSync(deadlineMarker, { force: true });
 
       const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
         env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "5" },
@@ -20991,10 +21070,17 @@ try {
       const source = readFileSync(fixture.script, "utf8");
       assert(source.includes("const lifecycleReportGithubRequestTimeoutMs = 5_000;"), "lifecycle GitHub request timeout seam changed");
       assert(source.includes("const lifecycleReportGithubBudgetMs = 15_000;"), "lifecycle GitHub budget seam changed");
-      assert(source.includes("context.lifecycleGithubDeadlineAt = Date.now() + lifecycleReportGithubBudgetMs;"), "lifecycle GitHub deadline seam changed");
-      assert(source.includes("const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();"), "lifecycle GitHub clock seam changed");
+      const lifecycleMonotonicClock = [
+        "function lifecycleReportMonotonicNow() {",
+        "  return process.hrtime.bigint();",
+        "}",
+      ].join("\n");
+      assert(source.includes(lifecycleMonotonicClock), "lifecycle monotonic clock seam changed");
+      assert(source.includes("context.lifecycleGithubDeadlineAt = lifecycleReportMonotonicNow() + BigInt(lifecycleReportGithubBudgetMs) * 1_000_000n;"), "lifecycle GitHub deadline seam changed");
+      assert(source.includes("const remainingNs = context.lifecycleGithubDeadlineAt - lifecycleReportMonotonicNow();"), "lifecycle GitHub clock seam changed");
       assert(source.includes("const githubTimeout = lifecycleGithubTimeout(context);"), "lifecycle GitHub timeout seam changed");
-      assert(source.includes('const pr = prView(manifest, null, { timeout: githubTimeout, killSignal: "SIGKILL" });'), "lifecycle GitHub cancellation seam changed");
+      assert(source.includes('beforeSpawn: () => lifecycleGithubTimeout(context) >= githubTimeout,'), "lifecycle GitHub pre-spawn deadline seam changed");
+      assert(source.includes("beforeSpawn: options.beforeSpawn,"), "prView must forward the lifecycle GitHub pre-spawn guard");
       writeFileSync(
         fixture.script,
         source
@@ -21003,13 +21089,16 @@ try {
             "const lifecycleReportGithubBudgetMs = 15_000;",
             [
               "const lifecycleReportGithubBudgetMs = 250;",
-              "const lifecycleFixtureNowValues = [0, 0, 251, 251];",
+              "const lifecycleFixtureNowValues = [0n, 0n, 0n, 250_500_000n, 250_500_000n];",
               "let lifecycleFixtureNowIndex = 0;",
               "const lifecycleFixtureNow = () => lifecycleFixtureNowValues[Math.min(lifecycleFixtureNowIndex++, lifecycleFixtureNowValues.length - 1)];",
             ].join("\n"),
           )
-          .replace("context.lifecycleGithubDeadlineAt = Date.now() + lifecycleReportGithubBudgetMs;", "context.lifecycleGithubDeadlineAt = lifecycleFixtureNow() + lifecycleReportGithubBudgetMs;")
-          .replace("const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();", "const remaining = Number(context.lifecycleGithubDeadlineAt) - lifecycleFixtureNow();")
+          .replace(lifecycleMonotonicClock, [
+            "function lifecycleReportMonotonicNow() {",
+            "  return lifecycleFixtureNow();",
+            "}",
+          ].join("\n"))
           .replace(
             "const githubTimeout = lifecycleGithubTimeout(context);",
             [
