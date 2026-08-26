@@ -20991,11 +20991,32 @@ try {
       const source = readFileSync(fixture.script, "utf8");
       assert(source.includes("const lifecycleReportGithubRequestTimeoutMs = 5_000;"), "lifecycle GitHub request timeout seam changed");
       assert(source.includes("const lifecycleReportGithubBudgetMs = 15_000;"), "lifecycle GitHub budget seam changed");
+      assert(source.includes("context.lifecycleGithubDeadlineAt = Date.now() + lifecycleReportGithubBudgetMs;"), "lifecycle GitHub deadline seam changed");
+      assert(source.includes("const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();"), "lifecycle GitHub clock seam changed");
+      assert(source.includes("const githubTimeout = lifecycleGithubTimeout(context);"), "lifecycle GitHub timeout seam changed");
+      assert(source.includes('const pr = prView(manifest, null, { timeout: githubTimeout, killSignal: "SIGKILL" });'), "lifecycle GitHub cancellation seam changed");
       writeFileSync(
         fixture.script,
         source
           .replace("const lifecycleReportGithubRequestTimeoutMs = 5_000;", "const lifecycleReportGithubRequestTimeoutMs = 100;")
-          .replace("const lifecycleReportGithubBudgetMs = 15_000;", "const lifecycleReportGithubBudgetMs = 250;"),
+          .replace(
+            "const lifecycleReportGithubBudgetMs = 15_000;",
+            [
+              "const lifecycleReportGithubBudgetMs = 250;",
+              "const lifecycleFixtureNowValues = [0, 0, 251, 251];",
+              "let lifecycleFixtureNowIndex = 0;",
+              "const lifecycleFixtureNow = () => lifecycleFixtureNowValues[Math.min(lifecycleFixtureNowIndex++, lifecycleFixtureNowValues.length - 1)];",
+            ].join("\n"),
+          )
+          .replace("context.lifecycleGithubDeadlineAt = Date.now() + lifecycleReportGithubBudgetMs;", "context.lifecycleGithubDeadlineAt = lifecycleFixtureNow() + lifecycleReportGithubBudgetMs;")
+          .replace("const remaining = Number(context.lifecycleGithubDeadlineAt) - Date.now();", "const remaining = Number(context.lifecycleGithubDeadlineAt) - lifecycleFixtureNow();")
+          .replace(
+            "const githubTimeout = lifecycleGithubTimeout(context);",
+            [
+              "const githubTimeout = lifecycleGithubTimeout(context);",
+              "    if (process.env.CODEX_WORKSPACE_FIXTURE_LIFECYCLE_TIMEOUT_LOG) writeFileSync(process.env.CODEX_WORKSPACE_FIXTURE_LIFECYCLE_TIMEOUT_LOG, `${githubTimeout}\\n`, { flag: \"a\" });",
+            ].join("\n"),
+          ),
       );
       const tasksDir = join(fixture.stateRoot, "tasks");
       const primary = readJson(join(tasksDir, "cleanup-task.json"));
@@ -21003,30 +21024,42 @@ try {
         const duplicate = { ...primary, task_id: `cleanup-task-${suffix}`, title: `Cleanup task ${suffix}` };
         writeFileSync(join(tasksDir, `${duplicate.task_id}.json`), `${JSON.stringify(duplicate, null, 2)}\n`);
       }
+      const githubInvocationLog = join(fixture.root, "lifecycle-github-invocations.log");
+      const githubTimeoutLog = join(fixture.root, "lifecycle-github-timeouts.log");
       writeFileSync(
         join(fixture.fakeBin, "gh"),
         [
-          "#!/bin/sh",
-          "sleep 60",
+          `#!${process.execPath}`,
+          "import { appendFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          "if (args[0] !== 'pr' || args[1] !== 'view') process.exit(1);",
+          "appendFileSync(process.env.CODEX_WORKSPACE_FIXTURE_GH_INVOCATION_LOG, `${args.join(' ')}\\n`);",
+          "setInterval(() => {}, 1_000);",
           "",
         ].join("\n"),
       );
       chmodSync(join(fixture.fakeBin, "gh"), 0o755);
       const beforeTasks = taskSnapshot(tasksDir);
       const beforeAssignments = taskSnapshot(join(fixture.stateRoot, "assignments"));
-      const started = Date.now();
-      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
-      const elapsedMs = Date.now() - started;
+      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: {
+          ...fixture.env,
+          CODEX_WORKSPACE_FIXTURE_GH_INVOCATION_LOG: githubInvocationLog,
+          CODEX_WORKSPACE_FIXTURE_LIFECYCLE_TIMEOUT_LOG: githubTimeoutLog,
+        },
+      });
 
       assert(result.code === 0, result.stderr || result.stdout);
-      // The nested fixture process can spend a short handoff interval closing
-      // inherited pipes after its hard-killed GitHub child.  The assertion
-      // still proves the report is bounded rather than waiting for the
-      // fixture's 60-second command, while the packet proves the shared
-      // lifecycle budget stopped additional GitHub calls.
-      assert(elapsedMs < 3_000, `lifecycle health exceeded its bounded GitHub report budget: ${elapsedMs}ms`);
       const rows = JSON.parse(result.stdout).rows;
-      assert(rows.some((row) => row.reasonCode === "cleanup_github_budget_exhausted"), result.stdout || result.stderr);
+      const firstBudgetExhaustedIndex = rows.findIndex((row) => row.reasonCode === "cleanup_github_budget_exhausted");
+      const githubInvocations = existsSync(githubInvocationLog) ? readFileSync(githubInvocationLog, "utf8").trim().split(/\r?\n/).filter(Boolean) : [];
+      const githubTimeouts = existsSync(githubTimeoutLog) ? readFileSync(githubTimeoutLog, "utf8").trim().split(/\r?\n/).filter(Boolean).map(Number) : [];
+      assert(firstBudgetExhaustedIndex > 0, result.stdout || result.stderr);
+      assert(rows.slice(0, firstBudgetExhaustedIndex).every((row) => row.reasonCode === "cleanup_pr_merged_unproven"), result.stdout || result.stderr);
+      assert(rows.slice(firstBudgetExhaustedIndex).every((row) => row.reasonCode === "cleanup_github_budget_exhausted"), result.stdout || result.stderr);
+      assert(githubTimeouts.join(",") === "100,0,0", `unexpected lifecycle GitHub timeout sequence: ${githubTimeouts.join(",")}`);
+      assert(githubInvocations.length === firstBudgetExhaustedIndex, `GitHub probes continued after lifecycle budget exhaustion: ${githubInvocations.join("\\n")}`);
+      assert(githubInvocations.every((invocation) => invocation.startsWith("pr view ")), `fixture logged a non-PR-view GitHub command: ${githubInvocations.join("\\n")}`);
       assert(rows.every((row) => row.derivedState === "hold_attention_required"), result.stdout || result.stderr);
       assert(taskSnapshot(tasksDir) === beforeTasks, "lifecycle health mutated manifests during GitHub timeout");
       assert(taskSnapshot(join(fixture.stateRoot, "assignments")) === beforeAssignments, "lifecycle health mutated assignments during GitHub timeout");
