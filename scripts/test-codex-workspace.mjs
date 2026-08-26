@@ -20489,7 +20489,11 @@ try {
       const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "preflight", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
       assert(verified.code !== 0, verified.stderr || verified.stdout);
       assert(readFileSync(manifestPath, "utf8") === before, "preflight verify-no-source recorded a receipt");
+      // GitHub Actions invokes this profile through pnpm, so inherit the
+      // pnpm.cjs shim path that would otherwise bypass the fixture binary.
+      fixture.env = { ...fixture.env, npm_execpath: "/opt/hostedtoolcache/pnpm/bin/pnpm.cjs" };
       installFixtureNoSourceVerificationPnpm(fixture);
+      assert(fixture.env.npm_execpath.endsWith("fixture-npm-execpath"), "fixture pnpm shim override was not installed");
       const scopedDryRun = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
       assert(scopedDryRun.code === 0, scopedDryRun.stderr || scopedDryRun.stdout);
       assert(readFileSync(manifestPath, "utf8") === before, "scoped verify-no-source dry-run mutated manifest");
@@ -20996,6 +21000,10 @@ function installFixtureNoSourceVerificationPnpm(fixture) {
     "",
   ].join("\n"));
   chmodSync(pnpmPath, 0o755);
+  // The shared resolver intentionally invokes a pnpm-shaped npm_execpath
+  // directly. Supply a non-pnpm sentinel so it strips that ambient shim and
+  // resolves the fixture's fake pnpm from PATH instead.
+  fixture.env = { ...fixture.env, npm_execpath: join(fixture.fakeBin, "fixture-npm-execpath") };
 }
 
 function createRemoteOnlySourceCommit(fixture) {
