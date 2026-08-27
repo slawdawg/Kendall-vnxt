@@ -22372,21 +22372,21 @@ function installFixtureResumableCheckInterruptAfterStageWrite(fixture) {
 
 function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
   const source = readFileSync(fixture.script, "utf8");
-  const inFlightTransition = [
+  const terminalCaptureGate = "    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;";
+  const persistedInFlightWrite = [
     "    manifest.check_verification_packet = packet;",
     "    writeManifest(manifestPath, manifest);",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
   ].join("\n");
-  assert(source.includes(inFlightTransition), "fixture did not contain the persisted in-flight stage transition");
+  const terminalCaptureIndex = source.indexOf(terminalCaptureGate);
+  const persistedInFlightWriteIndex = source.lastIndexOf(persistedInFlightWrite, terminalCaptureIndex);
+  assert(terminalCaptureIndex >= 0 && persistedInFlightWriteIndex >= 0, "fixture did not contain the persisted in-flight stage transition");
   const interruption = [
-    "    manifest.check_verification_packet = packet;",
-    "    writeManifest(manifestPath, manifest);",
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
     '      throw new Error("fixture packet interruption after in-flight marker");',
     "    }",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
   ].join("\n");
-  writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
+  const insertAt = persistedInFlightWriteIndex + persistedInFlightWrite.length;
+  writeFileSync(fixture.script, `${source.slice(0, insertAt)}\n${interruption}${source.slice(insertAt)}`);
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable in-flight interruption seam"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
