@@ -22335,13 +22335,21 @@ function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
 
 function installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage) {
   const source = readFileSync(fixture.script, "utf8");
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
-  assert(source.includes(invocation), "fixture did not contain the resumable check stage invocation seam");
+  const terminalCaptureGate = "    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;";
+  const resultDeclaration = "    const result = run(\"pnpm\", [\"run\", stage], {";
+  const resultCompletion = "    });\n    const evidence = { stage,";
+  assert(source.includes(terminalCaptureGate) && source.includes(resultDeclaration) && source.includes(resultCompletion), "fixture did not contain the resumable check stage invocation seam");
   const replacement = [
-    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+    "    });",
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE === stage) result = { status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" };',
+    "    const evidence = { stage,",
   ].join("\n");
-  writeFileSync(fixture.script, source.replace(invocation, replacement));
+  writeFileSync(
+    fixture.script,
+    source
+      .replace(resultDeclaration, "    let result = run(\"pnpm\", [\"run\", stage], {")
+      .replace(resultCompletion, replacement),
+  );
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable supervisor timeout result"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE: timeoutStage };
