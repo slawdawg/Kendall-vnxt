@@ -4599,6 +4599,7 @@ function buildPrHeadRefreshEvidence(manifest, context = {}) {
   const pr = prViewForGates(manifest);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: pr?.headRefOid || "",
+    expectedBaseSha: pr?.baseRefOid || "",
     worktreePath: manifest.worktree_path,
     statusCheckRollup: pr?.statusCheckRollup,
   });
@@ -5581,6 +5582,7 @@ function recoverAlreadyResolvedOutdatedThreadAttempt(manifest, threadId) {
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
   }, {
     expectedHeadSha: prior.expectedHeadSha,
+    expectedBaseSha: pr?.baseRefOid || "",
     worktreePath: manifest.worktree_path,
     statusCheckRollup: pr?.statusCheckRollup,
   });
@@ -5805,6 +5807,7 @@ function recoverAlreadyResolvedCurrentThreadAttempt(manifest, threadId) {
     nonRequiredCheckPolicy: retained?.nonRequiredCheckPolicy?.policyRef,
   }, {
     expectedHeadSha: prior.expectedHeadSha,
+    expectedBaseSha: pr?.baseRefOid || "",
     worktreePath: manifest.worktree_path,
     statusCheckRollup: pr?.statusCheckRollup,
   });
@@ -5866,7 +5869,7 @@ function currentThreadResolutionPreMutationBlockers(manifest, pr, headState, aud
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (fresh.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: fresh.nonRequiredCheckPolicy?.policyRef,
-  }, { expectedHeadSha: fresh.expectedHeadSha, worktreePath: manifest.worktree_path, statusCheckRollup: pr?.statusCheckRollup });
+  }, { expectedHeadSha: fresh.expectedHeadSha, expectedBaseSha: pr?.baseRefOid || "", worktreePath: manifest.worktree_path, statusCheckRollup: pr?.statusCheckRollup });
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
   if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
@@ -6200,7 +6203,7 @@ function reviewThreadResolutionPreMutationBlockers(manifest, pr, headState, audi
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence({
     nonRequiredChecks: (fresh.nonRequiredCheckPolicy?.names || []).join(","),
     nonRequiredCheckPolicy: fresh.nonRequiredCheckPolicy?.policyRef,
-  }, { expectedHeadSha: fresh.expectedHeadSha, worktreePath: manifest.worktree_path, statusCheckRollup: pr?.statusCheckRollup });
+  }, { expectedHeadSha: fresh.expectedHeadSha, expectedBaseSha: pr?.baseRefOid || "", worktreePath: manifest.worktree_path, statusCheckRollup: pr?.statusCheckRollup });
   const checks = normalizeStatusCheckRollup(pr?.statusCheckRollup, nonRequiredCheckPolicy);
   if (checks.total === 0) blockers.push("No status checks reported for exact head immediately before the thread mutation");
   if (checks.pending.length) blockers.push(`Pending checks immediately before the thread mutation: ${checks.pending.map((check) => check.name).join(", ")}`);
@@ -6942,6 +6945,7 @@ function buildPrGateEvidence(manifest, context = {}) {
   const reviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(context.options || {}, {
     expectedHeadSha: headState.expectedHeadSha,
+    expectedBaseSha: pr.baseRefOid,
     worktreePath: manifest.worktree_path,
     statusCheckRollup: pr.statusCheckRollup,
   });
@@ -7142,6 +7146,7 @@ function buildOutdatedThreadAdjudicationEvidence(manifest, context = {}) {
   const reviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: headState.expectedHeadSha,
+    expectedBaseSha: pr.baseRefOid,
     worktreePath: manifest.worktree_path,
     statusCheckRollup: pr.statusCheckRollup,
   });
@@ -7261,6 +7266,7 @@ function buildCurrentThreadAdjudicationEvidence(manifest, context = {}) {
   const reviewThreadState = fetchReviewThreadState(manifest, repositoryRef, pr.number);
   const nonRequiredCheckPolicy = shapeNonRequiredCheckPolicyEvidence(options, {
     expectedHeadSha: headState.expectedHeadSha,
+    expectedBaseSha: pr.baseRefOid,
     worktreePath: manifest.worktree_path,
     statusCheckRollup: pr.statusCheckRollup,
   });
@@ -8586,13 +8592,14 @@ function behaviorShadowSkipPlannerEvidence(names, context = {}) {
     return { required: false, valid: true, selections: {}, sources: [] };
   }
   const expectedHeadSha = exactGitObjectIdOrNull(context.expectedHeadSha || "");
+  const expectedBaseSha = exactGitObjectIdOrNull(context.expectedBaseSha || "");
   const nodes = statusCheckNodes(context.statusCheckRollup);
   const skippedByName = new Map(nodes
     .filter((node) => shadowOutputKey.has(statusCheckName(node))
       && terminalCheckStatus(String(node?.status || node?.state || "").toUpperCase())
       && String(node?.conclusion || "").toUpperCase() === "SKIPPED")
     .map((node) => [statusCheckName(node), node]));
-  if (!expectedHeadSha || !context.worktreePath || requiredNames.some((name) => !skippedByName.has(name))) {
+  if (!expectedHeadSha || !expectedBaseSha || !context.worktreePath || requiredNames.some((name) => !skippedByName.has(name))) {
     return { required: true, valid: false, selections: {}, sources: [] };
   }
   const cache = behaviorShadowPlannerEvidenceCache ||= new Map();
@@ -8606,7 +8613,7 @@ function behaviorShadowSkipPlannerEvidence(names, context = {}) {
     if (!shadowRunId || !match || String(planner?.conclusion || "").toUpperCase() !== "SUCCESS") {
       return { required: true, valid: false, selections, sources };
     }
-    const cacheKey = `${context.worktreePath}:${expectedHeadSha}:${match[1]}:${match[2]}`;
+    const cacheKey = `${context.worktreePath}:${expectedHeadSha}:${expectedBaseSha}:${match[1]}:${match[2]}`;
     let output = cache.get(cacheKey);
     if (!output) {
       const result = run("gh", ["run", "view", match[1], "--log", "--job", match[2]], {
@@ -8623,8 +8630,8 @@ function behaviorShadowSkipPlannerEvidence(names, context = {}) {
     const logBacked = output.code === 0 && exactHeadPattern.test(output.stdout) && emptySelection;
     const artifact = logBacked || String(output.stdout || "").trim()
       ? null
-      : exactHeadPlannerArtifact(match[1], expectedHeadSha, context.worktreePath);
-    const artifactBacked = artifact?.headSha === expectedHeadSha && Array.isArray(artifact?.[outputKey]) && artifact[outputKey].length === 0;
+      : exactHeadPlannerArtifact(match[1], expectedHeadSha, expectedBaseSha, context.worktreePath);
+    const artifactBacked = artifact?.headSha === expectedHeadSha && artifact?.baseSha === expectedBaseSha && Array.isArray(artifact?.[outputKey]) && artifact[outputKey].length === 0;
     selections[name] = logBacked || artifactBacked ? [] : null;
     sources.push({ name, runId: match[1], jobId: match[2], exactHeadObserved: logBacked || artifactBacked, source: artifactBacked ? "exact-head-planner-artifact" : "planner-log" });
     if (!logBacked && !artifactBacked) {
@@ -8634,7 +8641,7 @@ function behaviorShadowSkipPlannerEvidence(names, context = {}) {
   return { required: true, valid: true, selections, sources };
 }
 
-function exactHeadPlannerArtifact(runId, expectedHeadSha, worktreePath) {
+function exactHeadPlannerArtifact(runId, expectedHeadSha, expectedBaseSha, worktreePath) {
   const artifactDir = mkdtempSync(join(tmpdir(), "codex-workspace-planner-artifact-"));
   try {
     const artifactName = `ci-planner-${expectedHeadSha}`;
@@ -8643,7 +8650,7 @@ function exactHeadPlannerArtifact(runId, expectedHeadSha, worktreePath) {
     const evidencePath = join(artifactDir, "ci-planner-evidence.json");
     if (!existsSync(evidencePath)) return null;
     const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
-    return evidence?.schemaVersion === "ci-planner-evidence/v1" && evidence?.headSha === expectedHeadSha ? evidence : null;
+    return evidence?.schemaVersion === "ci-planner-evidence/v1" && evidence?.headSha === expectedHeadSha && evidence?.baseSha === expectedBaseSha ? evidence : null;
   } catch {
     return null;
   } finally {
@@ -10077,6 +10084,10 @@ function noSourceCloseoutRemainingProbeOptions(options = {}) {
     ...options,
     timeout: Math.max(1, Math.min(noSourceCloseoutExternalRequestTimeoutMs, remaining)),
   };
+}
+
+function noSourceCloseoutLaunchTimeout(options = {}) {
+  return noSourceCloseoutRemainingProbeOptions(options)?.timeout ?? null;
 }
 
 function createNoSourceCloseoutExternalProofBudget() {
@@ -14281,6 +14292,7 @@ function sourceBranchPullRequestProof(branch, cwd, options = {}) {
     timeout: options.timeout,
     killSignal: options.killSignal,
     beforeSpawn: () => noSourceCloseoutRemainingProbeOptions(options) !== null,
+    ...(options.externalProofBudget ? { timeoutAtSpawn: () => noSourceCloseoutLaunchTimeout(options) } : {}),
   });
   if (result.errorCode === "EDEADLINE") return { status: "blocked", count: null, reason: "no-source external proof deadline exhausted immediately before GitHub PR proof" };
   if (result.code !== 0) {
@@ -16450,6 +16462,7 @@ function originBranchSnapshot(branches, cwd = repoRoot, options = {}) {
     timeout: options.timeout,
     killSignal: options.killSignal,
     beforeSpawn: () => noSourceCloseoutRemainingProbeOptions(options) !== null,
+    ...(options.externalProofBudget ? { timeoutAtSpawn: () => noSourceCloseoutLaunchTimeout(options) } : {}),
   });
   if (result.errorCode === "EDEADLINE") throw new Error("no-source external proof deadline exhausted immediately before coherent remote source/base snapshot");
   if (result.code !== 0) throw new Error(result.stderr || "Could not inspect remote source/base snapshot");
@@ -16476,6 +16489,7 @@ function remoteBranchShaAt(remote, branch, cwd = repoRoot, label = remote, optio
     timeout: options.timeout,
     killSignal: options.killSignal,
     beforeSpawn: () => noSourceCloseoutRemainingProbeOptions(options) !== null,
+    ...(options.externalProofBudget ? { timeoutAtSpawn: () => noSourceCloseoutLaunchTimeout(options) } : {}),
   });
   if (result.errorCode === "EDEADLINE") throw new Error(`no-source external proof deadline exhausted immediately before remote ${label} branch proof`);
   if (result.code !== 0) {
@@ -23065,6 +23079,21 @@ function run(commandName, commandArguments, options = {}) {
       stdout: "",
       stderr: "",
     };
+  }
+  if (typeof options.timeoutAtSpawn === "function") {
+    const timeoutAtSpawn = options.timeoutAtSpawn();
+    if (!Number.isSafeInteger(timeoutAtSpawn) || timeoutAtSpawn <= 0) {
+      return {
+        code: 1,
+        status: 1,
+        signal: null,
+        errorCode: "EDEADLINE",
+        errorMessage: "command launch blocked after its bounded deadline expired",
+        stdout: "",
+        stderr: "",
+      };
+    }
+    spawnOptions.timeout = timeoutAtSpawn;
   }
   const leaseContext = activeTaskLeaseWriteContext;
   const intent = leaseContext ? taskLeaseExternalIntent(leaseContext, resolved.command, resolved.args) : null;

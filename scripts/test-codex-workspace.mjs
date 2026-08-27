@@ -12008,11 +12008,13 @@ try {
     for (const scenario of [
       { name: "artifact-success", plannerArtifactHeadSha: null, expectedCode: 0 },
       { name: "artifact-head-mismatch", plannerArtifactHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expectedCode: 1 },
+      { name: "artifact-base-mismatch", plannerArtifactBaseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", expectedCode: 1 },
     ]) {
       const fixture = createCanonicalManagedPrFixture({
         existingPr: true,
         plannerLogUnavailable: true,
         plannerArtifactHeadSha: scenario.plannerArtifactHeadSha,
+        plannerArtifactBaseSha: scenario.plannerArtifactBaseSha,
         statusCheckRollup: [
           { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
           { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
@@ -18301,7 +18303,7 @@ try {
     assert(!match[0].includes("deleteRemoteBranchIfPresent"), "cleanup-superseded must retain remote branches");
   });
 
-  test("cleanup-superseded previews and applies only an exact merged carry-forward tree proof", () => {
+  test("cleanup-superseded retains non-budget source PR and remote proofs while previewing an exact merged carry-forward tree", () => {
     const fixture = createSupersededCleanupFixture();
     const args = [
       "cleanup-superseded",
@@ -18325,6 +18327,8 @@ try {
       const summary = JSON.parse(preview.stdout);
       assert(summary.mode === "cleanup-superseded", `mode is ${summary.mode}`);
       assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(summary.results?.[0]?.proof?.sourcePullRequests?.status === "matched", "non-budget source PR proof did not run");
+      assert(summary.results?.[0]?.proof?.source?.remoteBranchHead, "non-budget remote source proof did not run");
       assert(summary.remoteBranchPolicy.includes("retained"), summary.remoteBranchPolicy);
       assert(summary.results[0].proof.carryForward.baseRefOidSource === "gh-pr-view", preview.stdout || preview.stderr);
       assert(summary.results[0].proof.scope.status === "matched", preview.stdout || preview.stderr);
@@ -20893,6 +20897,52 @@ try {
     }
   });
 
+  test("close-no-source recalculates its provider timeout at the spawn boundary", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-spawn-boundary-deadline" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      const monotonicClock = [
+        "function noSourceCloseoutMonotonicNow() {",
+        "  return process.hrtime.bigint();",
+        "}",
+      ].join("\n");
+      assert(source.includes(monotonicClock), "no-source monotonic proof clock seam changed");
+      writeFileSync(
+        fixture.script,
+        source.replace(monotonicClock, [
+          "function noSourceCloseoutMonotonicNow() {",
+          "  const calls = (globalThis.noSourceCloseoutTestClockCalls || 0) + 1;",
+          "  globalThis.noSourceCloseoutTestClockCalls = calls;",
+          "  return calls >= 4 ? 7_000_000_000n : 1_000_000_000n;",
+          "}",
+        ].join("\n")),
+      );
+      const counterPath = join(fixture.fakeBin, "spawn-boundary-gh-probe-count");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "console.log('[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath },
+      });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.includes("no-source external proof deadline exhausted immediately before GitHub PR proof"), result.stdout || result.stderr);
+      assert(!existsSync(counterPath), "stale timeout launched a GitHub child after the aggregate deadline expired");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("close-no-source releases its locks after a bounded external proof timeout", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-bounded-github-timeout" });
     try {
@@ -21741,6 +21791,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       `const plannerSupervisorShards = ${JSON.stringify(options.plannerSupervisorShards || [])};`,
       `const plannerLogUnavailable = ${JSON.stringify(Boolean(options.plannerLogUnavailable))};`,
       `const plannerArtifactHeadSha = ${JSON.stringify(options.plannerArtifactHeadSha || null)};`,
+      `const plannerArtifactBaseSha = ${JSON.stringify(options.plannerArtifactBaseSha || null)};`,
       `const plannerArtifactSupervisorShards = ${JSON.stringify(options.plannerArtifactSupervisorShards || [])};`,
       `const postResolutionPrUnavailablePath = ${JSON.stringify(postResolutionPrUnavailablePath)};`,
       `const postResolutionAuditPath = ${JSON.stringify(postResolutionAuditPath)};`,
@@ -21749,7 +21800,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
       "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { if (plannerLogUnavailable) process.exit(0); const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
-      "if (args[0] === 'run' && args[1] === 'download') { const dir = args[args.indexOf('--dir') + 1]; const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(`${dir}/ci-planner-evidence.json`, JSON.stringify({ schemaVersion: 'ci-planner-evidence/v1', headSha: plannerArtifactHeadSha || pr.headRefOid, selectedWorkspaceProfiles: plannerWorkspaceProfiles, selectedSupervisorShards: plannerArtifactSupervisorShards })); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === 'download') { const dir = args[args.indexOf('--dir') + 1]; const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(`${dir}/ci-planner-evidence.json`, JSON.stringify({ schemaVersion: 'ci-planner-evidence/v1', headSha: plannerArtifactHeadSha || pr.headRefOid, baseSha: plannerArtifactBaseSha || pr.baseRefOid, selectedWorkspaceProfiles: plannerWorkspaceProfiles, selectedSupervisorShards: plannerArtifactSupervisorShards })); process.exit(0); }",
       options.changedPathBaseOidDrift
         ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
         : "",
