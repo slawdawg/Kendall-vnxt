@@ -22271,16 +22271,16 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
 function installFixtureResumableCheckLongLeafTimeoutCaptureSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
-  assert(source.includes(started) && source.includes(invocation), "fixture did not contain the long-leaf timeout seams");
+  const terminalCaptureGate = "    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;";
+  assert(source.includes(started) && source.includes(terminalCaptureGate), "fixture did not contain the long-leaf timeout seams");
   const timeoutLog = join(fixture.stateRoot, "resumable-check-timeouts.log");
   const patched = source
     .replace(started, '  const started = process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_CAPTURE === "1" ? Date.now() - 300_000 : Date.now();')
     .replace(
-      invocation,
+      terminalCaptureGate,
       [
         '    if (process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG) writeFileSync(process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG, `${stage}:${timeout}\\n`, { flag: "a" });',
-        invocation,
+        terminalCaptureGate,
       ].join("\n"),
     );
   writeFileSync(fixture.script, patched);
