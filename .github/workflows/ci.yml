@@ -55,7 +55,19 @@ jobs:
             --head "${{ github.event.pull_request.head.sha }}" \
             --ci-outputs > "$ci_outputs"
 
+          planner_evidence="${RUNNER_TEMP}/ci-planner-evidence.json"
+          node -e 'const fs = require("node:fs"); const [input, output, head, base] = process.argv.slice(1); const plan = JSON.parse(fs.readFileSync(input, "utf8")); fs.writeFileSync(output, `${JSON.stringify({ schemaVersion: "ci-planner-evidence/v1", headSha: head, baseSha: base, selectedWorkspaceProfiles: plan.selectedWorkspaceProfiles, selectedSupervisorShards: plan.selectedSupervisorShards })}\n`);' "$ci_outputs" "$planner_evidence" "${{ github.event.pull_request.head.sha }}" "${{ github.event.pull_request.base.sha }}"
+          echo "planner_evidence=$planner_evidence" >> "$GITHUB_OUTPUT"
+
           node -e 'const fs = require("node:fs"); const outputs = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const key of ["javascript", "supervisor", "static"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${outputs[key] ? "true" : "false"}\n`); for (const key of ["routingMode", "selectedStaticBundles", "skippedStaticBundles", "routingReasons", "requiredGates", "skippedRequiredGates", "selectedWorkspaceProfiles", "selectedSupervisorShards"]) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}=${typeof outputs[key] === "string" ? outputs[key] : JSON.stringify(outputs[key])}\n`); const required = outputs.requiredGates.map((gate) => `- \`${gate.id}\`: ${gate.reason}`).join("\n"); const selected = outputs.selectedStaticBundles.map((bundle) => `- \`${bundle.id}\`: ${bundle.reasons.join("; ")}`).join("\n") || "- none"; const skipped = outputs.skippedStaticBundles.map((bundle) => `- \`${bundle.id}\`: ${bundle.reasons.join("; ")}`).join("\n") || "- none"; const workspace = outputs.selectedWorkspaceProfiles.map((profile) => `- \`${profile.id}\`: ${profile.reason}`).join("\n") || "- none"; const supervisor = outputs.selectedSupervisorShards.map((shard) => `- \`${shard.id}\`: ${shard.reason}`).join("\n") || "- none"; fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CI routing\n\nMode: \`${outputs.routingMode}\`\n\nCurrent required gates:\n${required}\n\nSelected static bundles:\n${selected}\n\nSkipped static bundles:\n${skipped}\n\nRequired workspace behavior profiles:\n${workspace}\n\nRequired supervisor behavior shards:\n${supervisor}\n\nReasons:\n${outputs.routingReasons.map((reason) => `- ${reason}`).join("\n") || "- no changed files"}\n`); console.log(JSON.stringify(outputs, null, 2));' "$ci_outputs"
+
+      - name: Upload exact-head planner evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-planner-${{ github.event.pull_request.head.sha }}
+          path: ${{ steps.filter.outputs.planner_evidence }}
+          if-no-files-found: error
+          retention-days: 1
 
   fast:
     if: github.event_name == 'pull_request'

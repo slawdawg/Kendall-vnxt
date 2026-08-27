@@ -12004,6 +12004,42 @@ try {
     }
   });
 
+  test("verify-pr-gates requires an exact-head planner artifact when planner logs are unavailable", () => {
+    for (const scenario of [
+      { name: "artifact-success", plannerArtifactHeadSha: null, expectedCode: 0 },
+      { name: "artifact-head-mismatch", plannerArtifactHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expectedCode: 1 },
+    ]) {
+      const fixture = createCanonicalManagedPrFixture({
+        existingPr: true,
+        plannerLogUnavailable: true,
+        plannerArtifactHeadSha: scenario.plannerArtifactHeadSha,
+        statusCheckRollup: [
+          { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
+          { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+          { name: "supervisor_behavior_shadow", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/461" },
+        ],
+      });
+      try {
+        const seeded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        const result = runFixtureScript(fixture, [
+          "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head artifact audit passed.",
+          "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+          "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+          "--non-required-checks", "supervisor_behavior_shadow",
+          "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+          "--diff-risk-summary", "Focused planner artifact fixture.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs", "--state-root", fixture.stateRoot,
+        ], { cwd: fixture.worktree, env: fixture.env });
+        assert(result.code === scenario.expectedCode, `${scenario.name}: ${result.stderr || result.stdout}`);
+        if (scenario.expectedCode !== 0) assert(result.stderr.includes("Behavior-shadow skipped checks require exact-head changes planner evidence"), result.stderr || result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
   test("verify-pr-gates rejects static skips when the exact changes planner selected static", () => {
     const fixture = createCanonicalManagedPrFixture({
       existingPr: true,
@@ -20643,6 +20679,29 @@ try {
     }
   });
 
+  test("verify-no-source rejects checkout-relative symbolic base refs", () => {
+    for (const [suffix, baseRef] of [["head", "HEAD"], ["expression", "HEAD^{commit}"], ["reflog", "@{-1}"]]) {
+      const fixture = createIntegratedCleanupFixture({ taskId: `no-source-symbolic-base-${suffix}` });
+      try {
+        const { manifestPath } = prepareNoSourceFixture(fixture);
+        const manifest = readJson(manifestPath);
+        manifest.base_ref = baseRef;
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        installFixtureNoSourceVerificationPnpm(fixture);
+        const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+        assert(verified.code !== 0, verified.stderr || verified.stdout);
+        assert(verified.stderr.includes("symbolic_checkout_base_ref_hold"), verified.stderr || verified.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, "symbolic base ref changed the retained receipt");
+        const preview = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+        assert(preview.code === 0, preview.stderr || preview.stdout);
+        assert(JSON.parse(preview.stdout).blockers.includes("symbolic_checkout_base_ref_hold"), preview.stdout || preview.stderr);
+      } finally {
+        cleanupIntegratedCleanupFixture(fixture);
+      }
+    }
+  });
+
   test("close-no-source refuses foreign ownership, linked assignments, and dirty worktree evidence without mutation", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-refusal-task", baseBranch: "dev" });
     try {
@@ -21680,13 +21739,17 @@ function createFinishPrExistingCommitFixture(options = {}) {
       `const plannerStatic = ${JSON.stringify(Boolean(options.plannerStatic))};`,
       `const plannerWorkspaceProfiles = ${JSON.stringify(options.plannerWorkspaceProfiles || [])};`,
       `const plannerSupervisorShards = ${JSON.stringify(options.plannerSupervisorShards || [])};`,
+      `const plannerLogUnavailable = ${JSON.stringify(Boolean(options.plannerLogUnavailable))};`,
+      `const plannerArtifactHeadSha = ${JSON.stringify(options.plannerArtifactHeadSha || null)};`,
+      `const plannerArtifactSupervisorShards = ${JSON.stringify(options.plannerArtifactSupervisorShards || [])};`,
       `const postResolutionPrUnavailablePath = ${JSON.stringify(postResolutionPrUnavailablePath)};`,
       `const postResolutionAuditPath = ${JSON.stringify(postResolutionAuditPath)};`,
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
-      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { if (plannerLogUnavailable) process.exit(0); const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === 'download') { const dir = args[args.indexOf('--dir') + 1]; const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(`${dir}/ci-planner-evidence.json`, JSON.stringify({ schemaVersion: 'ci-planner-evidence/v1', headSha: plannerArtifactHeadSha || pr.headRefOid, selectedWorkspaceProfiles: plannerWorkspaceProfiles, selectedSupervisorShards: plannerArtifactSupervisorShards })); process.exit(0); }",
       options.changedPathBaseOidDrift
         ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
         : "",

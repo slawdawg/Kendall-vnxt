@@ -8,6 +8,7 @@ import {
   linkSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readlinkSync,
@@ -1641,7 +1642,9 @@ function buildCoordinationReportPacket(options = {}) {
   const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
   const generatedAt = new Date();
   const manifestRecords = readManifestRecords(state);
-  const manifests = readManifests(state).map(({ manifest }) => manifest);
+  // Use one retained snapshot for every section in this report. A second
+  // directory read can otherwise contradict the lifecycle rows below.
+  const manifests = validatedManifestRecords(manifestRecords).map(({ manifest }) => manifest);
   const assignments = readAssignments(state).map(({ assignment }) => assignment);
   const activeManifests = manifests.filter((manifest) => manifest.status !== "closed");
   const context = { currentOwner, generatedAt, staleAfterSeconds };
@@ -8617,13 +8620,35 @@ function behaviorShadowSkipPlannerEvidence(names, context = {}) {
     const exactHeadPattern = new RegExp(`--head\\s+["']${escapeRegExp(expectedHeadSha)}["']`);
     const outputKey = shadowOutputKey.get(name);
     const emptySelection = new RegExp(`"${outputKey}"\\s*:\\s*\\[\\s*\\]`).test(output.stdout);
-    selections[name] = emptySelection ? [] : null;
-    sources.push({ name, runId: match[1], jobId: match[2], exactHeadObserved: exactHeadPattern.test(output.stdout) });
-    if (output.code !== 0 || !exactHeadPattern.test(output.stdout) || !emptySelection) {
+    const logBacked = output.code === 0 && exactHeadPattern.test(output.stdout) && emptySelection;
+    const artifact = logBacked || String(output.stdout || "").trim()
+      ? null
+      : exactHeadPlannerArtifact(match[1], expectedHeadSha, context.worktreePath);
+    const artifactBacked = artifact?.headSha === expectedHeadSha && Array.isArray(artifact?.[outputKey]) && artifact[outputKey].length === 0;
+    selections[name] = logBacked || artifactBacked ? [] : null;
+    sources.push({ name, runId: match[1], jobId: match[2], exactHeadObserved: logBacked || artifactBacked, source: artifactBacked ? "exact-head-planner-artifact" : "planner-log" });
+    if (!logBacked && !artifactBacked) {
       return { required: true, valid: false, selections, sources };
     }
   }
   return { required: true, valid: true, selections, sources };
+}
+
+function exactHeadPlannerArtifact(runId, expectedHeadSha, worktreePath) {
+  const artifactDir = mkdtempSync(join(tmpdir(), "codex-workspace-planner-artifact-"));
+  try {
+    const artifactName = `ci-planner-${expectedHeadSha}`;
+    const download = run("gh", ["run", "download", runId, "--name", artifactName, "--dir", artifactDir], { cwd: worktreePath, timeout: defaultVerificationTimeoutMs, killSignal: "SIGKILL" });
+    if (download.code !== 0) return null;
+    const evidencePath = join(artifactDir, "ci-planner-evidence.json");
+    if (!existsSync(evidencePath)) return null;
+    const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+    return evidence?.schemaVersion === "ci-planner-evidence/v1" && evidence?.headSha === expectedHeadSha ? evidence : null;
+  } catch {
+    return null;
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
 }
 
 function escapeRegExp(value) {
@@ -9707,6 +9732,7 @@ function buildNoSourceVerificationPacket(record, state, options) {
   const { manifest } = record;
   const blockers = [];
   const add = (condition, reason) => { if (!condition) blockers.push(reason); };
+  add(!isCheckoutRelativeBaseRef(manifest.base_ref, manifest.worktree_path), "symbolic_checkout_base_ref_hold");
   try { assertExactReconciliationOwner(manifest, options); } catch (error) { blockers.push(safeMetadataText(error.message || error, 240)); }
   add(manifest.status === "active", `manifest_status_not_active:${safeMetadataText(manifest.status, 80) || "missing"}`);
   let worktree = null;
@@ -9874,6 +9900,7 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
   const add = (condition, reason) => { if (!condition) blockers.push(reason); };
   try { assertExactReconciliationOwner(manifest, context.options); } catch (error) { blockers.push(safeMetadataText(error.message || error, 240)); }
   add(manifest.status === "active", `manifest_status_not_active:${safeMetadataText(manifest.status, 80) || "missing"}`);
+  add(!isCheckoutRelativeBaseRef(manifest.base_ref, manifest.worktree_path), "symbolic_checkout_base_ref_hold");
   let worktree = null;
   let gitStatus = null;
   try {
@@ -9916,7 +9943,10 @@ function buildCloseNoSourcePacket(record, state, context = {}) {
     ? manifest.events.map((event) => String(event?.type || "")).filter((type) => /(?:pr|delivery|merge|cleanup|supersession|closeout|verify)/i.test(type) && type !== "verified")
     : ["events_unreadable"];
   add(evidencePresent.length === 0 && eventResidue.length === 0 && !hasStrictCloseoutEvidence(manifest), evidencePresent.length ? `delivery_or_cleanup_evidence:${evidencePresent.join(",")}` : eventResidue.length ? `delivery_or_cleanup_events:${eventResidue.join(",")}` : "strict_closeout_evidence_present");
-  const authorityDecision = shapeAuthorityDecisionEvidence({ operation: "close-no-source", authorityFamily: "metadata-only-no-source-closeout", decision: blockers.length === 0 ? (context.applying ? "applied" : "ready_for_apply") : "blocked", allowed: blockers.length === 0, requiredGates: ["exact owner", "clean registered worktree", "zero local commits", "assignment inventory is empty under its index lock", "live GitHub PR absence", "remote branch is absent or exactly the current base", "successful scoped verification", "no delivery or cleanup evidence"], satisfiedGates: blockers.length === 0 ? ["exact owner", "clean registered worktree", "zero local commits", "assignment inventory is empty under its index lock", "live GitHub PR absence", "remote branch is absent or exactly the current base", "successful scoped verification", "no delivery or cleanup evidence"] : [], blockedReasons: blockers, stopLines: ["never close on ambiguous assignment, GitHub, remote-branch, or lifecycle evidence", "apply holds the assignment-index lock and re-proves evidence under the exact manifest lock", "never delete resources"], evidenceRefs: [`task:${manifest.task_id}`, `owner:${manifest.owner || "unknown"}`, "github:no-pr", `remote:${remoteBranch.state || "unknown"}`], nextSafeAction: blockers.length === 0 ? "Apply only with a bounded reason." : "Preserve resources and resolve the listed blockers.", recoveryPath: "preserve retained resources and inspect the no-source receipt before any separate governed cleanup." });
+  const assignmentGate = context.applying
+    ? "assignment inventory is empty under its index lock"
+    : "assignment inventory snapshot is empty; apply re-proves it under the index lock";
+  const authorityDecision = shapeAuthorityDecisionEvidence({ operation: "close-no-source", authorityFamily: "metadata-only-no-source-closeout", decision: blockers.length === 0 ? (context.applying ? "applied" : "ready_for_apply") : "blocked", allowed: blockers.length === 0, requiredGates: ["exact owner", "clean registered worktree", "zero local commits", assignmentGate, "live GitHub PR absence", "remote branch is absent or exactly the current base", "successful scoped verification", "no delivery or cleanup evidence"], satisfiedGates: blockers.length === 0 ? ["exact owner", "clean registered worktree", "zero local commits", assignmentGate, "live GitHub PR absence", "remote branch is absent or exactly the current base", "successful scoped verification", "no delivery or cleanup evidence"] : [], blockedReasons: blockers, stopLines: ["never close on ambiguous assignment, GitHub, remote-branch, or lifecycle evidence", "apply holds the assignment-index lock and re-proves evidence under the exact manifest lock", "never delete resources"], evidenceRefs: [`task:${manifest.task_id}`, `owner:${manifest.owner || "unknown"}`, "github:no-pr", `remote:${remoteBranch.state || "unknown"}`], nextSafeAction: blockers.length === 0 ? "Apply only with a bounded reason." : "Preserve resources and resolve the listed blockers.", recoveryPath: "preserve retained resources and inspect the no-source receipt before any separate governed cleanup." });
   return {
     schemaVersion: "workspace-close-no-source/v0",
     taskId: manifest.task_id,
@@ -15844,7 +15874,22 @@ function boundedRecoveryResolution(value) {
 }
 
 function readManifests(state) {
-  return readManifestRecords(state)
+  return validatedManifestRecords(readManifestRecords(state));
+}
+
+function isCheckoutRelativeBaseRef(baseRef, cwd) {
+  const value = String(baseRef || "").trim();
+  if (!value || ["HEAD", "@"].includes(value) || value.includes("@{")) return true;
+  if (exactGitObjectIdOrNull(value)) return false;
+  const symbolic = git(["rev-parse", "--symbolic-full-name", value], { cwd });
+  // A revision expression based on HEAD (for example HEAD^{commit}) either
+  // resolves back to HEAD or has no stable symbolic ref. Neither may serve as
+  // immutable no-source base evidence.
+  return symbolic.code !== 0 || !symbolic.stdout.trim() || symbolic.stdout.trim() === "HEAD";
+}
+
+function validatedManifestRecords(records) {
+  return records
     .map((record) => {
       if (record.error) {
         return record;
