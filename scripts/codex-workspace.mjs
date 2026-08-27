@@ -16847,9 +16847,33 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     packet.updated_at = startedAt;
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
-    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL" });
+    // The terminal full workspace-fixture leaf is the sole resumable stage
+    // eligible for owner-bound external-direct evidence. Retain only its
+    // bounded, sanitized failure tail locally so an external capture loss is
+    // diagnosable; packet evidence remains metadata-only for every stage.
+    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;
+    const result = run("pnpm", ["run", stage], {
+      cwd: options.cwd,
+      timeout,
+      killSignal: "SIGKILL",
+      preserveChildOutput: retainExternalCheckStageDiagnostic,
+    });
     const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
-    if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); delete packet.in_flight_stage; manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: timeout, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
+    if (verificationOutcome(result) !== "success") {
+      packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); delete packet.in_flight_stage; manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest);
+      const diagnostic = persistVerificationDiagnostic({
+        context: { state: options.state, taskId: manifest.task_id },
+        profile: retainExternalCheckStageDiagnostic ? "codex-workspace" : "check",
+        command: ["pnpm", "run", stage],
+        elapsedMs: Date.now() - started,
+        timeoutMs: timeout,
+        outcome: verificationOutcome(result),
+        result,
+        stage,
+        captureMaxBufferBytes: null,
+      });
+      throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`);
+    }
     packet.stages.push(evidence);
     packet.updated_at = new Date().toISOString();
     if (index + 1 === plan.stages.length) {
@@ -17386,7 +17410,7 @@ function runBoundedVerification(verificationPlan, options = {}) {
   );
 }
 
-function persistVerificationDiagnostic({ context, profile, command, elapsedMs, timeoutMs, outcome, result }) {
+function persistVerificationDiagnostic({ context, profile, command, elapsedMs, timeoutMs, outcome, result, stage = null, captureMaxBufferBytes = profile === "codex-workspace" ? verificationDiagnosticCaptureMaxBytes : null }) {
   if (!context?.state || !context?.taskId) return { status: "unavailable" };
   try {
     assertSafeTaskId(context.taskId);
@@ -17400,6 +17424,7 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
       operation,
       task_id: context.taskId,
       profile,
+      ...(stage ? { stage } : {}),
       command: command.map((value) => String(value)),
       outcome,
       elapsed_ms: elapsedMs,
@@ -17418,7 +17443,7 @@ function persistVerificationDiagnostic({ context, profile, command, elapsedMs, t
           error_code: result?.errorCode || null,
           error_message: sanitizeVerificationDiagnosticText(result?.errorMessage || "", 320).value || null,
           output_capture_limited: result?.errorCode === "ENOBUFS",
-          max_buffer_bytes: profile === "codex-workspace" ? verificationDiagnosticCaptureMaxBytes : null,
+          max_buffer_bytes: captureMaxBufferBytes,
         },
       },
       check_projection: boundedCheckProjection(profile, result),

@@ -248,6 +248,7 @@ Tool Churn RCA Packet
 - Retry stop line: After two capture attempts for this direct command, do not repeat a fire-and-forget or status-suppressed shape through the same bridge. Never attest `--external-direct-success` without a confirmed numeric zero exit.
 - One next safe action: In an operator-local terminal with output intentionally suppressed, run `bash -c 'pnpm run test:codex-workspace >/dev/null 2>&1; code=$?; printf "exit=%s\\n" "$code"; exit "$code"'` and retain only `exit=<code>`.
 - Durable fix recommendation: Route a confirmed `exit=0` to the owner-bound metadata-only handoff once; otherwise retain the bounded capture failure, inspect the runner/session capture path, and do not retry, record a handoff, or start delivery.
+- Governed packet diagnostic: A terminal nonzero `test:codex-workspace` leaf now persists one local, bounded, redacted diagnostic tail and process summary. The resumable packet and operator-facing error remain metadata-only. Treat the tail as diagnostic evidence only: it cannot prove success, authorize `--external-direct-success`, change packet status, or bypass the exact numeric-exit requirement above.
 ```
 
 ## Dashboard Auth/Projection Nested Server Tests In Sandbox

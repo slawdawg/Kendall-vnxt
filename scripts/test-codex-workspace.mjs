@@ -10556,6 +10556,58 @@ try {
     }
   });
 
+  test("finish-pr retains a bounded sanitized diagnostic tail only for a failed terminal workspace fixture stage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["test:codex-workspace"], { "test:codex-workspace": "secret-nonzero" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "terminal workspace fixture unexpectedly passed");
+      assert(!result.stderr.includes("fixture-packet-secret"), "CLI error retained child output");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "terminal workspace fixture did not persist one diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, names[0]));
+      assert(diagnostic.profile === "codex-workspace" && diagnostic.stage === "test:codex-workspace", JSON.stringify(diagnostic));
+      assert(diagnostic.command?.join(" ") === "pnpm run test:codex-workspace", JSON.stringify(diagnostic));
+      assert(diagnostic.child?.output === "sanitized-tail-v1", JSON.stringify(diagnostic));
+      assert(diagnostic.child?.stderr_tail?.value.includes("[redacted-sensitive]"), JSON.stringify(diagnostic));
+      assert(diagnostic.child?.process?.max_buffer_bytes === null, JSON.stringify(diagnostic));
+      assert(!JSON.stringify(diagnostic).includes("fixture-packet-secret"), "terminal diagnostic retained raw child output");
+      assert(manifest.check_verification_packet?.failed_stage === "test:codex-workspace", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.stages?.[0]?.output === "omitted", JSON.stringify(manifest.check_verification_packet));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr keeps terminal workspace fixture success packet behavior unchanged", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["test:codex-workspace", "check:later-failure"], { "check:later-failure": "secret-nonzero" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "later failing fixture unexpectedly passed");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.check_verification_packet?.status === "failed" && manifest.check_verification_packet.failed_stage === "check:later-failure", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.stages?.[0]?.output === "omitted", JSON.stringify(manifest.check_verification_packet));
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "later failure did not persist exactly one diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, names[0]));
+      assert(diagnostic.stage === "check:later-failure" && diagnostic.child?.output === "omitted", JSON.stringify(diagnostic));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("external check stage handoff records the fixed leaf for an exact-head open PR and resumes every later stage before delivery", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
