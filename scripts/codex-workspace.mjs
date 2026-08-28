@@ -1002,6 +1002,11 @@ function startWorkspace(argv) {
     fetchBaseBranch(baseBranch, { usingDefaultBase });
   }
   const baseRef = explicitBaseRef || resolveBaseRef(baseBranch, { usingDefaultBase });
+  const baseShaResult = git(["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], { cwd: repoRoot });
+  const baseSha = baseShaResult.code === 0 ? exactGitObjectIdOrNull(baseShaResult.stdout.trim()) : null;
+  if (!baseSha) {
+    throw new Error(`Base ref cannot be bound to an immutable commit: ${baseRef}`);
+  }
 
   if (existsSync(manifestPath)) {
     throw new Error(`Task manifest already exists: ${manifestPath}`);
@@ -1026,6 +1031,9 @@ function startWorkspace(argv) {
     state_root: state.root,
     base_branch: baseBranch,
     base_ref: baseRef,
+    // Retain the commit selected at workspace creation. Closeout safety must
+    // never re-resolve a mutable local ref (for example `dev` or `HEAD`).
+    base_sha: baseSha,
     branch,
     worktree_path: worktreePath,
     status: "active",
@@ -1051,7 +1059,7 @@ function startWorkspace(argv) {
       shouldFetch ? `git fetch origin ${baseBranch}` : "skip fetch",
       `mkdir ${state.tasksDir}`,
       `mkdir ${state.worktreesDir}`,
-      `git worktree add -b ${branch} ${worktreePath} ${baseRef}`,
+      `git worktree add -b ${branch} ${worktreePath} ${baseSha}`,
       `write ${manifestPath}`,
     ];
     if (options.summaryJson) {
@@ -1068,7 +1076,9 @@ function startWorkspace(argv) {
   mkdirSync(state.tasksDir, { recursive: true });
   mkdirSync(state.worktreesDir, { recursive: true });
   withBranchOwnershipLock(state, branch, () => withManifestLock(state, taskId, () => {
-    runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseRef], { cwd: repoRoot });
+    // The worktree and manifest must derive from the same immutable commit;
+    // never re-resolve a mutable base ref after capturing base_sha.
+    runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseSha], { cwd: repoRoot });
     writeManifest(manifestPath, manifest);
   }));
 
@@ -2036,20 +2046,23 @@ function commitsAheadOfBase(manifest) {
 }
 
 function inspectCommitsAheadOfBase(manifest) {
-  const baseRef = String(manifest.base_ref || manifest.base_branch || "").trim();
-  if (!baseRef) {
-    return { known: false, count: null, reasonCode: "base_ref_missing_hold", reason: "manifest has no inspectable base ref" };
+  const baseSha = immutableManifestBaseSha(manifest, manifest.worktree_path);
+  if (!baseSha) {
+    return { known: false, count: null, reasonCode: "immutable_base_missing_hold", reason: "manifest has no immutable base commit binding" };
   }
-  const base = git(["rev-parse", "--verify", "--quiet", baseRef], { cwd: manifest.worktree_path });
-  if (base.code !== 0 || !base.stdout.trim()) {
-    return { known: false, count: null, reasonCode: "base_ref_unresolved_hold", reason: "manifest base ref cannot be resolved in the worktree" };
-  }
-  const ahead = git(["rev-list", "--count", `${baseRef}..HEAD`], { cwd: manifest.worktree_path });
+  const ahead = git(["rev-list", "--count", `${baseSha}..HEAD`], { cwd: manifest.worktree_path });
   const count = Number.parseInt(ahead.stdout.trim(), 10);
   if (ahead.code !== 0 || !Number.isFinite(count)) {
     return { known: false, count: null, reasonCode: "base_commit_count_unavailable_hold", reason: "local-only commit count cannot be proven" };
   }
   return { known: true, count };
+}
+
+function immutableManifestBaseSha(manifest, cwd) {
+  const baseSha = exactGitObjectIdOrNull(manifest?.base_sha);
+  if (!baseSha || !cwd) return null;
+  const available = git(["cat-file", "-e", `${baseSha}^{commit}`], { cwd });
+  return available.code === 0 ? baseSha : null;
 }
 
 function coordinationReportStopLines() {
@@ -8628,7 +8641,10 @@ function behaviorShadowSkipPlannerEvidence(names, context = {}) {
     const outputKey = shadowOutputKey.get(name);
     const emptySelection = new RegExp(`"${outputKey}"\\s*:\\s*\\[\\s*\\]`).test(output.stdout);
     const logBacked = output.code === 0 && exactHeadPattern.test(output.stdout) && emptySelection;
-    const artifact = logBacked || String(output.stdout || "").trim()
+    // Logs are an optimization, not authority. A nonempty partial or failed
+    // log cannot prove the planner selection, so it must fall back to the
+    // exact-head/base-bound artifact just like empty unavailable output.
+    const artifact = logBacked
       ? null
       : exactHeadPlannerArtifact(match[1], expectedHeadSha, expectedBaseSha, context.worktreePath);
     const artifactBacked = artifact?.headSha === expectedHeadSha && artifact?.baseSha === expectedBaseSha && Array.isArray(artifact?.[outputKey]) && artifact[outputKey].length === 0;
@@ -9755,9 +9771,8 @@ function buildNoSourceVerificationPacket(record, state, options) {
   } catch (error) { blockers.push(`worktree_unproven:${safeMetadataText(error.message || error, 200)}`); }
   const commits = worktree ? inspectCommitsAheadOfBase(manifest) : { known: false, count: null, reasonCode: "base_unproven" };
   add(commits.known && commits.count === 0, commits.reasonCode || "local_only_commits_present");
-  const base = git(["rev-parse", "--verify", "--quiet", manifest.base_ref], { cwd: manifest.worktree_path });
-  const baseSha = base.code === 0 ? exactGitObjectIdOrNull(base.stdout.trim()) : null;
-  add(Boolean(baseSha), "base_ref_unresolved_hold");
+  const baseSha = immutableManifestBaseSha(manifest, manifest.worktree_path);
+  add(Boolean(baseSha), "immutable_base_unavailable_hold");
   add(Boolean(headSha), "checkout_head_unresolved_hold");
   add(Boolean(headSha) && Boolean(baseSha) && headSha === baseSha, "checkout_head_does_not_match_base_hold");
   return {
@@ -9987,8 +10002,7 @@ function closeNoSourceVerificationEvidence(manifest) {
     return { status: "blocked", reason: `no-source verification receipt cannot inspect the worktree: ${safeMetadataText(error.message || error, 200)}` };
   }
   const expectedPlan = resolveVerificationPlan("scoped", manifest, worktreeStatus);
-  const expectedBase = git(["rev-parse", manifest.base_ref], { cwd: manifest.worktree_path });
-  const baseSha = expectedBase.code === 0 ? expectedBase.stdout.trim() : null;
+  const baseSha = immutableManifestBaseSha(manifest, manifest.worktree_path);
   const currentHead = git(["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: manifest.worktree_path });
   const currentHeadSha = currentHead.code === 0 ? exactGitObjectIdOrNull(currentHead.stdout.trim()) : null;
   const expectedCommand = expectedPlan.command.join(" ");
@@ -22355,19 +22369,79 @@ function assertActiveTaskLeaseWriteOwnership(context) {
 function withAssignmentsIndexLock(state, fn) {
   mkdirSync(state.assignmentsDir, { recursive: true });
   const lockPath = join(state.assignmentsDir, ".assignment-index.lock");
-  let fd;
+  const reclaimPath = assignmentsIndexReclaimClaimPath(lockPath);
+  if (existsSync(reclaimPath) && !recoverStaleAssignmentsIndexReclaimClaim(reclaimPath)) {
+    throw new Error(`Assignment index is locked by another session: ${lockPath}`);
+  }
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) throw new Error("Assignment index lock cannot establish the current process identity.");
+  const lockBytes = `${JSON.stringify({ schemaVersion: "assignment-index-lock/v1", pid: process.pid, processStart, acquiredAt: new Date().toISOString() })}\n`;
   try {
-    fd = openSync(lockPath, "wx");
+    publishBranchOwnershipLock(lockPath, lockBytes);
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+    if (recoverStaleAssignmentsIndexLock(lockPath)) {
+      return withAssignmentsIndexLock(state, fn);
+    }
     throw new Error(`Assignment index is locked by another session: ${lockPath}`);
   }
   try {
     return fn();
   } finally {
-    closeSync(fd);
-    rmSync(lockPath, { force: true });
+    // A recovered or replacement owner must never be unlinked by this owner.
+    removeBranchOwnershipArtifactIfOwned(lockPath, lockBytes);
   }
+}
+
+function recoverStaleAssignmentsIndexLock(lockPath) {
+  let observed;
+  try { observed = readFileSync(lockPath, "utf8"); } catch { return false; }
+  let record;
+  try { record = JSON.parse(observed); } catch { return false; }
+  if (record?.schemaVersion !== "assignment-index-lock/v1" || !Number.isInteger(record?.pid) || typeof record?.processStart !== "string") return false;
+  if (branchLockProcessProbe(record.pid) !== "dead") return false;
+  const reclaimPath = assignmentsIndexReclaimClaimPath(lockPath);
+  const processStart = processStartIdentity(process.pid);
+  if (!processStart) return false;
+  const claimBytes = `${JSON.stringify({ schemaVersion: "assignment-index-reclaim/v1", pid: process.pid, processStart, lockDigest: createHash("sha256").update(observed).digest("hex"), acquiredAt: new Date().toISOString() })}\n`;
+  try { publishBranchOwnershipLock(reclaimPath, claimBytes); } catch (error) {
+    if (error?.code !== "EEXIST") return false;
+    if (recoverStaleAssignmentsIndexReclaimClaim(reclaimPath)) return recoverStaleAssignmentsIndexLock(lockPath);
+    return false;
+  }
+  try {
+    let current;
+    try { current = readFileSync(lockPath, "utf8"); } catch { return false; }
+    if (current !== observed) return false;
+    // The reclaim sidecar is checked before every governed acquisition, so no
+    // replacement owner can appear between this proof and the atomic rename.
+    const quarantinePath = `${reclaimPath}.${randomUUID()}.stale`;
+    try { renameSync(lockPath, quarantinePath); } catch { return false; }
+    try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+    return true;
+  } finally {
+    removeBranchOwnershipArtifactIfOwned(reclaimPath, claimBytes);
+  }
+}
+
+function assignmentsIndexReclaimClaimPath(lockPath) {
+  return `${lockPath}.reclaim`;
+}
+
+function recoverStaleAssignmentsIndexReclaimClaim(reclaimPath) {
+  let observed;
+  try { observed = readFileSync(reclaimPath, "utf8"); } catch { return false; }
+  let claim;
+  try { claim = JSON.parse(observed); } catch { return false; }
+  if (claim?.schemaVersion !== "assignment-index-reclaim/v1" || !Number.isInteger(claim?.pid) || typeof claim?.processStart !== "string" || !/^[a-f0-9]{64}$/.test(claim?.lockDigest || "")) return false;
+  if (branchLockProcessProbe(claim.pid) !== "dead") return false;
+  let current;
+  try { current = readFileSync(reclaimPath, "utf8"); } catch { return false; }
+  if (current !== observed) return false;
+  const quarantinePath = `${reclaimPath}.${randomUUID()}.stale`;
+  try { renameSync(reclaimPath, quarantinePath); } catch { return false; }
+  try { rmSync(quarantinePath, { force: true }); } catch { return false; }
+  return true;
 }
 
 // Branch ownership is the outermost lock for governed branch creation, claim,

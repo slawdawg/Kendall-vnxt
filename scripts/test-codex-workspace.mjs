@@ -1340,6 +1340,21 @@ try {
     assert(result.stderr.includes("Invalid task id"));
   });
 
+  test("start creates its worktree from the immutable manifest base", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const worktreePath = join(fixture.root, "managed-immutable-base");
+    try {
+      const expectedBase = runGit(fixture.root, ["rev-parse", "origin/dev"]).stdout;
+      const result = run(["start", "immutable base task", "--task-id", "immutable-base-task", "--worktree", worktreePath, "--base", "origin/dev", "--no-fetch", "--owner", "runner-a", "--state-root", fixture.stateRoot], { script: fixture.script, cwd: fixture.root });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "immutable-base-task.json"));
+      assert(manifest.base_sha === expectedBase, JSON.stringify(manifest));
+      assert(runGit(worktreePath, ["rev-parse", "HEAD"]).stdout === expectedBase, "worktree head diverged from immutable manifest base");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("rebuild task id selection leaves lock rejection to the lock helper", () => {
     const source = readFileSync(scriptPath, "utf8");
     const match = source.match(/function uniqueTaskId[\s\S]*?function assertCurrentBranch/);
@@ -12059,12 +12074,14 @@ try {
   test("verify-pr-gates requires an exact-head planner artifact when planner logs are unavailable", () => {
     for (const scenario of [
       { name: "artifact-success", plannerArtifactHeadSha: null, expectedCode: 0 },
+      { name: "artifact-partial-invalid-log-success", plannerLogPartialInvalid: true, expectedCode: 0 },
       { name: "artifact-head-mismatch", plannerArtifactHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expectedCode: 1 },
       { name: "artifact-base-mismatch", plannerArtifactBaseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", expectedCode: 1 },
     ]) {
       const fixture = createCanonicalManagedPrFixture({
         existingPr: true,
-        plannerLogUnavailable: true,
+        plannerLogUnavailable: !scenario.plannerLogPartialInvalid,
+        plannerLogPartialInvalid: scenario.plannerLogPartialInvalid,
         plannerArtifactHeadSha: scenario.plannerArtifactHeadSha,
         plannerArtifactBaseSha: scenario.plannerArtifactBaseSha,
         statusCheckRollup: [
@@ -20687,7 +20704,7 @@ try {
     }
   });
 
-  test("verify-no-source rejects a stale checkout and close-no-source rejects a changed receipt head", () => {
+  test("verify-no-source retains its immutable base across remote advancement and close-no-source rejects a changed receipt head", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-head-binding", baseBranch: "dev" });
     try {
       const { manifestPath } = prepareNoSourceFixture(fixture, { verification: false });
@@ -20700,11 +20717,10 @@ try {
       assert(runGit(fixture.worktree, ["rev-parse", "origin/dev"]).stdout === advancedBase, "fixture did not advance the managed base ref");
       assert(staleHead !== advancedBase, "fixture did not retain the stale checkout HEAD");
 
-      const before = readFileSync(manifestPath, "utf8");
-      const stale = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
-      assert(stale.code !== 0, stale.stderr || stale.stdout);
-      assert(stale.stderr.includes("checkout_head_does_not_match_base_hold"), stale.stderr || stale.stdout);
-      assert(readFileSync(manifestPath, "utf8") === before, "stale checkout verification wrote a receipt");
+      const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(verified.code === 0, verified.stderr || verified.stdout);
+      const verifiedReceipt = readJson(manifestPath).no_source_verification_receipt;
+      assert(verifiedReceipt.baseSha === staleHead && verifiedReceipt.verifiedHeadSha === staleHead, JSON.stringify(verifiedReceipt));
 
       const manifest = readJson(manifestPath);
       manifest.no_source_verification_receipt = {
@@ -20755,6 +20771,27 @@ try {
       } finally {
         cleanupIntegratedCleanupFixture(fixture);
       }
+    }
+  });
+
+  test("verify-no-source uses the immutable manifest base when a mutable local base ref advances", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-immutable-local-base" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const manifest = readJson(manifestPath);
+      const immutableBase = manifest.base_sha;
+      commitFile(fixture.worktree, "unpublished-source.txt", "must not close\n", "create unpublished source");
+      const unpublishedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["update-ref", "refs/heads/mutable-base", unpublishedHead]);
+      manifest.base_ref = "mutable-base";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(verified.code !== 0, verified.stderr || verified.stdout);
+      assert(verified.stderr.includes("local_only_commits_present"), verified.stderr || verified.stdout);
+      assert(readJson(manifestPath).base_sha === immutableBase, "verification rewrote the immutable base binding");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
     }
   });
 
@@ -20816,6 +20853,29 @@ try {
       assert(refSnapshot(fixture.root) === remoteSourceRefs, "remote source evidence changed local refs");
     } finally {
       if (fd !== undefined) closeSync(fd);
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source recovers only a dead owner-bound assignment-index lock", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-dead-assignment-index-lock" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const lockPath = join(fixture.stateRoot, "assignments", ".assignment-index.lock");
+      const staleLock = `${JSON.stringify({ schemaVersion: "assignment-index-lock/v1", pid: 2147483647, processStart: "dead-owner", acquiredAt: "2026-08-25T00:00:00.000Z" })}\n`;
+      writeFileSync(lockPath, staleLock);
+      const reclaimPath = `${lockPath}.reclaim`;
+      writeFileSync(reclaimPath, `${JSON.stringify({ schemaVersion: "assignment-index-reclaim/v1", pid: process.pid, processStart: processStartIdentityForTest(), lockDigest: createHash("sha256").update(staleLock).digest("hex"), acquiredAt: "2026-08-25T00:00:00.000Z" })}\n`);
+      const blocked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(blocked.code !== 0 && blocked.stderr.includes("Assignment index is locked"), blocked.stderr || blocked.stdout);
+      assert(readFileSync(lockPath, "utf8") === staleLock, "live recovery claimant lost the stale lock it was serializing");
+      rmSync(reclaimPath);
+      const recovered = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(!existsSync(lockPath), "recovered assignment index lock was retained");
+      assert(!existsSync(reclaimPath), "assignment index reclaim claim was retained");
+      assert(readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`)).status === "closed", recovered.stdout || recovered.stderr);
+    } finally {
       cleanupIntegratedCleanupFixture(fixture);
     }
   });
@@ -21056,9 +21116,9 @@ try {
         expected: "local_only_commits_present",
       },
       {
-        name: "unresolved base",
-        prepare: ({ manifest }) => { manifest.base_ref = "refs/heads/no-source-missing-base"; },
-        expected: "base_ref_unresolved_hold",
+        name: "missing immutable base",
+        prepare: ({ manifest }) => { delete manifest.base_sha; },
+        expected: "immutable_base_missing_hold",
       },
       {
         name: "legacy retained task lock",
@@ -21384,8 +21444,9 @@ function prepareNoSourceFixture(fixture, options = {}) {
   const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
   const manifest = readJson(manifestPath);
   delete manifest.source_assignment_id;
+  manifest.base_sha = runGit(fixture.worktree, ["rev-parse", `${manifest.base_ref}^{commit}`]).stdout;
   if (options.verification !== false) {
-    const baseSha = runGit(fixture.worktree, ["rev-parse", manifest.base_ref]).stdout;
+    const baseSha = manifest.base_sha;
     const verifiedHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
     const verifiedAt = "2026-08-25T00:00:00.000Z";
     manifest.no_source_verification_receipt = {
@@ -21842,6 +21903,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       `const plannerWorkspaceProfiles = ${JSON.stringify(options.plannerWorkspaceProfiles || [])};`,
       `const plannerSupervisorShards = ${JSON.stringify(options.plannerSupervisorShards || [])};`,
       `const plannerLogUnavailable = ${JSON.stringify(Boolean(options.plannerLogUnavailable))};`,
+      `const plannerLogPartialInvalid = ${JSON.stringify(Boolean(options.plannerLogPartialInvalid))};`,
       `const plannerArtifactHeadSha = ${JSON.stringify(options.plannerArtifactHeadSha || null)};`,
       `const plannerArtifactBaseSha = ${JSON.stringify(options.plannerArtifactBaseSha || null)};`,
       `const plannerArtifactSupervisorShards = ${JSON.stringify(options.plannerArtifactSupervisorShards || [])};`,
@@ -21851,7 +21913,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.existingPr
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
-      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { if (plannerLogUnavailable) process.exit(0); const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { if (plannerLogUnavailable) process.exit(0); if (plannerLogPartialInvalid) { console.log('truncated planner output'); process.exit(1); } const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
       "if (args[0] === 'run' && args[1] === 'download') { const dir = args[args.indexOf('--dir') + 1]; const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(`${dir}/ci-planner-evidence.json`, JSON.stringify({ schemaVersion: 'ci-planner-evidence/v1', headSha: plannerArtifactHeadSha || pr.headRefOid, baseSha: plannerArtifactBaseSha || pr.baseRefOid, selectedWorkspaceProfiles: plannerWorkspaceProfiles, selectedSupervisorShards: plannerArtifactSupervisorShards })); process.exit(0); }",
       options.changedPathBaseOidDrift
         ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
