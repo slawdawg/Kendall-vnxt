@@ -10045,6 +10045,7 @@ try {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const stageLog = installFixtureResumableCheckPlan(fixture, supervisorCheckLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      installFixtureResumableCheckPauseAtStageSeam(fixture, "test:supervisor:check:integration:supervisor-flow");
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
       manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, ["test:supervisor"], { plan_digest: createHash("sha256").update("test:supervisor").digest("hex") });
@@ -10056,10 +10057,13 @@ try {
         { cwd: fixture.worktree, env: fixture.env },
       );
 
-      assert(result.code === 0, result.stderr || result.stdout);
-      assert(readFixtureStageLog(stageLog).join(",") === supervisorCheckLeaves.join(","), "obsolete packet did not start the newly bound full plan from its first leaf");
+      const pausedStage = "test:supervisor:check:integration:supervisor-flow";
+      const pausedIndex = supervisorCheckLeaves.indexOf(pausedStage);
+      assert(pausedIndex > 0, "fixture supervisor-flow stage is missing from the full plan");
+      assert(result.code !== 0 && result.stderr.includes(`Check verification packet paused before ${pausedStage}`), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === supervisorCheckLeaves.slice(0, pausedIndex).join(","), "obsolete packet did not start the newly bound full plan from its first leaf");
       const updated = readJson(manifestPath);
-      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.status === "partial" && updated.check_verification_packet?.next_stage === pausedStage, JSON.stringify(updated.check_verification_packet));
       assert(updated.check_verification_packet?.stages?.[0]?.stage === supervisorCheckLeaves[0], JSON.stringify(updated.check_verification_packet));
       assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
     } finally {
@@ -22404,6 +22408,16 @@ function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
   writeFileSync(fixture.script, source.replace(started, "  const started = Date.now() - resumableCheckInvocationBudgetMs;"));
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pre-stage pause clock"]);
+}
+
+function installFixtureResumableCheckPauseAtStageSeam(fixture, stage) {
+  const source = readFileSync(fixture.script, "utf8");
+  const elapsed = "    const elapsedMs = Date.now() - started;";
+  assert(source.includes(elapsed), "fixture did not contain the resumable check elapsed-time seam");
+  writeFileSync(fixture.script, source.replace(elapsed, "    const elapsedMs = stage === process.env.CODEX_WORKSPACE_FIXTURE_PAUSE_STAGE ? invocationBudgetMs : 0;"));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check targeted stage pause"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PAUSE_STAGE: stage };
 }
 
 function installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage) {
