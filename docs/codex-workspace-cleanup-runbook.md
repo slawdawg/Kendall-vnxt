@@ -183,7 +183,16 @@ ownership, reconcile PRs, or clean resources.
 
 Only the exact current owner may close an `active` lane that has a registered
 clean worktree, a provable zero-ahead base, no delivery or cleanup evidence,
-no active assignment, and no task lock. Inspect first:
+no active assignment, no active task lock, and a remote branch that is absent or
+exactly matches the freshly read remote base branch. First record verification through the
+supported no-source path; do not edit manifest evidence manually:
+
+```bash
+node ./scripts/codex-workspace.mjs verify-no-source <task-id> --verify scoped
+```
+
+The command re-proves the clean no-source state under its manifest lock before
+recording the command, successful result, and exact base SHA. Then inspect:
 
 ```bash
 node ./scripts/codex-workspace.mjs close-no-source <task-id> --summary-json
@@ -196,6 +205,8 @@ node ./scripts/codex-workspace.mjs close-no-source <task-id> --apply \
   --reason "bounded explanation of why this lane produced no source"
 ```
 
+Apply holds the assignment-index lock through its fresh manifest-lock proof, so
+an active matching assignment cannot be created between the proof and closeout.
 This does not delete the worktree, any branch, a PR, task-lock history,
 assignment, or retained evidence. The closed manifest therefore prevents the
 ordinary merged cleanup path from deleting these retained resources; any later

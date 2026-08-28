@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { evaluateMutationAdmission } from "./lib/mutation-admission.mjs";
@@ -13,6 +13,7 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
 const testFilter = String(process.env.CODEX_WORKSPACE_TEST_FILTER || "").trim().toLowerCase();
 const workspaceTestProfile = String(process.env.CODEX_WORKSPACE_TEST_PROFILE || "all").trim().toLowerCase();
+const testChildTimeoutMs = optionalTestChildTimeoutMs(process.env.CODEX_WORKSPACE_TEST_CHILD_TIMEOUT_MS);
 if (!isWorkspaceTestProfile(workspaceTestProfile)) {
   throw new Error(`Unknown CODEX_WORKSPACE_TEST_PROFILE: ${workspaceTestProfile}`);
 }
@@ -20,6 +21,8 @@ if (testFilter && workspaceTestProfile !== "all") {
   throw new Error("CODEX_WORKSPACE_TEST_FILTER and CODEX_WORKSPACE_TEST_PROFILE cannot be combined");
 }
 const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
+let testProgressPath;
+let testRunCompleted = false;
 const routingPreviewCheckLeafStages = Object.freeze([
   "test:supervisor:check-routing-preview-01",
   "test:supervisor:check-routing-preview-02",
@@ -62,6 +65,8 @@ if (nestedNodeProbe.error?.code === "EPERM") {
 }
 
 try {
+  testProgressPath = optionalTestProgressPath(process.env.CODEX_WORKSPACE_TEST_PROGRESS_PATH, stateRoot);
+  writeTestProgressArtifact(testProgressPath, { schemaVersion: 1, status: "initializing", test: null });
   test("child JSON command guard reports empty stdout as sandbox/process boundary", () => {
     const guarded = guardExpectedJsonResult(["list", "--summary-json"], {
       code: 1,
@@ -93,6 +98,63 @@ try {
     assert(markers.length === 1, JSON.stringify(markers));
     assert(markers[0] === 'TEST_FAILURE={"test":"fixture failure marker probe"}', JSON.stringify(markers));
     assert(!markers[0].includes("fixture-secret-token-123"), markers[0]);
+  });
+
+  test("test harness progress marker and child watchdog are opt-in", () => {
+    const progressDirectory = mkdtempSync(join(tmpdir(), "codex-workspace-progress-"));
+    const progressPath = join(tmpdir(), `codex-workspace-progress-${process.pid}-${Date.now()}.json`);
+    try {
+      writeTestProgressArtifact(progressPath, { schemaVersion: 1, status: "running", test: "fixture progress marker probe" });
+      const initialProgress = readJson(progressPath);
+      assert(initialProgress.status === "running" && initialProgress.test === "fixture progress marker probe", JSON.stringify(initialProgress));
+      assert(existsSync(progressPath), "progress artifact was not published");
+      assert(readdirSync(progressDirectory).length === 0, "progress artifact left a non-atomic temporary file");
+      const escapedPath = join(progressDirectory, "escape", "last-progress.json");
+      symlinkSync(rootDir, join(progressDirectory, "escape"), "dir");
+      let escaped = false;
+      try { writeTestProgressArtifact(escapedPath, initialProgress); } catch { escaped = true; }
+      assert(escaped, "progress artifact followed a symlink outside the temporary root");
+      const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        env: {
+          ...process.env,
+          CODEX_WORKSPACE_TEST_FILTER: "test harness emits a deterministic sanitized failure marker",
+          CODEX_WORKSPACE_TEST_PROFILE: "all",
+          CODEX_WORKSPACE_TEST_PROGRESS_PATH: progressPath,
+        },
+      });
+      assert(child.status === 0, child.stderr || child.stdout);
+      assert(!child.stdout.includes("TEST_PROGRESS="), child.stdout);
+      const completedProgress = readJson(progressPath);
+      assert(completedProgress.status === "completed" && completedProgress.executedTestCount === 1, JSON.stringify(completedProgress));
+      const watchdog = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+        env: {
+          ...process.env,
+          CODEX_WORKSPACE_TEST_FILTER: "doctor accepts an empty state root",
+          CODEX_WORKSPACE_TEST_PROFILE: "all",
+          CODEX_WORKSPACE_TEST_CHILD_TIMEOUT_MS: "1",
+        },
+      });
+      assert((watchdog.status ?? 0) !== 0, "child watchdog did not bound the fixture command");
+      assert((watchdog.stderr || "").includes('TEST_FAILURE={"test":"doctor accepts an empty state root"}'), watchdog.stderr || watchdog.stdout);
+      assert(optionalTestChildTimeoutMs("") === undefined, "unset child watchdog unexpectedly changed harness defaults");
+      assert(optionalTestChildTimeoutMs("25") === 25, "bounded child watchdog was not parsed");
+      for (const invalid of ["0", "invalid"]) {
+        let rejected = false;
+        try { optionalTestChildTimeoutMs(invalid); } catch { rejected = true; }
+        assert(rejected, `invalid child watchdog was accepted: ${invalid}`);
+      }
+    } finally {
+      rmSync(progressPath, { force: true });
+      rmSync(progressDirectory, { recursive: true, force: true });
+    }
   });
 
   test("workspace behavior profiles classify lifecycle tests deterministically", () => {
@@ -328,7 +390,11 @@ try {
       worktrees.push(freshWorktree, staleWorktree, deliveryWorktree, cleanupWorktree, holdWorktree);
       const freshHeartbeat = new Date().toISOString();
       const staleHeartbeat = "2026-07-01T18:00:00.000Z";
+      const freshHead = runGit(freshWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      const staleHead = runGit(staleWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      const deliveryHead = runGit(deliveryWorktree, ["rev-parse", "HEAD"]).stdout.trim();
       const cleanupHead = runGit(cleanupWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      const holdHead = runGit(holdWorktree, ["rev-parse", "HEAD"]).stdout.trim();
       runGit(cleanupWorktree, ["branch", "codex/lifecycle-cleanup", cleanupHead]);
       const manifests = [
         {
@@ -337,6 +403,7 @@ try {
           branch: "codex/lifecycle-fresh",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: freshHead,
           status: "active",
           owner: "runner-a",
           worktree_path: freshWorktree,
@@ -348,6 +415,7 @@ try {
           branch: "codex/lifecycle-stale",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: staleHead,
           status: "active",
           owner: "runner-b",
           worktree_path: staleWorktree,
@@ -359,6 +427,7 @@ try {
           branch: "codex/lifecycle-delivery",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: deliveryHead,
           status: "pr_open",
           owner: "runner-a",
           worktree_path: deliveryWorktree,
@@ -371,6 +440,7 @@ try {
           branch: "codex/lifecycle-cleanup",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: cleanupHead,
           status: "merged",
           owner: "runner-a",
           worktree_path: cleanupWorktree,
@@ -401,6 +471,7 @@ try {
           branch: "codex/lifecycle-hold",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: holdHead,
           status: "blocked_authority",
           owner: "runner-a",
           worktree_path: holdWorktree,
@@ -433,6 +504,7 @@ try {
           branch: "codex/lifecycle-future-heartbeat",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: freshHead,
           status: "active",
           owner: "runner-a",
           worktree_path: freshWorktree,
@@ -442,6 +514,11 @@ try {
       for (const manifest of manifests) {
         writeFileSync(join(tasksDir, `${manifest.task_id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
       }
+      writeFileSync(join(tasksDir, "lifecycle-malformed.json"), "{ this is not valid JSON\n");
+      writeFileSync(
+        join(tasksDir, "lifecycle-schema-invalid.json"),
+        `${JSON.stringify({ task_id: "lifecycle-schema-invalid", status: "active" }, null, 2)}\n`,
+      );
       const before = taskSnapshot(tasksDir);
 
       const summary = run([
@@ -459,23 +536,29 @@ try {
       assert(!summary.stdout.includes("Lifecycle Health"), "summary-json stdout must not include text output");
       const packet = JSON.parse(summary.stdout);
       assert(packet.mutation === "none; summary only", summary.stdout || summary.stderr);
-      assert(packet.rows.length === manifests.length, summary.stdout || summary.stderr);
-      assert(packet.counts.total === manifests.length, summary.stdout || summary.stderr);
+      assert(packet.rows.length === manifests.length + 2, summary.stdout || summary.stderr);
+      assert(packet.counts.total === manifests.length + 2, summary.stdout || summary.stderr);
       assert(packet.counts.states.fresh_active === 1, summary.stdout || summary.stderr);
       assert(packet.counts.states.stale_attention_required === 1, summary.stdout || summary.stderr);
       assert(packet.counts.states.delivery_attention_required === 1, summary.stdout || summary.stderr);
       assert(packet.counts.states.cleanup_ready === 0, summary.stdout || summary.stderr);
       assert(packet.counts.states.missing_worktree_reconciliation_required === 1, summary.stdout || summary.stderr);
-      assert(packet.counts.states.hold_attention_required === 5, summary.stdout || summary.stderr);
+      assert(packet.counts.states.hold_attention_required === 7, summary.stdout || summary.stderr);
       assert(packet.counts.states.closed === 0, summary.stdout || summary.stderr);
-      assert(Object.values(packet.counts.states).reduce((total, count) => total + count, 0) === manifests.length, summary.stdout || summary.stderr);
+      assert(Object.values(packet.counts.states).reduce((total, count) => total + count, 0) === manifests.length + 2, summary.stdout || summary.stderr);
       assert(packet.rows.every((row) => row.observedStatus && row.derivedState && row.reasonCode && row.nextAction), summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-missing")?.derivedState === "missing_worktree_reconciliation_required", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-stale")?.derivedState === "stale_attention_required", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-cleanup")?.reasonCode === "cleanup_prerequisites_unproven", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-uninspectable")?.reasonCode === "worktree_inspection_unavailable", summary.stdout || summary.stderr);
-      assert(packet.rows.find((row) => row.taskId === "lifecycle-unresolved-base")?.reasonCode === "base_ref_unresolved_hold", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-unresolved-base")?.reasonCode === "immutable_base_missing_hold", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-future-heartbeat")?.reasonCode === "owner_heartbeat_future_hold", summary.stdout || summary.stderr);
+      const invalidRows = packet.rows.filter((row) => row.reasonCode === "manifest_invalid");
+      assert(invalidRows.length === 2, summary.stdout || summary.stderr);
+      assert(invalidRows.every((row) => row.derivedState === "hold_attention_required"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.taskId === "lifecycle-schema-invalid"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.taskId === null && row.manifestFile === "lifecycle-malformed.json"), summary.stdout || summary.stderr);
+      assert(invalidRows.some((row) => row.manifestFile === "lifecycle-schema-invalid.json"), summary.stdout || summary.stderr);
       assert(taskSnapshot(tasksDir) === before, "lifecycle-health must not mutate manifests");
 
       const text = run(["lifecycle-health", "--state-root", lifecycleStateRoot, "--owner", "runner-a"]);
@@ -483,6 +566,8 @@ try {
       assert(text.stdout.includes("Workspace Lifecycle Health"), text.stdout || text.stderr);
       assert(text.stdout.includes("fresh_active=1"), text.stdout || text.stderr);
       assert(text.stdout.includes("closed=0"), text.stdout || text.stderr);
+      assert(text.stdout.includes("lifecycle-malformed.json | observed=invalid"), text.stdout || text.stderr);
+      assert(!text.stdout.includes("- null | observed=invalid"), text.stdout || text.stderr);
       assert(taskSnapshot(tasksDir) === before, "lifecycle-health text report must not mutate manifests");
     } finally {
       rmSync(lifecycleStateRoot, { recursive: true, force: true });
@@ -1177,6 +1262,7 @@ try {
       const branch = "codex/summary-json-lane";
       const worktreePath = join(fixture.stateRoot, "worktrees", taskId);
       const manifestPath = join(fixture.stateRoot, "tasks", `${taskId}.json`);
+      const baseSha = runGit(fixture.root, ["rev-parse", "origin/dev"]).stdout;
       const branchBefore = branchExists(fixture.root, branch);
 
       const result = runFixtureScript(fixture, [
@@ -1210,7 +1296,7 @@ try {
       assert(packet.worktreePath === worktreePath, result.stdout || result.stderr);
       assert(packet.manifestPath === manifestPath, result.stdout || result.stderr);
       assert(packet.shouldFetch === true, result.stdout || result.stderr);
-      assert(packet.plan.includes(`git worktree add -b ${branch} ${worktreePath} origin/dev`), result.stdout || result.stderr);
+      assert(packet.plan.includes(`git worktree add -b ${branch} ${worktreePath} ${baseSha}`), result.stdout || result.stderr);
       assert(packet.plannedWrites.manifest === manifestPath, result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(!existsSync(manifestPath), "start dry-run summary-json wrote a manifest");
@@ -1325,6 +1411,21 @@ try {
     const result = run(["start", "bad id", "--task-id", "..\\bad", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "path traversal task id unexpectedly passed");
     assert(result.stderr.includes("Invalid task id"));
+  });
+
+  test("start creates its worktree from the immutable manifest base", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    const worktreePath = join(fixture.root, "managed-immutable-base");
+    try {
+      const expectedBase = runGit(fixture.root, ["rev-parse", "origin/dev"]).stdout;
+      const result = run(["start", "immutable base task", "--task-id", "immutable-base-task", "--worktree", worktreePath, "--base", "origin/dev", "--no-fetch", "--owner", "runner-a", "--state-root", fixture.stateRoot], { script: fixture.script, cwd: fixture.root });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "immutable-base-task.json"));
+      assert(manifest.base_sha === expectedBase, JSON.stringify(manifest));
+      assert(runGit(worktreePath, ["rev-parse", "HEAD"]).stdout === expectedBase, "worktree head diverged from immutable manifest base");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
   });
 
   test("rebuild task id selection leaves lock rejection to the lock helper", () => {
@@ -10006,6 +10107,7 @@ try {
     const fixture = createFinishPrExistingCommitFixture();
     try {
       const stageLog = installFixtureResumableCheckPlan(fixture, supervisorCheckLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      installFixtureResumableCheckPauseAtStageSeam(fixture, "test:supervisor:check:integration:supervisor-flow");
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
       manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, ["test:supervisor"], { plan_digest: createHash("sha256").update("test:supervisor").digest("hex") });
@@ -10017,10 +10119,13 @@ try {
         { cwd: fixture.worktree, env: fixture.env },
       );
 
-      assert(result.code === 0, result.stderr || result.stdout);
-      assert(readFixtureStageLog(stageLog).join(",") === supervisorCheckLeaves.join(","), "obsolete packet did not start the newly bound full plan from its first leaf");
+      const pausedStage = "test:supervisor:check:integration:supervisor-flow";
+      const pausedIndex = supervisorCheckLeaves.indexOf(pausedStage);
+      assert(pausedIndex > 0, "fixture supervisor-flow stage is missing from the full plan");
+      assert(result.code !== 0 && result.stderr.includes(`Check verification packet paused before ${pausedStage}`), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === supervisorCheckLeaves.slice(0, pausedIndex).join(","), "obsolete packet did not start the newly bound full plan from its first leaf");
       const updated = readJson(manifestPath);
-      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.status === "partial" && updated.check_verification_packet?.next_stage === pausedStage, JSON.stringify(updated.check_verification_packet));
       assert(updated.check_verification_packet?.stages?.[0]?.stage === supervisorCheckLeaves[0], JSON.stringify(updated.check_verification_packet));
       assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
     } finally {
@@ -10538,6 +10643,58 @@ try {
       assert(!retained.includes("fixture-packet-secret"), "resumable check retained raw child output");
       assert(manifest.check_verification_packet?.stages?.[0]?.output === "omitted", JSON.stringify(manifest.check_verification_packet));
       assert(readJson(join(diagnosticsDir, names[0])).child?.output === "omitted", retained);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr retains a bounded sanitized diagnostic tail only for a failed terminal workspace fixture stage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["test:codex-workspace"], { "test:codex-workspace": "secret-nonzero" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "terminal workspace fixture unexpectedly passed");
+      assert(!result.stderr.includes("fixture-packet-secret"), "CLI error retained child output");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "terminal workspace fixture did not persist one diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, names[0]));
+      assert(diagnostic.profile === "codex-workspace" && diagnostic.stage === "test:codex-workspace", JSON.stringify(diagnostic));
+      assert(diagnostic.command?.join(" ") === "pnpm run test:codex-workspace", JSON.stringify(diagnostic));
+      assert(diagnostic.child?.output === "sanitized-tail-v1", JSON.stringify(diagnostic));
+      assert(diagnostic.child?.stderr_tail?.value.includes("[redacted-sensitive]"), JSON.stringify(diagnostic));
+      assert(diagnostic.child?.process?.max_buffer_bytes === null, JSON.stringify(diagnostic));
+      assert(!JSON.stringify(diagnostic).includes("fixture-packet-secret"), "terminal diagnostic retained raw child output");
+      assert(manifest.check_verification_packet?.failed_stage === "test:codex-workspace", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.stages?.[0]?.output === "omitted", JSON.stringify(manifest.check_verification_packet));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr keeps terminal workspace fixture success packet behavior unchanged", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["test:codex-workspace", "check:later-failure"], { "check:later-failure": "secret-nonzero" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "later failing fixture unexpectedly passed");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.check_verification_packet?.status === "failed" && manifest.check_verification_packet.failed_stage === "check:later-failure", JSON.stringify(manifest.check_verification_packet));
+      assert(manifest.check_verification_packet?.stages?.[0]?.output === "omitted", JSON.stringify(manifest.check_verification_packet));
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(names.length === 1, "later failure did not persist exactly one diagnostic");
+      const diagnostic = readJson(join(diagnosticsDir, names[0]));
+      assert(diagnostic.stage === "check:later-failure" && diagnostic.child?.output === "omitted", JSON.stringify(diagnostic));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -11988,6 +12145,46 @@ try {
       assert(result.stderr.includes("Behavior-shadow skipped checks require exact-head changes planner evidence"), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates requires an exact-head planner artifact when planner logs are unavailable", () => {
+    for (const scenario of [
+      { name: "artifact-success", plannerArtifactHeadSha: null, expectedCode: 0 },
+      { name: "artifact-partial-invalid-log-success", plannerLogPartialInvalid: true, expectedCode: 0 },
+      { name: "artifact-head-mismatch", plannerArtifactHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", expectedCode: 1 },
+      { name: "artifact-base-mismatch", plannerArtifactBaseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", expectedCode: 1 },
+    ]) {
+      const fixture = createCanonicalManagedPrFixture({
+        existingPr: true,
+        plannerLogUnavailable: !scenario.plannerLogPartialInvalid,
+        plannerLogPartialInvalid: scenario.plannerLogPartialInvalid,
+        plannerArtifactHeadSha: scenario.plannerArtifactHeadSha,
+        plannerArtifactBaseSha: scenario.plannerArtifactBaseSha,
+        statusCheckRollup: [
+          { name: "changes", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/456" },
+          { name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+          { name: "supervisor_behavior_shadow", status: "COMPLETED", conclusion: "SKIPPED", detailsUrl: "https://github.com/slawdawg/Kendall-vnxt/actions/runs/123/job/461" },
+        ],
+      });
+      try {
+        const seeded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        const result = runFixtureScript(fixture, [
+          "verify-pr-gates", "resumed-task", "--owner", "runner-a",
+          "--delivery-audit-agent", "Wegener", "--delivery-audit-status", "merge-ready",
+          "--delivery-audit-summary", "Exact-head artifact audit passed.",
+          "--merge-method", `gh pr merge 456 --merge --match-head-commit ${seeded.pr_delivery_head_sha}`,
+          "--rollback-path", "Revert the exact merge commit with gh pr revert 456 if recovery is needed.",
+          "--non-required-checks", "supervisor_behavior_shadow",
+          "--non-required-check-policy", "docs/workflows/end-to-end-lane-runner.md#documented-non-required-checks",
+          "--diff-risk-summary", "Focused planner artifact fixture.", "--diff-risk-files", "feature.txt",
+          "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs", "--state-root", fixture.stateRoot,
+        ], { cwd: fixture.worktree, env: fixture.env });
+        assert(result.code === scenario.expectedCode, `${scenario.name}: ${result.stderr || result.stdout}`);
+        if (scenario.expectedCode !== 0) assert(result.stderr.includes("Behavior-shadow skipped checks require exact-head changes planner evidence"), result.stderr || result.stdout);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
     }
   });
 
@@ -18252,7 +18449,7 @@ try {
     assert(!match[0].includes("deleteRemoteBranchIfPresent"), "cleanup-superseded must retain remote branches");
   });
 
-  test("cleanup-superseded previews and applies only an exact merged carry-forward tree proof", () => {
+  test("cleanup-superseded retains non-budget source PR and remote proofs while previewing an exact merged carry-forward tree", () => {
     const fixture = createSupersededCleanupFixture();
     const args = [
       "cleanup-superseded",
@@ -18276,6 +18473,8 @@ try {
       const summary = JSON.parse(preview.stdout);
       assert(summary.mode === "cleanup-superseded", `mode is ${summary.mode}`);
       assert(summary.counts.cleanupReady === 1, preview.stdout || preview.stderr);
+      assert(summary.results?.[0]?.proof?.sourcePullRequests?.status === "matched", "non-budget source PR proof did not run");
+      assert(summary.results?.[0]?.proof?.source?.remoteBranchHead, "non-budget remote source proof did not run");
       assert(summary.remoteBranchPolicy.includes("retained"), summary.remoteBranchPolicy);
       assert(summary.results[0].proof.carryForward.baseRefOidSource === "gh-pr-view", preview.stdout || preview.stderr);
       assert(summary.results[0].proof.scope.status === "matched", preview.stdout || preview.stderr);
@@ -20459,6 +20658,220 @@ try {
     }
   });
 
+  test("close-no-source compares a retained remote branch with symbolic remote HEAD evidence", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-symbolic-head" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      runGit(fixture.remoteRoot, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+      runGit(fixture.worktree, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = "HEAD";
+      manifest.base_ref = "origin/HEAD";
+      const baseSha = runGit(fixture.worktree, ["rev-parse", "origin/HEAD"]).stdout;
+      manifest.no_source_verification_receipt.baseRef = manifest.base_ref;
+      manifest.no_source_verification_receipt.baseSha = baseSha;
+      manifest.no_source_verification_receipt.verifiedHeadSha = baseSha;
+      manifest.no_source_verification_receipt.proof.worktree.headSha = baseSha;
+      manifest.no_source_verification_receipt.proof.base.ref = manifest.base_ref;
+      manifest.no_source_verification_receipt.proof.base.sha = baseSha;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.state === "exact_base", result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.baseSha === runGit(fixture.worktree, ["rev-parse", "origin/main"]).stdout, result.stdout || result.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source reads source and base refs from one coherent remote snapshot", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-coherent-remote-snapshot" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const invocationLog = join(fixture.root, "coherent-remote-snapshot.log");
+      installFixtureRemoteSnapshotLogger(fixture, invocationLog);
+      const before = readFileSync(manifestPath, "utf8");
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === true, result.stdout || result.stderr);
+      const invocations = readFileSync(invocationLog, "utf8").trim().split(/\r?\n/).filter(Boolean);
+      assert(invocations.length === 1, `remote source/base proof was not a single snapshot: ${invocations.join("\\n")}`);
+      assert(invocations[0].includes(`refs/heads/${fixture.branch}`), invocations[0]);
+      assert(invocations[0].includes(`refs/heads/${fixture.baseBranch}`), invocations[0]);
+      assert(readFileSync(manifestPath, "utf8") === before, "coherent remote snapshot preview mutated manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("verify-no-source records only a task-bound scoped receipt for an otherwise empty lane", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-verification-task", baseBranch: "dev" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture, { verification: false });
+      const blocked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      assert(JSON.parse(blocked.stdout).blockers.includes("task-bound no-source scoped verification receipt is required"), blocked.stdout || blocked.stderr);
+      const generic = readJson(manifestPath);
+      generic.last_verification_result = { schemaVersion: 1, command: "pnpm run check:fast", exitCode: 0, baseRef: generic.base_ref, baseSha: runGit(fixture.worktree, ["rev-parse", generic.base_ref]).stdout, verifiedAt: "2026-08-25T00:00:00.000Z" };
+      writeFileSync(manifestPath, `${JSON.stringify(generic, null, 2)}\n`);
+      const genericBlocked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(genericBlocked.code === 0, genericBlocked.stderr || genericBlocked.stdout);
+      assert(JSON.parse(genericBlocked.stdout).blockers.includes("task-bound no-source scoped verification receipt is required"), genericBlocked.stdout || genericBlocked.stderr);
+      const before = readFileSync(manifestPath, "utf8");
+      const dryRun = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "preflight", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(dryRun.code !== 0, dryRun.stderr || dryRun.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "preflight verify-no-source mutated manifest");
+      const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "preflight", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(verified.code !== 0, verified.stderr || verified.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "preflight verify-no-source recorded a receipt");
+      // GitHub Actions invokes this profile through pnpm, so inherit the
+      // pnpm.cjs shim path that would otherwise bypass the fixture binary.
+      fixture.env = { ...fixture.env, npm_execpath: "/opt/hostedtoolcache/pnpm/bin/pnpm.cjs" };
+      installFixtureNoSourceVerificationPnpm(fixture);
+      assert(fixture.env.npm_execpath.endsWith("fixture-npm-execpath"), "fixture pnpm shim override was not installed");
+      const scopedDryRun = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--dry-run", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(scopedDryRun.code === 0, scopedDryRun.stderr || scopedDryRun.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "scoped verify-no-source dry-run mutated manifest");
+      const scoped = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(scoped.code === 0, scoped.stderr || scoped.stdout);
+      const manifest = readJson(manifestPath);
+      assert(manifest.no_source_verification_receipt?.taskId === fixture.taskId, JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.profile === "scoped", JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.resolvedProfile === "check-fast", JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.command === "pnpm run check:fast", JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.proof?.base?.sha === manifest.last_verification_result?.baseSha, JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.verifiedHeadSha === runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout, JSON.stringify(manifest));
+      assert(manifest.no_source_verification_receipt?.verifiedHeadSha === manifest.last_verification_result?.verifiedHeadSha, JSON.stringify(manifest));
+      assert(manifest.events.some((event) => event.type === "verified"), JSON.stringify(manifest.events));
+      const ready = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(ready.code === 0, ready.stderr || ready.stdout);
+      assert(JSON.parse(ready.stdout).ready === true, ready.stdout || ready.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("verify-no-source records its own bounded verification diagnostic", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-verification-diagnostic" });
+    try {
+      prepareNoSourceFixture(fixture, { verification: false });
+      fixture.env = { ...fixture.env, npm_execpath: "/opt/hostedtoolcache/pnpm/bin/pnpm.cjs" };
+      installFixtureNoSourceVerificationPnpm(fixture);
+      writeFileSync(join(fixture.fakeBin, "pnpm"), [
+        "#!/bin/sh",
+        "exit 1",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "pnpm"), 0o755);
+
+      const result = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code !== 0, result.stderr || result.stdout);
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const diagnosticFiles = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
+      assert(diagnosticFiles.length === 1, `expected one no-source diagnostic: ${diagnosticFiles.join(",")}`);
+      const diagnostic = readJson(join(diagnosticsDir, diagnosticFiles[0]));
+      assert(diagnostic.operation === "verify-no-source", JSON.stringify(diagnostic));
+      assert(diagnostic.task_id === fixture.taskId, JSON.stringify(diagnostic));
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("verify-no-source retains its immutable base across remote advancement and close-no-source rejects a changed receipt head", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-head-binding", baseBranch: "dev" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture, { verification: false });
+      installFixtureNoSourceVerificationPnpm(fixture);
+      const staleHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      commitFile(fixture.root, "advanced-base.txt", "advanced base\n", "advance base past managed checkout");
+      const advancedBase = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["push", "-q", "origin", "dev"]);
+      runGit(fixture.worktree, ["fetch", "-q", "origin", "dev"]);
+      assert(runGit(fixture.worktree, ["rev-parse", "origin/dev"]).stdout === advancedBase, "fixture did not advance the managed base ref");
+      assert(staleHead !== advancedBase, "fixture did not retain the stale checkout HEAD");
+
+      const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(verified.code === 0, verified.stderr || verified.stdout);
+      const verifiedReceipt = readJson(manifestPath).no_source_verification_receipt;
+      assert(verifiedReceipt.baseSha === staleHead && verifiedReceipt.verifiedHeadSha === staleHead, JSON.stringify(verifiedReceipt));
+
+      const manifest = readJson(manifestPath);
+      manifest.no_source_verification_receipt = {
+        schemaVersion: 1,
+        taskId: manifest.task_id,
+        profile: "scoped",
+        resolvedProfile: "check-fast",
+        command: "pnpm run check:fast",
+        exitCode: 0,
+        baseRef: manifest.base_ref,
+        baseSha: advancedBase,
+        verifiedHeadSha: advancedBase,
+        verifiedAt: "2026-08-25T00:00:00.000Z",
+        proof: {
+          worktree: { registered: true, clean: true, branch: manifest.branch, headSha: advancedBase },
+          base: { ref: manifest.base_ref, sha: advancedBase, localOnlyCommits: 0 },
+        },
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const close = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(close.code === 0, close.stderr || close.stdout);
+      const packet = JSON.parse(close.stdout);
+      assert(packet.ready === false, close.stdout || close.stderr);
+      assert(packet.blockers.includes("task-bound no-source scoped verification receipt is incomplete or does not match the current proof"), close.stdout || close.stderr);
+      assert(readJson(manifestPath).status === "active", "receipt head mismatch mutated the manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("verify-no-source rejects checkout-relative symbolic base refs", () => {
+    for (const [suffix, baseRef] of [["head", "HEAD"], ["expression", "HEAD^{commit}"], ["reflog", "@{-1}"]]) {
+      const fixture = createIntegratedCleanupFixture({ taskId: `no-source-symbolic-base-${suffix}` });
+      try {
+        const { manifestPath } = prepareNoSourceFixture(fixture);
+        const manifest = readJson(manifestPath);
+        manifest.base_ref = baseRef;
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        installFixtureNoSourceVerificationPnpm(fixture);
+        const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+        assert(verified.code !== 0, verified.stderr || verified.stdout);
+        assert(verified.stderr.includes("symbolic_checkout_base_ref_hold"), verified.stderr || verified.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, "symbolic base ref changed the retained receipt");
+        const preview = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+        assert(preview.code === 0, preview.stderr || preview.stdout);
+        assert(JSON.parse(preview.stdout).blockers.includes("symbolic_checkout_base_ref_hold"), preview.stdout || preview.stderr);
+      } finally {
+        cleanupIntegratedCleanupFixture(fixture);
+      }
+    }
+  });
+
+  test("verify-no-source uses the immutable manifest base when a mutable local base ref advances", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-immutable-local-base" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const manifest = readJson(manifestPath);
+      const immutableBase = manifest.base_sha;
+      commitFile(fixture.worktree, "unpublished-source.txt", "must not close\n", "create unpublished source");
+      const unpublishedHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["update-ref", "refs/heads/mutable-base", unpublishedHead]);
+      manifest.base_ref = "mutable-base";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const verified = runFixtureScript(fixture, ["verify-no-source", fixture.taskId, "--verify", "scoped", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(verified.code !== 0, verified.stderr || verified.stdout);
+      assert(verified.stderr.includes("local_only_commits_present"), verified.stderr || verified.stdout);
+      assert(readJson(manifestPath).base_sha === immutableBase, "verification rewrote the immutable base binding");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("close-no-source refuses foreign ownership, linked assignments, and dirty worktree evidence without mutation", () => {
     const fixture = createIntegratedCleanupFixture({ taskId: "no-source-refusal-task", baseBranch: "dev" });
     try {
@@ -20484,6 +20897,270 @@ try {
       assert(JSON.parse(dirty.stdout).blockers.includes("worktree_dirty"), dirty.stdout || dirty.stderr);
       assert(readFileSync(manifestPath, "utf8") === before, "close-no-source refusal mutated manifest");
       assert(existsSync(fixture.worktree), "close-no-source refusal removed worktree");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source holds the assignment index and rejects remote source evidence", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-assignment-lock", baseBranch: "dev" });
+    let fd;
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const before = readFileSync(manifestPath, "utf8");
+      const refs = refSnapshot(fixture.root);
+      fd = openSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock"), "wx");
+      const locked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(locked.code !== 0, locked.stderr || locked.stdout);
+      assert(locked.stderr.includes("Assignment index is locked"), locked.stderr || locked.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "held assignment index mutated manifest");
+      assert(refSnapshot(fixture.root) === refs, "held assignment index changed refs");
+      closeSync(fd);
+      fd = undefined;
+
+      createRemoteOnlySourceCommit(fixture);
+      const remoteSourceRefs = refSnapshot(fixture.root);
+      const remoteSource = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(remoteSource.code === 0, remoteSource.stderr || remoteSource.stdout);
+      const packet = JSON.parse(remoteSource.stdout);
+      assert(packet.ready === false, remoteSource.stdout || remoteSource.stderr);
+      assert(packet.blockers.includes("remote branch contains source or differs from the current remote base"), remoteSource.stdout || remoteSource.stderr);
+      assert(packet.proof.remoteBranch.state === "different_from_base", remoteSource.stdout || remoteSource.stderr);
+      assert(readFileSync(manifestPath, "utf8") === before, "remote source evidence mutated manifest");
+      assert(refSnapshot(fixture.root) === remoteSourceRefs, "remote source evidence changed local refs");
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source recovers only a dead owner-bound assignment-index lock", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-dead-assignment-index-lock" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const lockPath = join(fixture.stateRoot, "assignments", ".assignment-index.lock");
+      const staleLock = `${JSON.stringify({ schemaVersion: "assignment-index-lock/v1", pid: 2147483647, processStart: "dead-owner", acquiredAt: "2026-08-25T00:00:00.000Z" })}\n`;
+      writeFileSync(lockPath, staleLock);
+      const reclaimPath = `${lockPath}.reclaim`;
+      writeFileSync(reclaimPath, `${JSON.stringify({ schemaVersion: "assignment-index-reclaim/v1", pid: process.pid, processStart: processStartIdentityForTest(), lockDigest: createHash("sha256").update(staleLock).digest("hex"), acquiredAt: "2026-08-25T00:00:00.000Z" })}\n`);
+      const blocked = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(blocked.code !== 0 && blocked.stderr.includes("Assignment index is locked"), blocked.stderr || blocked.stdout);
+      assert(readFileSync(lockPath, "utf8") === staleLock, "live recovery claimant lost the stale lock it was serializing");
+      rmSync(reclaimPath);
+      const recovered = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(!existsSync(lockPath), "recovered assignment index lock was retained");
+      assert(!existsSync(reclaimPath), "assignment index reclaim claim was retained");
+      assert(readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`)).status === "closed", recovered.stdout || recovered.stderr);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source rejects a retained remote branch when the remote base changed since verification", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-remote-base-drift" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const localBaseSha = runGit(fixture.worktree, ["rev-parse", "origin/main"]).stdout;
+      commitFile(fixture.root, "advanced-base.txt", "advanced remote base\n", "advance remote base only");
+      const remoteBaseSha = runGit(fixture.root, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.root, ["push", "-q", "origin", "main"]);
+      // Keep the managed worktree's base snapshot intentionally stale. The
+      // remote branch still equals that old snapshot, so local-only proof
+      // would incorrectly accept it.
+      runGit(fixture.root, ["update-ref", "refs/remotes/origin/main", localBaseSha]);
+      assert(runGit(fixture.worktree, ["rev-parse", "origin/main"]).stdout === localBaseSha, "fixture did not retain a stale local base ref");
+      assert(localBaseSha !== remoteBaseSha, "fixture did not advance the remote base");
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.includes("remote base no longer matches the scoped verification checkout"), result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.state === "base_changed_since_verification", result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.sha === localBaseSha, result.stdout || result.stderr);
+      assert(packet.proof.remoteBranch.baseSha === remoteBaseSha, result.stdout || result.stderr);
+      assert(readJson(manifestPath).status === "active", "remote-base proof mutated the manifest");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source shares one external proof deadline across locked proof and final reproof", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-bounded-external-proof" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;"), "no-source external timeout seam changed");
+      const monotonicClock = [
+        "function noSourceCloseoutMonotonicNow() {",
+        "  return process.hrtime.bigint();",
+        "}",
+      ].join("\n");
+      assert(source.includes(monotonicClock), "no-source monotonic proof clock seam changed");
+      const deadlineMarker = join(fixture.fakeBin, "external-proof-deadline-expired");
+      writeFileSync(
+        fixture.script,
+        source
+          .replace("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;", "const noSourceCloseoutExternalRequestTimeoutMs = 500;")
+          .replace(monotonicClock, [
+            "function noSourceCloseoutMonotonicNow() {",
+            "  const marker = process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER;",
+            "  return marker && existsSync(marker) ? 2_000_000_000n : 1_000_000_000n;",
+            "}",
+          ].join("\n")),
+      );
+      const counterPath = join(fixture.fakeBin, "external-probe-count");
+      const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "console.log('[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+      writeFileSync(join(fixture.fakeBin, "git"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "import { spawnSync } from 'node:child_process';",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === 'ls-remote') {",
+        "  const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "  const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "  writeFileSync(counterPath, String(count + 1));",
+        "  if (count === Number(process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT)) {",
+        "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);",
+        "    writeFileSync(process.env.CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER, 'expired');",
+        "  }",
+        "}",
+        `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
+        "process.exit(result.status ?? 1);",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "git"), 0o755);
+
+      const previewCounterPath = join(fixture.fakeBin, "preview-external-probe-count");
+      const preview = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: previewCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "1" },
+      });
+      assert(preview.code !== 0, `preview external proof deadline unexpectedly allowed closeout: ${preview.stdout || preview.stderr}`);
+      assert(preview.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), preview.stderr || preview.stdout);
+      assert(Number(readFileSync(previewCounterPath, "utf8")) === 2, `preview continued external proof after its deadline: ${preview.stdout || preview.stderr}`);
+      rmSync(deadlineMarker, { force: true });
+
+      const summaryCounterPath = join(fixture.fakeBin, "summary-external-probe-count");
+      const summary = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: summaryCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "1" },
+      });
+      assert(summary.code === 0, summary.stderr || summary.stdout);
+      const summaryPacket = JSON.parse(summary.stdout);
+      assert(summaryPacket.ready === false, summary.stdout || summary.stderr);
+      assert(summaryPacket.blockers.includes("no-source external proof deadline exhausted after remote branch proof"), summary.stdout || summary.stderr);
+      assert(Number(readFileSync(summaryCounterPath, "utf8")) === 2, `summary continued external proof after its deadline: ${summary.stdout || summary.stderr}`);
+      rmSync(deadlineMarker, { force: true });
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "5" },
+      });
+      assert(result.code !== 0, `external proof deadline unexpectedly allowed closeout: ${result.stdout || result.stderr}`);
+      assert(result.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), result.stderr || result.stdout);
+      assert(Number(readFileSync(counterPath, "utf8")) === 6, `final reproof started a probe after the aggregate deadline: ${result.stdout || result.stderr}`);
+      assert(!existsSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock")), "external proof deadline left the assignment index locked");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+      assert(manifest.status === "active" && !manifest.no_source_closeout, "external proof deadline wrote durable closeout state");
+
+      rmSync(deadlineMarker, { force: true });
+      const finalCounterPath = join(fixture.fakeBin, "final-external-probe-count");
+      const finalResult = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: finalCounterPath, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_DEADLINE_MARKER: deadlineMarker, CODEX_WORKSPACE_TEST_CLOSE_NO_SOURCE_EXPIRE_AT_COUNT: "5" },
+      });
+      assert(finalResult.code !== 0, `final external proof deadline unexpectedly allowed closeout: ${finalResult.stdout || finalResult.stderr}`);
+      assert(finalResult.stderr.includes("no-source external proof deadline exhausted after remote branch proof"), finalResult.stderr || finalResult.stdout);
+      assert(Number(readFileSync(finalCounterPath, "utf8")) === 6, `final external proof did not reach the post-command deadline guard: ${finalResult.stdout || finalResult.stderr}`);
+      assert(readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`)).status === "active", "final external proof deadline wrote durable closeout state");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source recalculates its provider timeout at the spawn boundary", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-spawn-boundary-deadline" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      const monotonicClock = [
+        "function noSourceCloseoutMonotonicNow() {",
+        "  return process.hrtime.bigint();",
+        "}",
+      ].join("\n");
+      assert(source.includes(monotonicClock), "no-source monotonic proof clock seam changed");
+      writeFileSync(
+        fixture.script,
+        source.replace(monotonicClock, [
+          "function noSourceCloseoutMonotonicNow() {",
+          "  const calls = (globalThis.noSourceCloseoutTestClockCalls || 0) + 1;",
+          "  globalThis.noSourceCloseoutTestClockCalls = calls;",
+          "  return calls >= 4 ? 7_000_000_000n : 1_000_000_000n;",
+          "}",
+        ].join("\n")),
+      );
+      const counterPath = join(fixture.fakeBin, "spawn-boundary-gh-probe-count");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "console.log('[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath },
+      });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.ready === false, result.stdout || result.stderr);
+      assert(packet.blockers.includes("no-source external proof deadline exhausted immediately before GitHub PR proof"), result.stdout || result.stderr);
+      assert(!existsSync(counterPath), "stale timeout launched a GitHub child after the aggregate deadline expired");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("close-no-source releases its locks after a bounded external proof timeout", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-bounded-github-timeout" });
+    try {
+      prepareNoSourceFixture(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;"), "no-source external timeout seam changed");
+      writeFileSync(fixture.script, source.replace("const noSourceCloseoutExternalRequestTimeoutMs = 5_000;", "const noSourceCloseoutExternalRequestTimeoutMs = 500;"));
+      const counterPath = join(fixture.fakeBin, "github-timeout-probe-count");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_PROBE_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "if (count >= 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
+        "console.log('[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_PROBE_COUNTER: counterPath },
+      });
+      assert(result.code !== 0, `external proof timeout unexpectedly allowed closeout: ${result.stdout || result.stderr}`);
+      assert(result.stderr.includes("ETIMEDOUT"), result.stderr || result.stdout);
+      assert(Number(readFileSync(counterPath, "utf8")) === 2, `unexpected external probe count after timeout: ${result.stdout || result.stderr}`);
+      assert(!existsSync(join(fixture.stateRoot, "assignments", ".assignment-index.lock")), "external proof timeout left the assignment index locked");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`));
+      assert(manifest.status === "active" && !manifest.no_source_closeout, "external proof timeout wrote durable closeout state");
     } finally {
       cleanupIntegratedCleanupFixture(fixture);
     }
@@ -20516,9 +21193,9 @@ try {
         expected: "local_only_commits_present",
       },
       {
-        name: "unresolved base",
-        prepare: ({ manifest }) => { manifest.base_ref = "refs/heads/no-source-missing-base"; },
-        expected: "base_ref_unresolved_hold",
+        name: "missing immutable base",
+        prepare: ({ manifest }) => { delete manifest.base_sha; },
+        expected: "immutable_base_missing_hold",
       },
       {
         name: "legacy retained task lock",
@@ -20604,6 +21281,36 @@ try {
     }
   });
 
+  test("close-no-source fails closed when final live PR reproof changes under locks", () => {
+    const fixture = createIntegratedCleanupFixture({ taskId: "no-source-final-external-reproof" });
+    try {
+      const { manifestPath } = prepareNoSourceFixture(fixture);
+      const counterPath = join(fixture.fakeBin, "final-pr-probe-count");
+      writeFileSync(join(fixture.fakeBin, "gh"), [
+        `#!${process.execPath}`,
+        "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+        "const counterPath = process.env.CODEX_WORKSPACE_TEST_FINAL_PR_COUNTER;",
+        "const count = existsSync(counterPath) ? Number(readFileSync(counterPath, 'utf8')) || 0 : 0;",
+        "writeFileSync(counterPath, String(count + 1));",
+        "console.log(count >= 2 ? '[{\"number\": 999}]' : '[]');",
+        "",
+      ].join("\n"));
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+      const result = runFixtureScript(fixture, ["close-no-source", fixture.taskId, "--apply", "--reason", "operator confirmed no source was produced", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: { ...fixture.env, CODEX_WORKSPACE_TEST_FINAL_PR_COUNTER: counterPath },
+      });
+      assert(result.code !== 0, result.stderr || result.stdout);
+      assert(Number(readFileSync(counterPath, "utf8")) === 3, result.stderr || result.stdout);
+      const manifest = readJson(manifestPath);
+      assert(manifest.status === "active", JSON.stringify(manifest));
+      assert(!manifest.no_source_closeout, JSON.stringify(manifest));
+      assert(existsSync(fixture.worktree), "final PR reproof removed worktree");
+      assert(branchExists(fixture.root, fixture.branch), "final PR reproof removed branch");
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("lifecycle-health marks a merged lane cleanup-ready only after existing cleanup preconditions are proven", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -20623,33 +21330,251 @@ try {
     }
   });
 
+  test("lifecycle-health refuses cleanup-ready when linked assignment closure cannot be preflighted", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const assignmentPath = join(fixture.stateRoot, "assignments", "cleanup-assignment.json");
+      const assignment = readJson(assignmentPath);
+      assignment.branch = "codex/other-cleanup-lane";
+      assignment.source_backlog_item.branch_name = assignment.branch;
+      writeFileSync(assignmentPath, `${JSON.stringify(assignment, null, 2)}\n`);
+      const beforeManifest = readFileSync(join(fixture.stateRoot, "tasks", "cleanup-task.json"), "utf8");
+      const beforeAssignment = readFileSync(assignmentPath, "utf8");
+
+      const blocked = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      const blockedRow = JSON.parse(blocked.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(blockedRow?.derivedState === "hold_attention_required", blocked.stdout || blocked.stderr);
+      assert(blockedRow?.reasonCode === "cleanup_assignment_closure_unproven", blocked.stdout || blocked.stderr);
+      assert(readFileSync(join(fixture.stateRoot, "tasks", "cleanup-task.json"), "utf8") === beforeManifest, "lifecycle health mutated the manifest");
+      assert(readFileSync(assignmentPath, "utf8") === beforeAssignment, "lifecycle health mutated the assignment");
+
+      markFixtureAssignmentClosed(fixture);
+      const closed = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(closed.code === 0, closed.stderr || closed.stdout);
+      const closedRow = JSON.parse(closed.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(closedRow?.derivedState === "cleanup_ready", closed.stdout || closed.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health blocks unlinked active assignment records that match a merged lane", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      delete manifest.source_assignment_id;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const blocked = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(blocked.code === 0, blocked.stderr || blocked.stdout);
+      const blockedRow = JSON.parse(blocked.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(blockedRow?.derivedState === "hold_attention_required", blocked.stdout || blocked.stderr);
+      assert(blockedRow?.reasonCode === "cleanup_assignment_closure_unproven", blocked.stdout || blocked.stderr);
+
+      markFixtureAssignmentClosed(fixture);
+      const closed = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(closed.code === 0, closed.stderr || closed.stdout);
+      const closedRow = JSON.parse(closed.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(closedRow?.derivedState === "cleanup_ready", closed.stdout || closed.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health bounds aggregate GitHub latency for merged-lane reports", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const lifecycleReportGithubRequestTimeoutMs = 5_000;"), "lifecycle GitHub request timeout seam changed");
+      assert(source.includes("const lifecycleReportGithubBudgetMs = 15_000;"), "lifecycle GitHub budget seam changed");
+      const lifecycleMonotonicClock = [
+        "function lifecycleReportMonotonicNow() {",
+        "  return process.hrtime.bigint();",
+        "}",
+      ].join("\n");
+      assert(source.includes(lifecycleMonotonicClock), "lifecycle monotonic clock seam changed");
+      assert(source.includes("context.lifecycleGithubDeadlineAt = lifecycleReportMonotonicNow() + BigInt(lifecycleReportGithubBudgetMs) * 1_000_000n;"), "lifecycle GitHub deadline seam changed");
+      assert(source.includes("const remainingNs = context.lifecycleGithubDeadlineAt - lifecycleReportMonotonicNow();"), "lifecycle GitHub clock seam changed");
+      assert(source.includes("const githubTimeout = lifecycleGithubTimeout(context);"), "lifecycle GitHub timeout seam changed");
+      assert(source.includes("const githubLaunchTimeout = Math.max(1, githubTimeout - 1);"), "lifecycle GitHub launch-timeout seam changed");
+      assert(source.includes("timeout: githubLaunchTimeout,"), "lifecycle GitHub launch timeout must be bounded by the aggregate deadline");
+      assert(source.includes('beforeSpawn: () => lifecycleGithubTimeout(context) >= githubLaunchTimeout,'), "lifecycle GitHub pre-spawn deadline seam changed");
+      assert(source.includes("beforeSpawn: options.beforeSpawn,"), "prView must forward the lifecycle GitHub pre-spawn guard");
+      writeFileSync(
+        fixture.script,
+        source
+          .replace("const lifecycleReportGithubRequestTimeoutMs = 5_000;", "const lifecycleReportGithubRequestTimeoutMs = 100;")
+          .replace(
+            "const lifecycleReportGithubBudgetMs = 15_000;",
+            [
+              "const lifecycleReportGithubBudgetMs = 250;",
+              // The pre-spawn read is one millisecond later than the initial
+              // floored timeout read. A strict comparison against the stale
+              // timeout would reject this still-budgeted request.
+              "const lifecycleFixtureNowValues = [0n, 0n, 1_000_000n, 250_500_000n, 250_500_000n];",
+              "let lifecycleFixtureNowIndex = 0;",
+              "const lifecycleFixtureNow = () => lifecycleFixtureNowValues[Math.min(lifecycleFixtureNowIndex++, lifecycleFixtureNowValues.length - 1)];",
+            ].join("\n"),
+          )
+          .replace(lifecycleMonotonicClock, [
+            "function lifecycleReportMonotonicNow() {",
+            "  return lifecycleFixtureNow();",
+            "}",
+          ].join("\n"))
+          .replace(
+            "const githubTimeout = lifecycleGithubTimeout(context);",
+            [
+              "const githubTimeout = lifecycleGithubTimeout(context);",
+              "    if (process.env.CODEX_WORKSPACE_FIXTURE_LIFECYCLE_TIMEOUT_LOG) writeFileSync(process.env.CODEX_WORKSPACE_FIXTURE_LIFECYCLE_TIMEOUT_LOG, `${githubTimeout}\\n`, { flag: \"a\" });",
+            ].join("\n"),
+          ),
+      );
+      const tasksDir = join(fixture.stateRoot, "tasks");
+      const primary = readJson(join(tasksDir, "cleanup-task.json"));
+      for (const suffix of ["a", "b"]) {
+        const duplicate = { ...primary, task_id: `cleanup-task-${suffix}`, title: `Cleanup task ${suffix}` };
+        writeFileSync(join(tasksDir, `${duplicate.task_id}.json`), `${JSON.stringify(duplicate, null, 2)}\n`);
+      }
+      const githubInvocationLog = join(fixture.root, "lifecycle-github-invocations.log");
+      const githubTimeoutLog = join(fixture.root, "lifecycle-github-timeouts.log");
+      writeFileSync(
+        join(fixture.fakeBin, "gh"),
+        [
+          `#!${process.execPath}`,
+          "import { appendFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          "if (args[0] !== 'pr' || args[1] !== 'view') process.exit(1);",
+          "appendFileSync(process.env.CODEX_WORKSPACE_FIXTURE_GH_INVOCATION_LOG, `${args.join(' ')}\\n`);",
+          "setInterval(() => {}, 1_000);",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fixture.fakeBin, "gh"), 0o755);
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(join(fixture.stateRoot, "assignments"));
+      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], {
+        env: {
+          ...fixture.env,
+          CODEX_WORKSPACE_FIXTURE_GH_INVOCATION_LOG: githubInvocationLog,
+          CODEX_WORKSPACE_FIXTURE_LIFECYCLE_TIMEOUT_LOG: githubTimeoutLog,
+        },
+      });
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const rows = JSON.parse(result.stdout).rows;
+      const firstBudgetExhaustedIndex = rows.findIndex((row) => row.reasonCode === "cleanup_github_budget_exhausted");
+      const githubInvocations = existsSync(githubInvocationLog) ? readFileSync(githubInvocationLog, "utf8").trim().split(/\r?\n/).filter(Boolean) : [];
+      const githubTimeouts = existsSync(githubTimeoutLog) ? readFileSync(githubTimeoutLog, "utf8").trim().split(/\r?\n/).filter(Boolean).map(Number) : [];
+      assert(firstBudgetExhaustedIndex > 0, result.stdout || result.stderr);
+      assert(rows.slice(0, firstBudgetExhaustedIndex).every((row) => row.reasonCode === "cleanup_pr_merged_unproven"), result.stdout || result.stderr);
+      assert(rows.slice(firstBudgetExhaustedIndex).every((row) => row.reasonCode === "cleanup_github_budget_exhausted"), result.stdout || result.stderr);
+      assert(githubTimeouts.join(",") === "100,0,0", `unexpected lifecycle GitHub timeout sequence: ${githubTimeouts.join(",")}`);
+      assert(githubInvocations.length === firstBudgetExhaustedIndex, `GitHub probes continued after lifecycle budget exhaustion: ${githubInvocations.join("\\n")}`);
+      assert(githubInvocations.every((invocation) => invocation.startsWith("pr view ")), `fixture logged a non-PR-view GitHub command: ${githubInvocations.join("\\n")}`);
+      assert(rows.every((row) => row.derivedState === "hold_attention_required"), result.stdout || result.stderr);
+      assert(taskSnapshot(tasksDir) === beforeTasks, "lifecycle health mutated manifests during GitHub timeout");
+      assert(taskSnapshot(join(fixture.stateRoot, "assignments")) === beforeAssignments, "lifecycle health mutated assignments during GitHub timeout");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("lifecycle-health starts the GitHub budget at the first GitHub request", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      markFixtureAssignmentClosed(fixture);
+      const source = readFileSync(fixture.script, "utf8");
+      assert(source.includes("const lifecycleReportGithubBudgetMs = 15_000;"), "lifecycle GitHub budget seam changed");
+      assert(source.includes("const target = assertCleanupWorktreeForMerged(manifest, state);"), "lifecycle pre-request seam changed");
+      writeFileSync(
+        fixture.script,
+        source
+          .replace("const lifecycleReportGithubBudgetMs = 15_000;", "const lifecycleReportGithubBudgetMs = 100;")
+          .replace(
+            "const target = assertCleanupWorktreeForMerged(manifest, state);",
+            "const target = assertCleanupWorktreeForMerged(manifest, state);\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);",
+          ),
+      );
+
+      const result = runFixtureScript(fixture, ["lifecycle-health", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { env: fixture.env });
+      assert(result.code === 0, result.stderr || result.stdout);
+      const row = JSON.parse(result.stdout).rows.find((entry) => entry.taskId === "cleanup-task");
+      assert(row?.derivedState === "cleanup_ready", result.stdout || result.stderr);
+      assert(row?.reasonCode === "cleanup_preconditions_proven", result.stdout || result.stderr);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   if (executedTestCount === 0) {
     if (testFilter) throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
     if (workspaceTestProfile !== "all") throw new Error(`CODEX_WORKSPACE_TEST_PROFILE matched no tests: ${workspaceTestProfile}`);
   }
+  writeTestProgressArtifact(testProgressPath, { schemaVersion: 1, status: "completed", executedTestCount });
+  testRunCompleted = true;
   console.log(`WORKSPACE_TEST_PROFILE_SUMMARY=${JSON.stringify({ profile: workspaceTestProfile, executedTestCount })}`);
 } finally {
+  if (!testRunCompleted && testProgressPath && dirname(testProgressPath) === stateRoot && existsSync(testProgressPath)) {
+    const retainedDirectory = mkdtempSync(join(tmpdir(), "codex-workspace-progress-"));
+    renameSync(testProgressPath, join(retainedDirectory, "last-test-progress.json"));
+  }
   rmSync(stateRoot, { recursive: true, force: true });
 }
 
-function prepareNoSourceFixture(fixture) {
+function prepareNoSourceFixture(fixture, options = {}) {
   const manifestPath = join(fixture.stateRoot, "tasks", `${fixture.taskId}.json`);
   const manifest = readJson(manifestPath);
   delete manifest.source_assignment_id;
-  const baseSha = runGit(fixture.worktree, ["rev-parse", manifest.base_ref]).stdout;
-  manifest.last_verified_at = "2026-08-25T00:00:00.000Z";
-  manifest.last_verification_command = "fixture scoped verification";
-  manifest.last_verification_result = {
-    schemaVersion: 1,
-    command: manifest.last_verification_command,
-    exitCode: 0,
-    baseRef: manifest.base_ref,
-    baseSha,
-    verifiedAt: manifest.last_verified_at,
-  };
+  manifest.base_sha = runGit(fixture.worktree, ["rev-parse", `${manifest.base_ref}^{commit}`]).stdout;
+  if (options.verification !== false) {
+    const baseSha = manifest.base_sha;
+    const verifiedHeadSha = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+    const verifiedAt = "2026-08-25T00:00:00.000Z";
+    manifest.no_source_verification_receipt = {
+      schemaVersion: 1,
+      taskId: manifest.task_id,
+      profile: "scoped",
+      resolvedProfile: "check-fast",
+      command: "pnpm run check:fast",
+      exitCode: 0,
+      baseRef: manifest.base_ref,
+      baseSha,
+      verifiedHeadSha,
+      verifiedAt,
+      proof: {
+        worktree: { registered: true, clean: true, branch: manifest.branch, headSha: verifiedHeadSha },
+        base: { ref: manifest.base_ref, sha: baseSha, localOnlyCommits: 0 },
+      },
+    };
+  }
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rmSync(join(fixture.stateRoot, "assignments", "integrated-assignment.json"), { force: true });
   return { manifestPath, manifest };
+}
+
+function installFixtureNoSourceVerificationPnpm(fixture) {
+  const pnpmPath = join(fixture.fakeBin, "pnpm");
+  writeFileSync(pnpmPath, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"run\" ] && [ \"$2\" = \"check:fast\" ]; then exit 0; fi",
+    "exit 1",
+    "",
+  ].join("\n"));
+  chmodSync(pnpmPath, 0o755);
+  // The shared resolver intentionally invokes a pnpm-shaped npm_execpath
+  // directly. Supply a non-pnpm sentinel so it strips that ambient shim and
+  // resolves the fixture's fake pnpm from PATH instead.
+  fixture.env = { ...fixture.env, npm_execpath: join(fixture.fakeBin, "fixture-npm-execpath") };
+}
+
+function createRemoteOnlySourceCommit(fixture) {
+  const branch = "fixture-remote-only-source";
+  runGit(fixture.root, ["switch", "-q", "-c", branch, fixture.baseBranch]);
+  commitFile(fixture.root, "remote-only-source.txt", "remote source\n", "remote-only source");
+  runGit(fixture.root, ["push", "-q", "origin", `HEAD:refs/heads/${fixture.branch}`]);
+  runGit(fixture.root, ["switch", "-q", fixture.baseBranch]);
 }
 
 function injectCloseNoSourceRaceFixture(fixture) {
@@ -20668,6 +21593,7 @@ function injectCloseNoSourceRaceFixture(fixture) {
 }
 
 function run(args, options = {}) {
+  const timeout = options.timeoutMs ?? testChildTimeoutMs;
   const result = spawnSync(process.execPath, [options.script || scriptPath, ...args], {
     cwd: options.cwd || rootDir,
     encoding: "utf8",
@@ -20678,6 +21604,7 @@ function run(args, options = {}) {
       ...(options.env || {}),
     },
     stdio: "pipe",
+    ...(timeout === undefined ? {} : { timeout, killSignal: "SIGKILL" }),
   });
   return guardExpectedJsonResult(args, {
     code: result.status ?? 1,
@@ -21060,13 +21987,19 @@ function createFinishPrExistingCommitFixture(options = {}) {
       `const plannerStatic = ${JSON.stringify(Boolean(options.plannerStatic))};`,
       `const plannerWorkspaceProfiles = ${JSON.stringify(options.plannerWorkspaceProfiles || [])};`,
       `const plannerSupervisorShards = ${JSON.stringify(options.plannerSupervisorShards || [])};`,
+      `const plannerLogUnavailable = ${JSON.stringify(Boolean(options.plannerLogUnavailable))};`,
+      `const plannerLogPartialInvalid = ${JSON.stringify(Boolean(options.plannerLogPartialInvalid))};`,
+      `const plannerArtifactHeadSha = ${JSON.stringify(options.plannerArtifactHeadSha || null)};`,
+      `const plannerArtifactBaseSha = ${JSON.stringify(options.plannerArtifactBaseSha || null)};`,
+      `const plannerArtifactSupervisorShards = ${JSON.stringify(options.plannerArtifactSupervisorShards || [])};`,
       `const postResolutionPrUnavailablePath = ${JSON.stringify(postResolutionPrUnavailablePath)};`,
       `const postResolutionAuditPath = ${JSON.stringify(postResolutionAuditPath)};`,
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
         ? "if (args[0] === 'pr' && args[1] === 'view') { if (fs.existsSync(postResolutionPrUnavailablePath)) process.exit(1); console.log(fs.readFileSync(prStatePath, 'utf8')); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
-      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === 'view' && args.includes('--log')) { if (plannerLogUnavailable) process.exit(0); if (plannerLogPartialInvalid) { console.log('truncated planner output'); process.exit(1); } const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); console.log(`node ./scripts/check-plan.mjs --head \"${pr.headRefOid}\"\\n{\\n  \"static\": ${plannerStatic},\\n  \"selectedWorkspaceProfiles\": ${JSON.stringify(plannerWorkspaceProfiles)},\\n  \"selectedSupervisorShards\": ${JSON.stringify(plannerSupervisorShards)}\\n}`); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === 'download') { const dir = args[args.indexOf('--dir') + 1]; const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(`${dir}/ci-planner-evidence.json`, JSON.stringify({ schemaVersion: 'ci-planner-evidence/v1', headSha: plannerArtifactHeadSha || pr.headRefOid, baseSha: plannerArtifactBaseSha || pr.baseRefOid, selectedWorkspaceProfiles: plannerWorkspaceProfiles, selectedSupervisorShards: plannerArtifactSupervisorShards })); process.exit(0); }",
       options.changedPathBaseOidDrift
         ? `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.baseRefOid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`
         : "",
@@ -21485,16 +22418,16 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
 function installFixtureResumableCheckLongLeafTimeoutCaptureSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
-  assert(source.includes(started) && source.includes(invocation), "fixture did not contain the long-leaf timeout seams");
+  const terminalCaptureGate = "    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;";
+  assert(source.includes(started) && source.includes(terminalCaptureGate), "fixture did not contain the long-leaf timeout seams");
   const timeoutLog = join(fixture.stateRoot, "resumable-check-timeouts.log");
   const patched = source
     .replace(started, '  const started = process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_CAPTURE === "1" ? Date.now() - 300_000 : Date.now();')
     .replace(
-      invocation,
+      terminalCaptureGate,
       [
         '    if (process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG) writeFileSync(process.env.CODEX_WORKSPACE_FIXTURE_LONG_LEAF_TIMEOUT_LOG, `${stage}:${timeout}\\n`, { flag: "a" });',
-        invocation,
+        terminalCaptureGate,
       ].join("\n"),
     );
   writeFileSync(fixture.script, patched);
@@ -21547,15 +22480,33 @@ function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check pre-stage pause clock"]);
 }
 
+function installFixtureResumableCheckPauseAtStageSeam(fixture, stage) {
+  const source = readFileSync(fixture.script, "utf8");
+  const elapsed = "    const elapsedMs = Date.now() - started;";
+  assert(source.includes(elapsed), "fixture did not contain the resumable check elapsed-time seam");
+  writeFileSync(fixture.script, source.replace(elapsed, "    const elapsedMs = stage === process.env.CODEX_WORKSPACE_FIXTURE_PAUSE_STAGE ? invocationBudgetMs : 0;"));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable check targeted stage pause"]);
+  fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PAUSE_STAGE: stage };
+}
+
 function installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage) {
   const source = readFileSync(fixture.script, "utf8");
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
-  assert(source.includes(invocation), "fixture did not contain the resumable check stage invocation seam");
+  const terminalCaptureGate = "    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;";
+  const resultDeclaration = "    const result = run(\"pnpm\", [\"run\", stage], {";
+  const resultCompletion = "    });\n    const evidence = { stage,";
+  assert(source.includes(terminalCaptureGate) && source.includes(resultDeclaration) && source.includes(resultCompletion), "fixture did not contain the resumable check stage invocation seam");
   const replacement = [
-    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+    "    });",
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE === stage) result = { status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" };',
+    "    const evidence = { stage,",
   ].join("\n");
-  writeFileSync(fixture.script, source.replace(invocation, replacement));
+  writeFileSync(
+    fixture.script,
+    source
+      .replace(resultDeclaration, "    let result = run(\"pnpm\", [\"run\", stage], {")
+      .replace(resultCompletion, replacement),
+  );
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable supervisor timeout result"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE: timeoutStage };
@@ -21586,21 +22537,21 @@ function installFixtureResumableCheckInterruptAfterStageWrite(fixture) {
 
 function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
   const source = readFileSync(fixture.script, "utf8");
-  const inFlightTransition = [
+  const terminalCaptureGate = "    const retainExternalCheckStageDiagnostic = stage === externalCheckStageEvidenceStage;";
+  const persistedInFlightWrite = [
     "    manifest.check_verification_packet = packet;",
     "    writeManifest(manifestPath, manifest);",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
   ].join("\n");
-  assert(source.includes(inFlightTransition), "fixture did not contain the persisted in-flight stage transition");
+  const terminalCaptureIndex = source.indexOf(terminalCaptureGate);
+  const persistedInFlightWriteIndex = source.lastIndexOf(persistedInFlightWrite, terminalCaptureIndex);
+  assert(terminalCaptureIndex >= 0 && persistedInFlightWriteIndex >= 0, "fixture did not contain the persisted in-flight stage transition");
   const interruption = [
-    "    manifest.check_verification_packet = packet;",
-    "    writeManifest(manifestPath, manifest);",
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
     '      throw new Error("fixture packet interruption after in-flight marker");',
     "    }",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
   ].join("\n");
-  writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
+  const insertAt = persistedInFlightWriteIndex + persistedInFlightWrite.length;
+  writeFileSync(fixture.script, `${source.slice(0, insertAt)}\n${interruption}${source.slice(insertAt)}`);
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture resumable in-flight interruption seam"]);
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
@@ -22006,6 +22957,26 @@ function installFixtureOriginIdentityProxy(root, fakeBin, originUrls = ["git@git
   );
   chmodSync(fakeGit, 0o755);
   return fakeGit;
+}
+
+function installFixtureRemoteSnapshotLogger(fixture, invocationLog) {
+  const realPath = (process.env.PATH || "").split(":").filter((entry) => entry && entry !== fixture.fakeBin).join(":");
+  const fakeGit = join(fixture.fakeBin, "git");
+  writeFileSync(
+    fakeGit,
+    [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === '--push' && args[3] === '--all' && args[4] === 'origin') { console.log('git@github.com:slawdawg/Kendall-vnxt.git'); process.exit(0); }",
+      `if (args[0] === "ls-remote") appendFileSync(${JSON.stringify(invocationLog)}, \`${"${args.join(\" \")}"}\\n\`);`,
+      `const result = spawnSync("git", args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: "inherit" });`,
+      "process.exit(result.status ?? 1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGit, 0o755);
 }
 
 function installFixtureGitProxy(fixture, failureCondition, failureMessage, options = {}) {
@@ -23139,11 +24110,13 @@ function runFixtureScript(fixture, args, options = {}) {
     fixtureArgs.push("--diff-risk-verification-command", "node ./scripts/test-codex-workspace.mjs");
     fixtureArgs.push("--diff-risk-verification-exit-code", "0");
   }
+  const timeout = options.timeoutMs ?? testChildTimeoutMs;
   const result = spawnSync(process.execPath, [fixture.script, ...fixtureArgs], {
     cwd: options.cwd || fixture.root,
     encoding: "utf8",
     env: options.env || fixture.env || process.env,
     stdio: "pipe",
+    ...(timeout === undefined ? {} : { timeout, killSignal: "SIGKILL" }),
   });
   return guardExpectedJsonResult(fixtureArgs, {
     code: result.status ?? 1,
@@ -23698,8 +24671,50 @@ function test(name, fn) {
     return;
   }
   executedTestCount += 1;
+  writeTestProgressArtifact(testProgressPath, { schemaVersion: 1, status: "running", test: name });
   invokeTest(name, fn, (marker) => console.error(marker));
   console.log(`OK: ${name}`);
+}
+
+function optionalTestProgressPath(value, stateRootPath) {
+  const raw = String(value || "").trim();
+  if (!raw) return process.env.CODEX_WORKSPACE_TEST_PROGRESS === "1" ? join(stateRootPath, "last-test-progress.json") : undefined;
+  const path = resolve(raw);
+  if (dirname(path) !== resolve(tmpdir())) {
+    throw new Error("CODEX_WORKSPACE_TEST_PROGRESS_PATH must be a file directly below the system temporary directory.");
+  }
+  return path;
+}
+
+function writeTestProgressArtifact(path, record) {
+  if (!path) return;
+  const parent = realpathSync(dirname(path));
+  if (parent !== realpathSync(tmpdir()) && parent !== realpathSync(stateRoot)) {
+    throw new Error("Test progress artifact parent is not an owned temporary directory.");
+  }
+  const temporaryPath = join(parent, `.${basename(path)}.${process.pid}.tmp`);
+  let descriptor = null;
+  let published = false;
+  try {
+    descriptor = openSync(temporaryPath, "wx", 0o600);
+    writeFileSync(descriptor, `${JSON.stringify(record)}\n`);
+    closeSync(descriptor);
+    descriptor = null;
+    renameSync(temporaryPath, path);
+    published = true;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+    if (!published) rmSync(temporaryPath, { force: true });
+  }
+}
+
+function optionalTestChildTimeoutMs(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  if (!/^[1-9][0-9]{0,5}$/.test(raw)) {
+    throw new Error("CODEX_WORKSPACE_TEST_CHILD_TIMEOUT_MS must be a positive integer no greater than 999999.");
+  }
+  return Number(raw);
 }
 
 function invokeTest(name, fn, reportFailure) {
