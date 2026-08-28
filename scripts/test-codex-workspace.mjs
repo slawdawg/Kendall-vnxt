@@ -328,7 +328,11 @@ try {
       worktrees.push(freshWorktree, staleWorktree, deliveryWorktree, cleanupWorktree, holdWorktree);
       const freshHeartbeat = new Date().toISOString();
       const staleHeartbeat = "2026-07-01T18:00:00.000Z";
+      const freshHead = runGit(freshWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      const staleHead = runGit(staleWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      const deliveryHead = runGit(deliveryWorktree, ["rev-parse", "HEAD"]).stdout.trim();
       const cleanupHead = runGit(cleanupWorktree, ["rev-parse", "HEAD"]).stdout.trim();
+      const holdHead = runGit(holdWorktree, ["rev-parse", "HEAD"]).stdout.trim();
       runGit(cleanupWorktree, ["branch", "codex/lifecycle-cleanup", cleanupHead]);
       const manifests = [
         {
@@ -337,6 +341,7 @@ try {
           branch: "codex/lifecycle-fresh",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: freshHead,
           status: "active",
           owner: "runner-a",
           worktree_path: freshWorktree,
@@ -348,6 +353,7 @@ try {
           branch: "codex/lifecycle-stale",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: staleHead,
           status: "active",
           owner: "runner-b",
           worktree_path: staleWorktree,
@@ -359,6 +365,7 @@ try {
           branch: "codex/lifecycle-delivery",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: deliveryHead,
           status: "pr_open",
           owner: "runner-a",
           worktree_path: deliveryWorktree,
@@ -371,6 +378,7 @@ try {
           branch: "codex/lifecycle-cleanup",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: cleanupHead,
           status: "merged",
           owner: "runner-a",
           worktree_path: cleanupWorktree,
@@ -401,6 +409,7 @@ try {
           branch: "codex/lifecycle-hold",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: holdHead,
           status: "blocked_authority",
           owner: "runner-a",
           worktree_path: holdWorktree,
@@ -433,6 +442,7 @@ try {
           branch: "codex/lifecycle-future-heartbeat",
           base_branch: "dev",
           base_ref: "HEAD",
+          base_sha: freshHead,
           status: "active",
           owner: "runner-a",
           worktree_path: freshWorktree,
@@ -479,7 +489,7 @@ try {
       assert(packet.rows.find((row) => row.taskId === "lifecycle-stale")?.derivedState === "stale_attention_required", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-cleanup")?.reasonCode === "cleanup_prerequisites_unproven", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-uninspectable")?.reasonCode === "worktree_inspection_unavailable", summary.stdout || summary.stderr);
-      assert(packet.rows.find((row) => row.taskId === "lifecycle-unresolved-base")?.reasonCode === "base_ref_unresolved_hold", summary.stdout || summary.stderr);
+      assert(packet.rows.find((row) => row.taskId === "lifecycle-unresolved-base")?.reasonCode === "immutable_base_missing_hold", summary.stdout || summary.stderr);
       assert(packet.rows.find((row) => row.taskId === "lifecycle-future-heartbeat")?.reasonCode === "owner_heartbeat_future_hold", summary.stdout || summary.stderr);
       const invalidRows = packet.rows.filter((row) => row.reasonCode === "manifest_invalid");
       assert(invalidRows.length === 2, summary.stdout || summary.stderr);
