@@ -1200,6 +1200,7 @@ try {
       const branch = "codex/summary-json-lane";
       const worktreePath = join(fixture.stateRoot, "worktrees", taskId);
       const manifestPath = join(fixture.stateRoot, "tasks", `${taskId}.json`);
+      const baseSha = runGit(fixture.root, ["rev-parse", "origin/dev"]).stdout;
       const branchBefore = branchExists(fixture.root, branch);
 
       const result = runFixtureScript(fixture, [
@@ -1233,7 +1234,7 @@ try {
       assert(packet.worktreePath === worktreePath, result.stdout || result.stderr);
       assert(packet.manifestPath === manifestPath, result.stdout || result.stderr);
       assert(packet.shouldFetch === true, result.stdout || result.stderr);
-      assert(packet.plan.includes(`git worktree add -b ${branch} ${worktreePath} origin/dev`), result.stdout || result.stderr);
+      assert(packet.plan.includes(`git worktree add -b ${branch} ${worktreePath} ${baseSha}`), result.stdout || result.stderr);
       assert(packet.plannedWrites.manifest === manifestPath, result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(!existsSync(manifestPath), "start dry-run summary-json wrote a manifest");
