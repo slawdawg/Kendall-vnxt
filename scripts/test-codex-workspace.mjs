@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { evaluateMutationAdmission } from "./lib/mutation-admission.mjs";
@@ -13,6 +13,7 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
 const testFilter = String(process.env.CODEX_WORKSPACE_TEST_FILTER || "").trim().toLowerCase();
 const workspaceTestProfile = String(process.env.CODEX_WORKSPACE_TEST_PROFILE || "all").trim().toLowerCase();
+const testChildTimeoutMs = optionalTestChildTimeoutMs(process.env.CODEX_WORKSPACE_TEST_CHILD_TIMEOUT_MS);
 if (!isWorkspaceTestProfile(workspaceTestProfile)) {
   throw new Error(`Unknown CODEX_WORKSPACE_TEST_PROFILE: ${workspaceTestProfile}`);
 }
@@ -20,6 +21,8 @@ if (testFilter && workspaceTestProfile !== "all") {
   throw new Error("CODEX_WORKSPACE_TEST_FILTER and CODEX_WORKSPACE_TEST_PROFILE cannot be combined");
 }
 const stateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-test-"));
+let testProgressPath;
+let testRunCompleted = false;
 const routingPreviewCheckLeafStages = Object.freeze([
   "test:supervisor:check-routing-preview-01",
   "test:supervisor:check-routing-preview-02",
@@ -62,6 +65,8 @@ if (nestedNodeProbe.error?.code === "EPERM") {
 }
 
 try {
+  testProgressPath = optionalTestProgressPath(process.env.CODEX_WORKSPACE_TEST_PROGRESS_PATH, stateRoot);
+  writeTestProgressArtifact(testProgressPath, { schemaVersion: 1, status: "initializing", test: null });
   test("child JSON command guard reports empty stdout as sandbox/process boundary", () => {
     const guarded = guardExpectedJsonResult(["list", "--summary-json"], {
       code: 1,
@@ -93,6 +98,63 @@ try {
     assert(markers.length === 1, JSON.stringify(markers));
     assert(markers[0] === 'TEST_FAILURE={"test":"fixture failure marker probe"}', JSON.stringify(markers));
     assert(!markers[0].includes("fixture-secret-token-123"), markers[0]);
+  });
+
+  test("test harness progress marker and child watchdog are opt-in", () => {
+    const progressDirectory = mkdtempSync(join(tmpdir(), "codex-workspace-progress-"));
+    const progressPath = join(tmpdir(), `codex-workspace-progress-${process.pid}-${Date.now()}.json`);
+    try {
+      writeTestProgressArtifact(progressPath, { schemaVersion: 1, status: "running", test: "fixture progress marker probe" });
+      const initialProgress = readJson(progressPath);
+      assert(initialProgress.status === "running" && initialProgress.test === "fixture progress marker probe", JSON.stringify(initialProgress));
+      assert(existsSync(progressPath), "progress artifact was not published");
+      assert(readdirSync(progressDirectory).length === 0, "progress artifact left a non-atomic temporary file");
+      const escapedPath = join(progressDirectory, "escape", "last-progress.json");
+      symlinkSync(rootDir, join(progressDirectory, "escape"), "dir");
+      let escaped = false;
+      try { writeTestProgressArtifact(escapedPath, initialProgress); } catch { escaped = true; }
+      assert(escaped, "progress artifact followed a symlink outside the temporary root");
+      const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        env: {
+          ...process.env,
+          CODEX_WORKSPACE_TEST_FILTER: "test harness emits a deterministic sanitized failure marker",
+          CODEX_WORKSPACE_TEST_PROFILE: "all",
+          CODEX_WORKSPACE_TEST_PROGRESS_PATH: progressPath,
+        },
+      });
+      assert(child.status === 0, child.stderr || child.stdout);
+      assert(!child.stdout.includes("TEST_PROGRESS="), child.stdout);
+      const completedProgress = readJson(progressPath);
+      assert(completedProgress.status === "completed" && completedProgress.executedTestCount === 1, JSON.stringify(completedProgress));
+      const watchdog = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+        env: {
+          ...process.env,
+          CODEX_WORKSPACE_TEST_FILTER: "doctor accepts an empty state root",
+          CODEX_WORKSPACE_TEST_PROFILE: "all",
+          CODEX_WORKSPACE_TEST_CHILD_TIMEOUT_MS: "1",
+        },
+      });
+      assert((watchdog.status ?? 0) !== 0, "child watchdog did not bound the fixture command");
+      assert((watchdog.stderr || "").includes('TEST_FAILURE={"test":"doctor accepts an empty state root"}'), watchdog.stderr || watchdog.stdout);
+      assert(optionalTestChildTimeoutMs("") === undefined, "unset child watchdog unexpectedly changed harness defaults");
+      assert(optionalTestChildTimeoutMs("25") === 25, "bounded child watchdog was not parsed");
+      for (const invalid of ["0", "invalid"]) {
+        let rejected = false;
+        try { optionalTestChildTimeoutMs(invalid); } catch { rejected = true; }
+        assert(rejected, `invalid child watchdog was accepted: ${invalid}`);
+      }
+    } finally {
+      rmSync(progressPath, { force: true });
+      rmSync(progressDirectory, { recursive: true, force: true });
+    }
   });
 
   test("workspace behavior profiles classify lifecycle tests deterministically", () => {
@@ -21450,8 +21512,14 @@ try {
     if (testFilter) throw new Error(`CODEX_WORKSPACE_TEST_FILTER matched no tests: ${testFilter}`);
     if (workspaceTestProfile !== "all") throw new Error(`CODEX_WORKSPACE_TEST_PROFILE matched no tests: ${workspaceTestProfile}`);
   }
+  writeTestProgressArtifact(testProgressPath, { schemaVersion: 1, status: "completed", executedTestCount });
+  testRunCompleted = true;
   console.log(`WORKSPACE_TEST_PROFILE_SUMMARY=${JSON.stringify({ profile: workspaceTestProfile, executedTestCount })}`);
 } finally {
+  if (!testRunCompleted && testProgressPath && dirname(testProgressPath) === stateRoot && existsSync(testProgressPath)) {
+    const retainedDirectory = mkdtempSync(join(tmpdir(), "codex-workspace-progress-"));
+    renameSync(testProgressPath, join(retainedDirectory, "last-test-progress.json"));
+  }
   rmSync(stateRoot, { recursive: true, force: true });
 }
 
@@ -21525,6 +21593,7 @@ function injectCloseNoSourceRaceFixture(fixture) {
 }
 
 function run(args, options = {}) {
+  const timeout = options.timeoutMs ?? testChildTimeoutMs;
   const result = spawnSync(process.execPath, [options.script || scriptPath, ...args], {
     cwd: options.cwd || rootDir,
     encoding: "utf8",
@@ -21535,6 +21604,7 @@ function run(args, options = {}) {
       ...(options.env || {}),
     },
     stdio: "pipe",
+    ...(timeout === undefined ? {} : { timeout, killSignal: "SIGKILL" }),
   });
   return guardExpectedJsonResult(args, {
     code: result.status ?? 1,
@@ -24040,11 +24110,13 @@ function runFixtureScript(fixture, args, options = {}) {
     fixtureArgs.push("--diff-risk-verification-command", "node ./scripts/test-codex-workspace.mjs");
     fixtureArgs.push("--diff-risk-verification-exit-code", "0");
   }
+  const timeout = options.timeoutMs ?? testChildTimeoutMs;
   const result = spawnSync(process.execPath, [fixture.script, ...fixtureArgs], {
     cwd: options.cwd || fixture.root,
     encoding: "utf8",
     env: options.env || fixture.env || process.env,
     stdio: "pipe",
+    ...(timeout === undefined ? {} : { timeout, killSignal: "SIGKILL" }),
   });
   return guardExpectedJsonResult(fixtureArgs, {
     code: result.status ?? 1,
@@ -24599,8 +24671,50 @@ function test(name, fn) {
     return;
   }
   executedTestCount += 1;
+  writeTestProgressArtifact(testProgressPath, { schemaVersion: 1, status: "running", test: name });
   invokeTest(name, fn, (marker) => console.error(marker));
   console.log(`OK: ${name}`);
+}
+
+function optionalTestProgressPath(value, stateRootPath) {
+  const raw = String(value || "").trim();
+  if (!raw) return process.env.CODEX_WORKSPACE_TEST_PROGRESS === "1" ? join(stateRootPath, "last-test-progress.json") : undefined;
+  const path = resolve(raw);
+  if (dirname(path) !== resolve(tmpdir())) {
+    throw new Error("CODEX_WORKSPACE_TEST_PROGRESS_PATH must be a file directly below the system temporary directory.");
+  }
+  return path;
+}
+
+function writeTestProgressArtifact(path, record) {
+  if (!path) return;
+  const parent = realpathSync(dirname(path));
+  if (parent !== realpathSync(tmpdir()) && parent !== realpathSync(stateRoot)) {
+    throw new Error("Test progress artifact parent is not an owned temporary directory.");
+  }
+  const temporaryPath = join(parent, `.${basename(path)}.${process.pid}.tmp`);
+  let descriptor = null;
+  let published = false;
+  try {
+    descriptor = openSync(temporaryPath, "wx", 0o600);
+    writeFileSync(descriptor, `${JSON.stringify(record)}\n`);
+    closeSync(descriptor);
+    descriptor = null;
+    renameSync(temporaryPath, path);
+    published = true;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+    if (!published) rmSync(temporaryPath, { force: true });
+  }
+}
+
+function optionalTestChildTimeoutMs(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  if (!/^[1-9][0-9]{0,5}$/.test(raw)) {
+    throw new Error("CODEX_WORKSPACE_TEST_CHILD_TIMEOUT_MS must be a positive integer no greater than 999999.");
+  }
+  return Number(raw);
 }
 
 function invokeTest(name, fn, reportFailure) {
