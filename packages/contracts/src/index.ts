@@ -9,3 +9,4 @@ export * from "./memory-inbox-lifecycle";
 export * as ManagerControlPlane from "./manager-control-plane";
 export * from "./pipeline-control-plane";
 export * as PipelineControlPlane from "./pipeline-control-plane";
+export * as HermesControlPlane from "./hermes-control-plane";
