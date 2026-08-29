@@ -629,9 +629,13 @@ do not treat an operator authorization as a bypass.
    provably dead. Stale recovery first atomically
    claims a recovery gate and sidecar, then atomically moves the observed stale
    inode, so a competing recovery or fresh governed owner cannot lose a freshly
-   reacquired target lock. Linux records process start ticks; macOS records
-   only a live PID and deliberately treats PID reuse as ambiguous rather
-   than reclaiming it. A failed remote deletion retains
+   reacquired target lock. Linux records collision-resistant `/proc` process
+   start ticks. On a host without that exact identity (including macOS under
+   the current contract), live PID recovery and every numeric PID/PGID signal
+   are unavailable and remain ambiguous; do not reclaim, signal, or retry the
+   local process proof there. Preserve the fence and resume the governed
+   settlement/recovery route from a supported Linux host with the exact
+   retained lineage and approval evidence. A failed remote deletion retains
    its intent and is retryable only after a fresh probe proves the exact remote
    ref is still present; any ambiguous post-failure state remains blocked.
    If a versioned lease reports `external_command_fence_unresolved`, do not
@@ -642,7 +646,18 @@ do not treat an operator authorization as a bypass.
    `settle-external-intent <task> --intent-id <uuid> --dry-run|--apply`.
    Settlement records that bounded owner attestation with status 125; it does
    not claim the interrupted command had no effects. The next governed command
-   must repeat its ordinary verification, ownership, and delivery gates.
+   must repeat its ordinary verification, ownership, and delivery gates. For a
+   bound command, settlement additionally requires the exact recorded command
+   PID/start identity and command group to be provably dead; a live, reused, or
+   unprobeable identity is a stop line. For a spawned worker, the exact worker
+   PID/start identity and its recorded group must be dead. Never signal a group
+   after a PID/start mismatch, never infer completion from a missing receipt,
+   and never remove an ambiguous spawned/bound record. After an admissible
+   recovery transition, the only verification path is a fresh
+   `finish-pr <task> --stage-all --verify check`; a settled retained packet
+   blocks `finish-pr --no-verify` and every delivery path until that approved
+   recovery invalidation exists. `--no-verify`, profile switching, and retry
+   shortcuts remain blocked until that exact run passes.
    A no-PR lane that is not ancestral but was carried forward by a later merged
    PR must use `cleanup-superseded <task>` rather than `cleanup-integrated`.
    First review its `--summary-json` proof with the exact source head, merged
