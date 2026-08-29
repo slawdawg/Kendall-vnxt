@@ -8367,7 +8367,7 @@ try {
       const fixture = createFinishPrExistingCommitFixture();
       try {
         if (scenario.budgetMs) setFixtureCodexWorkspaceVerificationTimeout(fixture, scenario.budgetMs);
-        installFixtureVerificationCommand(fixture, scenario.mode);
+        installFixtureVerificationCommand(fixture, scenario.mode, { captureExternalWorkerStderr: true, preChildTimeout: scenario.mode === "timeout" });
         installFixtureDeliveryProbes(fixture);
         if (scenario.mode === "ambiguous-result" || scenario.mode === "output-limit") {
           fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_RESULT: scenario.mode };
@@ -8381,16 +8381,35 @@ try {
           ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
           { cwd: fixture.worktree, env: fixture.env },
         );
+        const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+        const externalFixtureEvidence = {
+          bindings: leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings")),
+          completions: leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")),
+        };
 
-        assert(result.code !== 0, `${scenario.mode} verification unexpectedly passed`);
-        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
-        assert(result.stderr.includes("child_output=omitted"), result.stderr || result.stdout);
-        if (scenario.secret) assert(!result.stderr.includes(scenario.secret), "verification diagnostic retained child secret output");
-        assert(result.stderr.includes("No verification or PR delivery evidence was recorded"), result.stderr || result.stdout);
+        assert(result.code !== 0, `${scenario.mode} verification unexpectedly passed: ${JSON.stringify(externalFixtureEvidence)}`);
+        const diagnostic = `${result.stderr}\n${result.stdout}`;
+        assert(diagnostic.includes(scenario.expected), `${diagnostic}\nfixture_external_evidence=${JSON.stringify(externalFixtureEvidence)}`);
+        assert(diagnostic.includes("child_output=omitted"), diagnostic);
+        if (scenario.secret) assert(!diagnostic.includes(scenario.secret), "verification diagnostic retained child secret output");
+        assert(diagnostic.includes("No verification or PR delivery evidence was recorded"), diagnostic);
         assert(readFileSync(manifestPath, "utf8") === before, `${scenario.mode} verification changed the manifest`);
         assert(!existsSync(lockPath), `${scenario.mode} verification retained the task lock`);
         assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.mode} verification reached git push`);
         assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.mode} verification reached gh pr create`);
+        if (scenario.mode === "timeout") {
+          const inspection = runFixtureScript(fixture, ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+          assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+          const packet = JSON.parse(inspection.stdout);
+          assert(packet.status === "released" && packet.reason === "owner_released_generation", inspection.stdout);
+          const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+          const intents = leaseJsonRecordsForFixture(join(leaseRoot, "external-intents"));
+          const completions = leaseJsonRecordsForFixture(join(leaseRoot, "external-completions"));
+          const unresolvedIntents = intents.filter((intent) => !completions.some((completion) => completion.intent_id === intent.intent_id));
+          assert(unresolvedIntents.length === 0 && completions.length === 1, "parent-enforced timeout did not record its bounded completion");
+          const bindings = leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings"));
+          assert(bindings.length === 0, JSON.stringify(bindings));
+        }
         if (scenario.mode === "output-limit") {
           const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
           const names = readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json"));
@@ -9029,6 +9048,44 @@ try {
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const retained = readJson(manifestPath).check_verification_packet;
       assert(retained?.in_flight_stage?.stage === "check:packet-one", JSON.stringify(retained));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const leaseRootRecord = readJson(join(leaseRoot, "root.json"));
+      const releasedLease = readJson(join(leaseRoot, "generations", `${leaseRootRecord.initial_generation}.json`));
+      const settledIntentId = "73737373-7373-4373-8373-737373737373";
+      const settledTokenDigest = createHash("sha256").update(releasedLease.token).digest("hex");
+      mkdirSync(join(leaseRoot, "external-intents"), { recursive: true });
+      mkdirSync(join(leaseRoot, "external-process-bindings"), { recursive: true });
+      writeFileSync(join(leaseRoot, "external-intents", `${settledIntentId}.json`), `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", generation: releasedLease.generation, token_digest: settledTokenDigest,
+        intent_id: settledIntentId, runner_pid: releasedLease.pid, runner_process_start_identity: releasedLease.process_start_identity,
+        command_digest: "e".repeat(64), started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      writeFileSync(join(leaseRoot, "external-process-bindings", `${settledIntentId}.json`), `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", generation: releasedLease.generation, token_digest: settledTokenDigest,
+        intent_id: settledIntentId, state: "unbound",
+      })}\n`);
+      const settled = runFixtureScript(
+        fixture,
+        ["settle-external-intent", "resumed-task", "--intent-id", settledIntentId, "--apply", "--approval", "operator approved exact recovery settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(settled.code === 0, settled.stderr || settled.stdout);
+      const unrelatedFingerprint = "f".repeat(64);
+      const unrelatedRecoveryPath = join(leaseRoot, "inflight-check-recoveries", `${unrelatedFingerprint}.json`);
+      mkdirSync(dirname(unrelatedRecoveryPath), { recursive: true });
+      writeFileSync(unrelatedRecoveryPath, `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", recovery: "invalidate-and-reverify/v1", packet_fingerprint: unrelatedFingerprint,
+        owner: "runner-a", prior_lease: { generation: releasedLease.generation, pid: releasedLease.pid, process_start_identity: releasedLease.process_start_identity },
+        packet: { stage: retained.in_flight_stage.stage, started_at: retained.in_flight_stage.started_at, timeout_ms: retained.in_flight_stage.timeout_ms, head: retained.head, plan_digest: retained.plan_digest, staged_input_digest: retained.staged_input_digest },
+        approval_sha256: "a".repeat(64), approval_length: 10, reason: "unrelated recovery record", recovered_at: new Date().toISOString(), metadata_only: true, raw_payload_retained: false,
+      })}\n`);
+      const unrelatedRecoveryBypass = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(unrelatedRecoveryBypass.code !== 0 && unrelatedRecoveryBypass.stderr.includes("exact post-settlement recover-inflight-check"), unrelatedRecoveryBypass.stderr || unrelatedRecoveryBypass.stdout);
+      rmSync(unrelatedRecoveryPath);
       installFixtureDeliveryProbes(fixture, { allowDelivery: true });
 
       const recovered = runFixtureScript(
@@ -9047,6 +9104,7 @@ try {
       assert(recoveryNames.length === 1, JSON.stringify(recoveryNames));
       const evidence = readJson(join(recoveryDirectory, recoveryNames[0]));
       assert(evidence.packet.stage === "check:packet-one" && evidence.packet_fingerprint.length === 64, JSON.stringify(evidence));
+      assert(evidence.settled_external_intent?.intent_id === settledIntentId && evidence.settled_external_intent?.generation === releasedLease.generation, JSON.stringify(evidence));
       assert(evidence.metadata_only === true && evidence.raw_payload_retained === false, JSON.stringify(evidence));
       assert(!JSON.stringify(evidence).includes("fixture-packet-secret"), "recovery evidence retained child output");
 
@@ -9267,7 +9325,7 @@ try {
         { cwd: fixture.worktree, env: fixture.env },
       );
       assert(result.code !== 0, "post-admission predecessor intent race unexpectedly invalidated the packet");
-      assert(result.stderr.includes("unresolved external intent"), result.stderr || result.stdout);
+      assert(result.stderr.includes("external_intent_generation_mismatch"), result.stderr || result.stdout);
       assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "locked recovery race invalidated the retained packet");
       const recoveryDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries");
       assert(!existsSync(recoveryDirectory), "failed final predecessor proof published recovery evidence");
@@ -9278,7 +9336,7 @@ try {
         { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_IN_FLIGHT_RECOVERY_LOCKED_INTENT: "0" } },
       );
       assert(retry.code !== 0, "later recovery retry bypassed the failed predecessor proof");
-      assert(retry.stderr.includes("unresolved external intent"), retry.stderr || retry.stdout);
+      assert(retry.stderr.includes("exact released versioned lease"), retry.stderr || retry.stdout);
       assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "later recovery retry invalidated the retained packet");
       assert(readFixtureStageLog(stageLog).length === 0, "locked recovery race launched a verification stage");
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "locked recovery race reached git push");
@@ -9312,7 +9370,7 @@ try {
 
       const blocked = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
       assert(blocked.code !== 0, "later locked recovery lineage intent unexpectedly invalidated the packet");
-      assert(blocked.stderr.includes("unresolved external intent"), blocked.stderr || blocked.stdout);
+      assert(blocked.stderr.includes("external_intent_generation_mismatch"), blocked.stderr || blocked.stdout);
       assert(readJson(manifestPath).check_verification_packet?.in_flight_stage?.stage === "check:packet-one", "later locked lineage proof invalidated the retained packet");
       const recoveryDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "inflight-check-recoveries");
       assert(readdirSync(recoveryDirectory).filter((name) => name.endsWith(".json")).length === 1, "failed final lineage proof duplicated immutable recovery evidence");
@@ -9607,10 +9665,10 @@ try {
       const stages = ["preflight", "check:packet-after-preflight"];
       const stageLog = installFixtureResumableCheckPlan(fixture, stages);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture);
       const manifest = readJson(manifestPath);
       manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture);
       installFixtureDeliveryProbes(fixture, { allowDelivery: true });
 
       const first = runFixtureScript(
@@ -9657,6 +9715,85 @@ try {
       );
       assert(fresh.code === 0, fresh.stderr || fresh.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "fresh full verification remained blocked after settled preflight retry recovery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("real environment-preflight worker crash settles, blocks drift recovery, and requires fresh exact verification", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+    const runFixtureWorktreeScript = (args) => {
+      const branch = runGit(fixture.worktree, ["branch", "--show-current"]).stdout;
+      const witness = readJson(manifestPath);
+      assert(branch === fixture.branch, JSON.stringify({ witness: "pre-run-branch", branch, expectedBranch: fixture.branch }));
+      assert(witness.worktree_path === fixture.worktree, JSON.stringify({ witness: "pre-run-manifest-worktree", worktreePath: witness.worktree_path, expectedWorktree: fixture.worktree }));
+      assert(fixture.worktreeScript === join(fixture.worktree, "scripts", "codex-workspace.mjs"), JSON.stringify({ witness: "pre-run-script-path", scriptPath: fixture.worktreeScript, expectedScriptPath: join(fixture.worktree, "scripts", "codex-workspace.mjs") }));
+      return runFixtureScript(
+        fixture,
+        args,
+        { cwd: fixture.worktree, env: fixture.env, scriptPath: fixture.worktreeScript },
+      );
+    };
+    try {
+      const stages = ["preflight", "check:packet-after-preflight"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture, { crashAfterIntent: true });
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const interrupted = runFixtureWorktreeScript(
+        ["finish-pr", "resumed-task", "--retry-environment-preflight", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(interrupted.code !== 0, "worker-crashed environment retry unexpectedly completed");
+      const retained = readJson(manifestPath);
+      assert(retained.check_verification_packet?.status === "failed" && retained.check_verification_packet?.in_flight_stage?.stage === "preflight", JSON.stringify({ packet: retained.check_verification_packet, stderr: interrupted.stderr, stdout: interrupted.stdout }));
+      const inspection = runFixtureWorktreeScript(
+        ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot],
+      );
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      const fence = JSON.parse(inspection.stdout);
+      assert(fence.status === "ambiguous" && fence.reason === "external_command_fence_unresolved" && fence.externalIntentId, inspection.stdout);
+      assert(
+        fence.commandDigest === createHash("sha256").update(JSON.stringify(["pnpm", "run", "preflight"])).digest("hex"),
+        `lock-time branch validation was incorrectly fenced instead of the retry preflight: ${inspection.stdout}`,
+      );
+
+      let preview;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        preview = runFixtureWorktreeScript(
+          ["settle-external-intent", "resumed-task", "--intent-id", fence.externalIntentId, "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        );
+        if (preview.code === 0 && JSON.parse(preview.stdout).allowed) break;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+      assert(preview?.code === 0 && JSON.parse(preview.stdout).allowed, preview?.stderr || preview?.stdout);
+      const settled = runFixtureWorktreeScript(
+        ["settle-external-intent", "resumed-task", "--intent-id", fence.externalIntentId, "--apply", "--approval", "operator approved bounded crashed preflight settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(settled.code === 0, settled.stderr || settled.stdout);
+      const settledManifest = readJson(manifestPath);
+      assert(settledManifest.check_verification_packet?.status === "failed" && settledManifest.check_verification_packet?.in_flight_stage?.stage === "preflight", JSON.stringify(settledManifest.check_verification_packet));
+
+      writeFileSync(join(fixture.worktree, "recovery-drift.txt"), "changed\n");
+      runGit(fixture.worktree, ["add", "recovery-drift.txt"]);
+      const drifted = runFixtureWorktreeScript(
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating crashed preflight", "--reason", "fixture rejects changed staged input", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(drifted.code !== 0, "drifted recovery unexpectedly applied");
+      runGit(fixture.worktree, ["read-tree", "HEAD"]);
+      rmSync(join(fixture.worktree, "recovery-drift.txt"), { force: true });
+      const recovered = runFixtureWorktreeScript(
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating crashed preflight", "--reason", "fixture rejects changed staged input", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      const fresh = runFixtureWorktreeScript(
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(fresh.code === 0, fresh.stderr || fresh.stdout);
+      const logged = readFixtureStageLog(stageLog);
+      assert(logged.slice(-stages.length).join(",") === stages.join(","), JSON.stringify(logged));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10005,17 +10142,25 @@ try {
   test("finish-pr --stage-all migrates a safely owned obsolete supervisor aggregate packet into the full current plan", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
-      const stageLog = installFixtureResumableCheckPlan(fixture, supervisorCheckLeaves, {}, ["test:supervisor"], ["test:supervisor"]);
+      const stageLog = installFixtureResumableCheckPlan(fixture, supervisorCheckLeaves, {}, supervisorCheckLeaves, ["test:supervisor"]);
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
       const manifest = readJson(manifestPath);
       manifest.check_verification_packet = fixtureFailedResumableCheckPacket(fixture, ["test:supervisor"], { plan_digest: createHash("sha256").update("test:supervisor").digest("hex") });
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-      const result = runFixtureScript(
+      let result = runFixtureScript(
         fixture,
         ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
+      for (let attempt = 0; result.code !== 0 && attempt <= supervisorCheckLeaves.length; attempt += 1) {
+        assert(result.stderr.includes("packet paused before"), result.stderr || result.stdout);
+        result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+      }
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === supervisorCheckLeaves.join(","), "obsolete packet did not start the newly bound full plan from its first leaf");
@@ -10910,7 +11055,7 @@ try {
     try {
       const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
         pid: 999_999_999,
-        process_start_identity: "linux-proc-start-ticks:1",
+        process_start_identity: processStartIdentityForTest(),
       }));
       const result = runFixtureScript(
         fixture,
@@ -11302,9 +11447,82 @@ try {
     }
   });
 
+  test("versioned lease treats multiple unresolved external intents as ambiguous", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "posix-ps-lstart:999999999:missing",
+      }));
+      const digest = createHash("sha256").update(initial.token).digest("hex");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const intentDirectory = join(leaseRoot, "external-intents");
+      const bindingDirectory = join(leaseRoot, "external-process-bindings");
+      mkdirSync(intentDirectory, { recursive: true });
+      mkdirSync(bindingDirectory, { recursive: true });
+      for (const [intentId, commandDigest] of [
+        ["12121212-1212-4121-8121-121212121212", "1".repeat(64)],
+        ["13131313-1313-4131-8131-131313131313", "2".repeat(64)],
+      ]) {
+        writeFileSync(join(intentDirectory, `${intentId}.json`), `${JSON.stringify({
+          schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: digest,
+          intent_id: intentId, runner_pid: initial.pid, runner_process_start_identity: initial.process_start_identity,
+          command_digest: commandDigest, started_at: "2026-07-26T00:00:00.000Z",
+        })}\n`);
+        writeFileSync(join(bindingDirectory, `${intentId}.json`), `${JSON.stringify({
+          schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: digest,
+          intent_id: intentId, state: "unbound",
+        })}\n`);
+      }
+      const inspection = runFixtureScript(fixture, ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      const packet = JSON.parse(inspection.stdout);
+      assert(packet.status === "ambiguous" && packet.reason === "external_command_fence_unresolved", inspection.stdout);
+      const takeover = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(takeover.code !== 0, "multiple unresolved intents unexpectedly allowed takeover");
+      assert(!existsSync(join(leaseRoot, "handoffs", `${initial.generation}.json`)), "multiple unresolved intents published a handoff");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("external intent inspection validates each retained sibling binding", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "posix-ps-lstart:999999999:missing",
+      }));
+      const digest = createHash("sha256").update(initial.token).digest("hex");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const intentId = "14141414-1414-4141-8141-141414141414";
+      const siblingId = "15151515-1515-4151-8151-151515151515";
+      const intentDirectory = join(leaseRoot, "external-intents");
+      const completionDirectory = join(leaseRoot, "external-completions");
+      const bindingDirectory = join(leaseRoot, "external-process-bindings");
+      mkdirSync(intentDirectory, { recursive: true });
+      mkdirSync(completionDirectory, { recursive: true });
+      mkdirSync(bindingDirectory, { recursive: true });
+      for (const id of [intentId, siblingId]) {
+        writeFileSync(join(intentDirectory, `${id}.json`), `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: digest, intent_id: id, runner_pid: initial.pid, runner_process_start_identity: initial.process_start_identity, command_digest: "a".repeat(64), started_at: "2026-07-26T00:00:00.000Z" })}\n`);
+      }
+      writeFileSync(join(completionDirectory, `${siblingId}.json`), `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: digest, intent_id: siblingId, completed_at: "2026-07-26T00:00:01.000Z", status: 0 })}\n`);
+      writeFileSync(join(bindingDirectory, `${intentId}.json`), `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: digest, intent_id: intentId, state: "unbound" })}\n`);
+      writeFileSync(join(bindingDirectory, `${siblingId}.json`), `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: digest, intent_id: siblingId, state: "bound" })}\n`);
+      const preview = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.allowed === false && packet.blockers.some((blocker) => blocker.includes("unresolved external intent record is invalid")), preview.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("settle-external-intent requires exact owner, dead runner, and immutable intent before releasing a fenced retry", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
+      const stageLog = installFixtureResumableCheckPlan(fixture, ["check:settlement-fresh"]);
+      installFixtureDeliveryProbes(fixture);
       const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
         pid: 999_999_999,
         process_start_identity: "linux-proc-start-ticks:1",
@@ -11324,17 +11542,562 @@ try {
         command_digest: "b".repeat(64),
         started_at: "2026-07-26T00:00:00.000Z",
       })}\n`);
+      const processBindingDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-process-bindings");
+      mkdirSync(processBindingDirectory, { recursive: true });
+      writeFileSync(join(processBindingDirectory, `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: digest,
+        intent_id: intentId,
+        worker_pid: 999_999_998,
+        worker_process_start_identity: "linux-proc-start-ticks:2",
+        worker_process_group_id: 999_999_998,
+        command_pid: 999_999_997,
+        command_process_start_identity: "linux-proc-start-ticks:3",
+        command_group_id: 999_999_996,
+        bound_at: "2026-07-26T00:00:01.000Z",
+      })}\n`);
       const wrongOwner = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved bounded intent settlement", "--owner", "runner-b", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
       assert(wrongOwner.code !== 0, "foreign owner settled an external intent");
       const preview = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
       assert(preview.code === 0, preview.stderr || preview.stdout);
       assert(preview.stdout.includes('"allowed": true'), preview.stdout);
-      const apply = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved bounded intent settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-      assert(apply.code === 0, apply.stderr || apply.stdout);
+      const interrupted = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved bounded intent settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_INTENT_SETTLEMENT_COMPLETION: "1" } });
+      assert(interrupted.code !== 0 && interrupted.stderr.includes("fixture interruption after immutable external intent settlement completion"), interrupted.stderr || interrupted.stdout);
       const completion = readJson(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-completions", `${intentId}.json`));
       assert(completion.status === 125 && completion.settlement === "owner-attested-runner-absent/v1", "settlement completion is not bounded owner-attested evidence");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "releases", `${initial.generation}.json`)), "interruption unexpectedly published a lease release");
+      const resumed = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved bounded intent settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(resumed.code === 0 && resumed.stdout.includes('"resumed":true'), resumed.stderr || resumed.stdout);
+      assert(existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "releases", `${initial.generation}.json`)), "resumed settlement did not publish the lease release");
       const retry = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-      assert(retry.code === 0, retry.stderr || retry.stdout);
+      assert(retry.code !== 0 && retry.stderr.includes("settled external intent requires the fresh exact finish-pr --stage-all --verify check"), retry.stderr || retry.stdout);
+      const fresh = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(!fresh.stderr.includes("settled external intent requires"), fresh.stderr || fresh.stdout);
+      assert(readFixtureStageLog(stageLog).includes("check:settlement-fresh"), fresh.stderr || fresh.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("settled delivery after a passed check packet requires exact invalidation then fresh stage-all verification", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:settled-delivery-fresh"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        owner: "runner-a",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      const tokenDigest = createHash("sha256").update(initial.token).digest("hex");
+      const intentId = "23232323-2323-4232-8232-232323232323";
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      mkdirSync(join(leaseRoot, "external-intents"), { recursive: true });
+      mkdirSync(join(leaseRoot, "external-process-bindings"), { recursive: true });
+      writeFileSync(join(leaseRoot, "external-intents", `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: tokenDigest,
+        intent_id: intentId,
+        runner_pid: initial.pid,
+        runner_process_start_identity: initial.process_start_identity,
+        command_digest: "c".repeat(64),
+        started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      writeFileSync(join(leaseRoot, "external-process-bindings", `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: tokenDigest,
+        intent_id: intentId,
+        state: "unbound",
+      })}\n`);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.check_verification_packet = fixturePassedResumableCheckPacket(fixture, stages);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const settled = runFixtureScript(
+        fixture,
+        ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--apply", "--approval", "operator approved passed delivery settlement", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(settled.code === 0, settled.stderr || settled.stdout);
+      const bypass = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(bypass.code !== 0 && bypass.stderr.includes("exact post-settlement recover-inflight-check"), bypass.stderr || bypass.stdout);
+
+      const recovered = runFixtureScript(
+        fixture,
+        ["recover-inflight-check", "resumed-task", "--apply", "--approval", "operator approved invalidating passed delivery check", "--reason", "fixture delivery runner disappeared after passed check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(recovered.code === 0, recovered.stderr || recovered.stdout);
+      assert(!Object.hasOwn(readJson(manifestPath), "check_verification_packet"), "passed packet was not invalidated");
+      assert(readFixtureStageLog(stageLog).length === 0, "recovery replayed a passed check stage");
+
+      const afterRecoveryBypass = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(afterRecoveryBypass.code !== 0 && afterRecoveryBypass.stderr.includes("fresh exact finish-pr --stage-all --verify check"), afterRecoveryBypass.stderr || afterRecoveryBypass.stdout);
+      const fresh = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(fresh.code === 0, fresh.stderr || fresh.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "fresh stage-all verification did not restart from the first leaf");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("external intent publishes its no-execution prerequisites before the durable intent", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const capability = source.indexOf("writeNewJson(taskLeaseExternalWorkerCapabilityPath(context.state, context.taskId, intent.intent_id)");
+    const binding = source.indexOf("writeNewJson(taskLeaseExternalProcessBindingPath(context.state, context.taskId, intent.intent_id)");
+    const intent = source.indexOf("writeNewJson(taskLeaseLedgerPath(context.state, context.taskId, \"external-intents\", intent.intent_id), intent);");
+    assert(capability >= 0 && binding > capability && intent > binding, "external intent publication can precede its durable no-execution prerequisites");
+  });
+
+  test("fenced worker timeout signals only its exact live PID/start-bound group", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    assert(source.includes("function signalExactExternalWorkerGroup(binding, signal)"), "external worker group signal helper is missing");
+    assert(source.includes("if (observed && observed !== binding.worker_process_start_identity) return false;"), "group signal does not reject a reused worker PID/start identity");
+    assert(source.includes("timedOut = signalExactExternalWorkerGroup(spawnedBinding, options.killSignal || \"SIGKILL\");"), "timeout does not use the exact worker binding signal path");
+    assert(source.includes("function boundedProcessTableProbe(args)"), "process-table probes are not centralized");
+    assert(source.includes("timeout: processTableProbeTimeoutMs") && source.includes("maxBuffer: processTableProbeMaximumBytes"), "process-table probe lacks bounded timeout/capture");
+    assert(source.includes('killSignal: "SIGKILL"'), "process-table timeout permits a TERM-resistant probe to block recovery");
+  });
+
+  test("fenced worker identity rejects second-granularity non-Linux process starts", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureNonLinuxProcessIdentitySeam(fixture);
+      installFixtureVerificationCommand(fixture, "success");
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "finish-pr accepted an unavailable high-resolution process identity");
+      assert((result.stderr || result.stdout).includes("Task lease ownership cannot be established because the current process start identity is unavailable"), result.stderr || result.stdout);
+      assert(!existsSync(fixture.deliveryProbe), "identity-ambiguous run reached a delivery command");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("fenced worker receipt requires a durable bound record and preserves maxBuffer failure", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    assert(source.includes("receiptReady = binding.state === \"bound\" ||"), "spawned receipt can still authorize completion");
+    assert(source.includes("maxBuffer: Number.isSafeInteger(options.maxBuffer)"), "fenced worker payload drops the configured maxBuffer");
+    assert(source.includes('errorCode: "ENOBUFS", errorMessage: "external command output exceeded configured capture limit"'), "fenced worker does not persist output overflow as ENOBUFS");
+    assert(source.includes('errorCode: bindingFailure ? "ERR_EXTERNAL_COMMAND_BINDING_FENCE" : "ERR_EXTERNAL_COMMAND_RECEIPT_FENCE"'), "binding-read failure can still return an externally successful worker result");
+    assert(source.includes("priorIntent.generation, priorIntent.token_digest"), "completed predecessor bindings are projected onto a successor generation");
+  });
+
+  test("settled external-intent admission scans sealed ledger history before allowing fresh verification", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    assert(source.includes("function taskLeaseLedgerHistory(state, taskId)"), "settled-intent admission cannot enumerate sealed ledger segments");
+    assert(source.includes("taskLeaseLedgerState(state, taskId, { verifySealedHistory: true })"), "settled-intent admission does not validate sealed ledger history");
+    assert(source.includes("for (const ledger of taskLeaseLedgerHistory(state, taskId))"), "settled-intent admission scans only the current ledger segment");
+  });
+
+  test("completed predecessor binding cleanup crash admits the successor while an unresolved receipt fence blocks delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "success");
+      installFixtureDeliveryProbes(fixture);
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_COMPLETION_BEFORE_BINDING_CLEANUP: "1" } },
+      );
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      assert(first.code !== 0, "completion-cleanup interruption unexpectedly reached delivery");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).length === 1, "completion-cleanup interruption did not retain the immutable completion");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings")).length === 1, "completion-cleanup interruption did not retain its terminal binding");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")) && !existsSync(join(fixture.root, "gh-pr-create-called.txt")), "unresolved receipt fence reached later delivery");
+      const successor = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(!successor.stderr.includes("external_process_binding_set_invalid"), successor.stderr || successor.stdout);
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).length >= 2, successor.stderr || successor.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("completed predecessor binding cleanup crash remains admissible after sealed ledger rollover", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "success");
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_COMPLETION_BEFORE_BINDING_CLEANUP: "1" } },
+      );
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const generation = readdirSync(join(leaseRoot, "generations")).filter((name) => name.endsWith(".json")).sort()[0];
+      const predecessor = readJson(join(leaseRoot, "generations", generation));
+      const tokenDigest = createHash("sha256").update(predecessor.token).digest("hex");
+      const intentDirectory = join(leaseRoot, "external-intents");
+      const completionDirectory = join(leaseRoot, "external-completions");
+      const bindingDirectory = join(leaseRoot, "external-process-bindings");
+      assert(first.code !== 0, "completion-cleanup interruption unexpectedly reached delivery");
+      assert(leaseJsonRecordsForFixture(intentDirectory).length === 1, "interruption did not retain its predecessor intent");
+      assert(leaseJsonRecordsForFixture(completionDirectory).length === 1, "interruption did not retain its predecessor completion");
+      assert(leaseJsonRecordsForFixture(bindingDirectory).length === 1, "interruption did not retain its predecessor binding");
+      for (let index = 1; index < 4_096; index += 1) {
+        const intentId = fixtureLeaseUuid("8", index);
+        writeFileSync(join(intentDirectory, `${intentId}.json`), `${JSON.stringify({
+          schema_version: 1,
+          task_id: "resumed-task",
+          generation: predecessor.generation,
+          token_digest: tokenDigest,
+          intent_id: intentId,
+          runner_pid: predecessor.pid,
+          runner_process_start_identity: predecessor.process_start_identity,
+          command_digest: "a".repeat(64),
+          started_at: "2026-07-26T00:00:00.000Z",
+        })}\n`);
+        writeFileSync(join(completionDirectory, `${intentId}.json`), `${JSON.stringify({
+          schema_version: 1,
+          task_id: "resumed-task",
+          generation: predecessor.generation,
+          token_digest: tokenDigest,
+          intent_id: intentId,
+          completed_at: "2026-07-26T00:00:01.000Z",
+          status: 0,
+        })}\n`);
+      }
+      const rollover = runFixtureScript(
+        fixture,
+        ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(rollover.code === 0, rollover.stderr || rollover.stdout);
+      const applied = JSON.parse(rollover.stdout);
+      assert(existsSync(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-intents")), "rollover did not seal the predecessor intent segment");
+      assert(leaseJsonRecordsForFixture(bindingDirectory).length === 1, "rollover unexpectedly removed the retained predecessor binding");
+      const successor = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(!successor.stderr.includes("external_orphan_binding_invalid"), successor.stderr || successor.stdout);
+      assert(!successor.stderr.includes("external_process_binding_set_invalid"), successor.stderr || successor.stdout);
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-completions")).length >= 1, successor.stderr || successor.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("post-spawn child identity failure retains an unresolved external fence", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "timeout", { failAfterChildSpawn: true });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      assert(result.code !== 0, "post-spawn identity failure unexpectedly released the task lease");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).length === 0, "post-spawn identity failure wrote an accepted completion");
+      const bindings = leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings"));
+      assert(bindings.length === 1 && bindings[0].state === "spawned", JSON.stringify(bindings));
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")) && !existsSync(join(fixture.root, "gh-pr-create-called.txt")), "post-spawn identity failure reached delivery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("bound child daemon descendant keeps its process-group fence and blocks delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "daemonized");
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      assert(result.code !== 0, "daemonized descendant unexpectedly reached delivery");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).length === 0, "daemonized descendant accepted a completion");
+      const bindings = leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings"));
+      assert(bindings.length === 1 && bindings[0].state === "bound", JSON.stringify(bindings));
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")) && !existsSync(join(fixture.root, "gh-pr-create-called.txt")), "daemonized descendant reached later delivery");
+      try { process.kill(-bindings[0].command_group_id, "SIGKILL"); } catch {}
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("incomplete successful process-table output keeps a live daemon descendant fenced", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureVerificationCommand(fixture, "daemonized");
+      installFixtureIncompleteProcessTableSeam(fixture);
+      installFixtureDeliveryProbes(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "codex-workspace", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      assert(result.code !== 0, "incomplete process table unexpectedly cleared a live daemon group fence");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).length === 0, "incomplete process table accepted an external completion");
+      const bindings = leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings"));
+      assert(bindings.length === 1 && bindings[0].state === "bound", JSON.stringify(bindings));
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")) && !existsSync(join(fixture.root, "gh-pr-create-called.txt")), "incomplete process table reached delivery");
+      try { process.kill(-bindings[0].command_group_id, "SIGKILL"); } catch {}
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("external generation-mismatched intent or completion evidence fails closed", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "posix-ps-lstart:999999999:missing",
+      }));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const intentId = "61616161-6161-4161-8161-616161616161";
+      mkdirSync(join(leaseRoot, "external-intents"), { recursive: true });
+      mkdirSync(join(leaseRoot, "external-completions"), { recursive: true });
+      writeFileSync(join(leaseRoot, "external-intents", `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", generation: "foreign-generation", token_digest: createHash("sha256").update(initial.token).digest("hex"),
+        intent_id: intentId, runner_pid: initial.pid, runner_process_start_identity: initial.process_start_identity,
+        command_digest: "d".repeat(64), started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      const blockedIntent = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(blockedIntent.code !== 0, "generation-mismatched external intent allowed callback execution");
+      rmSync(join(leaseRoot, "external-intents", `${intentId}.json`));
+      const predecessorGeneration = "71717171-7171-4171-8171-717171717171";
+      writeFileSync(join(leaseRoot, "external-intents", `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", generation: predecessorGeneration, token_digest: "not-a-token-digest",
+        intent_id: intentId, runner_pid: initial.pid, runner_process_start_identity: initial.process_start_identity,
+        command_digest: "d".repeat(64), started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      writeFileSync(join(leaseRoot, "external-completions", `${intentId}.json`), `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: predecessorGeneration, token_digest: "not-a-token-digest", intent_id: intentId, completed_at: "2026-07-26T00:00:01.000Z", status: 1 })}\n`);
+      const blockedToken = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(blockedToken.code !== 0, "malformed predecessor token digest allowed callback execution");
+      rmSync(join(leaseRoot, "external-intents", `${intentId}.json`));
+      writeFileSync(join(leaseRoot, "external-completions", `${intentId}.json`), `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: "foreign-generation", token_digest: createHash("sha256").update(initial.token).digest("hex"), intent_id: intentId, completed_at: "2026-07-26T00:00:01.000Z", status: 1 })}\n`);
+      const blockedCompletion = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(blockedCompletion.code !== 0, "generation-mismatched external completion allowed callback execution");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("external history rejects duplicate completion IDs across sealed and active segments without a binding", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task"));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const tokenDigest = createHash("sha256").update(initial.token).digest("hex");
+      writeFileSync(join(leaseRoot, "releases", `${initial.generation}.json`), `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: tokenDigest, released_at: "2026-07-26T00:01:00.000Z",
+      })}\n`);
+      const seeded = seedFixtureExactFullExternalHistory(leaseRoot, initial, { prefix: "c" });
+      const rollover = runFixtureScript(
+        fixture,
+        ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(rollover.code === 0, rollover.stderr || rollover.stdout);
+      const applied = JSON.parse(rollover.stdout);
+      const activeCompletionDirectory = join(leaseRoot, "ledger-segments", applied.nextSegment, "external-completions");
+      const duplicate = readJson(join(seeded.completionDirectory, `${seeded.intentId}.json`));
+      writeFileSync(join(activeCompletionDirectory, "retained-duplicate.json"), `${JSON.stringify(duplicate)}\n`);
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings")).length === 0, "duplicate fixture unexpectedly retained a process binding");
+      const blocked = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(blocked.code !== 0, "duplicate completion IDs across history allowed callback execution");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "ledger-segments", applied.nextSegment, "external-intents")).length === 0, "duplicate history reached a new external command callback");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("sealed interrupted settlement resumes through its exact historical intent lineage", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        owner: "runner-a",
+        pid: 999_999_999,
+        process_start_identity: "posix-ps-lstart:999999999:missing",
+      }));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const approval = "operator approved bounded intent settlement";
+      const seeded = seedFixtureExactFullExternalHistory(leaseRoot, initial, {
+        prefix: "d",
+        settlementApproval: approval,
+      });
+      const bindingDirectory = join(leaseRoot, "external-process-bindings");
+      mkdirSync(bindingDirectory, { recursive: true });
+      writeFileSync(join(bindingDirectory, `${seeded.intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: seeded.tokenDigest,
+        intent_id: seeded.intentId,
+        state: "bound",
+        worker_pid: 999_999_998,
+        worker_process_start_identity: "posix-ps-lstart:999999998:missing",
+        worker_process_group_id: 999_999_998,
+        command_pid: 999_999_997,
+        command_process_start_identity: "posix-ps-lstart:999999997:missing",
+        command_group_id: 999_999_997,
+        bound_at: "2026-07-26T00:00:01.000Z",
+      })}\n`);
+      const rollover = runFixtureScript(
+        fixture,
+        ["rollover-task-lease-ledger", "resumed-task", "--apply", "--approval", "operator approved immutable ledger rollover", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(rollover.code === 0, rollover.stderr || rollover.stdout);
+      const handoff = readJson(join(leaseRoot, "handoffs", `${initial.generation}.json`));
+      rmSync(join(leaseRoot, "handoffs", `${initial.generation}.json`), { force: true });
+      rmSync(join(leaseRoot, "releases", `${handoff.to_generation}.json`), { force: true });
+      rmSync(join(leaseRoot, "generations", `${handoff.to_generation}.json`), { force: true });
+      rmSync(join(leaseRoot, "heartbeats", handoff.to_generation), { recursive: true, force: true });
+      const resumed = runFixtureScript(
+        fixture,
+        ["settle-external-intent", "resumed-task", "--intent-id", seeded.intentId, "--apply", "--approval", approval, "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(resumed.code === 0 && resumed.stdout.includes('"resumed":true'), resumed.stderr || resumed.stdout);
+      assert(existsSync(join(leaseRoot, "releases", `${initial.generation}.json`)), "resumed settlement did not release its exact predecessor generation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("an unbound orphan binding is removed only as a proven never-started pre-intent record", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: "posix-ps-lstart:999999999:missing",
+      }));
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const intentId = "62626262-6262-4262-8262-626262626262";
+      const bindingPath = join(leaseRoot, "external-process-bindings", `${intentId}.json`);
+      mkdirSync(dirname(bindingPath), { recursive: true });
+      writeFileSync(bindingPath, `${JSON.stringify({ schema_version: 1, task_id: "resumed-task", generation: initial.generation, token_digest: createHash("sha256").update(initial.token).digest("hex"), intent_id: intentId, state: "unbound" })}\n`);
+      const inspection = runFixtureScript(fixture, ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      assert(!existsSync(bindingPath), "proven never-started orphan binding was not removed");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("delivery-fence recovery runbook preserves group-proof settlement stop lines", () => {
+    const runbook = readFileSync(join(rootDir, "docs", "workflows", "end-to-end-lane-runner.md"), "utf8");
+    assert(runbook.includes("PID/start mismatch") && runbook.includes("finish-pr <task> --stage-all --verify check") && runbook.includes("blocks `finish-pr --no-verify`"), "runbook omits external-fence settlement proof or fresh verification stop line");
+    assert(runbook.includes("including macOS under") && runbook.includes("supported Linux host") && runbook.includes("retained lineage and approval evidence"), "runbook implies unsupported non-Linux PID recovery rather than the fail-closed route");
+  });
+
+  test("detached external-command crash retains a redacted intent fence until explicit settlement", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const interrupted = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_WORKER_SPAWN: "1" } },
+      );
+      assert(interrupted.code !== 0, "external worker crash injection unexpectedly completed delivery");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const intents = leaseJsonRecordsForFixture(join(leaseRoot, "external-intents"));
+      assert(intents.length === 1, "crash path did not retain exactly one external intent");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-completions")).length === 0, "crash path published a completion receipt");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "external-process-bindings")).length === 1, "crash path did not retain a process binding");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "external worker crash reached PR creation");
+
+      const inspection = runFixtureScript(
+        fixture,
+        ["inspect-task-lock", "resumed-task", "--summary-json", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(inspection.code === 0, inspection.stderr || inspection.stdout);
+      const packet = JSON.parse(inspection.stdout);
+      assert(packet.status === "ambiguous" && packet.reason === "external_command_fence_unresolved", inspection.stdout);
+      assert(packet.externalIntentId === intents[0].intent_id, inspection.stdout);
+      assert(packet.commandDigest === intents[0].command_digest, inspection.stdout);
+      assert(!Object.hasOwn(packet, "args") && !Object.hasOwn(packet, "output") && !Object.hasOwn(packet, "payload"), inspection.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("settle-external-intent refuses a live bound command process when PATH ps traps TERM", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const initial = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        pid: 999_999_999,
+        process_start_identity: processStartIdentityForTest(),
+      }));
+      const digest = createHash("sha256").update(initial.token).digest("hex");
+      const intentId = "33333333-3333-4333-8333-333333333333";
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      mkdirSync(join(leaseRoot, "external-intents"), { recursive: true });
+      writeFileSync(join(leaseRoot, "external-intents", `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: digest,
+        intent_id: intentId,
+        runner_pid: initial.pid,
+        runner_process_start_identity: initial.process_start_identity,
+        command_digest: "c".repeat(64),
+        started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      mkdirSync(join(leaseRoot, "external-process-bindings"), { recursive: true });
+      writeFileSync(join(leaseRoot, "external-process-bindings", `${intentId}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: initial.generation,
+        token_digest: digest,
+        intent_id: intentId,
+        worker_pid: 999_999_998,
+        worker_process_start_identity: "linux-proc-start-ticks:2",
+        worker_process_group_id: 999_999_998,
+        command_pid: process.pid,
+        command_process_start_identity: processStartIdentityForTest(),
+        command_group_id: processGroupIdForTest(),
+        bound_at: "2026-07-26T00:00:01.000Z",
+      })}\n`);
+      installFixtureTermResistantProcessTableCommand(fixture);
+      const startedAt = Date.now();
+      const preview = runFixtureScript(fixture, ["settle-external-intent", "resumed-task", "--intent-id", intentId, "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(Date.now() - startedAt < 2_000, "TERM-resistant PATH process-table probe blocked settlement instead of failing closed");
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.allowed === false, preview.stdout);
+      assert(packet.blockers.some((blocker) => blocker.includes("external command process is still live")), preview.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -12587,6 +13350,7 @@ try {
       const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
       writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
         owner: "runner-other",
+        process_start_identity: processStartIdentityForTest(),
       }));
       const activeLock = runFixtureScript(
         fixture,
@@ -15769,10 +16533,8 @@ try {
     try {
       copyWorkspaceScriptFixture(fixtureRoot);
       const fixtureScript = join(fixtureRoot, "scripts", "codex-workspace.mjs");
-      const source = readFileSync(fixtureScript, "utf8");
-      const seam = 'if (process.platform === "darwin") {';
-      assert(source.includes(seam), "fixture did not contain portable process identity seam");
-      writeFileSync(fixtureScript, source.replace(seam, "if (true) {"));
+      const processIdentity = processStartIdentityForTest();
+      assert(processIdentity.startsWith(`linux-proc-start-ticks:${process.pid}:`) || processIdentity.startsWith(`posix-ps-lstart:${process.pid}:`), "fixture did not contain a collision-resistant process identity");
       seedGeneratedSuccessorPrerequisites(state);
       seedFixtureSafeBacklogSource(fixtureRoot, [{ itemId: "setup-churn-handoff-hardening", laneSlug: "setup-churn-handoff-hardening", status: "ready", priority: "P1", recommendedSliceSize: "small" }]);
       const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", state], { script: fixtureScript, cwd: fixtureRoot });
@@ -17939,9 +18701,13 @@ try {
         released_at: "2026-07-31T00:00:00.000Z",
       })}\n`);
       const fullLedger = join(leaseRoot, "external-intents");
+      const completions = join(leaseRoot, "external-completions");
       mkdirSync(fullLedger, { recursive: true });
+      mkdirSync(completions, { recursive: true });
       for (let index = 0; index < 4_096; index += 1) {
-        writeFileSync(join(fullLedger, `${index}.json`), "{}\n");
+        const intentId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+        writeFileSync(join(fullLedger, `${index}.json`), `${JSON.stringify({ schema_version: 1, task_id: fixture.taskId, generation: lease.generation, token_digest: digest, intent_id: intentId, runner_pid: lease.pid, runner_process_start_identity: lease.process_start_identity, command_digest: "a".repeat(64), started_at: "2026-07-31T00:00:00.000Z" })}\n`);
+        writeFileSync(join(completions, `${index}.json`), `${JSON.stringify({ schema_version: 1, task_id: fixture.taskId, generation: lease.generation, token_digest: digest, intent_id: intentId, completed_at: "2026-07-31T00:00:01.000Z", status: 1 })}\n`);
       }
       const preview = runFixtureScript(fixture, [
         "close-missing-worktree", fixture.taskId, "--summary-json", "--stale-after-seconds", "999999999", "--state-root", fixture.stateRoot,
@@ -20761,12 +21527,7 @@ function taskSnapshot(tasksDir, options = {}) {
 }
 
 function currentLinuxStartIdentity() {
-  const raw = readFileSync(`/proc/${process.pid}/stat`, "utf8");
-  const close = raw.lastIndexOf(")");
-  assert(close >= 0, "fixture process stat did not contain a command terminator");
-  const startTicks = raw.slice(close + 1).trim().split(/\s+/)[19];
-  assert(/^\d+$/.test(startTicks || ""), "fixture process stat did not expose a start tick identity");
-  return `linux-proc-start-ticks:${startTicks}`;
+  return processStartIdentityForTest();
 }
 
 function fixtureTaskLockMetadata(taskId, overrides = {}) {
@@ -20830,6 +21591,47 @@ function writeFixtureTaskLease(fixture, metadata) {
 
 function fixtureLeaseUuid(prefix, index) {
   return `${prefix}0000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+}
+
+function seedFixtureExactFullExternalHistory(leaseRoot, metadata, options = {}) {
+  const intentId = options.intentId || fixtureLeaseUuid("b", 1);
+  const tokenDigest = createHash("sha256").update(metadata.token).digest("hex");
+  const intentDirectory = join(leaseRoot, "external-intents");
+  const completionDirectory = join(leaseRoot, "external-completions");
+  mkdirSync(intentDirectory, { recursive: true });
+  mkdirSync(completionDirectory, { recursive: true });
+  for (let index = 1; index <= 4_096; index += 1) {
+    const currentIntentId = index === 1 ? intentId : fixtureLeaseUuid(options.prefix || "b", index);
+    writeFileSync(join(intentDirectory, `${currentIntentId}.json`), `${JSON.stringify({
+      schema_version: 1,
+      task_id: metadata.task_id,
+      generation: metadata.generation,
+      token_digest: tokenDigest,
+      intent_id: currentIntentId,
+      runner_pid: metadata.pid,
+      runner_process_start_identity: metadata.process_start_identity,
+      command_digest: "a".repeat(64),
+      started_at: "2026-07-26T00:00:00.000Z",
+    })}\n`);
+    const completion = {
+      schema_version: 1,
+      task_id: metadata.task_id,
+      generation: metadata.generation,
+      token_digest: tokenDigest,
+      intent_id: currentIntentId,
+      completed_at: "2026-07-26T00:00:01.000Z",
+      status: 0,
+    };
+    if (index === 1 && options.settlementApproval) {
+      completion.status = 125;
+      completion.settlement = "owner-attested-runner-absent/v1";
+      completion.approval = options.settlementApproval;
+      completion.metadata_only = true;
+      completion.raw_payload_retained = false;
+    }
+    writeFileSync(join(completionDirectory, `${currentIntentId}.json`), `${JSON.stringify(completion)}\n`);
+  }
+  return { intentId, tokenDigest, intentDirectory, completionDirectory };
 }
 
 function writeFixtureTaskLeaseChain(fixture, length, options = {}) {
@@ -21183,6 +21985,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
     branch,
     worktree,
     script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
+    worktreeScript: join(worktree, "scripts", "codex-workspace.mjs"),
     env,
   };
 }
@@ -21312,11 +22115,47 @@ function setFixtureCodexWorkspaceVerificationTimeout(fixture, timeoutMs) {
   runGit(fixture.root, ["commit", "-q", "-m", "fixture verification timeout seam"]);
 }
 
-function installFixtureVerificationCommand(fixture, mode) {
-  return installFixtureVerificationProfileCommand(fixture, "codex-workspace", mode);
+function installFixtureVerificationCommand(fixture, mode, options = {}) {
+  return installFixtureVerificationProfileCommand(fixture, "codex-workspace", mode, options);
 }
 
-function installFixtureVerificationProfileCommand(fixture, profile, mode) {
+function installFixtureIncompleteProcessTableSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const procEnumeration = 'const processIds = readdirSync("/proc").filter((name) => /^\\d+$/.test(name));';
+  const processTable = 'const result = boundedProcessTableProbe(["-e", "-o", "pid=,pgid=,stat="]);';
+  assert(source.includes(procEnumeration), "fixture did not contain the trusted process-group enumeration seam");
+  assert(source.includes(processTable), "fixture did not contain the portable process-table seam");
+  writeFileSync(
+    fixture.script,
+    source
+      .replace(procEnumeration, "const processIds = [];")
+      .replace(processTable, 'const result = { status: 0, stdout: "" };'),
+  );
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture incomplete process table seam"]);
+}
+
+function installFixtureNonLinuxProcessIdentitySeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const start = source.indexOf("function processStartIdentity(pid) {");
+  const end = source.indexOf("\nfunction processStartIdentityIncludingZombie", start);
+  assert(start >= 0 && end > start, "fixture did not contain the process identity seam");
+  const identity = source.slice(start, end);
+  assert(identity.includes('if (process.platform === "linux") {'), "fixture did not contain the Linux high-resolution identity branch");
+  assert(!identity.includes("lstart="), "fixture retained a second-granularity process identity fallback");
+  const patchedIdentity = identity.replace('if (process.platform === "linux") {', "if (false) {");
+  writeFileSync(fixture.script, `${source.slice(0, start)}${patchedIdentity}${source.slice(end)}`);
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture non-Linux process identity seam"]);
+}
+
+function installFixtureTermResistantProcessTableCommand(fixture) {
+  const command = join(fixture.fakeBin, "ps");
+  writeFileSync(command, "#!/bin/sh\ntrap '' TERM\nwhile :; do :; done\n");
+  chmodSync(command, 0o755);
+}
+
+function installFixtureVerificationProfileCommand(fixture, profile, mode, options = {}) {
   if (profile === "check") {
     writeFileSync(join(fixture.worktree, "package.json"), `${JSON.stringify({ scripts: { check: "pnpm run check:fixture", "check:fixture": "fixture-verification" } })}\n`);
     runGit(fixture.worktree, ["add", "package.json"]);
@@ -21334,6 +22173,16 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
   const fixtureScript = profile === "dashboard" ? "./scripts/dashboard-delivery.mjs" : "./scripts/test-codex-workspace.mjs";
   let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", ${JSON.stringify(fixtureScript)}],`);
   if (mode === "ambiguous-result" || mode === "output-limit") {
+    const leaseContextLine = "  const leaseContext = activeTaskLeaseWriteContext;";
+    assert(patchedSource.includes(leaseContextLine), "fixture did not contain the lease intent boundary");
+    patchedSource = patchedSource.replace(
+      leaseContextLine,
+      [
+        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "ambiguous-result" && resolved.command === "fixture-verification") return { code: 1, status: null, signal: null, errorCode: null, errorMessage: "", stdout: "", stderr: "" };',
+        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "output-limit" && resolved.command === "fixture-verification") return { code: 1, status: null, signal: "SIGKILL", errorCode: "ENOBUFS", errorMessage: "fixture output capture limit", stdout: "", stderr: "" };',
+        leaseContextLine,
+      ].join("\n"),
+    );
     const spawnLine = "    result = spawnSync(resolved.command, resolved.args, spawnOptions);";
     assert(patchedSource.includes(spawnLine), "fixture did not contain the verification spawn boundary");
     patchedSource = patchedSource.replace(
@@ -21346,6 +22195,43 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
         "        : spawnSync(resolved.command, resolved.args, spawnOptions);",
       ].join("\n"),
     );
+  }
+  if (options.captureExternalWorkerStderr) {
+    const workerStdio = '      stdio: "ignore",';
+    assert(patchedSource.includes(workerStdio), "fixture did not contain the external worker stdio seam");
+    patchedSource = patchedSource.replace(
+      workerStdio,
+      '      stdio: process.env.CODEX_WORKSPACE_FIXTURE_CAPTURE_EXTERNAL_WORKER_STDERR === "1" ? ["ignore", "ignore", "inherit"] : "ignore",',
+    );
+    fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_CAPTURE_EXTERNAL_WORKER_STDERR: "1" };
+  }
+  if (options.preChildTimeout) {
+    const parentSpawnBoundary = "function runFencedExternal(commandName, commandArguments, resolved, options, context, intent) {\n  const resultDirectory";
+    assert(patchedSource.includes(parentSpawnBoundary), "fixture did not contain the external parent pre-child timeout seam");
+    patchedSource = patchedSource.replace(
+      parentSpawnBoundary,
+      [
+        "function runFencedExternal(commandName, commandArguments, resolved, options, context, intent) {",
+        '  if (process.env.CODEX_WORKSPACE_FIXTURE_PRE_CHILD_TIMEOUT === "1") {',
+        "    completeTaskLeaseExternalIntent(context, intent, { status: null });",
+        '    return { code: 1, status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT", errorMessage: "", stdout: "", stderr: "" };',
+        "  }",
+        "  const resultDirectory",
+      ].join("\n"),
+    );
+    fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PRE_CHILD_TIMEOUT: "1" };
+  }
+  if (options.failAfterChildSpawn) {
+    const childIdentity = "    let commandStartIdentity = null;";
+    assert(patchedSource.includes(childIdentity), "fixture did not contain the post-spawn identity seam");
+    patchedSource = patchedSource.replace(
+      childIdentity,
+      [
+        '    if (process.env.CODEX_WORKSPACE_FIXTURE_FAIL_AFTER_CHILD_SPAWN === "1") throw new Error("fixture post-spawn child identity failure");',
+        childIdentity,
+      ].join("\n"),
+    );
+    fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_FAIL_AFTER_CHILD_SPAWN: "1" };
   }
   writeFileSync(fixture.script, patchedSource);
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
@@ -21360,6 +22246,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode) {
     "diagnostic-nonzero": "i=0\nwhile [ \"$i\" -lt 3000 ]; do printf 'x'; i=$((i + 1)); done\nprintf '\\nwrapper-stdout-tail\\n'\nprintf 'fixture-secret-token-123 password=correct-horse-battery-staple github_pat_fixture_token_123 Authorization: \"Bearer quoted-header-token\" Authorization: Basic basic-credential x-api-key=\"quoted-api-key\" password=\"quoted-password\" DATABASE_URL=postgres://fixture:diagnostic-url-password@example.test/db jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.signaturefixture1234567890 ' >&2\nprintf 'xoxb-' >&2; printf '123456789012-123456789012-abcdefghijklmnopqrstuv ' >&2\nprintf '%s\\n' '-----BEGIN PRIVATE KEY-----' 'fixture-private-key-material' '-----END PRIVATE KEY-----' >&2\nprintf 'Autho'; printf '\\001'; printf 'rization: Basic control-basic wrapper-stderr-tail\\n' >&2\nexit 23",
     "boundary-secret-nonzero": "printf 'xxxxxxxxxxsk-'\ni=0\nwhile [ \"$i\" -lt 2100 ]; do printf 'a'; i=$((i + 1)); done\nprintf '\\n'\nexit 23",
     "later-stage-nonzero": "echo '> pnpm run check:later-stage'\necho 'fixture-later-stage-secret' >&2\nexit 23",
+    daemonized: "sleep 10 </dev/null >/dev/null 2>&1 &\nsleep 0.2\nexit 0",
     signal: "kill -TERM $$",
   }[mode];
   if (mode === "launch-error") {
@@ -21485,7 +22372,7 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
 function installFixtureResumableCheckLongLeafTimeoutCaptureSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
+  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });";
   assert(source.includes(started) && source.includes(invocation), "fixture did not contain the long-leaf timeout seams");
   const timeoutLog = join(fixture.stateRoot, "resumable-check-timeouts.log");
   const patched = source
@@ -21549,10 +22436,10 @@ function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
 
 function installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage) {
   const source = readFileSync(fixture.script, "utf8");
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });";
+  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });";
   assert(source.includes(invocation), "fixture did not contain the resumable check stage invocation seam");
   const replacement = [
-    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });",
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE === stage) result = { status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" };',
   ].join("\n");
   writeFileSync(fixture.script, source.replace(invocation, replacement));
@@ -21589,7 +22476,7 @@ function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
   const inFlightTransition = [
     "    manifest.check_verification_packet = packet;",
     "    writeManifest(manifestPath, manifest);",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });",
   ].join("\n");
   assert(source.includes(inFlightTransition), "fixture did not contain the persisted in-flight stage transition");
   const interruption = [
@@ -21598,7 +22485,7 @@ function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
     '      throw new Error("fixture packet interruption after in-flight marker");',
     "    }",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\" });",
+    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });",
   ].join("\n");
   writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
@@ -21606,8 +22493,10 @@ function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
 }
 
-function installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture) {
-  const source = readFileSync(fixture.script, "utf8");
+function installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixture, { crashAfterIntent = false } = {}) {
+  const scriptPath = crashAfterIntent ? fixture.worktreeScript : fixture.script;
+  const sourceRoot = crashAfterIntent ? fixture.worktree : fixture.root;
+  const source = readFileSync(scriptPath, "utf8");
   const inFlightTransition = [
     "  manifest.check_verification_packet = packet;",
     "  writeManifest(manifestPath, manifest);",
@@ -21617,14 +22506,27 @@ function installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixt
   const interruption = [
     "  manifest.check_verification_packet = packet;",
     "  writeManifest(manifestPath, manifest);",
-    '  if (process.env.CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
-    '    throw new Error("fixture environment preflight retry interruption after in-flight marker");',
-    "  }",
+    ...(crashAfterIntent
+      ? [
+        '  if (process.env.CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
+        '    if (!activeTaskLeaseWriteContext) throw new Error("fixture retry intent context is unavailable");',
+        '    taskLeaseExternalIntent(activeTaskLeaseWriteContext, "pnpm", ["run", "preflight"]);',
+        '    process.exit(88);',
+        "  }",
+      ]
+      : [
+        '  if (process.env.CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
+        '    throw new Error("fixture environment preflight retry interruption after in-flight marker");',
+        "  }",
+      ]),
     "  const result = run(\"pnpm\", [\"run\", \"preflight\"], {",
   ].join("\n");
-  writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
-  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
-  runGit(fixture.root, ["commit", "-q", "-m", "fixture environment retry in-flight interruption seam"]);
+  writeFileSync(scriptPath, source.replace(inFlightTransition, interruption));
+  runGit(sourceRoot, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(sourceRoot, ["commit", "-q", "-m", crashAfterIntent ? "fixture environment retry durable intent crash seam" : "fixture environment retry interruption seam"]);
+  if (crashAfterIntent) {
+    assert(runGit(fixture.worktree, ["branch", "--show-current"]).stdout === fixture.branch, "fixture retry crash seam lost the managed worktree branch");
+  }
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
 }
 
@@ -21642,6 +22544,10 @@ function installFixtureInFlightRecoveryLockedIntentSeam(fixture) {
     "        schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: fixturePriorLease.generation, token_digest: fixtureTokenDigest,",
     "        intent_id: \"44444444-4444-4444-8444-444444444444\", runner_pid: process.pid, runner_process_start_identity: fixtureProcessStart,",
     "        command_digest: \"d\".repeat(64), started_at: new Date().toISOString(),",
+    "      });",
+    "      writeNewJson(taskLeaseExternalProcessBindingPath(state, taskId, \"44444444-4444-4444-8444-444444444444\"), {",
+    "        schema_version: externalCommandProcessBindingSchemaVersion, task_id: taskId, generation: fixturePriorLease.generation, token_digest: fixtureTokenDigest,",
+    "        intent_id: \"44444444-4444-4444-8444-444444444444\", state: \"unbound\",",
     "      });",
     "    }",
     admission,
@@ -23122,6 +24028,8 @@ function cleanupBranchCleanupFixture(fixture) {
 }
 
 function runFixtureScript(fixture, args, options = {}) {
+  const scriptPath = options.scriptPath || (options.worktreeScript ? fixture.worktreeScript : fixture.script);
+  assert(typeof scriptPath === "string" && scriptPath, "fixture script path is required");
   const fixtureArgs = [...args];
   if (!options.omitOutdatedResolutionAuthorization
     && fixtureArgs[0] === "adjudicate-outdated-thread"
@@ -23139,7 +24047,7 @@ function runFixtureScript(fixture, args, options = {}) {
     fixtureArgs.push("--diff-risk-verification-command", "node ./scripts/test-codex-workspace.mjs");
     fixtureArgs.push("--diff-risk-verification-exit-code", "0");
   }
-  const result = spawnSync(process.execPath, [fixture.script, ...fixtureArgs], {
+  const result = spawnSync(process.execPath, [scriptPath, ...fixtureArgs], {
     cwd: options.cwd || fixture.root,
     encoding: "utf8",
     env: options.env || fixture.env || process.env,
@@ -23150,7 +24058,7 @@ function runFixtureScript(fixture, args, options = {}) {
     stdout: result.stdout || "",
     stderr: result.stderr || result.error?.message || "",
   }, {
-    commandPrefix: ["node", fixture.script],
+    commandPrefix: ["node", scriptPath],
   });
 }
 
@@ -23685,9 +24593,22 @@ function readJson(path) {
 }
 
 function processStartIdentityForTest() {
-  const raw = readFileSync(`/proc/${process.pid}/stat`, "utf8");
-  const fields = raw.slice(raw.lastIndexOf(")") + 1).trim().split(/\s+/);
-  return `linux-proc-start-ticks:${fields[19]}`;
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${process.pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+      const ticks = fields[19];
+      if (/^\d+$/.test(ticks)) return `linux-proc-start-ticks:${process.pid}:${ticks}`;
+    } catch {}
+  }
+  assert(false, "test process high-resolution start identity is unavailable");
+}
+
+function processGroupIdForTest() {
+  const result = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8", stdio: "pipe" });
+  const groupId = result.status === 0 ? Number.parseInt(String(result.stdout || "").trim(), 10) : NaN;
+  assert(Number.isSafeInteger(groupId) && groupId > 0, "test process group identity is unavailable");
+  return groupId;
 }
 
 function test(name, fn) {

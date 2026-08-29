@@ -1,12 +1,14 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import {
   closeSync,
+  chmodSync,
   existsSync,
   fsyncSync,
   linkSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -214,6 +216,12 @@ function resumableCheckPacketMaximumLifetimeMs() {
 const taskLockSchemaVersion = 1;
 const taskLeaseSchemaVersion = 1;
 const inFlightCheckRecoverySchemaVersion = 1;
+const externalCommandProcessBindingSchemaVersion = 1;
+const externalCommandWorkerResultSchemaVersion = 1;
+const externalCommandOutputMaximumBytes = 4 * 1024 * 1024;
+const externalCommandWorkerPollMs = 25;
+const processTableProbeTimeoutMs = 250;
+const processTableProbeMaximumBytes = 64 * 1024;
 const inFlightCheckRecoveryApprovalMaximumLength = 512;
 const inFlightCheckRecoveryReasonMaximumLength = 512;
 const legacyRecoveryAdoptionTaskId = "20260810-recover-finish-pr-preflight-and-stale-lock-lifec";
@@ -337,6 +345,16 @@ const workspaceLifecycleStates = Object.freeze([
   "hold_attention_required",
   "closed",
 ]);
+
+if (process.env.CODEX_WORKSPACE_EXTERNAL_COMMAND_WORKER === "1") {
+  try {
+    await runExternalCommandWorker();
+    process.exit(0);
+  } catch (error) {
+    console.error(`FAIL: ${error?.message || error}`);
+    process.exit(1);
+  }
+}
 
 if (!command || command === "--help" || command === "-h") {
   printHelp();
@@ -3075,6 +3093,7 @@ function finishPr(argv) {
   if (!options.noVerify) {
     assertKnownVerificationProfile(String(options.verify || ""));
   }
+  assertSettledExternalIntentDeliveryAdmission(state, manifest, options);
   assertInFlightCheckRecoveryDeliveryAdmission(state, manifest, options);
   assertLaneOwner(manifest, options);
   assertBaseCheckoutRecoveryClearForDelivery(state);
@@ -3148,7 +3167,7 @@ function finishPr(argv) {
 
     worktreeStatus = parseStatus(manifest.worktree_path);
     if (worktreeStatus.unstaged && options.stageAll) {
-      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path });
+      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path, externalExecution: true });
       worktreeStatus = parseStatus(manifest.worktree_path);
     }
 
@@ -3210,10 +3229,10 @@ function finishPr(argv) {
     }
 
     if (worktreeStatus.unstaged && options.stageAll) {
-      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path });
+      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path, externalExecution: true });
     }
     if (worktreeStatus.any) {
-      runChecked("git", ["commit", "-m", commitMessage], { cwd: manifest.worktree_path });
+      runChecked("git", ["commit", "-m", commitMessage], { cwd: manifest.worktree_path, externalExecution: true });
       manifest.last_commit = git(["rev-parse", "--short", "HEAD"], {
         cwd: manifest.worktree_path,
       }).stdout.trim();
@@ -3222,7 +3241,7 @@ function finishPr(argv) {
     }
 
     lock.heartbeat();
-    runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
+    runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path, externalExecution: true });
     appendTaskEvent(manifest, "pushed", manifest.branch);
     manifest.pr_delivery_head_sha = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path }).stdout.trim() || null;
     manifest.pr_delivery_branch = manifest.branch;
@@ -3248,7 +3267,7 @@ function finishPr(argv) {
           "--body",
           prBody,
         ],
-        { cwd: manifest.worktree_path },
+        { cwd: manifest.worktree_path, externalExecution: true },
       );
       manifest.pr_url = result.stdout.trim().split(/\r?\n/).at(-1);
       manifest.pr_number = prNumberFromUrl(manifest.pr_url);
@@ -3283,6 +3302,28 @@ function finishPr(argv) {
     }
   }
   console.log(`PR: ${manifest.pr_url}`);
+}
+
+function assertSettledExternalIntentDeliveryAdmission(state, manifest, options) {
+  const settlements = settledExternalIntentRecords(state, manifest.task_id);
+  if (settlements.length === 0) return;
+  const recoveries = inFlightCheckRecoveryRecords(state, manifest.task_id);
+  const retainedPacket = manifest.check_verification_packet;
+  const exactRecovery = retainedPacket && recoveries.some((record) => settlements.some((settlement) =>
+    recoveryRecordMatchesSettledExternalIntent(record, settlement),
+  ));
+  if (retainedPacket && !exactRecovery) {
+    throw new Error("settled external intent requires an exact post-settlement recover-inflight-check invalidation before any finish-pr delivery path.");
+  }
+  if (
+    options.noVerify || options.verify !== "check" || options.stageAll !== true ||
+    options.retryEnvironmentPreflight
+  ) {
+    throw new Error(
+      "settled external intent requires the fresh exact finish-pr --stage-all --verify check path; " +
+      "--no-verify, non-check profiles, non-bare --stage-all, and environment retry are blocked before delivery.",
+    );
+  }
 }
 
 function assertFinishPrRecoveryOptions(options = {}) {
@@ -3330,18 +3371,31 @@ function externalIntentSettlementPacket(state, taskId, intentId, owner) {
   const blockers = [];
   if (manifest.owner !== owner) blockers.push("current runner is not the exact manifest owner");
   const inspection = inspectTaskLock(state, taskId);
-  if (inspection.protocol !== "versioned_lease" || inspection.status !== "ambiguous" || inspection.reason !== "external_command_fence_unresolved") {
-    blockers.push("task does not have the exact unresolved versioned external-command fence");
-  }
   const metadata = inspection.metadata;
   const tokenDigest = metadata?.token ? taskLeaseTokenDigest(metadata.token) : "";
   let intent = null;
+  let processBinding = null;
+  let processBindingBlockers = [];
+  let resumedSettlement = null;
   if (metadata && tokenDigest) {
     try {
-      intent = unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest);
+      resumedSettlement = settledExternalIntentRecords(state, taskId, metadata, tokenDigest)
+        .find((record) => record.intentId === intentId) || null;
+      if (resumedSettlement) {
+        intent = taskLeaseLedgerRecordByIntentId(state, taskId, "external-intents", intentId);
+      } else {
+        intent = unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest);
+      }
     } catch {
       blockers.push("unresolved external intent record is invalid");
     }
+  }
+  if (resumedSettlement) {
+    if (inspection.protocol !== "versioned_lease" || inspection.status !== "stale" || inspection.reason !== "owner_process_not_present") {
+      blockers.push("task does not have the exact interrupted settlement transition");
+    }
+  } else if (inspection.protocol !== "versioned_lease" || inspection.status !== "ambiguous" || inspection.reason !== "external_command_fence_unresolved") {
+    blockers.push("task does not have the exact unresolved versioned external-command fence");
   }
   if (!intent || intent.intent_id !== intentId) blockers.push("requested intent is not the exact unresolved external intent");
   if (intent) {
@@ -3352,6 +3406,14 @@ function externalIntentSettlementPacket(state, taskId, intentId, owner) {
       blockers.push("intent runner PID is still live or not probeable as absent");
     } catch (error) {
       if (error?.code !== "ESRCH") blockers.push("intent runner PID absence could not be proven");
+    }
+    try {
+      const fence = externalCommandProcessFence(state, taskId, metadata, intent);
+      processBinding = fence.binding;
+      processBindingBlockers = fence.blockers;
+      blockers.push(...processBindingBlockers);
+    } catch (error) {
+      blockers.push(`external command process binding is not admissible: ${error?.message || "unknown"}`);
     }
   }
   return {
@@ -3365,6 +3427,10 @@ function externalIntentSettlementPacket(state, taskId, intentId, owner) {
     runnerProcessStartIdentity: intent?.runner_process_start_identity || null,
     commandDigest: intent?.command_digest || null,
     startedAt: intent?.started_at || null,
+    commandProcessPid: processBinding?.command_pid || null,
+    commandProcessGroupId: processBinding?.command_group_id || null,
+    commandProcessAbsent: Boolean(processBinding && processBindingBlockers.length === 0),
+    resumedSettlement,
     allowed: blockers.length === 0,
     blockers,
     metadataOnly: true,
@@ -3394,32 +3460,69 @@ function settleExternalIntent(argv) {
   }
   if (!packet.allowed) throw new Error(`external intent settlement blocked: ${packet.blockers.join("; ")}`);
   const fresh = externalIntentSettlementPacket(state, taskId, intentId, owner);
-  if (!fresh.allowed || fresh.generation !== packet.generation || fresh.tokenDigest !== packet.tokenDigest || fresh.commandDigest !== packet.commandDigest || fresh.startedAt !== packet.startedAt) {
+  if (!fresh.allowed || fresh.generation !== packet.generation || fresh.tokenDigest !== packet.tokenDigest || fresh.commandDigest !== packet.commandDigest || fresh.startedAt !== packet.startedAt ||
+      Boolean(fresh.resumedSettlement) !== Boolean(packet.resumedSettlement)) {
     throw new Error("external intent settlement evidence changed before immutable completion; refusing to settle.");
   }
-  try {
-    writeNewJson(taskLeaseLedgerPath(state, taskId, "external-completions", intentId), {
-      schema_version: taskLeaseSchemaVersion,
-      task_id: taskId,
-      generation: fresh.generation,
-      token_digest: fresh.tokenDigest,
-      intent_id: intentId,
-      status: 125,
-      completed_at: new Date().toISOString(),
-      settlement: "owner-attested-runner-absent/v1",
-      approval: String(options.approval).trim(),
-      metadata_only: true,
-      raw_payload_retained: false,
-    });
-  } catch (error) {
-    if (error?.code === "EEXIST") throw new Error("external intent completion already exists; refusing to overwrite immutable evidence.");
-    throw error;
+  const approval = String(options.approval).trim();
+  if (fresh.resumedSettlement) {
+    if (fresh.resumedSettlement.approval !== approval) {
+      throw new Error("external intent settlement resumption requires the exact original approval.");
+    }
+  } else {
+    try {
+      writeNewJson(taskLeaseLedgerPath(state, taskId, "external-completions", intentId), {
+        schema_version: taskLeaseSchemaVersion,
+        task_id: taskId,
+        generation: fresh.generation,
+        token_digest: fresh.tokenDigest,
+        intent_id: intentId,
+        status: 125,
+        completed_at: new Date().toISOString(),
+        settlement: "owner-attested-runner-absent/v1",
+        approval,
+        metadata_only: true,
+        raw_payload_retained: false,
+      });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const resumed = settledExternalIntentRecords(state, taskId, { generation: fresh.generation }, fresh.tokenDigest)
+        .find((record) => record.intentId === intentId);
+      if (!resumed || resumed.approval !== approval) {
+        throw new Error("external intent completion already exists; refusing to overwrite immutable evidence.");
+      }
+    }
   }
+  if (process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_INTENT_SETTLEMENT_COMPLETION === "1") {
+    throw new Error("fixture interruption after immutable external intent settlement completion");
+  }
+  // The completion is the durable identity for a settled fence.  Publish it
+  // before a release can make the predecessor admissible to recovery.
+  const releasePath = taskLeasePath(state, taskId, "releases", fresh.generation);
+  if (!existsSync(releasePath)) {
+    try {
+      writeNewJson(releasePath, {
+        schema_version: taskLeaseSchemaVersion,
+        task_id: taskId,
+        generation: fresh.generation,
+        token_digest: fresh.tokenDigest,
+        released_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  const release = readRegularJson(releasePath);
+  if (!validTaskLeaseRelease(release, taskId, fresh.generation, fresh.tokenDigest)) {
+    throw new Error("external intent settlement release transition is not admissible.");
+  }
+  rmSync(taskLeaseExternalProcessBindingPath(state, taskId, intentId), { force: true });
   const output = {
     ...fresh,
     settledAt: new Date().toISOString(),
+    resumed: Boolean(fresh.resumedSettlement),
     settlement: "owner-attested-runner-absent/v1",
-    mutation: "immutable external completion published; subsequent governed operation must re-prove all normal gates",
+    mutation: "immutable external completion and released lease transition published; subsequent governed operation must re-prove all normal gates",
   };
   if (options.summaryJson) console.log(JSON.stringify(output, null, 2));
   else printPlan("settle-external-intent", [JSON.stringify(output)]);
@@ -3464,7 +3567,96 @@ function inFlightCheckPacketFingerprint(packet) {
   return createHash("sha256").update(JSON.stringify(boundedInFlightCheckPacketProjection(packet))).digest("hex");
 }
 
+function boundedSettledDeliveryPassedPacketProjection(packet) {
+  return {
+    schema_version: packet.schema_version,
+    task_id: packet.task_id,
+    owner: packet.owner,
+    head: packet.head,
+    plan_digest: packet.plan_digest,
+    staged_input_digest: packet.staged_input_digest,
+    status: packet.status,
+    next_stage: packet.next_stage,
+    created_at: packet.created_at,
+    updated_at: packet.updated_at,
+    expires_at: packet.expires_at,
+    completed_at: packet.completed_at,
+    packet_lifetime_ms: packet.packet_lifetime_ms,
+    stages: packet.stages.map((stage) => ({
+      stage: stage.stage,
+      completed_at: stage.completed_at,
+      status: stage.status,
+      signal: stage.signal,
+      error_code: stage.error_code,
+    })),
+  };
+}
+
+function settledDeliveryPassedCheckPacketFingerprint(packet) {
+  return createHash("sha256").update(JSON.stringify(boundedSettledDeliveryPassedPacketProjection(packet))).digest("hex");
+}
+
+function recoveryCheckPacketDescriptor(packet) {
+  if (packet?.status === "passed" && !Object.hasOwn(packet, "in_flight_stage")) {
+    return {
+      kind: "settled-delivery-passed",
+      fingerprint: settledDeliveryPassedCheckPacketFingerprint(packet),
+      recordPacket: {
+        kind: "settled-delivery-passed",
+        status: "passed",
+        completed_at: packet.completed_at,
+        head: packet.head,
+        plan_digest: packet.plan_digest,
+        staged_input_digest: packet.staged_input_digest,
+      },
+      admissionPacket: {
+        kind: "settled-delivery-passed",
+        status: "passed",
+        completedAt: packet.completed_at,
+        head: packet.head,
+        planDigest: packet.plan_digest,
+        stagedInputDigest: packet.staged_input_digest,
+      },
+    };
+  }
+  if (packet?.in_flight_stage) {
+    return {
+      kind: "in-flight",
+      fingerprint: inFlightCheckPacketFingerprint(packet),
+      recordPacket: {
+        stage: packet.in_flight_stage.stage,
+        started_at: packet.in_flight_stage.started_at,
+        timeout_ms: packet.in_flight_stage.timeout_ms,
+        head: packet.head,
+        plan_digest: packet.plan_digest,
+        staged_input_digest: packet.staged_input_digest,
+      },
+      admissionPacket: {
+        stage: packet.in_flight_stage.stage,
+        startedAt: packet.in_flight_stage.started_at,
+        timeoutMs: packet.in_flight_stage.timeout_ms,
+        head: packet.head,
+        planDigest: packet.plan_digest,
+        stagedInputDigest: packet.staged_input_digest,
+      },
+    };
+  }
+  return null;
+}
+
 function validInFlightCheckRecoveryRecord(record, taskId) {
+  const settlement = record?.settled_external_intent;
+  const inFlightPacket = record?.packet &&
+    Object.keys(record.packet).length === 6 &&
+    ["stage", "started_at", "timeout_ms", "head", "plan_digest", "staged_input_digest"].every((key) => Object.hasOwn(record.packet, key)) &&
+    typeof record.packet.stage === "string" && /^[A-Za-z0-9:_-]{1,120}$/.test(record.packet.stage) &&
+    typeof record.packet.started_at === "string" && isCanonicalIsoTimestamp(record.packet.started_at) &&
+    Number.isSafeInteger(record.packet.timeout_ms) && record.packet.timeout_ms > 0;
+  const settledDeliveryPassedPacket = record?.packet &&
+    Object.keys(record.packet).length === 6 &&
+    ["kind", "status", "completed_at", "head", "plan_digest", "staged_input_digest"].every((key) => Object.hasOwn(record.packet, key)) &&
+    record.packet.kind === "settled-delivery-passed" && record.packet.status === "passed" &&
+    typeof record.packet.completed_at === "string" && isCanonicalIsoTimestamp(record.packet.completed_at);
   return Boolean(
     record &&
       record.schema_version === inFlightCheckRecoverySchemaVersion &&
@@ -3476,10 +3668,7 @@ function validInFlightCheckRecoveryRecord(record, taskId) {
       typeof record.prior_lease.generation === "string" && isUuid(record.prior_lease.generation) &&
       Number.isInteger(record.prior_lease.pid) && record.prior_lease.pid > 0 &&
       typeof record.prior_lease.process_start_identity === "string" && record.prior_lease.process_start_identity.length > 0 &&
-      record.packet && typeof record.packet === "object" &&
-      typeof record.packet.stage === "string" && /^[A-Za-z0-9:_-]{1,120}$/.test(record.packet.stage) &&
-      typeof record.packet.started_at === "string" && isCanonicalIsoTimestamp(record.packet.started_at) &&
-      Number.isSafeInteger(record.packet.timeout_ms) && record.packet.timeout_ms > 0 &&
+      record.packet && typeof record.packet === "object" && (inFlightPacket || settledDeliveryPassedPacket) &&
       typeof record.packet.head === "string" && /^[a-f0-9]{40,64}$/i.test(record.packet.head) &&
       typeof record.packet.plan_digest === "string" && /^[a-f0-9]{64}$/i.test(record.packet.plan_digest) &&
       typeof record.packet.staged_input_digest === "string" && /^[a-f0-9]{64}$/i.test(record.packet.staged_input_digest) &&
@@ -3487,7 +3676,27 @@ function validInFlightCheckRecoveryRecord(record, taskId) {
       Number.isInteger(record.approval_length) && record.approval_length >= 10 && record.approval_length <= inFlightCheckRecoveryApprovalMaximumLength &&
       typeof record.reason === "string" && validTakeoverReason(record.reason) && record.reason.length <= inFlightCheckRecoveryReasonMaximumLength &&
       typeof record.recovered_at === "string" && isCanonicalIsoTimestamp(record.recovered_at) &&
+      (!Object.hasOwn(record, "settled_external_intent") || (
+        settlement && typeof settlement === "object" &&
+        isUuid(settlement.intent_id) && isUuid(settlement.generation) &&
+        typeof settlement.token_digest === "string" && /^[a-f0-9]{64}$/i.test(settlement.token_digest) &&
+        typeof settlement.command_digest === "string" && /^[a-f0-9]{64}$/i.test(settlement.command_digest) &&
+        typeof settlement.completed_at === "string" && isCanonicalIsoTimestamp(settlement.completed_at) &&
+        Date.parse(record.recovered_at) > Date.parse(settlement.completed_at)
+      )) &&
       record.metadata_only === true && record.raw_payload_retained === false,
+  );
+}
+
+function recoveryRecordMatchesSettledExternalIntent(record, settlement) {
+  return Boolean(
+    record?.settled_external_intent && settlement &&
+      record.settled_external_intent.intent_id === settlement.intentId &&
+      record.settled_external_intent.generation === settlement.generation &&
+      record.settled_external_intent.token_digest === settlement.tokenDigest &&
+      record.settled_external_intent.command_digest === settlement.commandDigest &&
+      record.settled_external_intent.completed_at === settlement.completedAt &&
+      Date.parse(record.recovered_at) > Date.parse(settlement.completedAt),
   );
 }
 
@@ -3512,6 +3721,23 @@ function recoveryRecordMatchesInFlightPacket(record, packet, owner, priorLease) 
       record.packet?.stage === packet.in_flight_stage?.stage &&
       record.packet?.started_at === packet.in_flight_stage?.started_at &&
       record.packet?.timeout_ms === packet.in_flight_stage?.timeout_ms &&
+      record.packet?.head === packet.head &&
+      record.packet?.plan_digest === packet.plan_digest &&
+      record.packet?.staged_input_digest === packet.staged_input_digest,
+  );
+}
+
+function recoveryRecordMatchesSettledDeliveryPassedPacket(record, packet, owner, priorLease) {
+  return Boolean(
+    record && packet &&
+      record.packet_fingerprint === settledDeliveryPassedCheckPacketFingerprint(packet) &&
+      record.owner === owner &&
+      record.prior_lease?.generation === priorLease?.generation &&
+      record.prior_lease?.pid === priorLease?.pid &&
+      record.prior_lease?.process_start_identity === priorLease?.processStartIdentity &&
+      record.packet?.kind === "settled-delivery-passed" &&
+      record.packet?.status === "passed" &&
+      record.packet?.completed_at === packet.completed_at &&
       record.packet?.head === packet.head &&
       record.packet?.plan_digest === packet.plan_digest &&
       record.packet?.staged_input_digest === packet.staged_input_digest,
@@ -3698,6 +3924,8 @@ function inFlightCheckRecoveryAdmissionPacket(state, taskId, owner) {
   let lockingPriorLease = null;
   let priorLease = null;
   let environmentPreflightRetryPending = false;
+  let recoveryKind = null;
+  let recoveryDescriptor = null;
   try {
     manifestRecord = findManifestByExactTaskId(state, taskId);
     validateManifest(manifestRecord.manifest, manifestRecord.path);
@@ -3714,13 +3942,15 @@ function inFlightCheckRecoveryAdmissionPacket(state, taskId, owner) {
       manifestRecord.manifest,
     );
     environmentPreflightRetryPending = validation.environmentPreflightRetryPending;
-    if (!Object.hasOwn(packet, "in_flight_stage")) blockers.push("check verification packet has no retained in-flight stage");
+    recoveryDescriptor = recoveryCheckPacketDescriptor(packet);
+    recoveryKind = recoveryDescriptor?.kind || null;
+    if (!recoveryDescriptor) blockers.push("check verification packet is neither an unresolved in-flight marker nor a settled-delivery passed packet");
   } catch (error) {
     blockers.push(`packet or source binding is not admissible: ${error?.message || "unknown"}`);
   }
-  let fingerprint = null;
-  if (packet?.in_flight_stage) {
-    try { fingerprint = inFlightCheckPacketFingerprint(packet); } catch { blockers.push("retained in-flight packet fingerprint is not provable"); }
+  let fingerprint = recoveryDescriptor?.fingerprint || null;
+  if (recoveryDescriptor && !fingerprint) {
+    blockers.push("retained check packet fingerprint is not provable");
   }
   try {
     inspection = inspectTaskLock(state, taskId);
@@ -3762,11 +3992,19 @@ function inFlightCheckRecoveryAdmissionPacket(state, taskId, owner) {
         const record = readRegularJson(recoveryPath);
         if (!validInFlightCheckRecoveryRecord(record, taskId)) {
           blockers.push("in-flight check recovery evidence is invalid");
-        } else if (!recoveryRecordMatchesInFlightPacket(record, packet, owner, {
+        } else if (!(
+          recoveryKind === "settled-delivery-passed"
+            ? recoveryRecordMatchesSettledDeliveryPassedPacket(record, packet, owner, {
+              generation: record.prior_lease.generation,
+              pid: record.prior_lease.pid,
+              processStartIdentity: record.prior_lease.process_start_identity,
+            })
+            : recoveryRecordMatchesInFlightPacket(record, packet, owner, {
           generation: record.prior_lease.generation,
           pid: record.prior_lease.pid,
           processStartIdentity: record.prior_lease.process_start_identity,
-        })) {
+            })
+        )) {
           blockers.push("in-flight check recovery evidence does not exactly match the retained packet");
         } else {
           recoveryRecord = record;
@@ -3791,11 +4029,10 @@ function inFlightCheckRecoveryAdmissionPacket(state, taskId, owner) {
     owner,
     manifestPath: manifestRecord?.path || null,
     packetFingerprint: fingerprint,
+    recoveryKind,
     priorLease,
     lockingPriorLease,
-    packet: packet?.in_flight_stage && packet?.head && packet?.plan_digest && packet?.staged_input_digest
-      ? { stage: packet.in_flight_stage.stage, startedAt: packet.in_flight_stage.started_at, timeoutMs: packet.in_flight_stage.timeout_ms, head: packet.head, planDigest: packet.plan_digest, stagedInputDigest: packet.staged_input_digest }
-      : null,
+    packet: recoveryDescriptor?.admissionPacket || null,
     recoveryPendingInvalidation: Boolean(recoveryRecord),
     recoveryRecord,
     environmentPreflightRetryPending: Boolean(environmentPreflightRetryPending),
@@ -3842,21 +4079,41 @@ function recoverInFlightCheck(argv) {
     const currentPlan = resumableCheckPlan(locked.worktree_path);
     const currentHead = git(["rev-parse", "HEAD"], { cwd: locked.worktree_path }).stdout.trim();
     const currentStagedInputDigest = stagedInputDigestForWorktree(locked.worktree_path);
+    const lockedRecoveryDescriptor = recoveryCheckPacketDescriptor(locked.check_verification_packet);
     if (
-      locked.owner !== owner || !locked.check_verification_packet ||
-      inFlightCheckPacketFingerprint(locked.check_verification_packet) !== packet.packetFingerprint ||
+      locked.owner !== owner || !lockedRecoveryDescriptor ||
+      lockedRecoveryDescriptor.kind !== packet.recoveryKind ||
+      lockedRecoveryDescriptor.fingerprint !== packet.packetFingerprint ||
       currentHead !== packet.packet.head || currentPlan.digest !== packet.packet.planDigest || currentStagedInputDigest !== packet.packet.stagedInputDigest
     ) {
       throw new Error("in-flight check recovery evidence changed before invalidation; refusing to mutate.");
     }
     const recoveryPath = inFlightCheckRecoveryRecordPath(state, taskId, packet.packetFingerprint);
     assertInFlightCheckRecoveryLockedLeaseAdmission(state, taskId, owner, packet.priorLease, packet.lockingPriorLease, lock);
+    const releasedPrior = leaseRecord(state, taskId, packet.priorLease.generation);
+    const settledMatches = settledExternalIntentRecords(
+      state,
+      taskId,
+      releasedPrior,
+      taskLeaseTokenDigest(releasedPrior.token),
+    );
+    if (settledMatches.length > 1) {
+      throw new Error("in-flight check recovery has multiple settled external intents; refusing to invalidate.");
+    }
+    const settledExternalIntent = settledMatches[0] || null;
+    if (packet.recoveryKind === "settled-delivery-passed" && !settledExternalIntent) {
+      throw new Error("settled-delivery passed packet recovery requires one exact settled external intent; refusing to invalidate.");
+    }
     let existingRecovery = null;
     if (existsSync(recoveryPath)) {
       existingRecovery = readRegularJson(recoveryPath);
       if (
         !validInFlightCheckRecoveryRecord(existingRecovery, taskId) ||
-        !recoveryRecordMatchesInFlightPacket(existingRecovery, locked.check_verification_packet, owner, packet.priorLease) ||
+        !(packet.recoveryKind === "settled-delivery-passed"
+          ? recoveryRecordMatchesSettledDeliveryPassedPacket(existingRecovery, locked.check_verification_packet, owner, packet.priorLease)
+          : recoveryRecordMatchesInFlightPacket(existingRecovery, locked.check_verification_packet, owner, packet.priorLease)) ||
+        (settledExternalIntent && !recoveryRecordMatchesSettledExternalIntent(existingRecovery, settledExternalIntent)) ||
+        (!settledExternalIntent && Object.hasOwn(existingRecovery, "settled_external_intent")) ||
         existingRecovery.approval_sha256 !== approvalSha256 || existingRecovery.reason !== reason
       ) {
         throw new Error("in-flight check recovery evidence is not an exact resumable invalidation record.");
@@ -3873,18 +4130,20 @@ function recoverInFlightCheck(argv) {
           pid: packet.priorLease.pid,
           process_start_identity: packet.priorLease.processStartIdentity,
         },
-        packet: {
-          stage: packet.packet.stage,
-          started_at: packet.packet.startedAt,
-          timeout_ms: packet.packet.timeoutMs,
-          head: packet.packet.head,
-          plan_digest: packet.packet.planDigest,
-          staged_input_digest: packet.packet.stagedInputDigest,
-        },
+        packet: lockedRecoveryDescriptor.recordPacket,
         approval_sha256: approvalSha256,
         approval_length: approval.length,
         reason,
         recovered_at: new Date().toISOString(),
+        ...(settledExternalIntent ? {
+          settled_external_intent: {
+            intent_id: settledExternalIntent.intentId,
+            generation: settledExternalIntent.generation,
+            token_digest: settledExternalIntent.tokenDigest,
+            command_digest: settledExternalIntent.commandDigest,
+            completed_at: settledExternalIntent.completedAt,
+          },
+        } : {}),
         metadata_only: true,
         raw_payload_retained: false,
       });
@@ -3900,7 +4159,7 @@ function recoverInFlightCheck(argv) {
       stagedInputDigest: currentStagedInputDigest,
     });
     delete locked.check_verification_packet;
-    appendTaskEvent(locked, "inflight_check_packet_invalidated", `fingerprint=${packet.packetFingerprint}; stage=${packet.packet.stage}; fresh --stage-all --verify check required`);
+    appendTaskEvent(locked, "inflight_check_packet_invalidated", `fingerprint=${packet.packetFingerprint}; ${packet.recoveryKind === "settled-delivery-passed" ? "settled-delivery passed packet" : `stage=${packet.packet.stage}`}; fresh --stage-all --verify check required`);
     writeManifest(packet.manifestPath, locked);
   });
   const output = { ...packet, recoveredAt: new Date().toISOString(), mutation: "immutable in-flight recovery evidence published; active packet invalidated; fresh --stage-all --verify check required" };
@@ -16340,7 +16599,7 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     packet.updated_at = startedAt;
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
-    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL" });
+    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL", externalExecution: true });
     const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
     if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); delete packet.in_flight_stage; manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: timeout, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
     packet.stages.push(evidence);
@@ -16518,6 +16777,7 @@ function runExactEnvironmentPreflightRetry(manifest, manifestPath, packet, retry
     cwd: options.cwd,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    externalExecution: true,
   });
   const outcome = verificationOutcome(result);
   if (outcome !== "success") {
@@ -16854,6 +17114,7 @@ function runBoundedVerification(verificationPlan, options = {}) {
     ...options,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    externalExecution: true,
     preserveChildOutput: profile === "codex-workspace",
     maxBuffer: profile === "codex-workspace" ? verificationDiagnosticCaptureMaxBytes : undefined,
   });
@@ -17749,6 +18010,26 @@ function writeJsonAtomic(path, value) {
   const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`);
   renameSync(tempPath, path);
+}
+
+function writeDurableJsonAtomic(path, value) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const directory = dirname(path);
+  const tempPath = join(directory, `.${basename(path)}.${randomUUID()}.pending`);
+  let fd;
+  try {
+    fd = openSync(tempPath, "wx", 0o600);
+    writeFileSync(fd, `${JSON.stringify(value)}\n`);
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  try {
+    renameSync(tempPath, path);
+    fsyncDirectory(directory);
+  } finally {
+    try { rmSync(tempPath, { force: true }); } catch {}
+  }
 }
 
 function normalizeEmergencyStopMode(value) {
@@ -20489,6 +20770,16 @@ function taskLeasePath(state, taskId, kind, name = null) {
   return name ? join(directory, `${name}.json`) : directory;
 }
 
+function taskLeaseExternalProcessBindingPath(state, taskId, intentId) {
+  if (!isUuid(intentId)) throw new Error("external process binding intent is invalid");
+  return taskLeasePath(state, taskId, "external-process-bindings", intentId);
+}
+
+function taskLeaseExternalWorkerCapabilityPath(state, taskId, intentId) {
+  if (!isUuid(intentId)) throw new Error("external worker capability intent is invalid");
+  return taskLeasePath(state, taskId, "external-worker-capabilities", intentId);
+}
+
 function validTaskLeaseLedgerRollover(record, taskId, segment, epoch) {
   return Boolean(
     record &&
@@ -20541,6 +20832,47 @@ function taskLeaseLedgerState(state, taskId, options = {}) {
     segment = record.to_segment;
     epoch += 1;
   }
+}
+
+function taskLeaseLedgerHistory(state, taskId) {
+  const current = taskLeaseLedgerState(state, taskId, { verifySealedHistory: true });
+  const states = [];
+  let segment = taskLeaseLegacyLedgerSegment;
+  let epoch = 0;
+  while (true) {
+    states.push({ segment, epoch });
+    if (segment === current.segment) return states;
+    const rollover = readRegularJson(taskLeasePath(state, taskId, "ledger-rollovers", segment));
+    if (!validTaskLeaseLedgerRollover(rollover, taskId, segment, epoch)) {
+      throw new Error("ledger_rollover_record_invalid");
+    }
+    segment = rollover.to_segment;
+    epoch += 1;
+  }
+}
+
+function taskLeaseLedgerRecords(state, taskId, kind) {
+  const records = [];
+  for (const ledger of taskLeaseLedgerHistory(state, taskId)) {
+    records.push(...leaseJsonRecords(taskLeaseLedgerDirectory(state, taskId, kind, ledger)));
+  }
+  return records;
+}
+
+function taskLeaseLedgerRecordsByIntentId(state, taskId, kind) {
+  const records = new Map();
+  for (const entry of taskLeaseLedgerRecords(state, taskId, kind)) {
+    const intentId = entry.record?.intent_id;
+    if (!isUuid(intentId) || records.has(intentId)) {
+      throw new Error("task_lease_ledger_intent_id_duplicate_or_invalid");
+    }
+    records.set(intentId, entry);
+  }
+  return records;
+}
+
+function taskLeaseLedgerRecordByIntentId(state, taskId, kind, intentId) {
+  return taskLeaseLedgerRecordsByIntentId(state, taskId, kind).get(intentId)?.record || null;
 }
 
 function taskLeaseLedgerDirectory(state, taskId, kind, ledger = taskLeaseLedgerState(state, taskId)) {
@@ -20727,7 +21059,54 @@ function validTaskLeaseExternalIntent(record, taskId, generation, tokenDigest) {
       Number.isInteger(record.runner_pid) && record.runner_pid > 0 &&
       typeof record.runner_process_start_identity === "string" && record.runner_process_start_identity &&
       typeof record.command_digest === "string" && /^[a-f0-9]{64}$/i.test(record.command_digest) &&
+      (!Object.hasOwn(record, "worker_capability_digest") ||
+        (typeof record.worker_capability_digest === "string" && /^[a-f0-9]{64}$/i.test(record.worker_capability_digest))) &&
       isIsoTimestamp(record.started_at),
+  );
+}
+
+function validTaskLeaseExternalProcessBinding(record, taskId, generation, tokenDigest, intentId) {
+  const unboundKeys = [
+    "schema_version", "task_id", "generation", "token_digest", "intent_id", "state",
+  ];
+  if (record && Object.keys(record).length === unboundKeys.length && unboundKeys.every((key) => Object.hasOwn(record, key)) &&
+      record.schema_version === externalCommandProcessBindingSchemaVersion && record.task_id === taskId &&
+      record.generation === generation && record.token_digest === tokenDigest && record.intent_id === intentId &&
+      record.state === "unbound") return true;
+  const spawnedKeys = [
+    "schema_version", "task_id", "generation", "token_digest", "intent_id", "state",
+    "worker_pid", "worker_process_start_identity", "worker_process_group_id", "spawned_at",
+  ];
+  if (record && Object.keys(record).length === spawnedKeys.length && spawnedKeys.every((key) => Object.hasOwn(record, key)) &&
+      record.schema_version === externalCommandProcessBindingSchemaVersion && record.task_id === taskId &&
+      record.generation === generation && record.token_digest === tokenDigest && record.intent_id === intentId &&
+      record.state === "spawned" && Number.isInteger(record.worker_pid) && record.worker_pid > 0 &&
+      typeof record.worker_process_start_identity === "string" && record.worker_process_start_identity &&
+      Number.isSafeInteger(record.worker_process_group_id) && record.worker_process_group_id > 0 &&
+      isIsoTimestamp(record.spawned_at)) return true;
+  const keys = [
+    "schema_version", "task_id", "generation", "token_digest", "intent_id",
+    "worker_pid", "worker_process_start_identity", "worker_process_group_id", "command_pid",
+    "command_process_start_identity", "command_group_id", "bound_at",
+  ];
+  const boundKeys = [...keys, "state"];
+  return Boolean(
+    record &&
+      (Object.keys(record).length === keys.length || Object.keys(record).length === boundKeys.length) &&
+      (keys.every((key) => Object.hasOwn(record, key)) &&
+        (Object.keys(record).length === keys.length ? !Object.hasOwn(record, "state") : record.state === "bound")) &&
+      record.schema_version === externalCommandProcessBindingSchemaVersion &&
+      record.task_id === taskId &&
+      record.generation === generation &&
+      record.token_digest === tokenDigest &&
+      record.intent_id === intentId &&
+      Number.isInteger(record.worker_pid) && record.worker_pid > 0 &&
+      typeof record.worker_process_start_identity === "string" && record.worker_process_start_identity &&
+      Number.isSafeInteger(record.worker_process_group_id) && record.worker_process_group_id > 0 &&
+      Number.isInteger(record.command_pid) && record.command_pid > 0 &&
+      typeof record.command_process_start_identity === "string" && record.command_process_start_identity &&
+      Number.isSafeInteger(record.command_group_id) && record.command_group_id > 0 &&
+      isIsoTimestamp(record.bound_at),
   );
 }
 
@@ -20742,6 +21121,45 @@ function validTaskLeaseExternalCompletion(record, taskId, generation, tokenDiges
       isIsoTimestamp(record.completed_at) &&
       Number.isInteger(record.status),
   );
+}
+
+function validSettledExternalIntentCompletion(record, taskId, generation, tokenDigest, intentId) {
+  return Boolean(
+    validTaskLeaseExternalCompletion(record, taskId, generation, tokenDigest, intentId) &&
+      record.status === 125 &&
+      record.settlement === "owner-attested-runner-absent/v1" &&
+      typeof record.approval === "string" && validTakeoverReason(record.approval) &&
+      record.metadata_only === true && record.raw_payload_retained === false,
+  );
+}
+
+function settledExternalIntentRecords(state, taskId, metadata = null, tokenDigest = null) {
+  const settlements = [];
+  const intentsById = taskLeaseLedgerRecordsByIntentId(state, taskId, "external-intents");
+  const completionsById = taskLeaseLedgerRecordsByIntentId(state, taskId, "external-completions");
+  for (const { record } of completionsById.values()) {
+    if (record?.settlement !== "owner-attested-runner-absent/v1") continue;
+    const intent = intentsById.get(record.intent_id)?.record;
+    const generation = record?.generation;
+    const digest = record?.token_digest;
+    if (
+      !isUuid(generation) || !/^[a-f0-9]{64}$/i.test(digest || "") ||
+      !intent || !validTaskLeaseExternalIntent(intent, taskId, generation, digest) ||
+      !validSettledExternalIntentCompletion(record, taskId, generation, digest, record.intent_id)
+    ) {
+      throw new Error("settled external intent evidence is invalid.");
+    }
+    if (metadata && (generation !== metadata.generation || digest !== tokenDigest)) continue;
+    settlements.push({
+      intentId: record.intent_id,
+      generation,
+      tokenDigest: digest,
+      commandDigest: intent.command_digest,
+      completedAt: record.completed_at,
+      approval: record.approval,
+    });
+  }
+  return settlements;
 }
 
 function validTaskLeaseManifestIntent(record, taskId, generation, tokenDigest) {
@@ -20784,6 +21202,8 @@ function ensureTaskLeaseDirectories(state, taskId) {
     taskLeasePath(state, taskId, "root-candidates"),
     taskLeasePath(state, taskId, "external-intents"),
     taskLeasePath(state, taskId, "external-completions"),
+    taskLeasePath(state, taskId, "external-process-bindings"),
+    taskLeasePath(state, taskId, "external-worker-capabilities"),
     taskLeasePath(state, taskId, "manifest-intents"),
     taskLeasePath(state, taskId, "manifest-commits"),
     taskLeasePath(state, taskId, "ledger-segments"),
@@ -21061,6 +21481,10 @@ function assertTaskLeaseReleaseCapacity(state, taskId, metadata) {
   }
   const fence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
   if (fence) {
+    if (fence.kind === "external") {
+      const binding = readTaskLeaseExternalProcessBinding(state, taskId, metadata, fence.intent);
+      if (binding.state === "unbound") return;
+    }
     throw new Error(`Task lease release capacity is blocked by unresolved ${fence.kind} intent; refusing callback execution.`);
   }
 }
@@ -21121,24 +21545,75 @@ function assertTaskLeaseCallbackAdmissionCapacity(state, taskId, metadata, optio
 }
 
 function unresolvedTaskLeaseExternalIntent(state, taskId, metadata, tokenDigest) {
-  const intents = leaseJsonRecords(taskLeaseLedgerPath(state, taskId, "external-intents"));
-  const completions = new Map(
-    leaseJsonRecords(taskLeaseLedgerPath(state, taskId, "external-completions"))
-      .filter(({ record }) => record?.generation === metadata.generation)
-      .map(({ record }) => [record?.intent_id, record]),
-  );
+  reconcileUnboundOrphanExternalBindings(state, taskId, metadata, tokenDigest);
+  const intentRecordsById = taskLeaseLedgerRecordsByIntentId(state, taskId, "external-intents");
+  const completionRecordsById = taskLeaseLedgerRecordsByIntentId(state, taskId, "external-completions");
+  const intents = [...intentRecordsById.values()];
+  const completionRecords = [...completionRecordsById.values()];
+  const completions = new Map([...completionRecordsById].map(([intentId, { record }]) => [intentId, record]));
+  for (const { record } of intents) {
+    if (record?.generation === metadata.generation) continue;
+    const completion = completions.get(record?.intent_id);
+    // A predecessor generation is admissible only as an exact, internally
+    // valid terminal pair.  An unmatched, malformed, or cross-generation
+    // record remains a fail-closed generation mismatch rather than being
+    // silently filtered from current-generation inspection.
+    if (!isUuid(record?.generation) || !/^[a-f0-9]{64}$/i.test(record?.token_digest || "") ||
+        !validTaskLeaseExternalIntent(record, taskId, record?.generation, record?.token_digest) ||
+        !validTaskLeaseExternalCompletion(completion, taskId, record.generation, record.token_digest, record.intent_id)) {
+      throw new Error("external_intent_generation_mismatch");
+    }
+  }
+  for (const { record } of completionRecords) {
+    if (record?.generation === metadata.generation) continue;
+    const intent = intentRecordsById.get(record?.intent_id);
+    if (!isUuid(record?.generation) || !/^[a-f0-9]{64}$/i.test(record?.token_digest || "") ||
+        !intent || intent.record?.generation !== record?.generation || intent.record?.token_digest !== record?.token_digest ||
+        !validTaskLeaseExternalIntent(intent.record, taskId, record.generation, record.token_digest) ||
+        !validTaskLeaseExternalCompletion(record, taskId, record.generation, record.token_digest, record.intent_id)) {
+      throw new Error("external_completion_generation_mismatch");
+    }
+  }
+  const unresolved = [];
   for (const { record } of intents) {
     if (record?.generation !== metadata.generation) continue;
     if (!validTaskLeaseExternalIntent(record, taskId, metadata.generation, tokenDigest)) {
       throw new Error("external_intent_record_invalid");
     }
     const completion = completions.get(record.intent_id);
-    if (!completion) return record;
+    if (!completion) {
+      readTaskLeaseExternalProcessBinding(state, taskId, metadata, record);
+      unresolved.push(record);
+      continue;
+    }
     if (!validTaskLeaseExternalCompletion(completion, taskId, metadata.generation, tokenDigest, record.intent_id)) {
       throw new Error("external_completion_record_invalid");
     }
   }
-  return null;
+  if (unresolved.length > 1) throw new Error("external_intent_multiple_unresolved");
+  return unresolved[0] || null;
+}
+
+function reconcileUnboundOrphanExternalBindings(state, taskId, metadata, tokenDigest) {
+  const bindingDirectory = taskLeasePath(state, taskId, "external-process-bindings");
+  if (!existsSync(bindingDirectory)) return;
+  const stats = lstatSync(bindingDirectory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("external_process_binding_directory_invalid");
+  for (const name of readdirSync(bindingDirectory).filter((entry) => entry.endsWith(".json")).sort()) {
+    const intentId = name.slice(0, -5);
+    if (!isUuid(intentId)) throw new Error("external_process_binding_set_invalid");
+    if (taskLeaseLedgerRecordByIntentId(state, taskId, "external-intents", intentId)) continue;
+    const binding = readRegularJson(join(bindingDirectory, name));
+    if (!validTaskLeaseExternalProcessBinding(binding, taskId, metadata.generation, tokenDigest, intentId)) {
+      throw new Error("external_orphan_binding_invalid");
+    }
+    // An unbound record has no durable intent, so no authenticated worker has
+    // a payload it can validate.  It is the sole orphan state that is proven
+    // never-started and may be removed; spawned/bound records remain fences.
+    if (binding.state !== "unbound") throw new Error("external_orphan_binding_unresolved");
+    rmSync(join(bindingDirectory, name), { force: true });
+    rmSync(taskLeaseExternalWorkerCapabilityPath(state, taskId, intentId), { force: true });
+  }
 }
 
 function unresolvedTaskLeaseManifestIntent(state, taskId, metadata, tokenDigest) {
@@ -21174,6 +21649,7 @@ function taskLeaseExternalIntent(context, commandName, commandArguments) {
   // Reserve both immutable sides before publishing an intent.  Otherwise a
   // full completion history could strand a protected callback at release.
   assertTaskLeaseIntentPairCapacity(context, "external");
+  const workerCapability = randomUUID();
   const intent = {
     schema_version: taskLeaseSchemaVersion,
     task_id: context.taskId,
@@ -21183,10 +21659,32 @@ function taskLeaseExternalIntent(context, commandName, commandArguments) {
     runner_pid: process.pid,
     runner_process_start_identity: context.processStart,
     command_digest: createHash("sha256").update(JSON.stringify([commandName, ...commandArguments])).digest("hex"),
+    worker_capability_digest: createHash("sha256").update(workerCapability).digest("hex"),
     started_at: new Date().toISOString(),
   };
+  // Publish every prerequisite before the intent.  Until the intent exists no
+  // worker has a payload that can pass authentication, so a crash in this
+  // window is an explicit no-execution state rather than an orphaned fence.
+  writeNewJson(taskLeaseExternalWorkerCapabilityPath(context.state, context.taskId, intent.intent_id), {
+    schema_version: taskLeaseSchemaVersion,
+    task_id: context.taskId,
+    generation: context.generation,
+    token_digest: intent.token_digest,
+    intent_id: intent.intent_id,
+    capability_digest: intent.worker_capability_digest,
+    command_digest: intent.command_digest,
+    issued_at: intent.started_at,
+  });
+  writeNewJson(taskLeaseExternalProcessBindingPath(context.state, context.taskId, intent.intent_id), {
+    schema_version: externalCommandProcessBindingSchemaVersion,
+    task_id: context.taskId,
+    generation: context.generation,
+    token_digest: intent.token_digest,
+    intent_id: intent.intent_id,
+    state: "unbound",
+  });
   writeNewJson(taskLeaseLedgerPath(context.state, context.taskId, "external-intents", intent.intent_id), intent);
-  return intent;
+  return { ...intent, worker_capability: workerCapability };
 }
 
 function completeTaskLeaseExternalIntent(context, intent, result) {
@@ -21199,6 +21697,81 @@ function completeTaskLeaseExternalIntent(context, intent, result) {
     completed_at: new Date().toISOString(),
     status: Number.isInteger(result.status) ? result.status : 1,
   });
+  if (process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_COMPLETION_BEFORE_BINDING_CLEANUP === "1") {
+    throw new Error("fixture interruption after external completion before binding cleanup");
+  }
+  // A process binding is only needed while the intent is unresolved.  Remove
+  // it after the immutable completion receipt is published so a later intent
+  // cannot be confused with a stale binding during strict replay inspection.
+  rmSync(taskLeaseExternalProcessBindingPath(context.state, context.taskId, intent.intent_id), { force: true });
+  rmSync(taskLeaseExternalWorkerCapabilityPath(context.state, context.taskId, intent.intent_id), { force: true });
+}
+
+function readTaskLeaseExternalProcessBinding(state, taskId, metadata, intent) {
+  const bindingDirectory = taskLeasePath(state, taskId, "external-process-bindings");
+  if (!existsSync(bindingDirectory)) throw new Error("external_process_binding_missing");
+  const stats = lstatSync(bindingDirectory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("external_process_binding_directory_invalid");
+  const names = readdirSync(bindingDirectory).filter((name) => name.endsWith(".json")).sort();
+  const expectedName = `${intent.intent_id}.json`;
+  if (!names.includes(expectedName)) throw new Error("external_process_binding_set_invalid");
+  // Completed bindings are retained as bounded local evidence if a cleanup
+  // raced a subsequent intent publication. They cannot mask an unresolved
+  // record: every additional binding must have its own valid intent and
+  // immutable completion receipt, otherwise the set remains ambiguous.
+  for (const name of names) {
+    if (name === expectedName) continue;
+    const priorIntentId = name.slice(0, -5);
+    if (!isUuid(priorIntentId)) throw new Error("external_process_binding_set_invalid");
+    const priorIntent = taskLeaseLedgerRecordByIntentId(state, taskId, "external-intents", priorIntentId);
+    const priorCompletion = taskLeaseLedgerRecordByIntentId(state, taskId, "external-completions", priorIntentId);
+    // A release can become durable after its immutable completion and before
+    // the now-terminal binding cleanup.  A successor must accept only that
+    // exact predecessor tuple; projecting it onto the successor generation
+    // would turn a harmless cleanup crash into an unresumable fence.
+    if (!validTaskLeaseExternalIntent(priorIntent, taskId, priorIntent?.generation, priorIntent?.token_digest)) {
+      throw new Error("external_process_binding_set_invalid");
+    }
+    if (!validTaskLeaseExternalCompletion(priorCompletion, taskId, priorIntent.generation, priorIntent.token_digest, priorIntentId)) {
+      throw new Error("external_process_binding_set_invalid");
+    }
+    const priorBinding = readRegularJson(join(bindingDirectory, name));
+    if (!validTaskLeaseExternalProcessBinding(priorBinding, taskId, priorIntent.generation, priorIntent.token_digest, priorIntentId)) {
+      throw new Error("external_process_binding_set_invalid");
+    }
+  }
+  const binding = readRegularJson(join(bindingDirectory, expectedName));
+  if (!validTaskLeaseExternalProcessBinding(binding, taskId, metadata.generation, taskLeaseTokenDigest(metadata.token), intent.intent_id)) {
+    throw new Error("external_process_binding_invalid");
+  }
+  return binding;
+}
+
+function externalCommandProcessFence(state, taskId, metadata, intent) {
+  const binding = readTaskLeaseExternalProcessBinding(state, taskId, metadata, intent);
+  // A worker cannot execute until it sees the parent's durable spawned record.
+  // Once the owner is absent, an unbound record therefore represents a
+  // recoverable no-command state rather than an unknowable side effect.
+  if (binding.state === "unbound") return { binding, blockers: [] };
+  if (binding.state === "spawned") {
+    const blockers = [];
+    const workerBlocker = probeProcessAbsence(binding.worker_pid, binding.worker_process_start_identity, "external command worker");
+    if (workerBlocker) blockers.push(workerBlocker);
+    const groupBlocker = probeProcessGroupAbsence(binding.worker_process_group_id, "external command worker group");
+    if (groupBlocker) blockers.push(groupBlocker);
+    return { binding, blockers };
+  }
+  const blockers = [];
+  for (const [pid, identity, label] of [
+    [binding.worker_pid, binding.worker_process_start_identity, "external command worker"],
+    [binding.command_pid, binding.command_process_start_identity, "external command process"],
+  ]) {
+    const blocker = probeProcessAbsence(pid, identity, label);
+    if (blocker) blockers.push(blocker);
+  }
+  const groupBlocker = probeProcessGroupAbsence(binding.command_group_id, "external command process group");
+  if (groupBlocker) blockers.push(groupBlocker);
+  return { binding, blockers };
 }
 
 function inspectLegacyTaskLock(state, taskId) {
@@ -21384,24 +21957,145 @@ function applyLegacyRecoveryAdoption(state, packet, approval) {
   return { ...legacyRecoveryAdoptionPacket(state, taskId), adoptionPath: legacyAdoptionRecordPath(state, taskId) };
 }
 
-function processStartIdentity(pid) {
+function portableProcessState(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform === "darwin") {
-    // macOS lacks Linux /proc start ticks. A live PID-only
-    // identity is deliberately non-reclaimable on reuse: it preserves mutual
-    // exclusion by failing closed rather than mistaking a reused PID for dead.
-    try { process.kill(pid, 0); return `portable-live-pid:${pid}`; } catch { return null; }
-  }
+  const result = boundedProcessTableProbe(["-o", "stat=", "-p", String(pid)]);
+  return result ? String(result.stdout || "").trim().slice(0, 16) || null : null;
+}
+
+function boundedProcessTableProbe(args) {
   try {
-    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const close = raw.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = raw.slice(close + 1).trim().split(/\s+/);
-    const startTicks = fields[19];
-    return /^\d+$/.test(startTicks || "") ? `linux-proc-start-ticks:${startTicks}` : null;
+    const result = spawnSync("ps", args, {
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: processTableProbeTimeoutMs,
+      maxBuffer: processTableProbeMaximumBytes,
+      killSignal: "SIGKILL",
+    });
+    return result?.status === 0 && !result.error ? result : null;
   } catch {
     return null;
   }
+}
+
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+      const ticks = fields[19];
+      if (/^\d+$/.test(ticks)) return `linux-proc-start-ticks:${pid}:${ticks}`;
+    } catch {}
+  }
+  // `ps lstart` has only second-level precision and is not safe authorization
+  // for a numeric PID/PGID signal after PID reuse.  Until a platform exposes
+  // an exact reuse-resistant identity, every identity-sensitive ownership,
+  // settlement, and group-signal path remains fail closed.
+  return null;
+}
+
+function processStartIdentityIncludingZombie(pid) {
+  return processStartIdentity(pid);
+}
+
+function processGroupId(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const result = boundedProcessTableProbe(["-o", "pgid=", "-p", String(pid)]);
+  const groupId = result ? Number.parseInt(String(result.stdout || "").trim(), 10) : NaN;
+  return Number.isSafeInteger(groupId) && groupId > 0 ? groupId : null;
+}
+
+function probeProcessAbsence(pid, expectedStartIdentity, label) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || typeof expectedStartIdentity !== "string" || !expectedStartIdentity) {
+    return `${label} identity is invalid`;
+  }
+  if (portableProcessState(pid)?.startsWith("Z")) return null;
+  const observed = processStartIdentity(pid);
+  if (observed !== null) {
+    return observed === expectedStartIdentity
+      ? `${label} is still live`
+      : `${label} PID/start identity was reused`;
+  }
+  try {
+    process.kill(pid, 0);
+    return `${label} is live or not probeable as absent`;
+  } catch (error) {
+    return error?.code === "ESRCH" ? null : `${label} absence could not be proven`;
+  }
+}
+
+function probeProcessGroupAbsence(groupId, label) {
+  if (!Number.isSafeInteger(groupId) || groupId <= 0) return `${label} identity is invalid`;
+  try {
+    process.kill(-groupId, 0);
+    // A group containing only zombies has no executable member left.  `kill`
+    // can still observe its PGID until the zombies are reaped, so require the
+    // portable member inspection to distinguish that proven-absent case from
+    // a live or uninspectable group.
+    return processGroupHasLiveMembers(groupId) ? `${label} is still live or not probeable as absent` : null;
+  } catch (error) {
+    return error?.code === "ESRCH" ? null : `${label} absence could not be proven`;
+  }
+}
+
+function processGroupHasLiveMembers(groupId) {
+  if (!Number.isSafeInteger(groupId) || groupId <= 0) return true;
+  const trustedMembers = trustedLinuxProcessGroupMembers(groupId);
+  if (trustedMembers) return trustedMembers.some((member) => !member.state.startsWith("Z"));
+  // A successful `ps -e` result can observe a live group member, but it has no
+  // completeness contract.  In particular, an empty or truncated table cannot
+  // prove that a group still reported by kill(2) contains only zombies.
+  try {
+    const result = boundedProcessTableProbe(["-e", "-o", "pid=,pgid=,stat="]);
+    if (!result) return true;
+    const members = String(result.stdout || "").split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/))
+      .filter((fields) => Number.parseInt(fields[1], 10) === groupId);
+    if (members.some((fields) => !String(fields[2] || "").startsWith("Z"))) return true;
+  } catch {
+    // Fall through to the fail-closed result below.
+  }
+  return true;
+}
+
+function trustedLinuxProcessGroupMembers(groupId) {
+  if (process.platform === "linux") {
+    try {
+      const processIds = readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+      if (processIds.length === 0) return null;
+      const members = [];
+      for (const processId of processIds) {
+        let stat;
+        try {
+          stat = readFileSync(`/proc/${processId}/stat`, "utf8");
+        } catch (error) {
+          if (error?.code === "ENOENT") continue;
+          return null;
+        }
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+        const processGroupId = Number.parseInt(fields[2], 10);
+        const state = String(fields[0] || "");
+        if (!Number.isSafeInteger(processGroupId) || !state) return null;
+        if (processGroupId === groupId) members.push({ pid: Number.parseInt(processId, 10), state });
+      }
+      return members.length > 0 ? members : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function spawnedBindingHasNoLiveChild(binding) {
+  if (!binding || binding.state !== "spawned") return false;
+  const observedWorker = processStartIdentity(binding.worker_pid);
+  if (observedWorker && observedWorker !== binding.worker_process_start_identity) return false;
+  if (!observedWorker && !processIsAbsent(binding.worker_pid)) return false;
+  const trustedMembers = trustedLinuxProcessGroupMembers(binding.worker_process_group_id);
+  return Boolean(trustedMembers) && !trustedMembers.some((member) =>
+    member.pid !== binding.worker_pid && !member.state.startsWith("Z"),
+  );
 }
 
 function isIsoTimestamp(value) {
@@ -21476,6 +22170,26 @@ function inspectTaskLease(state, taskId) {
         continue;
       }
       if (release) {
+        let releasedFence;
+        try {
+          releasedFence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
+        } catch (fenceError) {
+          const reason = String(fenceError?.message || "").startsWith("external_")
+            ? "external_command_fence_unresolved"
+            : "lease_record_unreadable";
+          return { taskId, lockPath: root, status: "ambiguous", reason, metadata, generation, protocol: "versioned_lease" };
+        }
+        if (releasedFence) {
+          return {
+            taskId,
+            lockPath: root,
+            status: "ambiguous",
+            reason: releasedFence.kind === "external" ? "external_command_fence_unresolved" : "manifest_write_intent_unresolved",
+            metadata,
+            generation,
+            protocol: "versioned_lease",
+          };
+        }
         const epochPath = taskLeasePath(state, taskId, "epochs", generation);
         const epochRecord = existsSync(epochPath) ? readRegularJson(epochPath) : null;
         if (epochRecord) {
@@ -21530,7 +22244,15 @@ function inspectTaskLease(state, taskId) {
         return { taskId, lockPath: root, status: "ambiguous", reason: "owner_process_identity_unavailable", metadata, generation, heartbeat, protocol: "versioned_lease" };
       } catch (error) {
         if (error?.code === "ESRCH") {
-          const fence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
+          let fence;
+          try {
+            fence = leaseGenerationFence(state, taskId, metadata, tokenDigest);
+          } catch (fenceError) {
+            const reason = String(fenceError?.message || "").startsWith("external_")
+              ? "external_command_fence_unresolved"
+              : "lease_record_unreadable";
+            return { taskId, lockPath: root, status: "ambiguous", reason, metadata, generation, heartbeat, protocol: "versioned_lease" };
+          }
           if (fence) {
             return {
               taskId,
@@ -21540,6 +22262,8 @@ function inspectTaskLease(state, taskId) {
               metadata,
               generation,
               heartbeat,
+              externalIntentId: fence.kind === "external" ? fence.intent.intent_id : null,
+              commandDigest: fence.kind === "external" ? fence.intent.command_digest : null,
               protocol: "versioned_lease",
             };
           }
@@ -21630,6 +22354,8 @@ function redactTaskLockInspection(inspection) {
     protocol: inspection?.protocol || "unknown",
     generation: inspection?.generation || null,
     epoch: inspection?.epoch ?? 0,
+    externalIntentId: inspection?.externalIntentId || null,
+    commandDigest: inspection?.commandDigest || null,
     mutation: "none; read-only lock inspection",
   };
 }
@@ -22536,6 +23262,399 @@ function runShellChecked(commandText, options = {}) {
   };
 }
 
+function boundedChildOutput(value, chunk, maximumBytes = externalCommandOutputMaximumBytes) {
+  const next = `${value}${Buffer.from(chunk).toString("utf8")}`;
+  if (Buffer.byteLength(next, "utf8") <= maximumBytes) return next;
+  return Buffer.from(next, "utf8").subarray(0, maximumBytes).toString("utf8");
+}
+
+function validExternalCommandWorkerResult(record) {
+  return Boolean(
+    record &&
+      record.schema_version === externalCommandWorkerResultSchemaVersion &&
+      (record.status === null || Number.isInteger(record.status)) &&
+      (record.signal === null || typeof record.signal === "string") &&
+      (record.errorCode === null || typeof record.errorCode === "string") &&
+      typeof record.errorMessage === "string" &&
+      typeof record.stdout === "string" && Buffer.byteLength(record.stdout, "utf8") <= externalCommandOutputMaximumBytes &&
+      typeof record.stderr === "string" && Buffer.byteLength(record.stderr, "utf8") <= externalCommandOutputMaximumBytes
+  );
+}
+
+function assertPrivateExternalWorkerResultPath(resultPath) {
+  const directory = dirname(resultPath);
+  const stats = lstatSync(directory);
+  if (
+    basename(resultPath) !== "receipt.json" ||
+    !stats.isDirectory() || stats.isSymbolicLink() ||
+    (stats.mode & 0o077) !== 0
+  ) {
+    throw new Error("external command worker result path is not private");
+  }
+}
+
+function sleepSynchronously(milliseconds) {
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(wait, 0, 0, milliseconds);
+}
+
+function externalCommandWorkerPayload() {
+  const payload = JSON.parse(process.env.CODEX_WORKSPACE_EXTERNAL_COMMAND_PAYLOAD || "null");
+  if (!payload || !Array.isArray(payload.args) || typeof payload.command !== "string" || !payload.command ||
+      typeof payload.cwd !== "string" || !payload.cwd || typeof payload.resultPath !== "string" || !payload.resultPath ||
+      typeof payload.stateRoot !== "string" || !payload.stateRoot || typeof payload.taskId !== "string" || !payload.taskId ||
+      typeof payload.generation !== "string" || !payload.generation || typeof payload.tokenDigest !== "string" || !payload.tokenDigest ||
+      typeof payload.intentId !== "string" || !payload.intentId || typeof payload.commandDigest !== "string" || !payload.commandDigest ||
+      typeof payload.workerCapability !== "string" || !payload.workerCapability ||
+      !Number.isSafeInteger(payload.maxBuffer) || payload.maxBuffer <= 0 || payload.maxBuffer > externalCommandOutputMaximumBytes) {
+    throw new Error("external command worker payload is invalid");
+  }
+  if (payload.args.some((arg) => typeof arg !== "string")) throw new Error("external command worker arguments are invalid");
+  const commandDigest = createHash("sha256").update(JSON.stringify([payload.command, ...payload.args])).digest("hex");
+  if (payload.commandDigest !== commandDigest) throw new Error("external command worker command digest is invalid");
+  return payload;
+}
+
+async function runExternalCommandWorker() {
+  const payload = externalCommandWorkerPayload();
+  assertPrivateExternalWorkerResultPath(payload.resultPath);
+  const state = workspaceState({ stateRoot: payload.stateRoot });
+  const workerStartIdentity = processStartIdentity(process.pid);
+  if (!workerStartIdentity) throw new Error("external command worker process identity is unavailable");
+  const intent = readRegularJson(taskLeaseLedgerPath(state, payload.taskId, "external-intents", payload.intentId));
+  if (!validTaskLeaseExternalIntent(intent, payload.taskId, payload.generation, payload.tokenDigest) ||
+      intent.command_digest !== payload.commandDigest ||
+      typeof intent.worker_capability_digest !== "string") {
+    throw new Error("external command worker durable intent binding is invalid");
+  }
+  const capability = readRegularJson(taskLeaseExternalWorkerCapabilityPath(state, payload.taskId, payload.intentId));
+  const capabilityDigest = createHash("sha256").update(payload.workerCapability).digest("hex");
+  if (!capability || capability.schema_version !== taskLeaseSchemaVersion || capability.task_id !== payload.taskId ||
+      capability.generation !== payload.generation || capability.token_digest !== payload.tokenDigest ||
+      capability.intent_id !== payload.intentId || capability.command_digest !== payload.commandDigest ||
+      capability.capability_digest !== capabilityDigest || intent.worker_capability_digest !== capabilityDigest) {
+    throw new Error("external command worker capability is invalid");
+  }
+  const commandEnvironment = { ...process.env };
+  delete commandEnvironment.CODEX_WORKSPACE_EXTERNAL_COMMAND_WORKER;
+  delete commandEnvironment.CODEX_WORKSPACE_EXTERNAL_COMMAND_PAYLOAD;
+  let child;
+  try {
+    const bindingPath = taskLeaseExternalProcessBindingPath(state, payload.taskId, payload.intentId);
+    const bindingDeadline = Date.now() + 2_000;
+    let priorBinding = null;
+    while (Date.now() < bindingDeadline) {
+      try {
+        const candidate = readRegularJson(bindingPath);
+        if (candidate.state === "spawned") { priorBinding = candidate; break; }
+        if (candidate.state !== "unbound") throw new Error("external command worker binding transition is invalid");
+      } catch (error) {
+        if (error?.message?.includes("transition")) throw error;
+      }
+      sleepSynchronously(externalCommandWorkerPollMs);
+    }
+    if (!validTaskLeaseExternalProcessBinding(priorBinding, payload.taskId, payload.generation, payload.tokenDigest, payload.intentId) ||
+        priorBinding.state !== "spawned" || priorBinding.worker_pid !== process.pid ||
+        priorBinding.worker_process_start_identity !== workerStartIdentity) {
+      throw new Error("external command worker was not durably claimed by its runner");
+    }
+    child = spawn(payload.command, payload.args, {
+      cwd: payload.cwd,
+      env: commandEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+    });
+    let commandStartIdentity = null;
+    const commandIdentityDeadline = Date.now() + 2_000;
+    while (Date.now() < commandIdentityDeadline && !commandStartIdentity && !processIsAbsent(child.pid)) {
+      commandStartIdentity = processStartIdentityIncludingZombie(child.pid);
+      if (!commandStartIdentity) sleepSynchronously(externalCommandWorkerPollMs);
+    }
+    const commandIdentityUnavailable = !commandStartIdentity;
+    if (!commandIdentityUnavailable) {
+      priorBinding = readRegularJson(bindingPath);
+      if (!validTaskLeaseExternalProcessBinding(priorBinding, payload.taskId, payload.generation, payload.tokenDigest, payload.intentId) ||
+          priorBinding.state !== "spawned" || priorBinding.worker_pid !== process.pid ||
+          priorBinding.worker_process_start_identity !== workerStartIdentity) {
+        throw new Error("external command process binding transition is invalid");
+      }
+      writeDurableJsonAtomic(bindingPath, {
+        schema_version: externalCommandProcessBindingSchemaVersion,
+        task_id: payload.taskId,
+        generation: payload.generation,
+        token_digest: payload.tokenDigest,
+        intent_id: payload.intentId,
+        state: "bound",
+        worker_pid: process.pid,
+        worker_process_start_identity: workerStartIdentity,
+        worker_process_group_id: priorBinding.worker_process_group_id,
+        command_pid: child.pid,
+        command_process_start_identity: commandStartIdentity,
+        command_group_id: priorBinding.worker_process_group_id,
+        bound_at: new Date().toISOString(),
+      });
+    }
+    let stdout = "";
+    let stderr = "";
+    let outputOverflow = false;
+    child.stdout.on("data", (chunk) => {
+      outputOverflow ||= Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(chunk) > payload.maxBuffer;
+      stdout = boundedChildOutput(stdout, chunk, payload.maxBuffer);
+    });
+    child.stderr.on("data", (chunk) => {
+      outputOverflow ||= Buffer.byteLength(stderr, "utf8") + Buffer.byteLength(chunk) > payload.maxBuffer;
+      stderr = boundedChildOutput(stderr, chunk, payload.maxBuffer);
+    });
+    const result = await new Promise((resolveResult) => {
+      child.once("error", (error) => resolveResult({ status: null, signal: null, errorCode: error?.code || "ERR_CHILD_PROCESS", errorMessage: error?.message || "", stdout, stderr }));
+      child.once("close", (status, signal) => resolveResult({ status, signal: signal || null, errorCode: null, errorMessage: "", stdout, stderr }));
+    });
+    writeNewJson(payload.resultPath, {
+      schema_version: externalCommandWorkerResultSchemaVersion,
+      ...result,
+      ...(outputOverflow ? { status: null, signal: "SIGKILL", errorCode: "ENOBUFS", errorMessage: "external command output exceeded configured capture limit" } : {}),
+    });
+  } catch (error) {
+    try {
+      writeNewJson(payload.resultPath, { schema_version: externalCommandWorkerResultSchemaVersion, status: null, signal: null, errorCode: error?.code || "ERR_EXTERNAL_COMMAND_WORKER", errorMessage: error?.message || String(error), stdout: "", stderr: "" });
+    } catch (receiptError) {
+      if (receiptError?.code !== "EEXIST") throw receiptError;
+    }
+    throw error;
+  }
+}
+
+function processIsAbsent(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  if (portableProcessState(pid)?.startsWith("Z")) return true;
+  if (processStartIdentity(pid) !== null) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+}
+
+function signalExactExternalWorkerGroup(binding, signal) {
+  if (!binding || !["spawned", "bound"].includes(binding.state)) return false;
+  // Never target a numeric PGID until the original worker PID is still the
+  // recorded process.  A reused PID/PGID is indistinguishable from an
+  // unrelated process group and must remain an unresolved fence.
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline && !processIsAbsent(binding.worker_pid)) {
+    const observed = processStartIdentity(binding.worker_pid);
+    if (observed && observed !== binding.worker_process_start_identity) return false;
+    if (observed === binding.worker_process_start_identity) {
+      try {
+        process.kill(-binding.worker_process_group_id, signal);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    sleepSynchronously(externalCommandWorkerPollMs);
+  }
+  return false;
+}
+
+function runFencedExternal(commandName, commandArguments, resolved, options, context, intent) {
+  const resultDirectory = mkdtempSync(join(tmpdir(), `codex-external-command-${intent.intent_id}-`));
+  chmodSync(resultDirectory, 0o700);
+  fsyncDirectory(resultDirectory);
+  const resultPath = join(resultDirectory, "receipt.json");
+  const payload = {
+    command: resolved.command,
+    args: resolved.args,
+    cwd: options.cwd || repoRoot,
+    resultPath,
+    stateRoot: context.state.root,
+    taskId: context.taskId,
+    generation: context.generation,
+    tokenDigest: taskLeaseTokenDigest(context.token),
+    intentId: intent.intent_id,
+    commandDigest: intent.command_digest,
+    workerCapability: intent.worker_capability,
+    maxBuffer: Number.isSafeInteger(options.maxBuffer) && options.maxBuffer > 0
+      ? Math.min(options.maxBuffer, externalCommandOutputMaximumBytes)
+      : externalCommandOutputMaximumBytes,
+  };
+  const workerEnvironment = {
+    ...(resolved.env ?? process.env),
+    CODEX_WORKSPACE_EXTERNAL_COMMAND_WORKER: "1",
+    CODEX_WORKSPACE_EXTERNAL_COMMAND_PAYLOAD: JSON.stringify(payload),
+  };
+  let worker;
+  try {
+    worker = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+      cwd: payload.cwd,
+      env: workerEnvironment,
+      detached: true,
+      stdio: "ignore",
+    });
+  } catch (error) {
+    rmSync(resultDirectory, { recursive: true, force: true });
+    return { code: 1, status: null, signal: null, errorCode: error?.code || "ERR_EXTERNAL_COMMAND_WORKER", errorMessage: error?.message || String(error), stdout: "", stderr: error?.message || String(error) };
+  }
+  const workerStartIdentity = processStartIdentityIncludingZombie(worker.pid);
+  // Node's detached POSIX child is the leader of its own session/process
+  // group.  Its PID is therefore the durable group identity; probing it does
+  // not race a separate `ps` observation before the worker reaches exec.
+  const workerProcessGroupId = worker.pid;
+  const bindingPath = taskLeaseExternalProcessBindingPath(context.state, context.taskId, intent.intent_id);
+  const initialBinding = readRegularJson(bindingPath);
+  if (!workerStartIdentity || !workerProcessGroupId || !validTaskLeaseExternalProcessBinding(initialBinding, context.taskId, context.generation, taskLeaseTokenDigest(context.token), intent.intent_id) || initialBinding.state !== "unbound") {
+    rmSync(resultDirectory, { recursive: true, force: true });
+    throw new Error("external command worker spawn binding is not admissible");
+  }
+  writeDurableJsonAtomic(bindingPath, {
+    schema_version: externalCommandProcessBindingSchemaVersion,
+    task_id: context.taskId,
+    generation: context.generation,
+    token_digest: taskLeaseTokenDigest(context.token),
+    intent_id: intent.intent_id,
+    state: "spawned",
+    worker_pid: worker.pid,
+    worker_process_start_identity: workerStartIdentity,
+    worker_process_group_id: workerProcessGroupId,
+    spawned_at: new Date().toISOString(),
+  });
+  if (process.env.CODEX_WORKSPACE_TEST_CRASH_AFTER_EXTERNAL_WORKER_SPAWN === "1") {
+    const bindingDeadline = Date.now() + 2_000;
+    while (!processIsAbsent(worker.pid) && Date.now() < bindingDeadline) {
+      try {
+        const binding = readRegularJson(bindingPath);
+        if (binding.state === "bound") break;
+      } catch {}
+      sleepSynchronously(externalCommandWorkerPollMs);
+    }
+    process.exit(88);
+  }
+  const timeout = Number.isSafeInteger(options.timeout) && options.timeout > 0 ? options.timeout : defaultVerificationTimeoutMs;
+  const deadline = Date.now() + timeout;
+  let timedOut = false;
+  while (!existsSync(resultPath) && !processIsAbsent(worker.pid) && Date.now() < deadline) sleepSynchronously(externalCommandWorkerPollMs);
+  if (!existsSync(resultPath) && !processIsAbsent(worker.pid)) {
+    const spawnedBinding = readRegularJson(bindingPath);
+    timedOut = signalExactExternalWorkerGroup(spawnedBinding, options.killSignal || "SIGKILL");
+  }
+  while (!processIsAbsent(worker.pid) && Date.now() < deadline + 1_000) sleepSynchronously(externalCommandWorkerPollMs);
+  let result = { status: null, signal: timedOut ? "SIGKILL" : null, errorCode: timedOut ? "ETIMEDOUT" : "ERR_EXTERNAL_COMMAND_WORKER", errorMessage: timedOut ? "" : "external command worker exited without a result", stdout: "", stderr: "" };
+  let receiptReady = false;
+  let bindingFailure = false;
+  if (existsSync(resultPath)) {
+    try {
+      const candidate = JSON.parse(readFileSync(resultPath, "utf8"));
+      if (validExternalCommandWorkerResult(candidate)) {
+        result = candidate;
+        try {
+          const binding = readTaskLeaseExternalProcessBinding(context.state, context.taskId, {
+            generation: context.generation,
+            token: context.token,
+          }, intent);
+          receiptReady = binding.state === "bound" ||
+            (binding.state === "spawned" && spawnedBindingHasNoLiveChild(binding));
+        } catch {
+          bindingFailure = true;
+        }
+      }
+    } catch {
+      bindingFailure = true;
+    }
+    rmSync(resultDirectory, { recursive: true, force: true });
+  }
+  // A receipt is not completion authority while its binding never reached the
+  // durable bound state: a post-spawn persistence failure may have launched a
+  // child.  Stop only the exact still-identified worker group; otherwise
+  // retain the fence for explicit settlement rather than guessing.
+  if (!receiptReady) {
+    // The private receipt directory may already be gone after inspection; the
+    // only admissible signal target is the durable binding itself.
+    try {
+      const binding = readTaskLeaseExternalProcessBinding(context.state, context.taskId, {
+        generation: context.generation,
+        token: context.token,
+      }, intent);
+      if (!timedOut) signalExactExternalWorkerGroup(binding, options.killSignal || "SIGKILL");
+    } catch {
+      bindingFailure = true;
+    }
+  }
+  // A caller-enforced timeout is distinguishable from a lost worker receipt:
+  // this process killed the worker group and has subsequently proven every
+  // bound process absent.  Record that known timeout outcome so its own lease
+  // can release; any other missing receipt remains an unresolved fence.
+  if (!receiptReady && timedOut) {
+    try {
+      const fence = externalCommandProcessFence(context.state, context.taskId, {
+        generation: context.generation,
+        token: context.token,
+      }, intent);
+      // The detached worker leads its own group.  A timeout path that killed
+      // that exact group can safely record a bounded non-success completion
+      // after the group is absent, including the small spawned-before-bound
+      // window where no durable child identity exists yet.  A parent crash,
+      // a missing receipt without this kill, or any unproven group remains
+      // unresolved for explicit settlement.
+      const workerGroupAbsent =
+        probeProcessGroupAbsence(fence.binding.worker_process_group_id, "external command worker group") === null;
+      receiptReady = ["spawned", "bound"].includes(fence.binding.state) &&
+        fence.blockers.length === 0 && workerGroupAbsent;
+    } catch {
+      bindingFailure = true;
+    }
+  }
+  if (receiptReady) {
+    // A zero-exit bound child does not prove that it did not leave a daemon in
+    // its recorded group.  Completion may remove the only durable fence, so
+    // require every recorded process and the whole command group to be absent
+    // before publishing the immutable completion.
+    try {
+      const fence = externalCommandProcessFence(context.state, context.taskId, {
+        generation: context.generation,
+        token: context.token,
+      }, intent);
+      if (fence.blockers.length > 0) {
+        receiptReady = false;
+        bindingFailure = true;
+      }
+    } catch {
+      receiptReady = false;
+      bindingFailure = true;
+    }
+  }
+  // A missing worker receipt or process binding leaves the intent unresolved;
+  // releasing it would turn an unknown external side effect into a false
+  // completion.  The retained fence can then be inspected and settled only
+  // after the command process/group is proven absent.
+  if (!receiptReady) {
+    // Never let a zero-status worker receipt authorize the caller to start a
+    // later external delivery command when its durable binding/fence was not
+    // proven.  The unresolved intent remains the sole recovery authority.
+    result = {
+      ...result,
+      status: null,
+      errorCode: bindingFailure ? "ERR_EXTERNAL_COMMAND_BINDING_FENCE" : "ERR_EXTERNAL_COMMAND_RECEIPT_FENCE",
+      errorMessage: bindingFailure
+        ? "external command binding validation or fencing is not admissible"
+        : "external command receipt is not durably bound",
+    };
+  } else {
+    completeTaskLeaseExternalIntent(context, intent, result);
+  }
+  const stdout = options.preserveStdout || options.preserveChildOutput ? (result.stdout || "") : (result.stdout || "").trim();
+  const stderr = options.preserveChildOutput ? (result.stderr || result.errorMessage || "") : (result.stderr || result.errorMessage || "").trim();
+  return {
+    code: result.status ?? 1,
+    status: result.status,
+    signal: result.signal || null,
+    errorCode: result.errorCode || null,
+    errorMessage: result.errorMessage || "",
+    stdout,
+    stderr,
+  };
+}
+
 function run(commandName, commandArguments, options = {}) {
   // Resolve against the complete caller environment. The resolver can then
   // retain per-command state while still stripping unsafe pnpm shim metadata.
@@ -22558,8 +23677,16 @@ function run(commandName, commandArguments, options = {}) {
   if (Number.isSafeInteger(options.maxBuffer) && options.maxBuffer > 0) {
     spawnOptions.maxBuffer = options.maxBuffer;
   }
+  // Only explicit delivery and verification launches receive an external
+  // command fence.  Lock-time control-plane probes (for example Git branch
+  // validation and manifest inspection) must remain local to this process;
+  // fencing them would make routine probe failures look like ambiguous
+  // external side effects and can suppress their diagnostic output.
   const leaseContext = activeTaskLeaseWriteContext;
-  const intent = leaseContext ? taskLeaseExternalIntent(leaseContext, resolved.command, resolved.args) : null;
+  const intent = leaseContext && options.externalExecution === true
+    ? taskLeaseExternalIntent(leaseContext, resolved.command, resolved.args)
+    : null;
+  if (intent) return runFencedExternal(commandName, commandArguments, resolved, options, leaseContext, intent);
   let result;
   try {
     result = spawnSync(resolved.command, resolved.args, spawnOptions);
