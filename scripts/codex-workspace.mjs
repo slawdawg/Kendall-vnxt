@@ -22309,7 +22309,10 @@ function reconcileManifest(manifest, options = {}) {
 }
 
 function parseStatus(cwd) {
-  const result = git(["status", "--porcelain"], { cwd });
+  // Porcelain's leading XY columns are semantic.  In particular, an
+  // unstaged-only modification begins with a literal space; preserve it rather
+  // than allowing the generic command wrapper to trim it away.
+  const result = git(["status", "--porcelain"], { cwd, preserveStdout: true });
   if (result.code !== 0) {
     throw new Error(result.stderr || "Could not inspect worktree status.");
   }
