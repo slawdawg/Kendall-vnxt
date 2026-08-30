@@ -7743,7 +7743,8 @@ try {
         "--reason", "must refuse unstaged input without any delivery",
       ]));
       assert(result.code !== 0, "base sync unexpectedly accepted unstaged input");
-      assert(result.stderr.includes("ordinary staged regular-file paths"), result.stderr || result.stdout);
+      assert(result.stdout.includes("BLOCKED: sync-dirty-lane-base"), result.stderr || result.stdout);
+      assert((result.stderr || result.stdout).includes("exactly staged-only worktree"), result.stderr || result.stdout);
       assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "blocked base sync changed HEAD");
       assert(readFileSync(fixture.manifestPath, "utf8") === beforeManifest, "blocked base sync changed manifest state");
       assert(!existsSync(join(fixture.stateRoot, "base-sync")), "blocked base sync wrote a patch journal");
@@ -11017,7 +11018,7 @@ try {
       const prior = fixtureFailedResumableCheckPacket(fixture, stages);
       manifest.check_verification_packet = prior;
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      writeFileSync(join(fixture.worktree, "feature.txt"), "changed reviewed tracked input\n");
 
       const result = runFixtureScript(
         fixture,
@@ -11030,6 +11031,7 @@ try {
       const updated = readJson(manifestPath);
       assert(updated.check_verification_packet?.staged_input_digest !== prior.staged_input_digest, JSON.stringify(updated.check_verification_packet));
       assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("staged-input")), JSON.stringify(updated.events));
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout === "", "stage-all did not commit the tracked working-tree change");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -23035,7 +23037,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "capture-lost-pem-four-rows" && (resolved.command === "fixture-verification" || (resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic"))) {',
+        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "capture-lost-pem-four-rows" && (resolved.command === "fixture-verification" || (resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic") || (resolved.command === process.execPath && /(?:^|[\\\\/])pnpm(?:[-.]cli)?\\.[cm]?js$/i.test(resolved.args?.[0] || "") && resolved.args?.[1] === "run" && resolved.args?.[2] === "check:diagnostic"))) {',
         '    const stdout = ("0".repeat(64) + "\\n").repeat(4);',
         '    return { code: 23, status: 23, signal: null, errorCode: null, errorMessage: "", stdout, stderr: "", stdoutBytes: 4 * 1024 * 1024 + Buffer.byteLength(stdout), stderrBytes: 0 };',
         "  }",
