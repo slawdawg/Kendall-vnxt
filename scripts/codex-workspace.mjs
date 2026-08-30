@@ -3003,6 +3003,10 @@ function dirtyBaseSyncPacket(state, target, context) {
   if (remote.lane_branch_head) blockers.push(`remote lane branch origin/${manifest.branch} is present`);
   const sourceHead = branch.local_sha || null;
   const targetHead = remote.base_head || null;
+  const localTargetHead = branchSha(manifest.base_ref, worktree.path);
+  if (targetHead && localTargetHead !== targetHead) {
+    blockers.push("local origin/dev ref does not match the proven live remote target; base sync never fetches");
+  }
   if (targetHead && git(["cat-file", "-e", `${targetHead}^{commit}`], { cwd: worktree.path }).code !== 0) {
     blockers.push("live origin/dev object is not available locally; base sync never fetches");
   }
@@ -3100,7 +3104,8 @@ function dirtyBaseSyncRemoteProof(worktreePath, branch) {
 
 function assertDirtyBaseSyncCurrentRemote(manifest, journal) {
   const remote = dirtyBaseSyncRemoteProof(manifest.worktree_path, manifest.branch);
-  if (!remote.allowed || remote.base_head !== journal.target_head || remote.lane_branch_head) {
+  const localTargetHead = branchSha(manifest.base_ref, manifest.worktree_path);
+  if (!remote.allowed || remote.base_head !== journal.target_head || remote.lane_branch_head || localTargetHead !== journal.target_head) {
     throw new Error("live origin/dev or remote lane-branch evidence changed while applying dirty base sync");
   }
 }
@@ -3134,11 +3139,9 @@ function preparedDirtyBaseSyncResumePacket(state, manifest, context) {
   if (!dirtyBaseSyncExactManifestBranch(manifest.worktree_path, manifest.branch)) blockers.push("prepared dirty base-sync worktree is no longer checked out on its manifest branch");
   if (journal.target_ref !== `origin/${defaultBaseBranch}` || journal.target_head !== context.targetHead) blockers.push("prepared dirty base-sync journal target identity changed");
   if (!/^[a-f0-9]{64}$/i.test(journal.patch_sha256 || "") || !Number.isSafeInteger(journal.patch_bytes) || journal.patch_bytes <= 0) blockers.push("prepared dirty base-sync journal patch identity is invalid");
-  const phase = dirtyBaseSyncResumePhaseEvidence(manifest.worktree_path, journal, context);
-  blockers.push(...phase.blockers);
   const patchPath = isUuid(journal.transaction_id) ? dirtyBaseSyncJournalPath(state, manifest.task_id, journal.transaction_id) : null;
   if (!patchPath || journal.patch_path_digest !== createHash("sha256").update(resolve(patchPath)).digest("hex")) blockers.push("prepared dirty base-sync journal patch path is invalid");
-  if (journal.status !== "patch_capture_prepared") {
+  if (!new Set(["patch_capture_prepared", "patch_disposal_prepared", "patch_disposed"]).has(journal.status)) {
     try {
       const stats = patchPath ? lstatSync(patchPath) : null;
       if (!stats?.isFile() || stats.isSymbolicLink() || (stats.mode & 0o077) !== 0) throw new Error("private patch file is unsafe");
@@ -3148,6 +3151,8 @@ function preparedDirtyBaseSyncResumePacket(state, manifest, context) {
       blockers.push(error instanceof Error ? error.message : "prepared dirty base-sync private patch is unavailable");
     }
   }
+  const phase = dirtyBaseSyncResumePhaseEvidence(manifest.worktree_path, journal, { ...context, patchPath });
+  blockers.push(...phase.blockers);
   const priorLease = leaseRecord(state, manifest.task_id, journal.lease_generation);
   if (!validTaskLeaseRecord(priorLease, manifest.task_id) || priorLease.owner !== context.currentOwner) blockers.push("prepared dirty base-sync predecessor lease is invalid");
   const active = inspectTaskLock(state, manifest.task_id);
@@ -3166,6 +3171,8 @@ function dirtyBaseSyncJournalIsResumable(journal) {
     "target_checked_out",
     "restore_prepared",
     "restored",
+    "patch_disposal_prepared",
+    "patch_disposed",
   ]).has(journal?.status);
 }
 
@@ -3242,6 +3249,17 @@ function dirtyBaseSyncResumePhaseEvidence(worktreePath, journal, context) {
     if (journal.status === "restored") {
       const restored = dirtyBaseSyncRestoredEvidence(worktreePath, journal, { throwOnMismatch: false });
       if (!restored.matches || !dirtyBaseSyncSameEvidence(restored.evidence, journal.restored)) return blocked(restored.reason || "restored phase evidence changed");
+      return { blockers: [], action: "prepare_patch_disposal", evidence: restored.evidence };
+    }
+    if (journal.status === "patch_disposal_prepared") {
+      const restored = dirtyBaseSyncRestoredEvidence(worktreePath, journal, { throwOnMismatch: false });
+      if (!restored.matches || !dirtyBaseSyncSameEvidence(restored.evidence, journal.restored)) return blocked(restored.reason || "patch disposal precondition changed");
+      return { blockers: [], action: "dispose_patch", evidence: restored.evidence };
+    }
+    if (journal.status === "patch_disposed") {
+      const restored = dirtyBaseSyncRestoredEvidence(worktreePath, journal, { throwOnMismatch: false });
+      if (!restored.matches || !dirtyBaseSyncSameEvidence(restored.evidence, journal.restored)) return blocked(restored.reason || "patch disposal proof changed");
+      if (existsSync(context.patchPath)) return blocked("disposed dirty base-sync private patch reappeared");
       return { blockers: [], action: "complete", evidence: restored.evidence };
     }
   } catch (error) {
@@ -3276,7 +3294,7 @@ function dirtyBaseSyncCleanEvidence(worktreePath, expectedHead, options = {}) {
   if (porcelain.code !== 0 || porcelain.stdout) throw new Error("dirty base-sync clean phase has changed working-tree input");
   const index = git(["write-tree"], { cwd: worktreePath, preserveStdout: true });
   const indexTree = String(index.stdout || "").trim();
-  if (index.code !== 0 || !/^[a-f0-9]{40}$/i.test(indexTree)) throw new Error("dirty base-sync clean phase index tree is unavailable");
+  if (index.code !== 0 || !exactGitObjectIdOrNull(indexTree)) throw new Error("dirty base-sync clean phase index tree is unavailable");
   const worktree = git(["diff-files", "--quiet"], { cwd: worktreePath, preserveStdout: true });
   if (worktree.code !== 0) throw new Error("dirty base-sync clean phase worktree differs from its index");
   return { head, index_tree: indexTree, porcelain_sha256: createHash("sha256").update(porcelain.stdout).digest("hex"), worktree_clean: true };
@@ -3287,11 +3305,11 @@ function dirtyBaseSyncRefUpdatedEvidence(worktreePath, journal) {
   if (head !== journal.target_head) throw new Error("target-ref-updated phase head changed");
   const index = git(["write-tree"], { cwd: worktreePath, preserveStdout: true });
   const indexTree = String(index.stdout || "").trim();
-  if (index.code !== 0 || !/^[a-f0-9]{40}$/i.test(indexTree)) throw new Error("target-ref-updated phase index tree is unavailable");
+  if (index.code !== 0 || !exactGitObjectIdOrNull(indexTree)) throw new Error("target-ref-updated phase index tree is unavailable");
   const worktree = git(["diff-files", "--quiet"], { cwd: worktreePath, preserveStdout: true });
   if (worktree.code !== 0) throw new Error("target-ref-updated phase worktree differs from its source index");
   const sourceIndexTree = journal.source_cleaned?.index_tree;
-  if (!/^[a-f0-9]{40}$/i.test(sourceIndexTree || "") || indexTree !== sourceIndexTree) {
+  if (!exactGitObjectIdOrNull(sourceIndexTree || "") || indexTree !== sourceIndexTree) {
     throw new Error("target-ref-updated phase index does not retain the source-cleaned tree");
   }
   return { head, index_tree: indexTree, worktree_clean: true };
@@ -3580,6 +3598,30 @@ function continuePreparedDirtyBaseSync(state, manifestPath, manifest, patchPath,
       journal.restored_at = new Date().toISOString();
       journal.restored = resume.evidence;
       writeManifest(manifestPath, manifest);
+      continue;
+    }
+    if (resume.action === "prepare_patch_disposal") {
+      journal.status = "patch_disposal_prepared";
+      journal.patch_disposal_prepared_at = new Date().toISOString();
+      writeManifest(manifestPath, manifest);
+      dirtyBaseSyncHardCrashAfterPhase("PATCH_DISPOSAL_PREPARED");
+      continue;
+    }
+    if (resume.action === "dispose_patch") {
+      assertDirtyBaseSyncCurrentRemote(manifest, journal);
+      if (existsSync(patchPath)) {
+        const stats = lstatSync(patchPath);
+        if (!stats.isFile() || stats.isSymbolicLink() || (stats.mode & 0o077) !== 0) throw new Error("prepared dirty base-sync private patch is unsafe for disposal");
+        const patch = readFileSync(patchPath, "utf8");
+        if (Buffer.byteLength(patch, "utf8") !== journal.patch_bytes || createHash("sha256").update(patch).digest("hex") !== journal.patch_sha256) throw new Error("prepared dirty base-sync private patch changed before disposal");
+        rmSync(patchPath, { force: true });
+        fsyncDirectory(dirname(patchPath));
+      }
+      if (process.env.CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_PATCH_DISPOSAL_ACTION === "1") process.exit(86);
+      journal.status = "patch_disposed";
+      journal.patch_disposed_at = new Date().toISOString();
+      writeManifest(manifestPath, manifest);
+      dirtyBaseSyncHardCrashAfterPhase("PATCH_DISPOSED");
       continue;
     }
     if (resume.action === "complete") {
@@ -3989,6 +4031,7 @@ function finishPr(argv) {
   if (!options.noVerify) {
     assertKnownVerificationProfile(String(options.verify || ""));
   }
+  assertDirtyBaseSyncDeliveryClear(manifest);
   assertSettledExternalIntentDeliveryAdmission(state, manifest, options);
   assertInFlightCheckRecoveryDeliveryAdmission(state, manifest, options);
   assertLaneOwner(manifest, options);
@@ -4219,6 +4262,13 @@ function finishPr(argv) {
     }
   }
   console.log(`PR: ${manifest.pr_url}`);
+}
+
+function assertDirtyBaseSyncDeliveryClear(manifest) {
+  const journal = manifest?.dirty_base_sync;
+  if (journal && journal.status !== "completed") {
+    throw new Error("finish-pr is blocked until the retained dirty base-sync journal is completed through its exact recovery phases.");
+  }
 }
 
 function assertSettledExternalIntentDeliveryAdmission(state, manifest, options) {
@@ -17526,7 +17576,10 @@ function runResumableCheckVerification(manifest, manifestPath, verificationPlan,
     packet.updated_at = startedAt;
     manifest.check_verification_packet = packet;
     writeManifest(manifestPath, manifest);
-    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL", externalExecution: true });
+    // A failed check leaf may persist a bounded, sanitized local diagnostic.
+    // Preserve the worker capture exactly until that boundary so its retained
+    // bytes and byte counters describe the same child output.
+    const result = run("pnpm", ["run", stage], { cwd: options.cwd, timeout, killSignal: "SIGKILL", externalExecution: true, preserveChildOutput: true });
     const evidence = { stage, completed_at: new Date().toISOString(), status: result.status ?? null, signal: result.signal || null, error_code: result.errorCode || null, output: "omitted" };
     if (verificationOutcome(result) !== "success") { packet.status = "failed"; packet.failed_stage = stage; packet.stages.push(evidence); delete packet.in_flight_stage; manifest.check_verification_packet = packet; writeManifest(manifestPath, manifest); const diagnostic = persistVerificationDiagnostic({ context: { state: options.state, taskId: manifest.task_id }, profile: "check", checkStage: stage === "preflight" ? null : stage, command: ["pnpm", "run", "check"], elapsedMs: Date.now() - started, timeoutMs: timeout, outcome: verificationOutcome(result), result }); throw new Error(`Verification ${verificationOutcome(result)}: profile=check; check stage=${stage}; timeout_ms=${timeout}; child_output=omitted; diagnostic=${diagnostic.status}.`); }
     packet.stages.push(evidence);
@@ -18119,7 +18172,10 @@ function runBoundedVerification(verificationPlan, options = {}) {
     timeout: timeoutMs,
     killSignal: "SIGKILL",
     externalExecution: true,
-    preserveChildOutput: profile === "codex-workspace",
+    // The check profile may retain a bounded sanitized diagnostic tail. Keep
+    // its worker capture byte-for-byte until that sanitizer runs; trimming
+    // here while retaining pre-trim byte counts would fabricate capture loss.
+    preserveChildOutput: profile === "codex-workspace" || profile === "check",
     maxBuffer: profile === "codex-workspace" ? verificationDiagnosticCaptureMaxBytes : undefined,
   });
   const elapsedMs = Math.max(0, Date.now() - startedAt);
@@ -18149,7 +18205,10 @@ function persistVerificationDiagnostic({ context, profile, checkStage = null, co
   try {
     assertSafeTaskId(context.taskId);
     const diagnosticsDir = join(context.state.tasksDir, ".diagnostics");
-    mkdirSync(diagnosticsDir, { recursive: true });
+    mkdirSync(diagnosticsDir, { recursive: true, mode: 0o700 });
+    const directoryStats = lstatSync(diagnosticsDir);
+    if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) throw new Error("private diagnostic directory is unsafe");
+    chmodSync(diagnosticsDir, 0o700);
     const child = boundedVerificationDiagnosticChild(profile, result, checkStage);
     const record = {
       schema_version: verificationDiagnosticSchemaVersion,
@@ -18183,7 +18242,9 @@ function persistVerificationDiagnostic({ context, profile, checkStage = null, co
       lock: redactTaskLockInspection(inspectTaskLock(context.state, context.taskId)),
     };
     const fileName = `${context.taskId}-${record.recorded_at.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
-    writeFileSync(join(diagnosticsDir, fileName), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
+    const diagnosticPath = join(diagnosticsDir, fileName);
+    writeFileSync(diagnosticPath, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    chmodSync(diagnosticPath, 0o600);
     return { status: "recorded", id: fileName };
   } catch {
     return { status: "unavailable" };
@@ -18238,6 +18299,7 @@ function sanitizeVerificationDiagnosticText(value, maxBytes, originalBytes = nul
   // value regardless of its authentication scheme. Restrict the match to one
   // physical line so following diagnostic lines remain available.
   redact(/(?:["']?(?:authorization|proxy-authorization|x-api-key)["']?)[ \t]*[:=][ \t]*[^\r\n]*/gi, "[auth-redacted]");
+  redact(/(?:["']?(?:auth|account[_-]?key)["']?)[ \t]*[:=][ \t]*(?:"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*'|[^\s\r\n]+)/gi, "[redacted-credential]");
   redact(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "[redacted-credential]");
   redact(/(?:["']?[A-Za-z0-9._-]*(?:secret|token|password|credential|api[_-]?key)[A-Za-z0-9._-]*["']?)(?:[ \t]*[:=][ \t]*|[ \t]+)(?:"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*'|[^\s\r\n]+)/gi, "[redacted-credential]");
   redact(/\b[A-Za-z0-9._-]*(?:secret|token|password|credential|api[_-]?key)[A-Za-z0-9._-]*\b/gi, "[redacted-sensitive]");

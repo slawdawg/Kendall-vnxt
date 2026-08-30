@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -7817,7 +7817,53 @@ try {
       const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
       assert(manifest.dirty_base_sync?.status === "completed", JSON.stringify(manifest.dirty_base_sync));
       assert(manifest.dirty_base_sync?.target_head === fixture.targetHead, JSON.stringify(manifest.dirty_base_sync));
+      assert(!existsSync(join(fixture.stateRoot, "base-sync", fixture.taskId, `${manifest.dirty_base_sync.transaction_id}.patch`)), "completed base sync retained raw staged patch bytes");
       assert(!manifest.pr_url && !manifest.pr_number, "base sync created delivery state");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
+  test("sync-dirty-lane-base accepts SHA-256 index trees through its exact recovery phases", () => {
+    const fixture = createDirtyBaseSyncFixture("sha256-index-tree", { objectFormat: "sha256" });
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "SHA-256 staged recovery input\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      assert(runGit(fixture.worktree, ["rev-parse", "--show-object-format"]).stdout === "sha256", "fixture did not use SHA-256 objects");
+      const result = runFixtureScript(fixture, syncDirtyBaseApplyArgs(fixture));
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync?.status === "completed", "SHA-256 base sync did not complete");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
+  test("sync-dirty-lane-base rejects a stale local origin/dev tracking ref before journaling", () => {
+    const fixture = createDirtyBaseSyncFixture("local-tracking-ref-drift");
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "must compare local tracking ref\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      runGit(fixture.worktree, ["update-ref", "refs/remotes/origin/dev", fixture.sourceHead, fixture.targetHead]);
+      const result = runFixtureScript(fixture, syncDirtyBaseArgs(fixture, ["--dry-run", "--summary-json"]));
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.allowed === false && packet.blockers.some((entry) => entry.includes("local origin/dev ref does not match")), JSON.stringify(packet));
+      assert(!JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync, "stale tracking ref published a journal");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
+  test("finish-pr refuses a crash-retained dirty base-sync journal before any delivery route", () => {
+    const fixture = createDirtyBaseSyncFixture("delivery-journal-fence");
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "journal fence staged input\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      const crashed = runFixtureScript(fixture, syncDirtyBaseApplyArgs(fixture), { env: { ...fixture.env, CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_TARGET_REF_UPDATE_PREPARED: "1" } });
+      assert(crashed.code === 86, JSON.stringify(crashed));
+      const result = runFixtureScript(fixture, ["finish-pr", fixture.taskId, "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot]);
+      assert(result.code !== 0 && (result.stderr || result.stdout).includes("retained dirty base-sync journal"), result.stderr || result.stdout);
+      assert(!JSON.parse(readFileSync(fixture.manifestPath, "utf8")).last_commit, "journal fence permitted commit metadata");
     } finally {
       cleanupDirtyBaseSyncFixture(fixture);
     }
@@ -7872,10 +7918,11 @@ try {
     }
   });
 
-  test("sync-dirty-lane-base re-proves remote base and lane absence immediately before a local transition", () => {
+  test("sync-dirty-lane-base re-proves remote base, lane absence, and local base ref immediately before a local transition", () => {
     for (const [name, remoteMutation] of [
       ["base", (fixture) => `git(["update-ref", "refs/heads/dev", ${JSON.stringify(fixture.sourceHead)}], { cwd: ${JSON.stringify(fixture.remoteRoot)} });`],
       ["lane", (fixture) => `git(["update-ref", ${JSON.stringify(`refs/heads/${fixture.branch}`)}, ${JSON.stringify(fixture.sourceHead)}], { cwd: ${JSON.stringify(fixture.remoteRoot)} });`],
+      ["local-base-ref", (fixture) => `git(["update-ref", "refs/remotes/origin/dev", ${JSON.stringify(fixture.sourceHead)}, ${JSON.stringify(fixture.targetHead)}], { cwd: ${JSON.stringify(fixture.worktree)} });`],
     ]) {
       const fixture = createDirtyBaseSyncFixture(`action-boundary-remote-${name}`);
       try {
@@ -7954,6 +8001,8 @@ try {
       ["CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_TARGET_CHECKED_OUT", "target_checked_out"],
       ["CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_RESTORE_PREPARED", "restore_prepared"],
       ["CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_RESTORED", "restored"],
+      ["CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_PATCH_DISPOSAL_PREPARED", "patch_disposal_prepared"],
+      ["CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_PATCH_DISPOSED", "patch_disposed"],
     ];
     for (const [crashVariable, expectedPhase] of crashPhases) {
       const fixture = createDirtyBaseSyncFixture(`phase-${expectedPhase}`);
@@ -7968,7 +8017,9 @@ try {
         assert(resumed.code === 0, `${expectedPhase}: ${resumed.stderr || resumed.stdout}`);
         assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === fixture.targetHead, `${expectedPhase}: resume missed exact target`);
         assert(runGit(fixture.worktree, ["diff", "--cached", "--binary", "HEAD"]).stdout === beforePatch, `${expectedPhase}: resume changed staged patch`);
-        assert(JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync?.status === "completed", `${expectedPhase}: resume did not publish completion`);
+        const completed = JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync;
+        assert(completed?.status === "completed", `${expectedPhase}: resume did not publish completion`);
+        assert(!existsSync(join(fixture.stateRoot, "base-sync", fixture.taskId, `${completed.transaction_id}.patch`)), `${expectedPhase}: completion retained raw patch`);
       } finally {
         cleanupDirtyBaseSyncFixture(fixture);
       }
@@ -9271,6 +9322,23 @@ try {
       const tail = readJson(join(diagnosticsDir, name)).child?.stdout_tail;
       assert(tail?.value.includes("0000000000000000000000000000000000000000000000000000000000000000"), JSON.stringify(tail));
       assert(tail.redacted === false, JSON.stringify(tail));
+    } finally { cleanupFinishPrExistingCommitFixture(fixture); }
+  });
+
+  test("finish-pr check diagnostics redact Docker auth and Azure AccountKey values with private file modes", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDiagnosticCheckStage(fixture, "docker-auth-accountkey-nonzero");
+      const result = runFixtureScript(fixture, ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(result.code !== 0, "credential diagnostic verification unexpectedly passed");
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const name = readdirSync(diagnosticsDir).find((entry) => entry.endsWith(".json"));
+      const diagnosticPath = join(diagnosticsDir, name);
+      const diagnostic = readJson(diagnosticPath);
+      const stored = JSON.stringify(diagnostic);
+      assert(!stored.includes("fixture-docker-auth-value") && !stored.includes("fixture-azure-account-key"), stored);
+      assert((statSync(diagnosticsDir).mode & 0o777) === 0o700, "diagnostic directory is not owner-only");
+      assert((statSync(diagnosticPath).mode & 0o777) === 0o600, "diagnostic record is not owner-only");
     } finally { cleanupFinishPrExistingCommitFixture(fixture); }
   });
 
@@ -12083,6 +12151,31 @@ try {
       assert(diagnostic.child?.output === "sanitized-tail-v1", retained);
       assert(diagnostic.child.stdout_tail.retained_bytes <= 2_048 && diagnostic.child.stderr_tail.retained_bytes <= 2_048, retained);
       assert(!`${result.stdout}\n${result.stderr}`.includes("fixture-packet-secret"), "CLI retained the diagnostic secret");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr resumable check diagnostics preserve real leaf output bytes until sanitization", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stage = "check:raw-child-output";
+      installFixtureResumableCheckPlan(fixture, [stage], { [stage]: "benign-multiline-nonzero" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "raw child-output fixture unexpectedly passed");
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const name = readdirSync(diagnosticsDir).find((entry) => entry.endsWith(".json"));
+      const stdoutTail = readJson(join(diagnosticsDir, name)).child?.stdout_tail;
+      const expected = "build\ntests\npassed\n";
+      // The real pnpm runner appends its own failure summary. The child’s
+      // terminal newline must nevertheless survive before that summary.
+      assert(stdoutTail?.value.startsWith(expected) && stdoutTail.value.includes("passed\n[ELIFECYCLE]"), JSON.stringify(stdoutTail));
+      assert(stdoutTail.bytes === Buffer.byteLength(stdoutTail.value) && stdoutTail.retained_bytes === Buffer.byteLength(stdoutTail.value), JSON.stringify(stdoutTail));
+      assert(stdoutTail.truncated === false && stdoutTail.redacted === false, JSON.stringify(stdoutTail));
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -23800,6 +23893,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     "headers-proxy-custom-quoted-nonzero": "printf '%s\\n' 'Proxy-Authorization: \"Custom fixture-proxy-custom-quoted-value more-secret\"' 'safe-following-diagnostic-line' >&2\nexit 23",
     "headers-x-api-key-unquoted-nonzero": "printf '%s\\n' 'X-API-Key: fixture-api-key-unquoted-value' 'safe-following-diagnostic-line' >&2\nexit 23",
     "headers-x-api-key-quoted-nonzero": "printf '%s\\n' 'X-API-Key: \"fixture-api-key-quoted-value\"' 'safe-following-diagnostic-line' >&2\nexit 23",
+    "docker-auth-accountkey-nonzero": "printf '%s\\n' '{\"auth\":\"fixture-docker-auth-value\"}' 'AccountKey=fixture-azure-account-key' >&2\nexit 23",
     "space-delimited-sensitive-nonzero": "printf '%s\\n' 'password correct-horse-battery-staple token fixture-token-value credential fixture-credential-value api_key fixture-api-key-value' 'safe-following-diagnostic-line' >&2\nexit 23",
     "boundary-long-spaced-authorization-nonzero": "printf '%s' 'Authorization: Digest '\nhead -c 20000 /dev/zero | tr '\\000' S\nprintf '%s' ' opaque-separator tail-secret=fixture-long-header-secret'\nexit 23",
     "escaped-quoted-sensitive-nonzero": "exit 23",
@@ -23893,6 +23987,7 @@ function installFixtureResumableCheckPlan(fixture, stages, stageModes = {}, chec
     .map(([stage, mode]) => {
       if (typeof mode === "string" && mode.startsWith("fixture-verification:")) return `  ${JSON.stringify(stage)}) exec fixture-verification ;;`;
       if (mode === "secret-nonzero") return `  ${JSON.stringify(stage)}) echo 'fixture-packet-secret' >&2; exit 23 ;;`;
+      if (mode === "benign-multiline-nonzero") return `  ${JSON.stringify(stage)}) printf 'build\\ntests\\npassed\\n'; exit 23 ;;`;
       if (mode === "signal") return `  ${JSON.stringify(stage)}) kill -TERM $$ ;;`;
       if (mode === "output-limit") return `  ${JSON.stringify(stage)}) head -c 5000000 /dev/zero | tr '\\0' x; exit 0 ;;`;
       throw new Error(`unknown resumable check fixture stage mode ${mode}`);
@@ -23981,7 +24076,7 @@ function installFixtureResumableCheckPauseAfterStageSeam(fixture) {
 function installFixtureResumableCheckLongLeafTimeoutCaptureSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const started = "  const started = Date.now();";
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });";
+  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true, preserveChildOutput: true });";
   assert(source.includes(started) && source.includes(invocation), "fixture did not contain the long-leaf timeout seams");
   const timeoutLog = join(fixture.stateRoot, "resumable-check-timeouts.log");
   const patched = source
@@ -24045,10 +24140,10 @@ function installFixtureResumableCheckPauseBeforeStageSeam(fixture) {
 
 function installFixtureResumableCheckTimeoutResultSeam(fixture, timeoutStage) {
   const source = readFileSync(fixture.script, "utf8");
-  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });";
+  const invocation = "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true, preserveChildOutput: true });";
   assert(source.includes(invocation), "fixture did not contain the resumable check stage invocation seam");
   const replacement = [
-    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });",
+    "    let result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true, preserveChildOutput: true });",
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_TIMEOUT_STAGE === stage) result = { status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" };',
   ].join("\n");
   writeFileSync(fixture.script, source.replace(invocation, replacement));
@@ -24085,7 +24180,10 @@ function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
   const inFlightTransition = [
     "    manifest.check_verification_packet = packet;",
     "    writeManifest(manifestPath, manifest);",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });",
+    "    // A failed check leaf may persist a bounded, sanitized local diagnostic.",
+    "    // Preserve the worker capture exactly until that boundary so its retained",
+    "    // bytes and byte counters describe the same child output.",
+    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true, preserveChildOutput: true });",
   ].join("\n");
   assert(source.includes(inFlightTransition), "fixture did not contain the persisted in-flight stage transition");
   const interruption = [
@@ -24094,7 +24192,7 @@ function installFixtureResumableCheckInterruptAfterInFlightWrite(fixture) {
     '    if (process.env.CODEX_WORKSPACE_FIXTURE_PACKET_INTERRUPT_AFTER_IN_FLIGHT_WRITE === "1") {',
     '      throw new Error("fixture packet interruption after in-flight marker");',
     "    }",
-    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true });",
+    "    const result = run(\"pnpm\", [\"run\", stage], { cwd: options.cwd, timeout, killSignal: \"SIGKILL\", externalExecution: true, preserveChildOutput: true });",
   ].join("\n");
   writeFileSync(fixture.script, source.replace(inFlightTransition, interruption));
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
@@ -25763,7 +25861,7 @@ function cleanupDirtyTakeoverFixture(fixture) {
   if (fixture.fakeBin) rmSync(fixture.fakeBin, { recursive: true, force: true });
 }
 
-function createDirtyBaseSyncFixture(name) {
+function createDirtyBaseSyncFixture(name, options = {}) {
   const root = mkdtempSync(join(tmpdir(), `codex-dirty-base-sync-${name}-`));
   const taskId = `base-sync-${name}`;
   const branch = `codex/${taskId}`;
@@ -25772,7 +25870,7 @@ function createDirtyBaseSyncFixture(name) {
   const tasksDir = join(stateRoot, "tasks");
   const manifestPath = join(tasksDir, `${taskId}.json`);
   copyWorkspaceScriptFixture(root);
-  runGit(root, ["init", "-q"]);
+  runGit(root, options.objectFormat === "sha256" ? ["init", "--object-format=sha256", "-q"] : ["init", "-q"]);
   runGit(root, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(root, ["config", "user.name", "Codex Workspace Test"]);
   writeFileSync(join(root, "tracked.txt"), "base\n");
@@ -25785,7 +25883,7 @@ function createDirtyBaseSyncFixture(name) {
   runGit(root, ["commit", "-q", "-m", "fixture target base"]);
   const targetHead = runGit(root, ["rev-parse", "HEAD"]).stdout;
   mkdirSync(remoteRoot, { recursive: true });
-  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(remoteRoot, options.objectFormat === "sha256" ? ["init", "--bare", "--object-format=sha256", "-q"] : ["init", "--bare", "-q"]);
   runGit(root, ["remote", "add", "origin", remoteRoot]);
   runGit(root, ["push", "-q", "origin", "dev:refs/heads/dev"]);
   runGit(root, ["update-ref", "refs/remotes/origin/dev", targetHead]);
