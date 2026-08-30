@@ -9480,6 +9480,41 @@ try {
     }
   });
 
+  test("fixture check-diagnostic injector matches only direct or normalized pnpm invocations", () => {
+    const matches = new Function("resolved", `return ${fixtureCheckDiagnosticInvocationExpression()};`);
+    const pnpmCli = "/tmp/pnpm.cjs";
+    const originalPnpmCli = process.env.npm_execpath;
+    process.env.npm_execpath = pnpmCli;
+    try {
+      assert(matches({ command: "pnpm", args: ["run", "check:diagnostic"] }), "direct pnpm check:diagnostic did not match");
+      assert(matches({ command: process.execPath, args: [pnpmCli, "run", "check:diagnostic"] }), "normalized node pnpm-cli check:diagnostic did not match");
+      assert(!matches({ command: process.execPath, args: [pnpmCli, "run", "check:other"] }), "unrelated normalized node invocation matched");
+      assert(!matches({ command: process.execPath, args: ["/tmp/other-cli.cjs", "run", "check:diagnostic"] }), "unrelated node CLI invocation matched");
+    } finally {
+      if (originalPnpmCli === undefined) delete process.env.npm_execpath;
+      else process.env.npm_execpath = originalPnpmCli;
+    }
+  });
+
+  test("fixture check-diagnostic injector supports the resolver-normalized pnpm CLI path", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDiagnosticCheckStage(fixture, "boundary-bearer-credential-nonzero");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, npm_execpath: "/tmp/pnpm.cjs" } },
+      );
+      assert(result.code !== 0, "normalized pnpm CLI fixture verification unexpectedly passed");
+      const diagnosticsDir = join(fixture.stateRoot, "tasks", ".diagnostics");
+      const name = readdirSync(diagnosticsDir).find((entry) => entry.endsWith(".json"));
+      const tail = readJson(join(diagnosticsDir, name)).child?.stdout_tail;
+      assert(tail?.value.includes("[redacted-auth-continuation]"), JSON.stringify(tail));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr codex-workspace diagnostics suppress an arbitrarily long PEM continuation row", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -23656,6 +23691,10 @@ function installFixtureVerificationCommand(fixture, mode, options = {}) {
   return installFixtureVerificationProfileCommand(fixture, "codex-workspace", mode, options);
 }
 
+function fixtureCheckDiagnosticInvocationExpression() {
+  return '(resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic" || resolved.command === process.execPath && resolved.args?.[0] === process.env.npm_execpath && /(?:^|[\\\\/])pnpm(?:[-.]cli)?\\.[cm]?js$/i.test(resolved.args?.[0] || "") && resolved.args?.[1] === "run" && resolved.args?.[2] === "check:diagnostic")';
+}
+
 function installFixtureIncompleteProcessTableSeam(fixture) {
   const source = readFileSync(fixture.script, "utf8");
   const procEnumeration = 'const processIds = readdirSync("/proc").filter((name) => /^\\d+$/.test(name));';
@@ -23709,6 +23748,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
   assert(fixtureSource.includes(original), `fixture did not contain the ${profile} verification command`);
   const fixtureScript = profile === "dashboard" ? "./scripts/dashboard-delivery.mjs" : "./scripts/test-codex-workspace.mjs";
   let patchedSource = fixtureSource.replace(original, `${JSON.stringify(profile)}: ["fixture-verification", ${JSON.stringify(fixtureScript)}],`);
+  const checkDiagnosticInvocation = fixtureCheckDiagnosticInvocationExpression();
   const boundaryHeader = {
     "boundary-bearer-credential-nonzero": { label: "Authorization: Bearer ", tokenCharacter: "B", suffix: "" },
     "boundary-basic-credential-nonzero": { label: "Authorization: Basic ", tokenCharacter: "Q", suffix: "" },
@@ -23726,7 +23766,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "authorization-boundary" && (resolved.command === "fixture-verification" || (resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic"))) {',
+        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "authorization-boundary" && (resolved.command === "fixture-verification" || ${checkDiagnosticInvocation})) {`,
         `    const label = ${JSON.stringify(boundaryHeader.label)};`,
         `    const headerValue = ${JSON.stringify(boundaryHeader.tokenCharacter)}.repeat(8 * 1024 - ${Buffer.byteLength(boundaryHeader.suffix)}) + ${JSON.stringify(boundaryHeader.suffix)};`,
         '    const stdout = "x".repeat(8 * 1024 - Buffer.byteLength(label)) + label + headerValue;',
@@ -23743,7 +23783,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "capture-lost-pem-four-rows" && (resolved.command === "fixture-verification" || (resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic") || (resolved.command === process.execPath && /(?:^|[\\\\/])pnpm(?:[-.]cli)?\\.[cm]?js$/i.test(resolved.args?.[0] || "") && resolved.args?.[1] === "run" && resolved.args?.[2] === "check:diagnostic"))) {',
+        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "capture-lost-pem-four-rows" && (resolved.command === "fixture-verification" || ${checkDiagnosticInvocation})) {`,
         '    const stdout = ("0".repeat(64) + "\\n").repeat(4);',
         '    return { code: 23, status: 23, signal: null, errorCode: null, errorMessage: "", stdout, stderr: "", stdoutBytes: 4 * 1024 * 1024 + Buffer.byteLength(stdout), stderrBytes: 0 };',
         "  }",
@@ -23758,7 +23798,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "benign-checksums" && resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic") {',
+        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "benign-checksums" && ${checkDiagnosticInvocation}) {`,
         '    const stdout = ["0".repeat(64), "1".repeat(64), "2".repeat(64), "3".repeat(64)].join("\\n") + "\\n";',
         '    return { code: 23, status: 23, signal: null, errorCode: null, errorMessage: "", stdout, stderr: "", stdoutBytes: Buffer.byteLength(stdout), stderrBytes: 0 };',
         "  }",
@@ -23773,7 +23813,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        '  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "benign-multiline" && resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic") {',
+        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === "benign-multiline" && ${checkDiagnosticInvocation}) {`,
         '    const stdout = "build\\ntests\\npassed\\n";',
         '    return { code: 23, status: 23, signal: null, errorCode: null, errorMessage: "", stdout, stderr: "", stdoutBytes: Buffer.byteLength(stdout), stderrBytes: 0 };',
         "  }",
@@ -23806,7 +23846,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === ${JSON.stringify(syntheticCheckDiagnostic.result)} && (resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic" || resolved.command === process.execPath && resolved.args?.[0] === process.env.npm_execpath && /(?:^|[\\\\/])pnpm(?:[-.]cli)?\\.[cm]?js$/i.test(resolved.args?.[0] || "") && resolved.args?.[1] === "run" && resolved.args?.[2] === "check:diagnostic")) {`,
+        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === ${JSON.stringify(syntheticCheckDiagnostic.result)} && ${checkDiagnosticInvocation}) {`,
         `    const stderr = ${JSON.stringify(syntheticCheckDiagnostic.stderr)};`,
         '    return { code: 23, status: 23, signal: null, errorCode: null, errorMessage: "", stdout: "", stderr, stdoutBytes: 0, stderrBytes: Buffer.byteLength(stderr) };',
         "  }",
