@@ -10111,6 +10111,313 @@ try {
     }
   });
 
+  test("finish-pr successor takeover discards only a released prior-owner stale partial packet and restarts at preflight", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["preflight", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const completedAt = new Date(Date.now() - 500).toISOString();
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        head: "f".repeat(40),
+        stages: [{ stage: "preflight", completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }],
+        next_stage: "check:packet-two",
+        updated_at: completedAt,
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        owner: "runner-a",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const result = runFixtureScript(
+        fixture,
+        [
+          "finish-pr", "resumed-task", "--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane",
+          "--stage-all", "--verify", "check", "--owner", "runner-b", "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "successor verification reused an old check stage instead of restarting at preflight");
+      const updated = readJson(manifestPath);
+      assert(updated.owner === "runner-b", JSON.stringify(updated));
+      assert(updated.check_verification_packet?.owner === "runner-b", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.stages?.map((entry) => entry.stage).join(",") === stages.join(","), JSON.stringify(updated.check_verification_packet));
+      assert(updated.ownership_takeovers?.some((entry) => entry.previous_owner === "runner-a" && entry.new_owner === "runner-b"), JSON.stringify(updated.ownership_takeovers));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("successor-takeover")), JSON.stringify(updated.events));
+      assert(!JSON.stringify(updated).includes("fixture-packet-secret"), "successor discard retained raw packet output");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr successor takeover preserves the original predecessor across a rejected retry generation", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["preflight", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const completedAt = new Date(Date.now() - 500).toISOString();
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        stages: [{ stage: "preflight", completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }],
+        next_stage: "check:packet-two",
+        updated_at: completedAt,
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prior = writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        owner: "runner-a",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      const tokenDigest = createHash("sha256").update(prior.token).digest("hex");
+      const intentDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-intents");
+      const intentPath = join(intentDirectory, "55555555-5555-4555-8555-555555555555.json");
+      mkdirSync(intentDirectory, { recursive: true });
+      writeFileSync(intentPath, `${JSON.stringify({
+        schema_version: 1, task_id: "resumed-task", generation: prior.generation, token_digest: tokenDigest,
+        intent_id: "55555555-5555-4555-8555-555555555555", runner_pid: prior.pid,
+        runner_process_start_identity: prior.process_start_identity, command_digest: "e".repeat(64), started_at: "2026-07-26T00:00:00.000Z",
+      })}\n`);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      const args = [
+        "finish-pr", "resumed-task", "--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane",
+        "--stage-all", "--verify", "check", "--owner", "runner-b", "--state-root", fixture.stateRoot,
+      ];
+
+      const rejected = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(rejected.code !== 0, "unresolved predecessor intent unexpectedly admitted successor takeover");
+      assert(rejected.stderr.includes("unresolved external intent"), rejected.stderr || rejected.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "rejected successor takeover launched verification");
+      assert(readJson(manifestPath).owner === "runner-a", "rejected successor takeover persisted a partial ownership claim");
+
+      rmSync(intentPath, { force: true });
+      const retried = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(retried.code === 0, retried.stderr || retried.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "retry reused predecessor stage proof instead of restarting at preflight");
+      const updated = readJson(manifestPath);
+      assert(updated.owner === "runner-b", JSON.stringify(updated));
+      assert(updated.check_verification_packet?.owner === "runner-b", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.stages?.map((entry) => entry.stage).join(",") === stages.join(","), JSON.stringify(updated.check_verification_packet));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr successor takeover discards an unchanged predecessor packet and starts fresh preflight", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["preflight", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      const completedAt = new Date(Date.now() - 500).toISOString();
+      manifest.check_verification_packet = fixtureResumableCheckPacket(fixture, stages, {
+        stages: [{ stage: "preflight", completed_at: completedAt, status: 0, signal: null, error_code: null, output: "omitted" }],
+        next_stage: "check:packet-two",
+        updated_at: completedAt,
+      });
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", {
+        owner: "runner-a",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const result = runFixtureScript(
+        fixture,
+        [
+          "finish-pr", "resumed-task", "--take-ownership", "--takeover-reason", "released prior owner retained this exact lane",
+          "--stage-all", "--verify", "check", "--owner", "runner-b", "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "unchanged successor takeover reused predecessor proof instead of a fresh preflight");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.owner === "runner-b", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.stages?.map((entry) => entry.stage).join(",") === stages.join(","), JSON.stringify(updated.check_verification_packet));
+      assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("successor-takeover")), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr successor takeover rejects an oversized owner before publishing a lease generation", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      const result = runFixtureScript(
+        fixture,
+        [
+          "finish-pr", "resumed-task", "--take-ownership", "--takeover-reason", "bounded owner lease publication regression fixture",
+          "--stage-all", "--verify", "check", "--owner", "o".repeat(241), "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "oversized owner unexpectedly entered finish-pr");
+      assert(result.stderr.includes("Lane owner must be no longer than 240 characters"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "oversized owner mutated the manifest");
+      assert(!existsSync(join(leaseRoot, "root.json")), "oversized owner published a task-lease root");
+      assert(!existsSync(join(leaseRoot, "generations")), "oversized owner published a task-lease generation");
+      assert(!existsSync(join(leaseRoot, "handoffs")), "oversized owner published a task-lease handoff");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr successor takeover normalizes a whitespace-padded bounded owner before lease publication", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const owner = "o".repeat(240);
+      const paddedOwner = `  ${owner}  `;
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
+      installFixtureResumableCheckPlan(fixture, ["preflight", "check:packet-two"]);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const result = runFixtureScript(
+        fixture,
+        [
+          "finish-pr", "resumed-task", "--take-ownership", "--takeover-reason", "normalize bounded owner before lease publication",
+          "--stage-all", "--verify", "check", "--owner", paddedOwner, "--state-root", fixture.stateRoot,
+        ],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const generations = readdirSync(join(leaseRoot, "generations"))
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => readJson(join(leaseRoot, "generations", name)));
+      assert(generations.length > 0, "bounded padded owner did not publish a lease generation");
+      assert(generations.every((record) => record.owner === owner), JSON.stringify(generations));
+      assert(generations.every((record) => record.owner.length === 240), JSON.stringify(generations));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr successor takeover stale-partial discard refuses every unsafe variant before verification or delivery", () => {
+    const cases = [
+      {
+        name: "missing full-check stage-all",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--verify", "check"],
+        expected: "requires the exact successor",
+        setup: (fixture) => writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" })),
+      },
+      {
+        name: "non-check profile",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "workspace-fast"],
+        expected: "requires the exact successor",
+        setup: (fixture) => writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" })),
+      },
+      {
+        name: "valued takeover",
+        args: ["--take-ownership=true", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "requires the exact successor",
+        setup: (fixture) => writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" })),
+      },
+      {
+        name: "missing released predecessor",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "requires an exact released predecessor lease",
+        setup: () => {},
+      },
+      {
+        name: "active predecessor lease",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "Task lease cannot be handed off",
+        setup: (fixture) => writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a" })),
+      },
+      {
+        name: "unresolved predecessor intent",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "unresolved external intent",
+        setup: (fixture) => {
+          const prior = writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" }));
+          const tokenDigest = createHash("sha256").update(prior.token).digest("hex");
+          const intentDirectory = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "external-intents");
+          mkdirSync(intentDirectory, { recursive: true });
+          writeFileSync(join(intentDirectory, "55555555-5555-4555-8555-555555555555.json"), `${JSON.stringify({
+            schema_version: 1, task_id: "resumed-task", generation: prior.generation, token_digest: tokenDigest,
+            intent_id: "55555555-5555-4555-8555-555555555555", runner_pid: prior.pid,
+            runner_process_start_identity: prior.process_start_identity, command_digest: "e".repeat(64), started_at: "2026-07-26T00:00:00.000Z",
+          })}\n`);
+        },
+      },
+      {
+        name: "retained in-flight marker",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "contains unbounded fields",
+        setup: (fixture, packet) => {
+          packet.in_flight_stage = { stage: "preflight", started_at: packet.created_at, timeout_ms: 1 };
+          writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" }));
+        },
+      },
+      {
+        name: "failed packet",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "binding changed",
+        setup: (fixture, packet) => {
+          packet.status = "failed";
+          packet.stages = [{ stage: "preflight", completed_at: packet.updated_at, status: 1, signal: null, error_code: null, output: "omitted" }];
+          packet.failed_stage = "preflight";
+          packet.next_stage = "preflight";
+          writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" }));
+        },
+      },
+      {
+        name: "malformed packet",
+        args: ["--take-ownership", "--takeover-reason", "released prior owner rebased this exact lane", "--stage-all", "--verify", "check"],
+        expected: "contains unbounded fields",
+        setup: (fixture, packet) => {
+          packet.raw_output = "fixture-packet-secret";
+          writeFixtureReleasedTaskLease(fixture, fixtureTaskLeaseMetadata("resumed-task", { owner: "runner-a", pid: 999_999_999, process_start_identity: "linux-proc-start-ticks:1" }));
+        },
+      },
+    ];
+    for (const scenario of cases) {
+      const fixture = createFinishPrExistingCommitFixture();
+      try {
+        const stages = ["preflight", "check:packet-two"];
+        const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+        const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+        const manifest = readJson(manifestPath);
+        const packet = fixtureResumableCheckPacket(fixture, stages, { head: "f".repeat(40) });
+        scenario.setup(fixture, packet);
+        manifest.check_verification_packet = packet;
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+        const before = readFileSync(manifestPath, "utf8");
+        installFixtureDeliveryProbes(fixture);
+
+        const result = runFixtureScript(
+          fixture,
+          ["finish-pr", "resumed-task", ...scenario.args, "--owner", "runner-b", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.name} successor stale discard unexpectedly continued`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        assert(readFileSync(manifestPath, "utf8") === before, `${scenario.name} mutated the stale packet or manifest`);
+        assert(readFixtureStageLog(stageLog).length === 0, `${scenario.name} launched verification`);
+        assert(!existsSync(join(fixture.root, "git-push-called.txt")), `${scenario.name} reached git push`);
+        assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), `${scenario.name} reached PR creation`);
+        assert(!result.stderr.includes("fixture-packet-secret"), `${scenario.name} leaked packet content`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
   test("finish-pr --stage-all rejects a forged stale partial packet", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -21587,6 +21894,20 @@ function writeFixtureTaskLease(fixture, metadata) {
     heartbeat_at: heartbeatAt,
   })}\n`);
   return metadata;
+}
+
+function writeFixtureReleasedTaskLease(fixture, metadata) {
+  const released = writeFixtureTaskLease(fixture, metadata);
+  const tokenDigest = createHash("sha256").update(released.token).digest("hex");
+  const releasePath = join(fixture.stateRoot, "tasks", ".leases", released.task_id, "releases", `${released.generation}.json`);
+  writeFileSync(releasePath, `${JSON.stringify({
+    schema_version: 1,
+    task_id: released.task_id,
+    generation: released.generation,
+    token_digest: tokenDigest,
+    released_at: "2026-07-26T00:01:00.000Z",
+  })}\n`);
+  return released;
 }
 
 function fixtureLeaseUuid(prefix, index) {
