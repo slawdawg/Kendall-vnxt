@@ -23806,7 +23806,7 @@ function installFixtureVerificationProfileCommand(fixture, profile, mode, option
     patchedSource = patchedSource.replace(
       leaseContextLine,
       [
-        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === ${JSON.stringify(syntheticCheckDiagnostic.result)} && resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic") {`,
+        `  if (process.env.CODEX_WORKSPACE_FIXTURE_RESULT === ${JSON.stringify(syntheticCheckDiagnostic.result)} && (resolved.command === "pnpm" && resolved.args?.[0] === "run" && resolved.args?.[1] === "check:diagnostic" || resolved.command === process.execPath && resolved.args?.[0] === process.env.npm_execpath && /(?:^|[\\\\/])pnpm(?:[-.]cli)?\\.[cm]?js$/i.test(resolved.args?.[0] || "") && resolved.args?.[1] === "run" && resolved.args?.[2] === "check:diagnostic")) {`,
         `    const stderr = ${JSON.stringify(syntheticCheckDiagnostic.stderr)};`,
         '    return { code: 23, status: 23, signal: null, errorCode: null, errorMessage: "", stdout: "", stderr, stdoutBytes: 0, stderrBytes: Buffer.byteLength(stderr) };',
         "  }",
