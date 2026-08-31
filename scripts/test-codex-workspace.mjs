@@ -14252,7 +14252,7 @@ try {
       const baseHeadSha = runGit(accepted.root, ["rev-parse", "HEAD"]).stdout;
       runGit(accepted.worktree, ["reset", "--hard", "main"]);
       runGit(accepted.worktree, ["cherry-pick", priorHeadSha]);
-      runGit(accepted.worktree, ["push", "-q", "--force", "origin", accepted.branch]);
+      runGit(accepted.worktree, ["push", "-q", "--force", accepted.remoteRoot, accepted.branch]);
       const liveHeadSha = runGit(accepted.worktree, ["rev-parse", "HEAD"]).stdout;
 
       const manifest = readJson(manifestPath);
@@ -14290,7 +14290,7 @@ try {
       const priorHeadSha = runGit(overLimit.root, ["rev-parse", "HEAD"]).stdout;
       runGit(overLimit.worktree, ["reset", "--hard", "main"]);
       commitFile(overLimit.worktree, "unrelated-live.txt", "unrelated\n", "unrelated live work");
-      runGit(overLimit.worktree, ["push", "-q", "--force", "origin", overLimit.branch]);
+      runGit(overLimit.worktree, ["push", "-q", "--force", overLimit.remoteRoot, overLimit.branch]);
       const liveHeadSha = runGit(overLimit.worktree, ["rev-parse", "HEAD"]).stdout;
 
       const manifest = readJson(manifestPath);
@@ -14534,7 +14534,7 @@ try {
       writeFileSync(join(blobDrift.worktree, "shared.txt"), `${baseLines.replace("line-0", "advanced-base-only-line").replace("line-14", "recorded-target")}\n`);
       runGit(blobDrift.worktree, ["add", "shared.txt"]);
       runGit(blobDrift.worktree, ["commit", "-q", "-m", "replay target hunk onto advanced base"]);
-      runGit(blobDrift.worktree, ["push", "-q", "--force", "origin", blobDrift.branch]);
+      runGit(blobDrift.worktree, ["push", "-q", "--force", blobDrift.remoteRoot, blobDrift.branch]);
       const liveHeadSha = runGit(blobDrift.worktree, ["rev-parse", "HEAD"]).stdout;
       const manifest = readJson(manifestPath);
       manifest.pr_delivery_head_sha = priorHeadSha;
@@ -14567,7 +14567,7 @@ try {
       runGit(gitlink.worktree, ["config", "diff.ignoreSubmodules", "all"]);
       runGit(gitlink.worktree, ["update-index", "--add", "--cacheinfo", `160000,${"b".repeat(40)},dependency`]);
       runGit(gitlink.worktree, ["commit", "-q", "-m", "replay different gitlink target"]);
-      runGit(gitlink.worktree, ["push", "-q", "--force", "origin", gitlink.branch]);
+      runGit(gitlink.worktree, ["push", "-q", "--force", gitlink.remoteRoot, gitlink.branch]);
       const liveHeadSha = runGit(gitlink.worktree, ["rev-parse", "HEAD"]).stdout;
       const manifest = readJson(manifestPath);
       manifest.pr_delivery_head_sha = priorHeadSha;
