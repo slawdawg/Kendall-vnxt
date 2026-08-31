@@ -3279,7 +3279,10 @@ function finishPr(argv) {
       if (preCommitHead.code !== 0 || !preCommitHead.stdout.trim()) {
         throw new Error(preCommitHead.stderr || "Could not prove the pre-commit HEAD.");
       }
-      const intendedStagedInputDigest = stagedInputDigestForWorktree(manifest.worktree_path);
+      // A verified lane must keep using the snapshot that was actually
+      // verified. Recomputing here could bless an index change that raced the
+      // final verification assertion.
+      const intendedStagedInputDigest = verifiedStagedInputDigest || stagedInputDigestForWorktree(manifest.worktree_path);
       manifest.commit_snapshot_proof_pending = {
         schemaVersion: 1,
         createdAt: new Date().toISOString(),
@@ -3384,6 +3387,7 @@ function finishPr(argv) {
     }
     const pushArgs = ["push", boundPushRemote, `${deliveryHead}:refs/heads/${manifest.branch}`];
     runChecked("git", pushArgs, { cwd: manifest.worktree_path, externalExecution: true });
+    synchronizePushedOriginTrackingRef(manifest.worktree_path, manifest.branch, deliveryHead);
     appendTaskEvent(manifest, "pushed", manifest.branch);
     manifest.pr_delivery_head_sha = deliveryHead;
     manifest.pr_delivery_branch = manifest.branch;
@@ -9313,8 +9317,11 @@ function antiChurnCleanupStatus(manifest) {
 }
 
 function statusPaths(worktreeStatus) {
-  return (worktreeStatus?.lines || [])
-    .map((line) => line.slice(3).trim())
+  const paths = Array.isArray(worktreeStatus?.paths)
+    ? worktreeStatus.paths
+    : (worktreeStatus?.lines || []).map((line) => line.slice(3));
+  return paths
+    .map((path) => path.trim())
     .filter(Boolean);
 }
 
@@ -17089,21 +17096,26 @@ function assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, 
     const authority = takeover?.authority_decision;
     const takeoverLeaseEvidence = takeover?.dirty_in_lane_evidence?.lock_evidence;
     const takeoverRecoveryEvidence = takeover?.dirty_in_lane_evidence?.interrupted_takeover_recovery;
+    const cleanTakeoverReleasedLease = takeover?.dirty_in_lane_evidence?.mode === "not_requested" &&
+      takeoverLeaseEvidence?.protocol === "versioned_lease" &&
+      takeoverLeaseEvidence?.status === "released" &&
+      takeoverLeaseEvidence?.owner === from.owner &&
+      takeoverLeaseEvidence?.generation === from.generation;
     if (
       !takeover || !validTakeoverReason(takeover.reason) || !validTakeoverReason(takeover.approval_evidence) ||
       !isCanonicalIsoTimestamp(takeover.applied_at) || !authority || authority.operation !== "takeover" ||
       authority.decision !== "applied" || authority.allowed !== true || authority.metadataOnly !== true ||
       authority.rawPayloadRetained !== false || takeoverLeaseEvidence.protocol !== "versioned_lease" ||
       takeoverLeaseEvidence.status !== "released" || takeoverLeaseEvidence.owner !== from.owner ||
-      takeoverRecoveryEvidence?.status !== "eligible" || takeoverRecoveryEvidence?.generation !== from.generation
+      (!cleanTakeoverReleasedLease && (takeoverRecoveryEvidence?.status !== "eligible" || takeoverRecoveryEvidence?.generation !== from.generation))
     ) {
       throw new Error("terminal check packet predecessor chain lacks an approved versioned owner takeover; refusing to discard.");
     }
     const takeoverAt = Date.parse(takeover.applied_at);
-    if (!(Date.parse(from.acquired_at) <= takeoverAt && takeoverAt <= Date.parse(to.acquired_at))) {
+    if (!(Date.parse(from.acquired_at) <= Date.parse(to.acquired_at) && Date.parse(to.acquired_at) <= takeoverAt)) {
       throw new Error("terminal check packet takeover evidence ordering is invalid; refusing to discard.");
     }
-    if (!firstTakeover) firstTakeover = takeover;
+    if (!firstTakeover) firstTakeover = { decision: takeover, successor: to };
   }
   if (leaseGenerationFence(state, expected.taskId, currentRecord, taskLeaseTokenDigest(currentRecord.token))) {
     throw new Error("terminal check packet successor lease has an unresolved intent; refusing to discard.");
@@ -17112,11 +17124,11 @@ function assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, 
     throw new Error("terminal check packet successor has unresolved in-flight recovery state; refusing to discard.");
   }
   const packetUpdatedAt = Date.parse(packet.updated_at);
-  const takeoverAt = firstTakeover ? Date.parse(firstTakeover.applied_at) : NaN;
+  const takeoverAt = firstTakeover ? Date.parse(firstTakeover.decision.applied_at) : NaN;
+  const takeoverSuccessorAcquiredAt = firstTakeover ? Date.parse(firstTakeover.successor.acquired_at) : NaN;
   const predecessorAcquiredAt = Date.parse(chainRecords[packetOwnerIndex].acquired_at);
-  const successorAcquiredAt = Date.parse(currentRecord.acquired_at);
-  if (!(predecessorAcquiredAt <= packetUpdatedAt && packetUpdatedAt <= takeoverAt && takeoverAt <= successorAcquiredAt)) {
-    throw new Error("terminal check packet evidence ordering is not predecessor-before-takeover-before-successor; refusing to discard.");
+  if (!(predecessorAcquiredAt <= packetUpdatedAt && packetUpdatedAt <= takeoverSuccessorAcquiredAt && takeoverSuccessorAcquiredAt <= takeoverAt)) {
+    throw new Error("terminal check packet evidence ordering is not predecessor-before-successor-acquisition-before-takeover; refusing to discard.");
   }
 }
 
@@ -20992,6 +21004,7 @@ function parseFinishPrStatus(cwd) {
 function parsePorcelainV1ZStatus(stdout) {
   const records = String(stdout || "").split("\0").filter(Boolean);
   const lines = [];
+  const paths = [];
   let staged = false;
   let unstaged = false;
   for (let index = 0; index < records.length; index += 1) {
@@ -21002,16 +21015,18 @@ function parsePorcelainV1ZStatus(stdout) {
     const indexStatus = line[0];
     const worktreeStatus = line[1];
     lines.push(line);
+    paths.push(line.slice(3));
     if (indexStatus !== " " && indexStatus !== "?") staged = true;
     if (worktreeStatus !== " " || line.startsWith("??")) unstaged = true;
     if (indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C") {
       if (index + 1 >= records.length) {
         throw new Error("Could not parse rename/copy porcelain-v1 status for finish-pr.");
       }
+      paths.push(records[index + 1]);
       index += 1;
     }
   }
-  return { any: lines.length > 0, staged, unstaged, lines };
+  return { any: lines.length > 0, staged, unstaged, lines, paths };
 }
 
 function stageFinishPrWorktree(worktreePath, worktreeStatus, options) {
@@ -21057,6 +21072,18 @@ function settlePendingCommitSnapshotProof(manifest, manifestPath) {
     throw new Error("finish-pr is blocked by an invalid pre-commit snapshot proof intent.");
   }
   const committedHead = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
+  if (committedHead.code === 0 && committedHead.stdout.trim() === pending.preCommitHead) {
+    const currentStagedInputDigest = stagedInputDigestForWorktree(manifest.worktree_path);
+    if (currentStagedInputDigest === pending.intendedStagedInputDigest) {
+      // A hook/signing failure can leave the durable pre-commit intent behind
+      // without creating a new commit. The still-exact staged input makes
+      // this a retryable no-commit result, never evidence of a bad commit.
+      delete manifest.commit_snapshot_proof_pending;
+      appendTaskEvent(manifest, "commit_snapshot_proof_reopened", "pre-commit intent found no new HEAD and the exact staged snapshot remains available for retry");
+      writeManifest(manifestPath, manifest);
+      return null;
+    }
+  }
   const committedParent = git(["rev-parse", "HEAD^"], { cwd: manifest.worktree_path });
   const committedTree = git(["rev-parse", "HEAD^{tree}"], { cwd: manifest.worktree_path });
   const actualCommittedInputDigest = committedTree.code === 0 && committedTree.stdout.trim()
@@ -21136,6 +21163,33 @@ function canonicalOriginPushEndpoint(cwd) {
   return parsed.protocol === "https:"
     ? "https://github.com/slawdawg/Kendall-vnxt.git"
     : "ssh://git@github.com/slawdawg/Kendall-vnxt.git";
+}
+
+function synchronizePushedOriginTrackingRef(cwd, branch, deliveryHead) {
+  const trackingRef = `refs/remotes/origin/${branch}`;
+  const symbolic = git(["symbolic-ref", "-q", trackingRef], { cwd });
+  if (symbolic.code === 0 && symbolic.stdout.trim()) {
+    throw new Error("finish-pr origin tracking ref must not be symbolic; PR delivery is withheld.");
+  }
+  if (symbolic.code !== 0 && symbolic.code !== 1) {
+    throw new Error("finish-pr could not inspect its origin tracking ref; PR delivery is withheld.");
+  }
+  const observed = git(["rev-parse", "--verify", "--quiet", trackingRef], { cwd });
+  if (observed.code !== 0 && observed.code !== 1) {
+    throw new Error("finish-pr could not read its origin tracking ref before update; PR delivery is withheld.");
+  }
+  const expectedOld = observed.code === 0 ? exactGitObjectIdOrNull(observed.stdout.trim()) : deliveryHead.replace(/./g, "0");
+  if (!expectedOld) {
+    throw new Error("finish-pr origin tracking ref is not an exact Git object id; PR delivery is withheld.");
+  }
+  const update = git(["update-ref", "--no-deref", trackingRef, deliveryHead, expectedOld], { cwd });
+  if (update.code !== 0) {
+    throw new Error("finish-pr origin tracking ref changed before its exact update; PR delivery is withheld.");
+  }
+  const trackingHead = git(["rev-parse", `origin/${branch}`], { cwd });
+  if (trackingHead.code !== 0 || trackingHead.stdout.trim() !== deliveryHead) {
+    throw new Error("finish-pr origin tracking ref did not match the pushed exact commit; PR delivery is withheld.");
+  }
 }
 
 function reconcileExistingTaskCommit(manifest, worktreeStatus) {

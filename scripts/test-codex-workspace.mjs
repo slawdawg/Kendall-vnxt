@@ -8662,6 +8662,16 @@ try {
     }
   });
 
+  test("finish-pr retains both porcelain-z rename paths for scoped verification", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const parser = source.match(/function parsePorcelainV1ZStatus[\s\S]*?\n}\n\nfunction stageFinishPrWorktree/);
+    assert(parser, "porcelain-z parser was not found");
+    assert(parser[0].includes("paths.push(line.slice(3));"), "porcelain-z parser did not retain the destination path");
+    assert(parser[0].includes("paths.push(records[index + 1]);"), "porcelain-z parser did not retain the source path");
+    const paths = source.match(/function statusPaths[\s\S]*?\n}\n\nfunction shapeAntiChurnManifestRecord/);
+    assert(paths?.[0].includes("worktreeStatus.paths"), "scoped verification did not consume parsed rename source paths");
+  });
+
   test("finish-pr rejects skip-worktree entries before verification or delivery", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -8875,6 +8885,41 @@ try {
     }
   });
 
+  test("finish-pr reopens an exact pending pre-commit snapshot when the prior commit created no HEAD", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      const hooksPath = runGit(fixture.worktree, ["rev-parse", "--git-path", "hooks"]).stdout;
+      mkdirSync(hooksPath, { recursive: true });
+      const hookPath = join(hooksPath, "pre-commit");
+      writeFileSync(hookPath, "#!/bin/sh\nexit 1\n");
+      chmodSync(hookPath, 0o755);
+      writeFileSync(join(fixture.worktree, "base.txt"), "retryable hook rejection\n");
+      const first = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(first.code !== 0, "rejecting hook unexpectedly delivered");
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      assert(readJson(manifestPath).commit_snapshot_proof_pending, "failed no-commit attempt did not retain its bounded intent");
+      unlinkSync(hookPath);
+      const resumed = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      const manifest = readJson(manifestPath);
+      assert(!manifest.commit_snapshot_proof_pending, "retryable no-commit intent was not settled by the successful retry");
+      assert(!manifest.commit_snapshot_mismatch, "retryable no-commit outcome was incorrectly recorded as a mismatch");
+      assert(manifest.events?.some((event) => event.type === "commit_snapshot_proof_reopened"), JSON.stringify(manifest.events));
+      assert(existsSync(join(fixture.root, "git-push-called.txt")), "successful retry did not reach the pinned push");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr withholds a clean existing no-verify commit when HEAD drifts before push", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -8913,6 +8958,27 @@ try {
       assert(manifest.commit_snapshot_mismatch?.commit === runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout, JSON.stringify(manifest.commit_snapshot_mismatch));
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "no-verify hook-mutated commit reached push");
       assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "no-verify hook-mutated commit reached PR delivery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr withholds a verified commit when the index changes after its verified snapshot", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureResumableCheckPlan(fixture, ["check:verified-commit-boundary"]);
+      installFixturePostVerifiedSnapshotIndexMutationSeam(fixture);
+      installFixtureDeliveryProbes(fixture);
+      writeFileSync(join(fixture.worktree, "base.txt"), "verified user edit\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "post-verification index mutation unexpectedly reached delivery");
+      assert(result.stderr.includes("committed snapshot differs from the intended staged snapshot"), result.stderr || result.stdout);
+      assert(readJson(join(fixture.stateRoot, "tasks", "resumed-task.json")).commit_snapshot_mismatch, "verified boundary mismatch was not retained");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "post-verification index mutation reached push");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -8972,6 +9038,107 @@ try {
       assert(result.code !== 0, "origin push-target drift unexpectedly reached delivery");
       assert(result.stderr.includes("origin push target changed during delivery"), result.stderr || result.stdout);
       assert(!existsSync(join(fixture.root, "git-push-called.txt")), "origin push-target drift reached push");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr establishes a validated origin tracking ref after its pinned push", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      runGit(fixture.worktree, ["branch", "--unset-upstream"]);
+      runGit(fixture.worktree, ["update-ref", "-d", `refs/remotes/origin/${fixture.branch}`]);
+      writeFileSync(join(fixture.worktree, "base.txt"), "tracking ref delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["rev-parse", `origin/${fixture.branch}`]).stdout === runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout, "pinned push did not establish the exact origin tracking ref");
+      assert(readFileSync(join(fixture.root, "git-push-args.txt"), "utf8").includes(fixture.pushRemoteUrl), "tracking test did not retain the pinned endpoint push");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr compare-and-swaps a stable existing direct origin tracking ref", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      const priorTracking = runGit(fixture.worktree, ["rev-parse", `origin/${fixture.branch}`]).stdout;
+      writeFileSync(join(fixture.worktree, "base.txt"), "stable tracking ref delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const deliveryHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      assert(priorTracking !== deliveryHead, "stable direct tracking fixture did not advance its delivery head");
+      assert(runGit(fixture.worktree, ["rev-parse", `origin/${fixture.branch}`]).stdout === deliveryHead, "stable direct tracking ref was not compare-and-swapped to the delivered head");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr creates a SHA-256 origin tracking ref with an exact absent-ref compare-and-swap", () => {
+    const fixture = createFinishPrExistingCommitFixture({ objectFormat: "sha256" });
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      runGit(fixture.worktree, ["update-ref", "-d", `refs/remotes/origin/${fixture.branch}`]);
+      writeFileSync(join(fixture.worktree, "base.txt"), "sha256 tracking ref delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const deliveryHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      assert(deliveryHead.length === 64, `SHA-256 fixture did not produce a 64-hex head: ${deliveryHead}`);
+      assert(runGit(fixture.worktree, ["rev-parse", `origin/${fixture.branch}`]).stdout === deliveryHead, "SHA-256 absent tracking ref was not created at the delivered head");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rejects a symbolic origin tracking ref after its pinned push", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      const protectedHead = runGit(fixture.worktree, ["rev-parse", "main"]).stdout;
+      runGit(fixture.worktree, ["symbolic-ref", `refs/remotes/origin/${fixture.branch}`, "refs/heads/main"]);
+      writeFileSync(join(fixture.worktree, "base.txt"), "symbolic tracking ref delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "symbolic origin tracking ref unexpectedly completed PR delivery");
+      assert(result.stderr.includes("origin tracking ref must not be symbolic"), result.stderr || result.stdout);
+      assert(runGit(fixture.worktree, ["rev-parse", "main"]).stdout === protectedHead, "symbolic tracking ref redirected the update into a local branch");
+      assert(existsSync(join(fixture.root, "git-push-called.txt")), "symbolic tracking-ref test did not reach the pinned push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "symbolic tracking ref reached PR delivery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr withholds PR delivery when its origin tracking ref changes before compare-and-swap", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true, trackingRefRace: true });
+      writeFileSync(join(fixture.worktree, "base.txt"), "tracking ref race delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "concurrent tracking-ref mutation unexpectedly completed PR delivery");
+      assert(result.stderr.includes("origin tracking ref changed before its exact update"), result.stderr || result.stdout);
+      assert(existsSync(join(fixture.root, "git-push-called.txt")), "tracking-ref race test did not reach the pinned push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "tracking-ref race reached PR delivery");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10570,6 +10737,24 @@ try {
       assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
       assert(updated.check_verification_packet?.owner === "runner-b", JSON.stringify(updated.check_verification_packet));
       assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded" && event.message.includes("versioned owner takeover")), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all accepts released-lease evidence for an approved clean successor takeover", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario: "clean" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-b", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_OWNER: "runner-b" } },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "clean successor did not restart the plan from the released-lease evidence");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -22235,7 +22420,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
 
   copyWorkspaceScriptFixture(fixtureRoot);
   mkdirSync(fakeBin, { recursive: true });
-  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, options.objectFormat === "sha256" ? ["init", "--object-format=sha256", "-q"] : ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
   writeFileSync(join(fixtureRoot, ".git", "info", "exclude"), "state/\nbin/\nreview-threads-state.json\nreview-threads-query-count\npr-state.json\n");
@@ -22253,7 +22438,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(fixtureRoot, ["commit", "-q", "-m", "base"]);
   runGit(fixtureRoot, ["branch", "-M", "main"]);
   mkdirSync(remoteRoot, { recursive: true });
-  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(remoteRoot, options.objectFormat === "sha256" ? ["init", "--object-format=sha256", "--bare", "-q"] : ["init", "--bare", "-q"]);
   runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
   runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
   const baseHead = runGit(fixtureRoot, ["rev-parse", "main"]).stdout;
@@ -23017,6 +23202,28 @@ function installFixtureCommitBoundaryIndexMutationSeam(fixture) {
   runGit(fixture.root, ["commit", "-q", "-m", "fixture commit-boundary index mutation seam"]);
 }
 
+function installFixturePostVerifiedSnapshotIndexMutationSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const marker = [
+    "    if (verifiedStagedInputDigest) {",
+    "      worktreeStatus = assertFinishPrVerifiedSnapshot(manifest.worktree_path, verifiedStagedInputDigest);",
+    "    }",
+    "    if (worktreeStatus.any) {",
+  ].join("\n");
+  assert(source.includes(marker), "fixture did not expose the post-verified-snapshot index seam");
+  const replacement = [
+    "    if (verifiedStagedInputDigest) {",
+    "      worktreeStatus = assertFinishPrVerifiedSnapshot(manifest.worktree_path, verifiedStagedInputDigest);",
+    "    }",
+    '    writeFileSync(join(manifest.worktree_path, "AGENTS.md"), "post-verified-snapshot index mutation\\n");',
+    '    runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path, externalExecution: true });',
+    "    if (worktreeStatus.any) {",
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(marker, replacement));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture post-verified snapshot index mutation seam"]);
+}
+
 function installFixtureCommitHookIndexMutation(fixture) {
   const hooksPath = runGit(fixture.worktree, ["rev-parse", "--git-path", "hooks"]).stdout;
   mkdirSync(hooksPath, { recursive: true });
@@ -23380,6 +23587,7 @@ function seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario = "appro
   manifest.check_verification_packet = packet;
   manifest.owner = "runner-b";
   if (scenario !== "forged") {
+    const cleanTakeover = scenario === "clean";
     manifest.takeover_decisions = [{
       schema_version: 1,
       target_kind: "workspace",
@@ -23389,19 +23597,23 @@ function seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario = "appro
       reason: "approved successor takeover for terminal packet reset",
       approval_evidence: "operator approved successor takeover for terminal packet reset",
       decision: "applied",
-      applied_at: new Date(now - 2_000).toISOString(),
+      // The successor lease is acquired before takeover application; a real
+      // owner change happens while that successor lease is live.
+      applied_at: new Date(now - 700).toISOString(),
       dirty_in_lane_evidence: {
-        mode: "requested",
+        mode: cleanTakeover ? "not_requested" : "requested",
         lock_evidence: {
           status: "released",
           protocol: "versioned_lease",
           owner: "runner-a",
           generation: "88888888-8888-4888-8888-888888888888",
         },
-        interrupted_takeover_recovery: {
-          status: "eligible",
-          generation: "88888888-8888-4888-8888-888888888888",
-        },
+        ...(cleanTakeover ? {} : {
+          interrupted_takeover_recovery: {
+            status: "eligible",
+            generation: "88888888-8888-4888-8888-888888888888",
+          },
+        }),
       },
       authority_decision: {
         operation: "takeover",
@@ -23519,7 +23731,7 @@ function setFixtureOriginPushUrls(fixture, urls) {
   }
 }
 
-function installFixtureDeliveryProbes(fixture, { allowDelivery = false } = {}) {
+function installFixtureDeliveryProbes(fixture, { allowDelivery = false, trackingRefRace = false } = {}) {
   const pushProbe = join(fixture.root, "git-push-called.txt");
   const pushArgs = join(fixture.root, "git-push-args.txt");
   const prProbe = join(fixture.root, "gh-pr-create-called.txt");
@@ -23534,6 +23746,7 @@ function installFixtureDeliveryProbes(fixture, { allowDelivery = false } = {}) {
       `const expected = ${JSON.stringify(fixture.pushRemoteUrl)};`,
       `const localRemote = ${JSON.stringify(fixture.remoteRoot)};`,
       `if (args[0] === 'push') { if (args.includes('origin')) { console.error('fixture push proxy rejects named origin'); process.exit(1); } const matches = args.filter((arg) => arg === expected); if (matches.length !== 1) { console.error('fixture push proxy rejects unexpected endpoint'); process.exit(1); } writeFileSync(${JSON.stringify(pushProbe)}, 'called\\n'); writeFileSync(${JSON.stringify(pushArgs)}, args.join(' ') + '\\n'); if (!${allowDelivery}) process.exit(1); args[args.indexOf(expected)] = localRemote; }`,
+      `if (args[0] === 'update-ref' && args[1] === '--no-deref' && ${trackingRefRace}) { const main = spawnSync('git', ['rev-parse', 'main'], { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, encoding: 'utf8' }); const mutation = main.status === 0 ? spawnSync('git', ['update-ref', args[2], String(main.stdout || '').trim()], { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' }) : main; if (mutation.status !== 0) process.exit(mutation.status ?? 1); }`,
       `const result = spawnSync('git', args, { cwd: process.cwd(), env: { ...process.env, PATH: ${JSON.stringify(realPath)} }, stdio: 'inherit' });`,
       "process.exit(result.status ?? 1);",
       "",
