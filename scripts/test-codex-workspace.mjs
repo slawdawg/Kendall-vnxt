@@ -9083,6 +9083,47 @@ try {
     }
   });
 
+  test("finish-pr verifies the full origin tracking ref when a same-name tag exists", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      runGit(fixture.worktree, ["tag", `origin/${fixture.branch}`, "main"]);
+      writeFileSync(join(fixture.worktree, "base.txt"), "unambiguous tracking ref delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const deliveryHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      assert(runGit(fixture.worktree, ["rev-parse", "--verify", `refs/remotes/origin/${fixture.branch}`]).stdout === deliveryHead, "full tracking ref did not match the delivered head");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rejects a canonical push endpoint that another Git URL rewrite rule would rewrite", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      runGit(fixture.worktree, ["config", "url.https://github.com/.insteadOf", "fixture-alias://"]);
+      runGit(fixture.worktree, ["config", "url.file:///untrusted/.pushinsteadof", fixture.pushRemoteUrl]);
+      runGit(fixture.worktree, ["remote", "set-url", "--push", "origin", "fixture-alias://slawdawg/Kendall-vnxt.git"]);
+      writeFileSync(join(fixture.worktree, "base.txt"), "rewrite-resistant push delivery\n");
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--stage-all", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "rewriteable canonical endpoint unexpectedly completed PR delivery");
+      assert(result.stderr.includes("origin push endpoint has an applicable Git URL rewrite"), result.stderr || result.stdout);
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "rewriteable endpoint reached the push proxy");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "rewriteable endpoint reached PR delivery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr creates a SHA-256 origin tracking ref with an exact absent-ref compare-and-swap", () => {
     const fixture = createFinishPrExistingCommitFixture({ objectFormat: "sha256" });
     try {
@@ -10755,6 +10796,24 @@ try {
       );
       assert(result.code === 0, result.stderr || result.stdout);
       assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "clean successor did not restart the plan from the released-lease evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all accepts eligible stale-owner takeover evidence for a terminal packet reset", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario: "stale" });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-b", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_OWNER: "runner-b" } },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "stale successor did not restart the plan from exact interrupted-takeover evidence");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -23533,13 +23592,15 @@ function seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario = "appro
   writeFixtureTaskLease(fixture, predecessor);
   if (scenario !== "active") {
     const tokenDigest = createHash("sha256").update(predecessor.token).digest("hex");
-    writeFileSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "releases", `${predecessor.generation}.json`), `${JSON.stringify({
-      schema_version: 1,
-      task_id: "resumed-task",
-      generation: predecessor.generation,
-      token_digest: tokenDigest,
-      released_at: new Date(now - 5_000).toISOString(),
-    })}\n`);
+    if (scenario !== "stale") {
+      writeFileSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "releases", `${predecessor.generation}.json`), `${JSON.stringify({
+        schema_version: 1,
+        task_id: "resumed-task",
+        generation: predecessor.generation,
+        token_digest: tokenDigest,
+        released_at: new Date(now - 5_000).toISOString(),
+      })}\n`);
+    }
     const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task");
     const bridge = fixtureTaskLeaseMetadata("resumed-task", {
       generation: bridgeGeneration,
@@ -23574,7 +23635,7 @@ function seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario = "appro
       from_generation: predecessor.generation,
       to_generation: scenario === "gap" ? "cccccccc-cccc-4ccc-8ccc-cccccccccccc" : bridge.generation,
       from_token_digest: tokenDigest,
-      reason: "released",
+      reason: scenario === "stale" ? "stale_owner_process_absent" : "released",
       handed_off_at: new Date(now - 2_000).toISOString(),
     })}\n`);
   }
@@ -23588,6 +23649,7 @@ function seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario = "appro
   manifest.owner = "runner-b";
   if (scenario !== "forged") {
     const cleanTakeover = scenario === "clean";
+    const staleTakeover = scenario === "stale";
     manifest.takeover_decisions = [{
       schema_version: 1,
       target_kind: "workspace",
@@ -23603,7 +23665,7 @@ function seedFixtureTerminalPacketSuccessor(fixture, stages, { scenario = "appro
       dirty_in_lane_evidence: {
         mode: cleanTakeover ? "not_requested" : "requested",
         lock_evidence: {
-          status: "released",
+          status: staleTakeover ? "stale" : "released",
           protocol: "versioned_lease",
           owner: "runner-a",
           generation: "88888888-8888-4888-8888-888888888888",

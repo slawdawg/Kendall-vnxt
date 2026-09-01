@@ -3168,6 +3168,7 @@ function finishPr(argv) {
     assertCurrentBranch(manifest);
     committedSnapshotBinding = settlePendingCommitSnapshotProof(manifest, manifestPath) || committedSnapshotBinding;
     const boundPushRemote = canonicalOriginPushEndpoint(manifest.worktree_path);
+    assertNoGitUrlRewriteForPushEndpoint(manifest.worktree_path, boundPushRemote);
     if (lock.recovery?.classification === "same_owner_stale_child_pid_reuse") {
       appendTaskEvent(manifest, "task_lock_recovered", "same-owner stale child lock with a proven replaced PID identity archived before delivery recovery");
     }
@@ -3350,6 +3351,7 @@ function finishPr(argv) {
     if (canonicalOriginPushEndpoint(manifest.worktree_path) !== boundPushRemote) {
       throw new Error("finish-pr origin push target changed during delivery; push and PR delivery are withheld.");
     }
+    assertNoGitUrlRewriteForPushEndpoint(manifest.worktree_path, boundPushRemote);
     const deliverySnapshotBinding = committedSnapshotBinding || verifiedHeadBinding;
     if (deliverySnapshotBinding) {
       const currentHead = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
@@ -3936,6 +3938,35 @@ function assertInFlightCheckRecoveryReleasedLeaseEvidence(state, taskId, owner, 
   const unresolved = unresolvedTaskLeaseExternalIntent(state, taskId, prior, tokenDigest);
   if (unresolved) {
     throw new Error("in-flight check recovery released lease has an unresolved external intent; refusing to mutate.");
+  }
+}
+
+function assertInFlightCheckRecoveryStaleLeaseEvidence(state, taskId, owner, priorLease) {
+  if (!priorLease?.generation || !Number.isInteger(priorLease.pid) || !priorLease.processStartIdentity) {
+    throw new Error("in-flight check recovery prior stale lease evidence is incomplete; refusing to invalidate.");
+  }
+  const prior = leaseRecord(state, taskId, priorLease.generation);
+  if (
+    !validTaskLeaseRecord(prior, taskId) || prior.owner !== owner || prior.pid !== priorLease.pid ||
+    prior.process_start_identity !== priorLease.processStartIdentity
+  ) {
+    throw new Error("in-flight check recovery prior stale lease evidence changed before invalidation; refusing to mutate.");
+  }
+  if (processStartIdentity(prior.pid) !== null) {
+    throw new Error("in-flight check recovery stale owner PID/start identity is still observable or reused; refusing to mutate.");
+  }
+  try {
+    process.kill(prior.pid, 0);
+    throw new Error("in-flight check recovery stale owner PID is still live or not probeable as absent; refusing to mutate.");
+  } catch (error) {
+    if (error?.message?.includes("stale owner PID is still live")) throw error;
+    if (error?.code !== "ESRCH") {
+      throw new Error("in-flight check recovery stale owner PID absence could not be proven; refusing to mutate.");
+    }
+  }
+  const unresolved = unresolvedTaskLeaseExternalIntent(state, taskId, prior, taskLeaseTokenDigest(prior.token));
+  if (unresolved) {
+    throw new Error("in-flight check recovery stale lease has an unresolved external intent; refusing to mutate.");
   }
 }
 
@@ -17079,14 +17110,21 @@ function assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, 
     const from = chainRecords[index];
     const to = chainRecords[index + 1];
     const link = chainLinks[index];
-    if (!link || link.record.generation !== from.generation || link.handoff.to_generation !== to.generation || link.handoff.reason !== "released" || !link.release) {
+    const releasedHandoff = link?.handoff?.reason === "released" && Boolean(link.release);
+    const staleOwnerHandoff = link?.handoff?.reason === "stale_owner_process_absent" && !link.release;
+    if (!link || link.record.generation !== from.generation || link.handoff.to_generation !== to.generation || (!releasedHandoff && !staleOwnerHandoff)) {
       throw new Error("terminal check packet predecessor chain contains a non-released or incomplete lease; refusing to discard.");
     }
-    assertInFlightCheckRecoveryReleasedLeaseEvidence(state, expected.taskId, from.owner, {
+    const priorLease = {
       generation: from.generation,
       pid: from.pid,
       processStartIdentity: from.process_start_identity,
-    });
+    };
+    if (staleOwnerHandoff) {
+      assertInFlightCheckRecoveryStaleLeaseEvidence(state, expected.taskId, from.owner, priorLease);
+    } else {
+      assertInFlightCheckRecoveryReleasedLeaseEvidence(state, expected.taskId, from.owner, priorLease);
+    }
     if (from.owner === to.owner) continue;
     const takeover = [...(Array.isArray(manifest.takeover_decisions) ? manifest.takeover_decisions : [])]
       .reverse()
@@ -17101,13 +17139,22 @@ function assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, 
       takeoverLeaseEvidence?.status === "released" &&
       takeoverLeaseEvidence?.owner === from.owner &&
       takeoverLeaseEvidence?.generation === from.generation;
+    const staleTakeoverRecoveredLease = staleOwnerHandoff &&
+      takeoverLeaseEvidence?.protocol === "versioned_lease" &&
+      takeoverLeaseEvidence?.status === "stale" &&
+      takeoverLeaseEvidence?.owner === from.owner &&
+      takeoverLeaseEvidence?.generation === from.generation &&
+      takeoverRecoveryEvidence?.status === "eligible" &&
+      takeoverRecoveryEvidence?.generation === from.generation;
     if (
       !takeover || !validTakeoverReason(takeover.reason) || !validTakeoverReason(takeover.approval_evidence) ||
       !isCanonicalIsoTimestamp(takeover.applied_at) || !authority || authority.operation !== "takeover" ||
       authority.decision !== "applied" || authority.allowed !== true || authority.metadataOnly !== true ||
-      authority.rawPayloadRetained !== false || takeoverLeaseEvidence.protocol !== "versioned_lease" ||
-      takeoverLeaseEvidence.status !== "released" || takeoverLeaseEvidence.owner !== from.owner ||
-      (!cleanTakeoverReleasedLease && (takeoverRecoveryEvidence?.status !== "eligible" || takeoverRecoveryEvidence?.generation !== from.generation))
+      authority.rawPayloadRetained !== false || (!cleanTakeoverReleasedLease && !staleTakeoverRecoveredLease && (
+        takeoverLeaseEvidence?.protocol !== "versioned_lease" || takeoverLeaseEvidence?.status !== "released" ||
+        takeoverLeaseEvidence?.owner !== from.owner || takeoverRecoveryEvidence?.status !== "eligible" ||
+        takeoverRecoveryEvidence?.generation !== from.generation
+      ))
     ) {
       throw new Error("terminal check packet predecessor chain lacks an approved versioned owner takeover; refusing to discard.");
     }
@@ -21165,6 +21212,24 @@ function canonicalOriginPushEndpoint(cwd) {
     : "ssh://git@github.com/slawdawg/Kendall-vnxt.git";
 }
 
+function assertNoGitUrlRewriteForPushEndpoint(cwd, endpoint) {
+  const configured = git(["config", "--null", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"], { cwd, preserveStdout: true });
+  if (configured.code === 1) return;
+  if (configured.code !== 0) {
+    throw new Error("finish-pr could not inspect Git URL rewrite rules; PR delivery is withheld.");
+  }
+  for (const record of String(configured.stdout || "").split("\0").filter(Boolean)) {
+    const separator = record.indexOf("\n");
+    if (separator <= 0 || separator === record.length - 1) {
+      throw new Error("finish-pr Git URL rewrite rule is malformed; PR delivery is withheld.");
+    }
+    const prefix = record.slice(separator + 1);
+    if (endpoint.startsWith(prefix)) {
+      throw new Error("finish-pr origin push endpoint has an applicable Git URL rewrite; PR delivery is withheld.");
+    }
+  }
+}
+
 function synchronizePushedOriginTrackingRef(cwd, branch, deliveryHead) {
   const trackingRef = `refs/remotes/origin/${branch}`;
   const symbolic = git(["symbolic-ref", "-q", trackingRef], { cwd });
@@ -21186,7 +21251,7 @@ function synchronizePushedOriginTrackingRef(cwd, branch, deliveryHead) {
   if (update.code !== 0) {
     throw new Error("finish-pr origin tracking ref changed before its exact update; PR delivery is withheld.");
   }
-  const trackingHead = git(["rev-parse", `origin/${branch}`], { cwd });
+  const trackingHead = git(["rev-parse", "--verify", "--quiet", trackingRef], { cwd });
   if (trackingHead.code !== 0 || trackingHead.stdout.trim() !== deliveryHead) {
     throw new Error("finish-pr origin tracking ref did not match the pushed exact commit; PR delivery is withheld.");
   }
