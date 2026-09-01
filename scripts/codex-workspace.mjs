@@ -3456,6 +3456,7 @@ function finishPr(argv) {
     const pushArgs = ["push", boundPushRemote, `${deliveryHead}:refs/heads/${manifest.branch}`];
     runChecked("git", pushArgs, { cwd: manifest.worktree_path, externalExecution: true });
     synchronizePushedOriginTrackingRef(manifest.worktree_path, manifest.branch, deliveryHead);
+    synchronizePushedBranchUpstream(manifest.worktree_path, manifest.branch, deliveryHead, boundPushRemote);
     appendTaskEvent(manifest, "pushed", manifest.branch);
     manifest.pr_delivery_head_sha = deliveryHead;
     manifest.pr_delivery_branch = manifest.branch;
@@ -21331,6 +21332,28 @@ function synchronizePushedOriginTrackingRef(cwd, branch, deliveryHead) {
   const trackingHead = git(["rev-parse", "--verify", "--quiet", trackingRef], { cwd });
   if (trackingHead.code !== 0 || trackingHead.stdout.trim() !== deliveryHead) {
     throw new Error("finish-pr origin tracking ref did not match the pushed exact commit; PR delivery is withheld.");
+  }
+}
+
+function synchronizePushedBranchUpstream(cwd, branch, deliveryHead, boundPushRemote) {
+  if (canonicalOriginPushEndpoint(cwd) !== boundPushRemote) {
+    throw new Error("finish-pr origin push target changed after pinned push; PR delivery is withheld.");
+  }
+  assertNoGitUrlRewriteForPushEndpoint(cwd, boundPushRemote);
+  const remote = git(["config", "--local", `branch.${branch}.remote`, "origin"], { cwd });
+  const merge = git(["config", "--local", `branch.${branch}.merge`, `refs/heads/${branch}`], { cwd });
+  if (remote.code !== 0 || merge.code !== 0) {
+    throw new Error("finish-pr could not configure the pushed branch upstream; PR delivery is withheld.");
+  }
+  const configuredRemote = git(["config", "--get", `branch.${branch}.remote`], { cwd });
+  const configuredMerge = git(["config", "--get", `branch.${branch}.merge`], { cwd });
+  const upstreamHead = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], { cwd });
+  if (
+    configuredRemote.code !== 0 || configuredRemote.stdout.trim() !== "origin" ||
+    configuredMerge.code !== 0 || configuredMerge.stdout.trim() !== `refs/heads/${branch}` ||
+    upstreamHead.code !== 0 || upstreamHead.stdout.trim() !== deliveryHead
+  ) {
+    throw new Error("finish-pr pushed branch upstream did not match the delivered exact commit; PR delivery is withheld.");
   }
 }
 

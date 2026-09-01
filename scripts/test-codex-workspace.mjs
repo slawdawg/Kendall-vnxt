@@ -9357,7 +9357,29 @@ try {
       );
       assert(result.code === 0, result.stderr || result.stdout);
       assert(runGit(fixture.worktree, ["rev-parse", `origin/${fixture.branch}`]).stdout === runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout, "pinned push did not establish the exact origin tracking ref");
+      assert(runGit(fixture.worktree, ["config", "--get", `branch.${fixture.branch}.remote`]).stdout === "origin", "pinned push did not configure the branch remote upstream");
+      assert(runGit(fixture.worktree, ["config", "--get", `branch.${fixture.branch}.merge`]).stdout === `refs/heads/${fixture.branch}`, "pinned push did not configure the branch merge upstream");
+      assert(runGit(fixture.worktree, ["rev-parse", "--verify", "@{upstream}"]).stdout === runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout, "pinned push upstream did not resolve to the delivered head");
       assert(readFileSync(join(fixture.root, "git-push-args.txt"), "utf8").includes(fixture.pushRemoteUrl), "tracking test did not retain the pinned endpoint push");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr withholds PR delivery when origin's push target drifts after its pinned push", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixturePostPushOriginDriftSeam(fixture);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "post-push origin drift unexpectedly created a PR");
+      assert(result.stderr.includes("origin push target changed after pinned push"), result.stderr || result.stdout);
+      assert(existsSync(join(fixture.root, "git-push-called.txt")), "post-push origin drift did not reach the pinned push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "post-push origin drift reached PR delivery");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -23798,6 +23820,18 @@ function installFixtureOriginPushDriftSeam(fixture) {
   );
   runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
   runGit(fixture.root, ["commit", "-q", "-m", "fixture origin push-target drift seam"]);
+}
+
+function installFixturePostPushOriginDriftSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const marker = "    synchronizePushedBranchUpstream(manifest.worktree_path, manifest.branch, deliveryHead, boundPushRemote);";
+  assert(source.includes(marker), "fixture did not expose the post-push origin target seam");
+  writeFileSync(
+    fixture.script,
+    source.replace(marker, '    runChecked("git", ["remote", "set-url", "--push", "origin", "ssh://git@github.com/slawdawg/Kendall-vnxt.git"], { cwd: manifest.worktree_path, externalExecution: true });\n' + marker),
+  );
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture post-push origin target drift seam"]);
 }
 
 function installFixturePostCommitHeadDriftSeam(fixture) {
