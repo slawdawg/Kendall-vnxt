@@ -3114,14 +3114,17 @@ function finishPr(argv) {
   let verifiedStagedInputDigest = null;
   let verifiedHeadBinding = null;
   let committedSnapshotBinding = null;
+  let reopenedPendingSnapshotProof = null;
+  let reopenedNoVerifySnapshotDigest = null;
+  let reopenedNoVerifySnapshotProof = null;
   const preflightReconciledCommit = reconcileExistingTaskCommit(manifest, worktreeStatus);
-  const verificationPlan = options.noVerify
+  let verificationPlan = options.noVerify
     ? { profile: "", resolvedProfile: "", command: [], changedFiles: [], reason: "explicit-no-verify" }
     : resolveVerificationPlan(String(options.verify || ""), manifest, worktreeStatus);
-  const verifyCommand = verificationPlan.command;
-  const commitMessage = String(options.message || manifest.title || manifest.description);
-  const prTitle = String(options.title || manifest.title || manifest.description);
-  const prBody = String(
+  let verifyCommand = verificationPlan.command;
+  let commitMessage = String(options.message || manifest.title || manifest.description);
+  let prTitle = String(options.title || manifest.title || manifest.description);
+  let prBody = String(
     options.body ||
       [
         "Created by Codex Workspace Protocol.",
@@ -3164,9 +3167,31 @@ function finishPr(argv) {
     assertNoCommitSnapshotMismatch(lockedManifest);
     assertLaneOwner(lockedManifest, options);
     claimLaneOwner(lockedManifest, options);
+    for (const key of Object.keys(manifest)) delete manifest[key];
     Object.assign(manifest, lockedManifest);
+    commitMessage = String(options.message || manifest.title || manifest.description);
+    prTitle = String(options.title || manifest.title || manifest.description);
+    prBody = String(
+      options.body ||
+        [
+          "Created by Codex Workspace Protocol.",
+          "",
+          `Task: ${manifest.task_id}`,
+          `Worktree: ${manifest.worktree_path}`,
+        ].join("\n"),
+    );
     assertCurrentBranch(manifest);
-    committedSnapshotBinding = settlePendingCommitSnapshotProof(manifest, manifestPath) || committedSnapshotBinding;
+    const pendingSnapshotSettlement = settlePendingCommitSnapshotProof(manifest, manifestPath);
+    const settledPendingSnapshotProof = pendingSnapshotSettlement.binding;
+    reopenedPendingSnapshotProof = pendingSnapshotSettlement.reopenedPending;
+    const reopenedPendingSnapshotChanged = reopenedPendingSnapshotProof &&
+      stagedInputDigestForWorktree(manifest.worktree_path) !== reopenedPendingSnapshotProof.intendedStagedInputDigest;
+    if (
+      reopenedPendingSnapshotChanged && (options.noVerify || !verifyCommand.length)
+    ) {
+      throw new Error("finish-pr reopened pre-commit input differs from the intended snapshot; --no-verify cannot deliver it. Rerun ordinary verification first.");
+    }
+    committedSnapshotBinding = settledPendingSnapshotProof || committedSnapshotBinding;
     const boundPushRemote = canonicalOriginPushEndpoint(manifest.worktree_path);
     assertNoGitUrlRewriteForPushEndpoint(manifest.worktree_path, boundPushRemote);
     if (lock.recovery?.classification === "same_owner_stale_child_pid_reuse") {
@@ -3175,6 +3200,27 @@ function finishPr(argv) {
 
     worktreeStatus = parseFinishPrStatus(manifest.worktree_path);
     worktreeStatus = stageFinishPrWorktree(manifest.worktree_path, worktreeStatus, options);
+    const lockedReconciledCommit = reconcileExistingTaskCommit(manifest, worktreeStatus);
+    if (reopenedPendingSnapshotProof && (options.noVerify || !verifyCommand.length)) {
+      if (stagedInputDigestForWorktree(manifest.worktree_path) !== reopenedPendingSnapshotProof.intendedStagedInputDigest) {
+        manifest.commit_snapshot_proof_pending = reopenedPendingSnapshotProof;
+        appendTaskEvent(manifest, "commit_snapshot_proof_reverification_required", "post-staging input differs from the reopened pre-commit snapshot; ordinary verification is required before retry");
+        writeManifest(manifestPath, manifest);
+        throw new Error("finish-pr reopened pre-commit input differs from the intended snapshot after staging; --no-verify cannot deliver it. Rerun ordinary verification first.");
+      }
+      delete manifest.commit_snapshot_proof_pending;
+      appendTaskEvent(manifest, "commit_snapshot_proof_reopened", "pre-commit intent found no new HEAD and the exact staged snapshot remains available for retry");
+      writeManifest(manifestPath, manifest);
+      reopenedNoVerifySnapshotDigest = reopenedPendingSnapshotProof.intendedStagedInputDigest;
+      reopenedNoVerifySnapshotProof = reopenedPendingSnapshotProof;
+      reopenedPendingSnapshotProof = null;
+    }
+    // The lock can have delayed staging while another actor changed the worktree.
+    // Rebuild any scoped selection from the exact post-lock staged status.
+    if (!options.noVerify) {
+      verificationPlan = resolveVerificationPlan(String(options.verify || ""), manifest, worktreeStatus);
+      verifyCommand = verificationPlan.command;
+    }
     if (!worktreeStatus.any) {
       const cleanHead = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
       const cleanTree = git(["rev-parse", "HEAD^{tree}"], { cwd: manifest.worktree_path });
@@ -3230,6 +3276,19 @@ function finishPr(argv) {
         throw new Error("finish-pr HEAD or tree changed during verification; rerun check before commit delivery.");
       }
       lock.heartbeat();
+      if (reopenedPendingSnapshotProof) {
+        delete manifest.commit_snapshot_proof_pending;
+        appendTaskEvent(
+          manifest,
+          verificationStagedInputDigest === reopenedPendingSnapshotProof.intendedStagedInputDigest
+            ? "commit_snapshot_proof_reopened"
+            : "commit_snapshot_proof_reverified",
+          verificationStagedInputDigest === reopenedPendingSnapshotProof.intendedStagedInputDigest
+            ? "pre-commit intent found no new HEAD and the exact staged snapshot passed ordinary verification"
+            : "reopened pre-commit input differs from its original snapshot and passed ordinary verification",
+        );
+        writeManifest(manifestPath, manifest);
+      }
       manifest.last_verified_at = new Date().toISOString();
       manifest.last_verification_command = verifyCommand.join(" ");
       manifest.last_verification_result = {
@@ -3250,6 +3309,7 @@ function finishPr(argv) {
     }
     const reconciledCommit =
       reconcileExistingTaskCommit(manifest, worktreeStatus) ||
+      lockedReconciledCommit ||
       (preflightReconciledCommit && manifest.last_commit === preflightReconciledCommit.short
         ? preflightReconciledCommit
         : null);
@@ -3275,6 +3335,12 @@ function finishPr(argv) {
     if (verifiedStagedInputDigest) {
       worktreeStatus = assertFinishPrVerifiedSnapshot(manifest.worktree_path, verifiedStagedInputDigest);
     }
+    if (reopenedNoVerifySnapshotDigest && stagedInputDigestForWorktree(manifest.worktree_path) !== reopenedNoVerifySnapshotDigest) {
+      manifest.commit_snapshot_proof_pending = reopenedNoVerifySnapshotProof;
+      appendTaskEvent(manifest, "commit_snapshot_proof_reverification_required", "reopened pre-commit snapshot changed before commit; ordinary verification is required before retry");
+      writeManifest(manifestPath, manifest);
+      throw new Error("finish-pr reopened pre-commit snapshot changed before commit; ordinary verification is required before delivery.");
+    }
     if (worktreeStatus.any) {
       const preCommitHead = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
       if (preCommitHead.code !== 0 || !preCommitHead.stdout.trim()) {
@@ -3283,7 +3349,7 @@ function finishPr(argv) {
       // A verified lane must keep using the snapshot that was actually
       // verified. Recomputing here could bless an index change that raced the
       // final verification assertion.
-      const intendedStagedInputDigest = verifiedStagedInputDigest || stagedInputDigestForWorktree(manifest.worktree_path);
+      const intendedStagedInputDigest = verifiedStagedInputDigest || reopenedNoVerifySnapshotDigest || stagedInputDigestForWorktree(manifest.worktree_path);
       manifest.commit_snapshot_proof_pending = {
         schemaVersion: 1,
         createdAt: new Date().toISOString(),
@@ -17100,7 +17166,13 @@ function assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, 
   }
   const chainRecords = [...(predecessor.chainRecords || []), currentRecord];
   const chainLinks = predecessor.chainLinks || [];
-  const packetOwnerIndex = chainRecords.findLastIndex((record) => record.owner === packet.owner);
+  const packetUpdatedAt = Date.parse(packet.updated_at);
+  const packetOwnerIndex = chainRecords.findLastIndex((record, index) => {
+    const next = chainRecords[index + 1];
+    return record.owner === packet.owner &&
+      Date.parse(record.acquired_at) <= packetUpdatedAt &&
+      (!next || packetUpdatedAt < Date.parse(next.acquired_at));
+  });
   if (packetOwnerIndex < 0 || packetOwnerIndex >= chainRecords.length - 1 || chainLinks.length !== chainRecords.length - 1) {
     throw new Error("terminal check packet owner has no continuous released predecessor chain; refusing to discard.");
   }
@@ -17167,14 +17239,16 @@ function assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, 
   if (leaseGenerationFence(state, expected.taskId, currentRecord, taskLeaseTokenDigest(currentRecord.token))) {
     throw new Error("terminal check packet successor lease has an unresolved intent; refusing to discard.");
   }
-  if (inFlightCheckRecoveryRecords(state, expected.taskId).length > 0 || Object.hasOwn(packet, "in_flight_stage")) {
+  // Recovery records are durable historical evidence. Only an unresolved
+  // in-flight marker on this packet can block successor discard.
+  if (Object.hasOwn(packet, "in_flight_stage")) {
     throw new Error("terminal check packet successor has unresolved in-flight recovery state; refusing to discard.");
   }
-  const packetUpdatedAt = Date.parse(packet.updated_at);
   const takeoverAt = firstTakeover ? Date.parse(firstTakeover.decision.applied_at) : NaN;
   const takeoverSuccessorAcquiredAt = firstTakeover ? Date.parse(firstTakeover.successor.acquired_at) : NaN;
   const predecessorAcquiredAt = Date.parse(chainRecords[packetOwnerIndex].acquired_at);
-  if (!(predecessorAcquiredAt <= packetUpdatedAt && packetUpdatedAt <= takeoverSuccessorAcquiredAt && takeoverSuccessorAcquiredAt <= takeoverAt)) {
+  const packetCreatedAt = Date.parse(packet.created_at);
+  if (!(predecessorAcquiredAt <= packetCreatedAt && packetCreatedAt <= packetUpdatedAt && packetUpdatedAt <= takeoverSuccessorAcquiredAt && takeoverSuccessorAcquiredAt <= takeoverAt)) {
     throw new Error("terminal check packet evidence ordering is not predecessor-before-successor-acquisition-before-takeover; refusing to discard.");
   }
 }
@@ -17203,12 +17277,14 @@ function discardRecoverableTerminalCheckPacket(manifest, manifestPath, packet, e
 function discardRecoverableStalePartialCheckPacket(manifest, manifestPath, packet, expected, options = {}) {
   if (!options.allowTerminalPacketRecovery) return false;
   if (packet?.status !== "partial") return false;
-  validateStalePartialCheckPacketForDiscard(packet, expected);
-  if (
+  const ownerChanged = packet?.owner !== expected.owner;
+  validateStalePartialCheckPacketForDiscard(packet, expected, { allowOwnerMismatch: ownerChanged });
+  if (ownerChanged) assertTerminalCheckPacketSuccessorTakeover(manifest, packet, expected, options);
+  if (!ownerChanged && (
     packet.head === expected.head
     && packet.plan_digest === expected.plan.digest
     && packet.staged_input_digest === expected.stagedInputDigest
-  ) return false;
+  )) return false;
   appendTaskEvent(
     manifest,
     "check_verification_packet_discarded",
@@ -17219,13 +17295,13 @@ function discardRecoverableStalePartialCheckPacket(manifest, manifestPath, packe
   return true;
 }
 
-function validateStalePartialCheckPacketForDiscard(packet, expected) {
+function validateStalePartialCheckPacketForDiscard(packet, expected, options = {}) {
   const invalid = (reason) => { throw new Error(`check verification packet is invalid: ${reason}.`); };
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) invalid("packet must be an object");
   const allowedPacketKeys = ["schema_version", "task_id", "owner", "head", "plan_digest", "staged_input_digest", "stages", "status", "next_stage", "created_at", "updated_at", "expires_at", "packet_lifetime_ms"];
   if (Object.keys(packet).some((key) => !allowedPacketKeys.includes(key))) invalid("packet contains unbounded fields");
   if (packet.schema_version !== resumableCheckPacketSchemaVersion) invalid("schema version is unsupported");
-  if (packet.task_id !== expected.taskId || packet.owner !== expected.owner) invalid("binding changed");
+  if (packet.task_id !== expected.taskId || (!options.allowOwnerMismatch && packet.owner !== expected.owner)) invalid("binding changed");
   if (
     typeof packet.head !== "string" || !/^[a-f0-9]{40,64}$/i.test(packet.head)
     || typeof packet.plan_digest !== "string" || !/^[a-f0-9]{64}$/i.test(packet.plan_digest)
@@ -21110,7 +21186,7 @@ function assertNoCommitSnapshotMismatch(manifest) {
 
 function settlePendingCommitSnapshotProof(manifest, manifestPath) {
   const pending = manifest.commit_snapshot_proof_pending;
-  if (!pending) return null;
+  if (!pending) return { binding: null, reopenedPending: null };
   if (
     !pending || typeof pending !== "object" || Array.isArray(pending) || pending.schemaVersion !== 1 ||
     !isCanonicalIsoTimestamp(pending.createdAt) || !exactGitObjectIdOrNull(pending.preCommitHead) ||
@@ -21121,15 +21197,16 @@ function settlePendingCommitSnapshotProof(manifest, manifestPath) {
   const committedHead = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
   if (committedHead.code === 0 && committedHead.stdout.trim() === pending.preCommitHead) {
     const currentStagedInputDigest = stagedInputDigestForWorktree(manifest.worktree_path);
-    if (currentStagedInputDigest === pending.intendedStagedInputDigest) {
-      // A hook/signing failure can leave the durable pre-commit intent behind
-      // without creating a new commit. The still-exact staged input makes
-      // this a retryable no-commit result, never evidence of a bad commit.
-      delete manifest.commit_snapshot_proof_pending;
-      appendTaskEvent(manifest, "commit_snapshot_proof_reopened", "pre-commit intent found no new HEAD and the exact staged snapshot remains available for retry");
+    if (currentStagedInputDigest !== pending.intendedStagedInputDigest) {
+      // Retain the proof before returning to the caller: an interruption here
+      // must not convert altered hook input into a later no-verify retry.
+      appendTaskEvent(manifest, "commit_snapshot_proof_reverification_required", "reopened pre-commit input differs from the intended snapshot; ordinary verification is required before retry");
       writeManifest(manifestPath, manifest);
-      return null;
+      return { binding: null, reopenedPending: pending };
     }
+    // Keep the exact no-commit proof until staging completes. Otherwise a
+    // later --stage-all could add unverified input after this reconciliation.
+    return { binding: null, reopenedPending: pending };
   }
   const committedParent = git(["rev-parse", "HEAD^"], { cwd: manifest.worktree_path });
   const committedTree = git(["rev-parse", "HEAD^{tree}"], { cwd: manifest.worktree_path });
@@ -21162,7 +21239,7 @@ function settlePendingCommitSnapshotProof(manifest, manifestPath) {
   delete manifest.commit_snapshot_proof_pending;
   appendTaskEvent(manifest, "commit_snapshot_proof_settled", "pending pre-commit snapshot proof reconciled exactly after interruption");
   writeManifest(manifestPath, manifest);
-  return binding;
+  return { binding, reopenedPending: null };
 }
 
 function canonicalOriginPushEndpoint(cwd) {
