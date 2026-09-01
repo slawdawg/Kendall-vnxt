@@ -9659,6 +9659,128 @@ try {
     }
   });
 
+  test("delivery-readiness returns a task-bound lock-free ready or not-ready result", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const args = ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot];
+      rmSync(join(fixture.worktree, "services", "supervisor", ".venv"), { recursive: true, force: true });
+
+      const notReady = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(notReady.code !== 0, "missing supervisor Python unexpectedly reported ready");
+      assert(notReady.stdout.trim(), notReady.stderr || "missing delivery-readiness JSON result");
+      const notReadyPacket = JSON.parse(notReady.stdout);
+      assert(notReadyPacket.status === "not-ready", JSON.stringify(notReadyPacket));
+      assert(notReadyPacket.task_id === "resumed-task", JSON.stringify(notReadyPacket));
+      assert(notReadyPacket.owner === "runner-a", JSON.stringify(notReadyPacket));
+      assert(notReadyPacket.reason_code === "supervisor_virtualenv_missing", JSON.stringify(notReadyPacket));
+      assert(notReadyPacket.recovery_command === "uv sync --directory services/supervisor", JSON.stringify(notReadyPacket));
+      assert(readFileSync(manifestPath, "utf8") === before, "not-ready inspection mutated the manifest");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task")), "not-ready inspection acquired a task lease");
+
+      const pythonPath = join(fixture.worktree, "services", "supervisor", ".venv", "bin", "python");
+      mkdirSync(dirname(pythonPath), { recursive: true });
+      writeFileSync(pythonPath, "fixture python\n");
+      chmodSync(pythonPath, 0o755);
+      chmodSync(pythonPath, 0o755);
+      const ready = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(ready.code === 0, ready.stderr || ready.stdout);
+      const readyPacket = JSON.parse(ready.stdout);
+      assert(readyPacket.status === "ready", JSON.stringify(readyPacket));
+      assert(readyPacket.recovery_command === null, JSON.stringify(readyPacket));
+      assert(readFileSync(manifestPath, "utf8") === before, "ready inspection mutated the manifest");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task")), "ready inspection acquired a task lease");
+
+      const externalPythonPath = join(fixture.root, "external-python");
+      writeFileSync(externalPythonPath, "fixture external python\n");
+      chmodSync(externalPythonPath, 0o755);
+      rmSync(pythonPath);
+      symlinkSync(externalPythonPath, pythonPath);
+      const symlinkReady = runFixtureScript(fixture, args, { cwd: fixture.worktree, env: fixture.env });
+      assert(symlinkReady.code === 0, symlinkReady.stderr || symlinkReady.stdout);
+      assert(JSON.parse(symlinkReady.stdout).status === "ready", symlinkReady.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "interpreter symlink readiness mutated the manifest");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("delivery-readiness fails closed for unknown, non-owner, missing-worktree, and malformed-prerequisite lanes", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      const cases = [
+        { name: "unknown", args: ["delivery-readiness", "unknown-task", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "exactly equals unknown-task" },
+        { name: "owner mismatch", args: ["delivery-readiness", "resumed-task", "--owner", "runner-b", "--state-root", fixture.stateRoot], expected: "exact manifest owner" },
+        { name: "missing worktree", mutate: (manifest) => ({ ...manifest, worktree_path: join(fixture.root, "missing-worktree") }), args: ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "worktree_unavailable" },
+        { name: "ambiguous existing worktree", mutate: (manifest) => ({ ...manifest, worktree_path: fixture.root }), setup: () => { const path = join(fixture.root, "services", "supervisor", ".venv", "bin", "python"); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "fixture python\n"); chmodSync(path, 0o755); }, args: ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "worktree_identity_unproven" },
+        { name: "unregistered matching worktree", mutate: (manifest) => ({ ...manifest, worktree_path: join(fixture.root, "unregistered-matching-worktree") }), setup: () => { const foreignWorktree = join(fixture.root, "unregistered-matching-worktree"); mkdirSync(foreignWorktree, { recursive: true }); runGit(foreignWorktree, ["init", "-q"]); runGit(foreignWorktree, ["config", "user.email", "fixture@example.test"]); runGit(foreignWorktree, ["config", "user.name", "Fixture"]); writeFileSync(join(foreignWorktree, "README.md"), "fixture\n"); runGit(foreignWorktree, ["add", "README.md"]); runGit(foreignWorktree, ["commit", "-q", "-m", "fixture"]); runGit(foreignWorktree, ["branch", "-M", fixture.branch]); const path = join(foreignWorktree, "services", "supervisor", ".venv", "bin", "python"); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "fixture python\n"); chmodSync(path, 0o755); }, args: ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "worktree_identity_unproven" },
+        { name: "malformed prerequisite", setup: () => { const path = join(fixture.worktree, "services", "supervisor", ".venv", "bin", "python"); mkdirSync(path, { recursive: true }); }, args: ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "supervisor_virtualenv_invalid" },
+        { name: "non-executable prerequisite", setup: () => { const path = join(fixture.worktree, "services", "supervisor", ".venv", "bin", "python"); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "not executable\n"); }, args: ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "supervisor_virtualenv_invalid" },
+        { name: "external virtualenv symlink", setup: () => { const external = join(fixture.root, "external-venv"); const path = join(external, "bin", "python"); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "external python\n"); chmodSync(path, 0o755); symlinkSync(external, join(fixture.worktree, "services", "supervisor", ".venv")); }, args: ["delivery-readiness", "resumed-task", "--summary-json", "--owner", "runner-a", "--state-root", fixture.stateRoot], expected: "supervisor_virtualenv_outside_worktree" },
+      ];
+      for (const scenario of cases) {
+        writeFileSync(manifestPath, before);
+        rmSync(join(fixture.worktree, "services", "supervisor", ".venv"), { recursive: true, force: true });
+        if (scenario.mutate) writeFileSync(manifestPath, `${JSON.stringify(scenario.mutate(readJson(manifestPath)), null, 2)}\n`);
+        scenario.setup?.();
+        const result = runFixtureScript(fixture, scenario.args, { cwd: fixture.worktree, env: fixture.env });
+        assert(result.code !== 0, `${scenario.name} readiness unexpectedly passed`);
+        assert(`${result.stdout}\n${result.stderr}`.includes(scenario.expected), result.stderr || result.stdout);
+        assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task")), `${scenario.name} readiness acquired a task lease`);
+      }
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rejects a missing supervisor environment before packet, lease, or delivery state", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const before = readFileSync(manifestPath, "utf8");
+      installFixtureDeliveryProbes(fixture);
+      rmSync(join(fixture.worktree, "services", "supervisor", ".venv"), { recursive: true, force: true });
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "missing supervisor environment unexpectedly entered finish-pr");
+      assert(result.stderr.includes("delivery readiness is not ready"), result.stderr || result.stdout);
+      assert(result.stderr.includes("uv sync --directory services/supervisor"), result.stderr || result.stdout);
+      assert(readFileSync(manifestPath, "utf8") === before, "unready finish-pr wrote a check packet or task state");
+      assert(!existsSync(join(fixture.stateRoot, "tasks", ".leases", "resumed-task")), "unready finish-pr acquired a task lease");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "unready finish-pr reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "unready finish-pr reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rechecks delivery readiness inside its lock before creating verification state", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      installFixtureDeliveryProbes(fixture);
+      installFixtureDeliveryReadinessPostLockMutationSeam(fixture);
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(result.code !== 0, "post-lock readiness loss unexpectedly entered verification");
+      assert(result.stderr.includes("delivery readiness is not ready"), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.check_verification_packet, "post-lock readiness loss created a verification packet");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "post-lock readiness loss reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "post-lock readiness loss reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr fails closed after interruption immediately following an environment preflight retry marker", () => {
     const fixture = createFinishPrExistingCommitFixture();
     try {
@@ -21737,6 +21859,10 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
   runGit(worktree, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(worktree, ["config", "user.name", "Codex Workspace Test"]);
+  const supervisorPythonPath = join(worktree, "services", "supervisor", ".venv", "bin", "python");
+  mkdirSync(dirname(supervisorPythonPath), { recursive: true });
+  writeFileSync(supervisorPythonPath, "fixture python\n");
+  chmodSync(supervisorPythonPath, 0o755);
   commitFile(worktree, options.featurePath || "feature.txt", options.featureContent || "feature\n", "feature");
   runGit(worktree, ["push", "-q", "-u", "origin", branch]);
   const branchHead = runGit(worktree, ["rev-parse", "HEAD"]).stdout;
@@ -22528,6 +22654,25 @@ function installFixtureEnvironmentPreflightRetryInterruptAfterInFlightWrite(fixt
     assert(runGit(fixture.worktree, ["branch", "--show-current"]).stdout === fixture.branch, "fixture retry crash seam lost the managed worktree branch");
   }
   fixture.env = { ...fixture.env, CODEX_WORKSPACE_FIXTURE_ENVIRONMENT_PREFLIGHT_RETRY_INTERRUPT_AFTER_IN_FLIGHT_WRITE: "1" };
+}
+
+function installFixtureDeliveryReadinessPostLockMutationSeam(fixture) {
+  const source = readFileSync(fixture.script, "utf8");
+  const admission = [
+    "    Object.assign(manifest, lockedManifest);",
+    "    assertFinishPrDeliveryReadiness(manifest, options);",
+    "    assertCurrentBranch(manifest);",
+  ].join("\n");
+  assert(source.includes(admission), "fixture did not contain the locked delivery-readiness admission seam");
+  const mutation = [
+    "    Object.assign(manifest, lockedManifest);",
+    "    rmSync(join(manifest.worktree_path, \"services\", \"supervisor\", \".venv\", \"bin\", \"python\"), { force: true });",
+    "    assertFinishPrDeliveryReadiness(manifest, options);",
+    "    assertCurrentBranch(manifest);",
+  ].join("\n");
+  writeFileSync(fixture.script, source.replace(admission, mutation));
+  runGit(fixture.root, ["add", "scripts/codex-workspace.mjs"]);
+  runGit(fixture.root, ["commit", "-q", "-m", "fixture locked delivery readiness mutation seam"]);
 }
 
 function installFixtureInFlightRecoveryLockedIntentSeam(fixture) {
