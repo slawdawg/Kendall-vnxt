@@ -261,7 +261,25 @@ publisher.
    `finish-pr --verify workspace-fast` profile. It runs that wrapper while
    retaining the normal manifest lock, anti-churn, commit, push, and PR gates;
    it is not `--no-verify`, `codex-workspace`, or `check-fast`.
-7. **Deliver PR.** A delegated delivery worker or subagent commits intended
+7. **Inspect delivery readiness.** Before `finish-pr`, the exact manifest owner
+   runs the lock-free, read-only gate:
+
+   ```bash
+   node ./scripts/codex-workspace.mjs delivery-readiness <task-id> --summary-json
+   ```
+
+   The result is bound to the selected task and owner but writes no manifest,
+   task lease, verification packet, external intent, commit, push, PR, merge,
+   cleanup, or verification state. `status=not-ready` exits nonzero. For the
+   missing supervisor environment it names the existing recovery command:
+   `uv sync --directory services/supervisor`. The gate never runs that command
+   itself and does not install dependencies. After normal setup supplies the
+   environment, start a fresh ordinary governed delivery attempt. If a prior
+   `check` packet already failed only at initial preflight, re-prove its exact
+   task, owner, head, plan, and staged-input binding before considering the one
+   existing `--retry-environment-preflight` path; never substitute external
+   success or retry an opaque failure.
+8. **Deliver PR.** A delegated delivery worker or subagent commits intended
    files, pushes the lane branch, opens or updates the PR, and monitors checks
    and review state. The manager records compact delivery evidence and does not
    execute these lane mutations in its own session.

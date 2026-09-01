@@ -333,6 +333,7 @@ const pr723NonAncestralRefreshException = Object.freeze({
   authorizedAnchorHeadSha: "85a74486f65328f76986834a61859b8f2e191042",
   documentedMergeBaseSha: "b8df8d162195993c7d37f5162b46783a388963d1",
 });
+const deliveryReadinessRecoveryCommand = "uv sync --directory services/supervisor";
 const args = process.argv.slice(2);
 const command = args[0];
 const commandArgs = args.slice(1);
@@ -406,6 +407,9 @@ try {
       break;
     case "finish-pr":
       finishPr(commandArgs);
+      break;
+    case "delivery-readiness":
+      deliveryReadinessCommand(commandArgs);
       break;
     case "record-check-stage-evidence":
       recordCheckStageEvidence(commandArgs);
@@ -515,6 +519,7 @@ Commands:
   dispatch-next             Claim or resume one safe lane and record handoff evidence.
   emergency-stop            Preview, apply, or clear a metadata-only emergency stop checkpoint.
   resume <query>            Print the matching task worktree and branch.
+  delivery-readiness <task-id> Inspect one exact owned lane's local delivery prerequisites without mutation.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
   adopt-legacy-recovery  Preview or apply the one governed v1-to-v2 recovery adoption.
@@ -651,6 +656,12 @@ finish-pr options:
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
+
+delivery-readiness options:
+  <task-id>                 Exact owned managed task id to inspect.
+  --summary-json            Print a bounded task-bound readiness packet.
+  --owner <id>              Require the exact recorded lane owner.
+  --state-root <path>       Override the Codex workspace state root.
 
 record-check-stage-evidence options:
   --external-direct-success Attest that the fixed external direct command succeeded.
@@ -3081,6 +3092,168 @@ function inspectEpicBatchLiveState(manifest) {
   }
 }
 
+function deliveryReadinessCommand(argv) {
+  const { positional, options } = parseOptions(argv);
+  assertDeliveryReadinessOptions(options);
+  if (positional.length !== 1) {
+    throw new Error("delivery-readiness requires exactly one explicit managed task id.");
+  }
+  const taskId = String(positional[0] || "").trim();
+  assertSafeTaskId(taskId);
+  const state = workspaceState(options);
+  const { manifest } = findManifestByExactTaskId(state, taskId);
+  const readiness = deliveryReadinessForManifest(manifest, options);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(readiness, null, 2));
+  } else {
+    printPlan("delivery-readiness", [
+      `task_id=${readiness.task_id}`,
+      `owner=${readiness.owner}`,
+      `status=${readiness.status}`,
+      `reason_code=${readiness.reason_code || "none"}`,
+      `recovery_command=${readiness.recovery_command || "none"}`,
+      "mutation=none; read-only delivery readiness inspection",
+    ]);
+  }
+  if (!readiness.ready) {
+    process.exitCode = 1;
+  }
+}
+
+function assertDeliveryReadinessOptions(options = {}) {
+  const allowed = new Set(["owner", "stateRoot", "summaryJson"]);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) {
+      throw new Error(`delivery-readiness does not accept --${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}.`);
+    }
+  }
+  if (options.summaryJson !== undefined && options.summaryJson !== true) {
+    throw new Error("delivery-readiness --summary-json accepts only a bare flag.");
+  }
+  if (options.owner === true || options.stateRoot === true) {
+    throw new Error("delivery-readiness --owner and --state-root require values.");
+  }
+}
+
+function deliveryReadinessForManifest(manifest, options = {}) {
+  const owner = String(currentLaneOwner(options) || "").trim();
+  if (!String(manifest.owner || "").trim() || manifest.owner !== owner) {
+    throw new Error("delivery-readiness requires the exact manifest owner; complete any governed takeover before inspecting delivery readiness.");
+  }
+  const base = {
+    schema_version: 1,
+    task_id: manifest.task_id,
+    owner,
+    worktree_path: manifest.worktree_path,
+    status: "ready",
+    ready: true,
+    reason_code: null,
+    recovery_command: null,
+    mutation: "none; read-only delivery readiness inspection",
+  };
+  try {
+    if (!existsSync(manifest.worktree_path) || !statSync(manifest.worktree_path).isDirectory()) {
+      return {
+        ...base,
+        status: "not-ready",
+        ready: false,
+        reason_code: "worktree_unavailable",
+      };
+    }
+  } catch {
+    return {
+      ...base,
+      status: "not-ready",
+      ready: false,
+      reason_code: "worktree_unavailable",
+    };
+  }
+  const worktreeRoot = git(["rev-parse", "--show-toplevel"], { cwd: manifest.worktree_path });
+  const worktreeBranch = git(["branch", "--show-current"], { cwd: manifest.worktree_path });
+  const registeredWorktrees = manifest.repo_root && existsSync(manifest.repo_root)
+    ? git(["worktree", "list", "--porcelain"], { cwd: manifest.repo_root })
+    : { code: 1, stdout: "" };
+  try {
+    if (
+      worktreeRoot.code !== 0 ||
+      realpathSync(worktreeRoot.stdout.trim()) !== realpathSync(manifest.worktree_path) ||
+      worktreeBranch.code !== 0 ||
+      worktreeBranch.stdout.trim() !== manifest.branch ||
+      registeredWorktrees.code !== 0 ||
+      !parseWorktreePorcelain(registeredWorktrees.stdout).some((record) =>
+        samePath(record.path, manifest.worktree_path) && record.branch === `refs/heads/${manifest.branch}`,
+      )
+    ) {
+      return {
+        ...base,
+        status: "not-ready",
+        ready: false,
+        reason_code: "worktree_identity_unproven",
+      };
+    }
+  } catch {
+    return {
+      ...base,
+      status: "not-ready",
+      ready: false,
+      reason_code: "worktree_identity_unproven",
+    };
+  }
+  const virtualenvPath = join(manifest.worktree_path, "services", "supervisor", ".venv");
+  const pythonPath = join(virtualenvPath, "bin", "python");
+  if (!existsSync(virtualenvPath) || !existsSync(pythonPath)) {
+    return {
+      ...base,
+      status: "not-ready",
+      ready: false,
+      reason_code: "supervisor_virtualenv_missing",
+      recovery_command: deliveryReadinessRecoveryCommand,
+    };
+  }
+  try {
+    const resolvedWorktreePath = realpathSync(manifest.worktree_path);
+    const resolvedVirtualenvPath = realpathSync(virtualenvPath);
+    const virtualenvRelativePath = relative(resolvedWorktreePath, resolvedVirtualenvPath);
+    if (virtualenvRelativePath === ".." || virtualenvRelativePath.startsWith(`..${sep}`)) {
+      return {
+        ...base,
+        status: "not-ready",
+        ready: false,
+        reason_code: "supervisor_virtualenv_outside_worktree",
+        recovery_command: deliveryReadinessRecoveryCommand,
+      };
+    }
+    const pythonStats = statSync(pythonPath);
+    if (!statSync(virtualenvPath).isDirectory() || !pythonStats.isFile() || (pythonStats.mode & 0o111) === 0) {
+      return {
+        ...base,
+        status: "not-ready",
+        ready: false,
+        reason_code: "supervisor_virtualenv_invalid",
+        recovery_command: deliveryReadinessRecoveryCommand,
+      };
+    }
+  } catch {
+    return {
+      ...base,
+      status: "not-ready",
+      ready: false,
+      reason_code: "supervisor_virtualenv_invalid",
+      recovery_command: deliveryReadinessRecoveryCommand,
+    };
+  }
+  return base;
+}
+
+function assertFinishPrDeliveryReadiness(manifest, options = {}) {
+  const readiness = deliveryReadinessForManifest(manifest, options);
+  if (readiness.ready) return;
+  throw new Error(
+    `delivery readiness is not ready: task_id=${readiness.task_id}; reason_code=${readiness.reason_code}; ` +
+    `recovery_command=${readiness.recovery_command}. No verification packet, external command, commit, push, PR, merge, or cleanup action was started.`,
+  );
+}
+
 function finishPr(argv) {
   const { positional, options } = parseOptions(argv);
   const state = workspaceState(options);
@@ -3096,6 +3269,7 @@ function finishPr(argv) {
   assertSettledExternalIntentDeliveryAdmission(state, manifest, options);
   assertInFlightCheckRecoveryDeliveryAdmission(state, manifest, options);
   assertLaneOwner(manifest, options);
+  assertFinishPrDeliveryReadiness(manifest, options);
   assertBaseCheckoutRecoveryClearForDelivery(state);
   requireGh("finish-pr");
   if (manifest.mode === "experiment") {
@@ -3160,6 +3334,7 @@ function finishPr(argv) {
     assertLaneOwner(lockedManifest, options);
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
+    assertFinishPrDeliveryReadiness(manifest, options);
     assertCurrentBranch(manifest);
     if (lock.recovery?.classification === "same_owner_stale_child_pid_reuse") {
       appendTaskEvent(manifest, "task_lock_recovered", "same-owner stale child lock with a proven replaced PID identity archived before delivery recovery");
