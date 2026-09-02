@@ -97,6 +97,7 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
+    HermesReviewHandoffRequest,
     HermesLaneRunProjectionApiEnvelope,
     HermesOutcomeProjectionApiEnvelope,
     ManagerLaneClarityHandoffApiEnvelope,
@@ -169,7 +170,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, read_hermes_lane_run, read_hermes_outcome
+from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, read_hermes_lane_run, read_hermes_outcome
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -1656,6 +1657,20 @@ async def ingest_hermes_outcome_ledger(
             status_code=409,
             detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
         ) from exc
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post("/hermes-control-plane/review-handoffs", response_model=HermesOutcomeProjectionApiEnvelope)
+async def ingest_hermes_review_handoff_route(
+    payload: HermesReviewHandoffRequest,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist a typed verification/review handoff; this endpoint cannot deliver or execute work."""
+    try:
+        projection = await ingest_hermes_review_handoff(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_handoff_conflict").model_dump()) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
 
 

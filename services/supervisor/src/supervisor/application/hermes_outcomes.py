@@ -111,6 +111,16 @@ async def _latest_evidence(session: AsyncSession, lane: HermesLaneRun | None) ->
     )
 
 
+async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[str], outcome: HermesOutcome, lane: HermesLaneRun) -> None:
+    evidence = (await session.scalars(select(HermesDeliveryEvidence).where(
+        HermesDeliveryEvidence.delivery_evidence_id.in_(evidence_refs),
+        HermesDeliveryEvidence.outcome_id == outcome.outcome_id,
+        HermesDeliveryEvidence.lane_run_id == lane.lane_run_id,
+    ))).all()
+    if len(evidence) != len(set(evidence_refs)):
+        raise ValueError("Review evidence must resolve to the bound outcome and Developer lane.")
+
+
 def _outcome_values(request: HermesLedgerIngestRequest) -> dict[str, object]:
     value = request.outcome
     return {"status": value.status, "result": value.result, "reason_code": value.reasonCode, "evidence_refs_json": value.evidenceRefs, "next_action": value.nextAction, "observed_at": value.observedAt, "current_event_id": request.event.eventId, "updated_at": value.updatedAt}
@@ -248,6 +258,9 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Verification result revision is stale.")
         if outcome.status != "review" or lane.status != "review" or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Verification result is stale for the current review lane.")
+        if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at:
+            raise ValueError("Verification evidence predates the current ledger projection.")
+        await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
         result, status, reason, action = ("rework", "rework", "verification_failed", "Return to the original Developer lane for bounded rework.") if verification.result == "failed" else ("blockedTechnical", "blocked", "verification_inconclusive", "Resolve the bounded verification technical block.")
         if not can_replace_current_result(previous=outcome.result, next_result=result) or not can_replace_current_result(previous=lane.result, next_result=result):
             raise ValueError("Verification result cannot overwrite a terminal ledger transition.")
@@ -272,6 +285,13 @@ async def ingest_hermes_review_handoff(
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
     if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id:
         raise ValueError("Review handoff requires an existing bound outcome and Developer lane.")
+    # A concurrent exact handoff can commit while this request waits for the
+    # projection locks. Recheck under those locks before examining state.
+    prior = await session.scalar(select(HermesReviewDisposition).where(HermesReviewDisposition.idempotency_key == disposition.idempotencyKey))
+    if prior is not None:
+        if prior.review_disposition_id != disposition.reviewDispositionId or prior.request_digest_sha256 != digest:
+            raise ValueError("Review disposition idempotency key conflicts with persisted metadata.")
+        return _projection(outcome, lane, await _latest_evidence(session, lane))
     if outcome.current_event_id != lane.current_event_id:
         raise ValueError("Review handoff lane is no longer current for its outcome.")
     if outcome.status != "review" or lane.status != "review":
@@ -280,11 +300,20 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Unavailable-reviewer exception expired before persistence.")
     if (outcome.revision, lane.revision) != (disposition.expectedOutcomeRevision, disposition.expectedLaneRevision):
         raise ValueError("Review handoff revision is stale.")
+    if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or disposition.observedAt < outcome.observed_at or disposition.observedAt < lane.observed_at:
+        raise ValueError("Review handoff evidence predates the current ledger projection.")
     record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
     if record is not None and record.verification_record_id != verification.verificationRecordId:
         raise ValueError("Verification idempotency key conflicts with persisted metadata.")
     if lane.evidence_fingerprint != verification.sourceFingerprint:
         raise ValueError("Verification source fingerprint is stale for the Developer lane.")
+    await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
+    await _require_bound_evidence(session, evidence_refs=disposition.evidenceRefs, outcome=outcome, lane=lane)
+    result, status = {"approve": ("completed", "completed"), "rework": ("rework", "rework"), "technical_block": ("blockedTechnical", "blocked")}[disposition.disposition]
+    if not can_replace_current_result(previous=outcome.result, next_result=result) or not can_replace_current_result(previous=lane.result, next_result=result):
+        raise ValueError("Review disposition cannot overwrite a terminal ledger transition.")
+    if disposition.disposition == "rework" and lane.rework_budget <= 0:
+        raise ValueError("Review handoff rework budget is exhausted.")
     if record is None:
         record = HermesVerificationRecord(
             verification_record_id=verification.verificationRecordId, outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId,
@@ -295,13 +324,27 @@ async def ingest_hermes_review_handoff(
         session.add(record)
     elif (record.outcome_id, record.lane_run_id, record.result, record.target, record.source_fingerprint, record.developer_identity, record.developer_home, record.developer_workspace, record.evidence_refs_json, record.expected_outcome_revision, record.expected_lane_revision, record.observed_at, record.created_at) != (verification.outcomeId, verification.laneRunId, verification.result, verification.target, verification.sourceFingerprint, verification.developerIdentity, verification.developerHome, verification.developerWorkspace, verification.evidenceRefs, verification.expectedOutcomeRevision, verification.expectedLaneRevision, verification.observedAt, verification.createdAt):
         raise ValueError("Verification record conflicts with immutable metadata.")
-    result, status = {"approve": ("completed", "completed"), "rework": ("rework", "rework"), "technical_block": ("blockedTechnical", "blocked")}[disposition.disposition]
-    if not can_replace_current_result(previous=outcome.result, next_result=result) or not can_replace_current_result(previous=lane.result, next_result=result):
-        raise ValueError("Review disposition cannot overwrite a terminal ledger transition.")
-    await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt})
-    await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt})
+    event_suffix = sha256(disposition.reviewDispositionId.encode("utf-8")).hexdigest()
+    event_id = f"event:review:{event_suffix}"
+    session.add(HermesLedgerEvent(
+        event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id,
+        schema_version="hermes_lifecycle_event.v1", event_name="hermes.review.disposition.recorded",
+        outcome_status=status, lane_status=status, lane_type=lane.lane_type, result=result,
+        reason_code=disposition.reasonCode, evidence_refs_json=disposition.evidenceRefs,
+        next_action=disposition.nextAction, correlation_id=disposition.reviewDispositionId,
+        causation_id=verification.verificationRecordId, observed_at=disposition.observedAt,
+        emitted_at=disposition.createdAt, heartbeat_at=lane.heartbeat_at,
+        stale_deadline_at=lane.stale_deadline_at, timeout_at=lane.timeout_at,
+        retry_budget=lane.retry_budget,
+        rework_budget=lane.rework_budget - (1 if disposition.disposition == "rework" else 0),
+        evidence_fingerprint=lane.evidence_fingerprint, idempotency_key=f"event:review:{sha256(disposition.idempotencyKey.encode('utf-8')).hexdigest()}",
+        request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False,
+    ))
+    await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt, "current_event_id": event_id})
+    await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt, "current_event_id": event_id, "rework_budget": lane.rework_budget - (1 if disposition.disposition == "rework" else 0)})
     session.add(HermesReviewDisposition(
         review_disposition_id=disposition.reviewDispositionId, verification_record_id=verification.verificationRecordId, outcome_id=disposition.outcomeId, developer_lane_run_id=disposition.developerLaneRunId,
+        schema_version=disposition.schemaVersion, expected_outcome_revision=disposition.expectedOutcomeRevision, expected_lane_revision=disposition.expectedLaneRevision,
         disposition=disposition.disposition, reviewer_identity=disposition.reviewerIdentity, reviewer_home=disposition.reviewerHome, reviewer_workspace=disposition.reviewerWorkspace,
         reason_code=disposition.reasonCode, next_action=disposition.nextAction, evidence_refs_json=disposition.evidenceRefs, idempotency_key=disposition.idempotencyKey,
         observed_at=disposition.observedAt, created_at=disposition.createdAt, metadata_only=True, raw_payload_retained=False,

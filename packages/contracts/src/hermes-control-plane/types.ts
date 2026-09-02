@@ -39,7 +39,8 @@ export type HermesLifecycleEventName =
   | "hermes.outcome.created"
   | "hermes.lane.recovered"
   | "hermes.delivery.denied"
-  | "hermes.external-impact.requested";
+  | "hermes.external-impact.requested"
+  | "hermes.review.disposition.recorded";
 
 export interface HermesOutcomeV1 {
   readonly outcomeId: import("./ids").HermesOutcomeId;
@@ -210,6 +211,7 @@ export interface VerificationRecordV1 {
   readonly schemaVersion: typeof HERMES_VERIFICATION_RECORD_SCHEMA_VERSION; readonly result: "passed" | "failed" | "inconclusive"; readonly target: string; readonly sourceFingerprint: string;
   readonly developerIdentity: string; readonly developerHome: string; readonly developerWorkspace: string; readonly evidenceRefs: readonly HermesEvidenceRefId[];
   readonly observedAt: string; readonly idempotencyKey: HermesIdempotencyKey; readonly createdAt: string; readonly metadataOnly: true; readonly rawPayloadRetained: false;
+  readonly expectedOutcomeRevision: number; readonly expectedLaneRevision: number;
 }
 
 export interface ReviewDispositionV1 {
@@ -218,6 +220,12 @@ export interface ReviewDispositionV1 {
   readonly reviewerIdentity: string; readonly reviewerHome: string; readonly reviewerWorkspace: string; readonly reasonCode: string; readonly nextAction: string; readonly evidenceRefs: readonly HermesEvidenceRefId[];
   readonly observedAt: string; readonly idempotencyKey: HermesIdempotencyKey; readonly createdAt: string; readonly metadataOnly: true; readonly rawPayloadRetained: false;
   readonly expectedOutcomeRevision: number; readonly expectedLaneRevision: number;
+}
+
+/** Coupled, metadata-only handoff. Individual records are not sufficient authority. */
+export interface ReviewHandoffV1 {
+  readonly verification: VerificationRecordV1;
+  readonly disposition: ReviewDispositionV1;
 }
 
 export type HermesLifecycleEventEnvelopeV1 = HermesLifecycleEventV1;

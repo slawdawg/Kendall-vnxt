@@ -8014,7 +8014,7 @@ HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION = "review_disposition.v1"
 HERMES_RESULTS = frozenset({"allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"})
 HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "review", "completed", "blocked", "rework"})
 HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
-HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested"})
+HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested", "hermes.review.disposition.recorded"})
 
 
 def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> str:
@@ -8026,6 +8026,7 @@ def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> st
         or PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
         or re.search(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY(?: BLOCK)?)-----", value, re.IGNORECASE)
         or LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
+        or (field_name in {"verificationRecordId", "outcomeId", "laneRunId", "reviewDispositionId", "developerLaneRunId", "idempotencyKey", "exceptionId"} and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}:[A-Za-z0-9._/@-]{1,160}", value))
     ):
         raise ValueError(f"{field_name} must be bounded safe metadata text.")
     return value
@@ -8261,10 +8262,10 @@ class HermesReviewDispositionInputV1(BaseModel):
 
 class HermesReviewerUnavailableExceptionV1(BaseModel):
     """Strict audit requirement; never an approval or authority grant."""
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
     exceptionId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
-    reasonCode: str = Field(max_length=120); riskClass: Literal["technical_block"]; compensatingReviewRef: str = Field(max_length=240)
-    recordedBy: str = Field(max_length=120); recordedAt: datetime; reviewBy: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    reasonCode: str = Field(max_length=120, alias="reason"); riskClass: Literal["technical_block", "medium"] = Field(alias="riskClass"); compensatingReviewRef: str = Field(max_length=240, alias="compensatingReviewRef")
+    recordedBy: str = Field(max_length=120); recordedAt: datetime; reviewBy: datetime = Field(alias="reviewOrExpiryAt"); metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
     @field_validator("exceptionId", "outcomeId", "laneRunId", "reasonCode", "compensatingReviewRef", "recordedBy")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
