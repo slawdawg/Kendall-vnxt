@@ -117,8 +117,8 @@ async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[
         HermesDeliveryEvidence.outcome_id == outcome.outcome_id,
         HermesDeliveryEvidence.lane_run_id == lane.lane_run_id,
     ))).all()
-    if len(evidence) != len(set(evidence_refs)):
-        raise ValueError("Review evidence must resolve to the bound outcome and Developer lane.")
+    if len(evidence) != len(set(evidence_refs)) or any(item.observed_at < max(outcome.updated_at, lane.updated_at) for item in evidence):
+        raise ValueError("Review evidence must resolve to the current bound outcome and Developer lane revision.")
 
 
 def _outcome_values(request: HermesLedgerIngestRequest) -> dict[str, object]:
@@ -167,6 +167,8 @@ async def ingest_hermes_ledger(
     evidence = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.delivery_evidence_id == request.deliveryEvidence.deliveryEvidenceId).with_for_update())
     if (outcome is not None and outcome.status == "review") or (lane is not None and lane.status == "review"):
         raise ValueError("Review lanes may transition only through the independent review handoff boundary.")
+    if "completed" in {request.outcome.status, request.laneRun.status, request.outcome.result, request.laneRun.result, request.event.result}:
+        raise ValueError("Generic ledger ingestion may not complete outcomes or lanes outside the independent review handoff boundary.")
     if evidence is not None and not _same_evidence(evidence, request.deliveryEvidence):
         raise ValueError("Hermes delivery evidence conflicts with persisted metadata.")
     if outcome is not None and (outcome.title != request.outcome.title or outcome.summary != request.outcome.summary or outcome.created_at != request.outcome.createdAt or outcome.idempotency_key != request.outcome.idempotencyKey or request.outcome.observedAt < outcome.observed_at or request.outcome.updatedAt <= outcome.updated_at or not can_replace_current_result(previous=outcome.result, next_result=request.outcome.result)):
@@ -337,7 +339,7 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Verification result revision is stale.")
         if outcome.status != "review" or lane.status != "review" or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Verification result is stale for the current review lane.")
-        if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at:
+        if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at:
             raise ValueError("Verification evidence predates the current ledger projection.")
         await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
         result, status, reason, action = ("rework", "rework", "verification_failed", "Return to the original Developer lane for bounded rework.") if verification.result == "failed" else ("blockedTechnical", "blocked", "verification_inconclusive", "Resolve the bounded verification technical block.")
@@ -384,7 +386,7 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Unavailable-reviewer exception expired before persistence.")
     if (outcome.revision, lane.revision) != (disposition.expectedOutcomeRevision, disposition.expectedLaneRevision):
         raise ValueError("Review handoff revision is stale.")
-    if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or disposition.observedAt < outcome.observed_at or disposition.observedAt < lane.observed_at:
+    if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or disposition.observedAt < outcome.observed_at or disposition.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at or disposition.observedAt < outcome.updated_at or disposition.observedAt < lane.updated_at:
         raise ValueError("Review handoff evidence predates the current ledger projection.")
     record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
     if record is not None and record.verification_record_id != verification.verificationRecordId:

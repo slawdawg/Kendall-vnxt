@@ -8015,6 +8015,7 @@ HERMES_RESULTS = frozenset({"allowed", "deniedPolicy", "deniedExternalImpact", "
 HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "review", "completed", "blocked", "rework"})
 HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
 HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested", "hermes.review.disposition.recorded"})
+HERMES_BOARD_EVENT_NAMES = HERMES_EVENT_NAMES - {"hermes.review.disposition.recorded"}
 
 
 def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> str:
@@ -8026,7 +8027,7 @@ def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> st
         or PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
         or re.search(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY(?: BLOCK)?)-----", value, re.IGNORECASE)
         or LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
-        or (field_name in {"verificationRecordId", "outcomeId", "laneRunId", "reviewDispositionId", "developerLaneRunId", "idempotencyKey", "exceptionId"} and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}:[A-Za-z0-9._/@-]{1,160}", value))
+        or (field_name in {"verificationRecordId", "outcomeId", "laneRunId", "reviewDispositionId", "developerLaneRunId", "idempotencyKey", "exceptionId"} and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}(?:[-_:][A-Za-z0-9._/@-]+)+", value))
     ):
         raise ValueError(f"{field_name} must be bounded safe metadata text.")
     return value
@@ -8192,7 +8193,7 @@ class HermesBoardLifecycleEventInputV1(BaseModel):
 
     @model_validator(mode="after")
     def _valid(self):
-        if self.eventName not in HERMES_EVENT_NAMES or self.result not in HERMES_RESULTS:
+        if self.eventName not in HERMES_BOARD_EVENT_NAMES or self.result not in HERMES_RESULTS:
             raise ValueError("Board lifecycle event has invalid closed state.")
         if not self.observedAt <= self.emittedAt < self.expiresAt:
             raise ValueError("Board lifecycle event has invalid timestamp order.")
@@ -8281,6 +8282,12 @@ class HermesReviewerUnavailableExceptionV1(BaseModel):
     @field_validator("exceptionId", "outcomeId", "laneRunId", "reasonCode", "compensatingReviewRef", "recordedBy")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
+    @field_validator("exceptionId", "outcomeId", "laneRunId")
+    @classmethod
+    def _opaque_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Unavailable-reviewer exception identity must be opaque.")
+        return value
     @field_validator("recordedAt", "reviewBy", mode="before")
     @classmethod
     def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)

@@ -203,6 +203,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     };
     const reviewEvent = { ...event, eventId: "event:review-one", idempotencyKey: "idempotency:review-one", eventName: "hermes.review.disposition.recorded" };
     const verificationEvent = { ...event, eventId: "event:verification-one", idempotencyKey: "idempotency:verification-one", eventName: "hermes.verification.recorded" };
+    const unavailableReviewerException = { exceptionId: "exception:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, reason: "reviewer_unavailable", riskClass: "technical_block", compensatingReviewRef: "evidence:compensating", recordedBy: "coordinator:one", recordedAt: observedAt, reviewOrExpiryAt: later, metadataOnly: true, rawPayloadRetained: false };
     const boardEvent = {
       ...common, schemaVersion: contracts.HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION,
       issuerId: "issuer:one", keyId: "key:one", eventId: "event:board-one", idempotencyKey: "idempotency:board-one",
@@ -223,12 +224,18 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.HERMES_LIFECYCLE_EVENT_NAMES.includes("hermes.verification.recorded"), true);
     assert.equal(contracts.isHermesLifecycleEventV1(verificationEvent), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, exceptionId: "not opaque" } }), false);
+    assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, eventName: "hermes.review.disposition.recorded" }), false);
+    assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, issuerId: "tenant:job:attempt" }), true);
     assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, result: "failed", verificationRecordId: "verification:failed", idempotencyKey: "idempotency:failed" } }), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.HermesLaneRunV1), true);
     assert.equal(Object.isFrozen(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.HermesFollowUpWorkV1), true);
+    assert.deepEqual(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.VerificationRecordV1.slice(-2), ["expectedOutcomeRevision", "expectedLaneRevision"]);
+    assert.deepEqual(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.VerificationRecordV1.slice(-2), ["expected_outcome_revision", "expected_lane_revision"]);
     for (const fieldMetadata of [
       contracts.hermesOutcomeV1Fields,
       contracts.hermesLaneRunV1Fields,

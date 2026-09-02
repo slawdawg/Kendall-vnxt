@@ -223,10 +223,18 @@ export interface ReviewDispositionV1 {
   readonly expectedOutcomeRevision: number; readonly expectedLaneRevision: number;
 }
 
+/** Audit-only exception for a bounded unavailable-reviewer technical block. */
+export interface HermesReviewerUnavailableExceptionV1 {
+  readonly exceptionId: string; readonly outcomeId: import("./ids").HermesOutcomeId; readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly reason: string; readonly riskClass: "technical_block" | "medium"; readonly compensatingReviewRef: string; readonly recordedBy: string;
+  readonly recordedAt: string; readonly reviewOrExpiryAt: string; readonly metadataOnly: true; readonly rawPayloadRetained: false;
+}
+
 /** Metadata-only verification handoff; only passed verification may carry a disposition. */
 export interface ReviewHandoffV1 {
   readonly verification: VerificationRecordV1;
   readonly disposition?: ReviewDispositionV1;
+  readonly unavailableReviewerException?: HermesReviewerUnavailableExceptionV1;
 }
 
 export type HermesLifecycleEventEnvelopeV1 = HermesLifecycleEventV1;

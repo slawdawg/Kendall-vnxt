@@ -35,6 +35,12 @@ const EXTERNALLY_ACCEPTED_LIFECYCLE_EVENT_NAMES = Object.freeze([
   "hermes.external-impact.requested",
   "hermes.review.disposition.recorded",
 ] as const);
+const BOARD_LIFECYCLE_EVENT_NAMES = Object.freeze([
+  "hermes.outcome.created",
+  "hermes.lane.recovered",
+  "hermes.delivery.denied",
+  "hermes.external-impact.requested",
+] as const);
 
 const EVENT_FIELDS = [
   "eventId", "outcomeId", "laneRunId", "schemaVersion", "eventName", "result", "reasonCode", "evidenceRefs", "nextAction",
@@ -77,7 +83,7 @@ export function isHermesBoardLifecycleEventV1(value: unknown): value is HermesBo
       isHermesEventId(value.eventId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) &&
       isHermesCorrelationId(value.correlationId) && isHermesCausationId(value.causationId) &&
       isMetadataOnlyRecord(value, HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION, ["observedAt", "emittedAt", "expiresAt"]) &&
-      isOneOf(value.eventName, EXTERNALLY_ACCEPTED_LIFECYCLE_EVENT_NAMES) && isDecisionFields(value) && value.authoritative === false &&
+      isOneOf(value.eventName, BOARD_LIFECYCLE_EVENT_NAMES) && isDecisionFields(value) && value.authoritative === false &&
       typeof value.signatureB64 === "string" && /^[A-Za-z0-9+/]+={0,2}$/.test(value.signatureB64) && value.signatureB64.length <= 256 &&
       isTimestampOrder(value, ["observedAt", "emittedAt", "expiresAt"]);
   });

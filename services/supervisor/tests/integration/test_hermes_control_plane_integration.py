@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 
@@ -13,10 +14,10 @@ from supervisor.application.hermes_outcomes import (
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest
+from supervisor.api.schemas import HermesBoardLifecycleEventInputV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesReviewDisposition, HermesVerificationRecord
+from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesReviewDisposition, HermesVerificationRecord
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from test_hermes_control_plane import payload
 
@@ -39,6 +40,15 @@ async def test_hermes_ledger_is_idempotent_conflict_fenced_and_metadata_only(tmp
         bypass = copy.deepcopy(payload()); bypass["event"]["eventName"] = "hermes.review.disposition.recorded"; bypass["event"]["eventId"] = "event:review-bypass"; bypass["event"]["idempotencyKey"] = "event:review-bypass"; bypass["event"]["result"] = "completed"; bypass["outcome"]["status"] = "completed"; bypass["outcome"]["result"] = "completed"; bypass["laneRun"]["status"] = "completed"; bypass["laneRun"]["result"] = "completed"  # type: ignore[index]
         with pytest.raises(ValueError, match="independent review handoff"):
             await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(bypass))
+        bypass = copy.deepcopy(payload()); bypass["event"]["eventName"] = "hermes.lane.recovered"; bypass["event"]["eventId"] = "event:completion-bypass"; bypass["event"]["idempotencyKey"] = "event:completion-bypass"; bypass["event"]["result"] = "completed"; bypass["outcome"]["status"] = "completed"; bypass["outcome"]["result"] = "completed"; bypass["laneRun"]["status"] = "completed"; bypass["laneRun"]["result"] = "completed"  # type: ignore[index]
+        with pytest.raises(ValueError, match="independent review handoff"):
+            await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(bypass))
+        initial_completion = payload(); initial_completion["event"]["eventId"] = "event:initial-completion"; initial_completion["event"]["idempotencyKey"] = "event:initial-completion"; initial_completion["event"]["result"] = "completed"; initial_completion["outcome"]["status"] = "completed"; initial_completion["outcome"]["result"] = "completed"; initial_completion["laneRun"]["status"] = "completed"; initial_completion["laneRun"]["result"] = "completed"  # type: ignore[index]
+        with pytest.raises(ValueError, match="independent review handoff"):
+            await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial_completion))
+        status_only_completion = payload(); status_only_completion["event"]["eventId"] = "event:status-only-completion"; status_only_completion["event"]["idempotencyKey"] = "event:status-only-completion"; status_only_completion["outcome"]["status"] = "completed"; status_only_completion["laneRun"]["status"] = "completed"  # type: ignore[index]
+        with pytest.raises(ValueError, match="independent review handoff"):
+            await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(status_only_completion))
         projection = await read_hermes_outcome(session, "outcome:1")
         assert projection is not None and projection.reasonCode == "verification_pending"
     async with engine.begin() as connection:
@@ -191,6 +201,44 @@ async def test_hermes_review_handoff_requires_passed_independent_verification_an
         with pytest.raises(ValueError, match="Independent review"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(invalid))
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_review_handoff_fences_evidence_and_handoff_times_to_current_lane_revision(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-current-revision.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        lane = await session.get(HermesLaneRun, "lane:1")
+        assert lane is not None
+        lane.evidence_fingerprint = "sha256:current"
+        lane.observed_at = datetime(2026, 9, 2, 12, 2, tzinfo=timezone.utc)
+        lane.updated_at = lane.observed_at
+        lane.revision += 1
+        await session.commit()
+        stale_evidence = review_handoff(); stale_evidence["verification"]["sourceFingerprint"] = "sha256:current"; stale_evidence["verification"]["expectedLaneRevision"] = 2; stale_evidence["disposition"]["expectedLaneRevision"] = 2  # type: ignore[index]
+        with pytest.raises(ValueError, match="current bound"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(stale_evidence))
+        await session.rollback()
+        lane = await session.get(HermesLaneRun, "lane:1")
+        outcome = await session.get(HermesOutcome, "outcome:1")
+        evidence = await session.get(HermesDeliveryEvidence, "evidence:1")
+        assert lane is not None and outcome is not None and evidence is not None
+        later = datetime(2026, 9, 2, 12, 3, tzinfo=timezone.utc)
+        evidence.observed_at = later; lane.updated_at = later; outcome.updated_at = later
+        await session.commit()
+        stale_time = review_handoff(); stale_time["verification"]["sourceFingerprint"] = "sha256:current"; stale_time["verification"]["expectedLaneRevision"] = 2; stale_time["disposition"]["expectedLaneRevision"] = 2  # type: ignore[index]
+        with pytest.raises(ValueError, match="predates"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(stale_time))
+    await engine.dispose()
+
+
+def test_hermes_board_input_excludes_review_dispositions():
+    event = {"schemaVersion": "hermes_board_lifecycle_event.v1", "issuerId": "issuer:one", "keyId": "key:one", "eventId": "event:board-one", "idempotencyKey": "idempotency:board-one", "boardId": "board:one", "cardId": "card:one", "outcomeId": "outcome:one", "laneRunId": "lane:one", "eventName": "hermes.review.disposition.recorded", "result": "retryable", "reasonCode": "observed", "evidenceRefs": ["evidence:one"], "nextAction": "continue", "correlationId": "correlation:one", "causationId": "causation:one", "observedAt": "2026-09-02T12:00:00Z", "emittedAt": "2026-09-02T12:01:00Z", "expiresAt": "2026-09-02T12:02:00Z", "signatureB64": "AA==", "metadataOnly": True, "rawPayloadRetained": False, "authoritative": False}
+    with pytest.raises(ValueError, match="invalid closed state"):
+        HermesBoardLifecycleEventInputV1.model_validate(event)
 
 
 @pytest.mark.asyncio

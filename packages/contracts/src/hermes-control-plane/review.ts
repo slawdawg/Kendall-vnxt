@@ -1,8 +1,9 @@
-import { isHermesLaneRunId, isHermesOutcomeId, isReviewDispositionId, isVerificationRecordId } from "./ids";
-import { HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION, HERMES_VERIFICATION_RECORD_SCHEMA_VERSION, guardFailsClosed, hasExactKeys, isEvidenceRefs, isMetadataOnlyRecord, isRecord, isSafeText, isTimestampOrder, type ReviewDispositionV1, type ReviewHandoffV1, type VerificationRecordV1 } from "./types";
+import { isHermesLaneRunId, isHermesOutcomeId, isOpaqueId, isReviewDispositionId, isVerificationRecordId } from "./ids";
+import { HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION, HERMES_VERIFICATION_RECORD_SCHEMA_VERSION, guardFailsClosed, hasExactKeys, isEvidenceRefs, isMetadataOnlyRecord, isRecord, isSafeText, isTimestampOrder, type HermesReviewerUnavailableExceptionV1, type ReviewDispositionV1, type ReviewHandoffV1, type VerificationRecordV1 } from "./types";
 
 const VERIFICATION_FIELDS = ["verificationRecordId", "outcomeId", "laneRunId", "schemaVersion", "result", "target", "sourceFingerprint", "developerIdentity", "developerHome", "developerWorkspace", "evidenceRefs", "observedAt", "idempotencyKey", "createdAt", "metadataOnly", "rawPayloadRetained", "expectedOutcomeRevision", "expectedLaneRevision"] as const;
 const DISPOSITION_FIELDS = ["reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "schemaVersion", "disposition", "reviewerIdentity", "reviewerHome", "reviewerWorkspace", "reasonCode", "nextAction", "evidenceRefs", "observedAt", "idempotencyKey", "createdAt", "metadataOnly", "rawPayloadRetained", "expectedOutcomeRevision", "expectedLaneRevision"] as const;
+const UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS = ["exceptionId", "outcomeId", "laneRunId", "reason", "riskClass", "compensatingReviewRef", "recordedBy", "recordedAt", "reviewOrExpiryAt", "metadataOnly", "rawPayloadRetained"] as const;
 const distinct = (...values: unknown[]) => new Set(values).size === values.length;
 
 export function isVerificationRecordV1(value: unknown): value is VerificationRecordV1 {
@@ -12,7 +13,12 @@ export function isReviewDispositionV1(value: unknown): value is ReviewDispositio
   return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, DISPOSITION_FIELDS) && isReviewDispositionId(value.reviewDispositionId) && isVerificationRecordId(value.verificationRecordId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.developerLaneRunId) && isMetadataOnlyRecord(value, HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION, ["observedAt", "createdAt"]) && isTimestampOrder(value, ["createdAt", "observedAt"]) && ["approve", "rework", "technical_block"].includes(value.disposition as string) && isSafeText(value.reviewerIdentity, 120) && isSafeText(value.reviewerHome, 240) && isSafeText(value.reviewerWorkspace, 240) && distinct(value.reviewerIdentity, value.reviewerHome, value.reviewerWorkspace) && Number.isInteger(value.expectedOutcomeRevision) && (value.expectedOutcomeRevision as number) > 0 && Number.isInteger(value.expectedLaneRevision) && (value.expectedLaneRevision as number) > 0 && isSafeText(value.reasonCode, 120) && isSafeText(value.nextAction, 360) && isEvidenceRefs(value.evidenceRefs));
 }
 
+export function isHermesReviewerUnavailableExceptionV1(value: unknown): value is HermesReviewerUnavailableExceptionV1 {
+  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isSafeText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isSafeText(value.compensatingReviewRef, 240) && isSafeText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]));
+}
+
 const REVIEW_HANDOFF_FIELDS = ["verification", "disposition"] as const;
+const REVIEW_HANDOFF_EXCEPTION_FIELDS = ["verification", "disposition", "unavailableReviewerException"] as const;
 const VERIFICATION_ONLY_HANDOFF_FIELDS = ["verification"] as const;
 const pathParts = (value: string) => value.toLowerCase().split(/[:\\\\/]+/).reduce<string[]>((parts, part) => {
   if (!part || part === ".") return parts;
@@ -34,9 +40,11 @@ export function isReviewHandoffV1(value: unknown): value is ReviewHandoffV1 {
     if (!isRecord(value) || !isVerificationRecordV1(value.verification)) return false;
     const verification = value.verification;
     if (verification.result !== "passed") return hasExactKeys(value, VERIFICATION_ONLY_HANDOFF_FIELDS);
-    if (!hasExactKeys(value, REVIEW_HANDOFF_FIELDS) || !isReviewDispositionV1(value.disposition)) return false;
+    if (!(hasExactKeys(value, REVIEW_HANDOFF_FIELDS) || hasExactKeys(value, REVIEW_HANDOFF_EXCEPTION_FIELDS)) || !isReviewDispositionV1(value.disposition)) return false;
     const disposition = value.disposition as ReviewDispositionV1;
-    return verification.verificationRecordId === disposition.verificationRecordId &&
+    const exception = value.unavailableReviewerException;
+    return (exception === undefined || (isHermesReviewerUnavailableExceptionV1(exception) && disposition.disposition === "technical_block" && exception.outcomeId === verification.outcomeId && exception.laneRunId === verification.laneRunId)) &&
+      verification.verificationRecordId === disposition.verificationRecordId &&
       verification.outcomeId === disposition.outcomeId &&
       verification.laneRunId === disposition.developerLaneRunId &&
       verification.expectedOutcomeRevision === disposition.expectedOutcomeRevision &&
