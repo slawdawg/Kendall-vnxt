@@ -149,8 +149,6 @@ async def ingest_hermes_ledger(
 ) -> HermesOutcomeProjectionV1:
     """Append an event and atomically publish its current Supervisor projection."""
     request = HermesLedgerIngestRequest.model_validate(payload.model_dump())
-    if request.event.eventName in {"hermes.review.disposition.recorded", "hermes.verification.recorded"}:
-        raise ValueError("Review and verification lifecycle events require the independent review handoff boundary.")
     digest = _request_digest(request)
     replay = await _existing_event(session, request, digest)
     if replay is not None:
@@ -159,6 +157,8 @@ async def ingest_hermes_ledger(
         if outcome is None:
             raise ValueError("Persisted Hermes event lacks its outcome projection.")
         return _projection(outcome, lane, await _latest_evidence(session, lane))
+    if request.event.eventName in {"hermes.review.disposition.recorded", "hermes.verification.recorded"}:
+        raise ValueError("Review and verification lifecycle events require the independent review handoff boundary.")
 
     # Locks protect supported production databases; revision predicates retain
     # the same fail-closed behavior for SQLite and stale ORM snapshots.
@@ -239,6 +239,14 @@ def _handoff_digest(request: HermesReviewHandoffRequest) -> str:
     return sha256(json.dumps(request.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _handoff_replay_digests(request: HermesReviewHandoffRequest) -> set[str]:
+    """Accept the pre-alias digest only for exact persisted handoff replay."""
+    return {
+        _handoff_digest(request),
+        sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+    }
+
+
 def _emitted_at(observed_at: datetime) -> datetime:
     """Events cannot claim emission before the metadata they persist."""
     return max(datetime.now(UTC), observed_at)
@@ -284,7 +292,7 @@ async def _replay_verification(session: AsyncSession, value) -> HermesOutcomePro
 
 
 async def _replay_disposition(
-    session: AsyncSession, disposition, digest: str,
+    session: AsyncSession, disposition, digests: set[str],
 ) -> HermesOutcomeProjectionV1 | None:
     prior = await session.scalar(
         select(HermesReviewDisposition)
@@ -293,7 +301,7 @@ async def _replay_disposition(
     )
     if prior is None:
         return None
-    if prior.review_disposition_id != disposition.reviewDispositionId or prior.request_digest_sha256 != digest:
+    if prior.review_disposition_id != disposition.reviewDispositionId or prior.request_digest_sha256 not in digests:
         raise ValueError("Review disposition idempotency key conflicts with persisted metadata.")
     outcome = await session.get(HermesOutcome, prior.outcome_id)
     if outcome is None:
@@ -355,7 +363,8 @@ async def ingest_hermes_review_handoff(
         return _projection(outcome, lane, await _latest_evidence(session, lane))
     assert disposition is not None
     digest = _handoff_digest(request)
-    replay = await _replay_disposition(session, disposition, digest)
+    replay_digests = _handoff_replay_digests(request)
+    replay = await _replay_disposition(session, disposition, replay_digests)
     if replay is not None:
         return replay
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
@@ -364,7 +373,7 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Review handoff requires an existing bound outcome and Developer lane.")
     # A concurrent exact handoff can commit while this request waits for the
     # projection locks. Recheck under those locks before examining state.
-    replay = await _replay_disposition(session, disposition, digest)
+    replay = await _replay_disposition(session, disposition, replay_digests)
     if replay is not None:
         return replay
     if outcome.current_event_id != lane.current_event_id:
@@ -434,7 +443,7 @@ async def ingest_hermes_review_handoff(
         else: await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        replay = await _replay_disposition(session, disposition, digest)
+        replay = await _replay_disposition(session, disposition, replay_digests)
         if replay is not None:
             return replay
         raise ValueError("Review handoff persistence conflict.") from exc

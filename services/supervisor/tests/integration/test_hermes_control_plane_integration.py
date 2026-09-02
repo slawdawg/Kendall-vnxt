@@ -1,4 +1,6 @@
 import copy
+from hashlib import sha256
+import json
 
 import pytest
 from sqlalchemy import select, text
@@ -14,7 +16,7 @@ from supervisor.application.hermes_outcomes import (
 from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesVerificationRecord
+from supervisor.infrastructure.db.models import HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesReviewDisposition, HermesVerificationRecord
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from test_hermes_control_plane import payload
 
@@ -41,6 +43,25 @@ async def test_hermes_ledger_is_idempotent_conflict_fenced_and_metadata_only(tmp
         assert projection is not None and projection.reasonCode == "verification_pending"
     async with engine.begin() as connection:
         assert await connection.scalar(text("SELECT COUNT(*) FROM hermes_ledger_events")) == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_ledger_replays_exact_pre_handoff_restricted_event(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-restricted-replay.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    legacy = payload(); legacy["event"]["eventName"] = "hermes.review.disposition.recorded"  # type: ignore[index]
+    request = HermesLedgerIngestRequest.model_validate(legacy)
+    digest = sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        event = await session.get(HermesLedgerEvent, "event:1")
+        assert event is not None
+        event.event_name = request.event.eventName
+        event.request_digest_sha256 = digest
+        await session.commit()
+        assert (await ingest_hermes_ledger(session, request)).currentLaneRunId == "lane:1"
     await engine.dispose()
 
 
@@ -139,6 +160,7 @@ async def test_hermes_verification_revision_migration_upgrades_an_existing_0008_
         await connection.run_sync(lambda sync_connection: HermesVerificationRecord.metadata.create_all(sync_connection, tables=[HermesVerificationRecord.__table__]))
         await connection.execute(text("ALTER TABLE hermes_verification_records DROP COLUMN expected_outcome_revision"))
         await connection.execute(text("ALTER TABLE hermes_verification_records DROP COLUMN expected_lane_revision"))
+        await connection.execute(text("ALTER TABLE hermes_verification_records DROP COLUMN schema_version"))
         await upgrade_database(connection)
         columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(hermes_verification_records)"))).all()}
     assert {"schema_version", "expected_outcome_revision", "expected_lane_revision"} <= columns
@@ -201,6 +223,27 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
         before = copy.deepcopy(request); before["disposition"]["observedAt"] = "2026-09-02T12:01:00Z"  # type: ignore[index]
         with pytest.raises(ValueError, match="timestamp"):
             HermesReviewHandoffRequest.model_validate(before)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_review_handoff_replays_legacy_unavailable_exception_digest(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-exception-replay.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    request = review_handoff("technical_block")
+    request["unavailableReviewerException"] = {"exceptionId": "exception:legacy", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reason": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2026-09-02T12:02:00Z", "reviewOrExpiryAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
+    parsed = HermesReviewHandoffRequest.model_validate(request)
+    legacy_digest = sha256(json.dumps(parsed.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        first = await ingest_hermes_review_handoff(session, parsed)
+        stored = await session.get(HermesReviewDisposition, "review:technical_block")
+        assert stored is not None
+        stored.request_digest_sha256 = legacy_digest
+        await session.commit()
+        assert await ingest_hermes_review_handoff(session, parsed) == first
     await engine.dispose()
 
 

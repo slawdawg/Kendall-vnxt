@@ -428,6 +428,7 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                     "0008_hermes_review_handoff",
                     "0009_hermes_verification_revision_binding",
                     "0010_hermes_review_disposition_revision_binding",
+                    "0011_hermes_verification_schema_version",
                 }
     finally:
         await engine.dispose()
