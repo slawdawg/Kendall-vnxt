@@ -4,7 +4,7 @@ import pytest
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
-from supervisor.api.main import app
+from supervisor.api.main import app, require_authenticated_hermes_capability_provisioner
 from supervisor.api.schemas import HermesLedgerIngestRequest
 
 
@@ -44,3 +44,8 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert route("/hermes-control-plane/board-events").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/outcomes/{outcome_id}").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/lane-runs/{lane_run_id}").response_model.__name__ == "HermesLaneRunProjectionApiEnvelope"
+    capability_route = route("/hermes-control-plane/role-capabilities")
+    assert capability_route.status_code == 204
+    assert require_authenticated_hermes_capability_provisioner in {
+        dependency.call for dependency in capability_route.dependant.dependencies
+    }

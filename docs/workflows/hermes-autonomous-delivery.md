@@ -102,3 +102,35 @@ An unavailable independent Reviewer produces a metadata-only exception
 requirement with the outcome/lane-run identifiers, reason, risk class,
 compensating-review reference, recorder/time, and review-or-expiry point. It is
 not approval and is not persisted by this workflow.
+
+## Verification and Independent Review Handoff
+
+The Supervisor ledger accepts a metadata-only verification record before an
+independent review disposition. A record binds the existing Outcome and
+Developer lane to an opaque record/idempotency identity, passed/failed/
+inconclusive result, cited evidence, and the current source fingerprint. Only
+`passed` may enter review; missing, stale, failed, inconclusive, malformed, or
+replay-conflicting evidence stops at the ledger boundary.
+
+A local authenticated Coordinator may provision a task-scoped Developer or
+Reviewer capability at `/hermes-control-plane/role-capabilities`. The
+Supervisor stores only its digest, role, outcome/lane binding, expiry,
+revocation state, and provisioner identity; it never returns, logs, or retains
+the supplied capability value. Caller-supplied profile fields are compared to
+that binding and are not authority. The Developer first records verification
+with its capability. Only then may a distinct, non-revoked Reviewer capability
+submit a disposition against that exact record. An expired, revoked, stale,
+unbound, or replay-conflicting admission fails closed; exact persisted replays
+remain available only when their bound metadata can be proven.
+
+A disposition is exactly `approve`, `rework`, or `technical_block`. It is
+atomically bound to that verification record, the original Developer lane, and
+distinct Reviewer identity, home, and workspace metadata. Self-review or any
+overlap is denied. Approval records only post-review completion: it is not a
+GitHub, delivery, merge, provider, or runtime action. Rework returns to the
+same recorded Developer lane with cited evidence. A `technical_block` remains
+immutable; the Coordinator's typed recovery path may only create a distinct
+replacement review lane with fresh metadata-only evidence, exact current
+outcome/blocked-lane revisions, and no budget replenishment. It cannot reopen
+or overwrite the blocked lane. The unavailable-Reviewer exception remains
+audit-only and cannot waive verification or become an approval.

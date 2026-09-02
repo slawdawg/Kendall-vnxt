@@ -97,6 +97,8 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
+    HermesRoleCapabilityProvisionRequest,
+    HermesReviewHandoffRequest,
     HermesLaneRunProjectionApiEnvelope,
     HermesOutcomeProjectionApiEnvelope,
     ManagerLaneClarityHandoffApiEnvelope,
@@ -169,7 +171,13 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, read_hermes_lane_run, read_hermes_outcome
+from supervisor.application.hermes_outcomes import (
+    ingest_hermes_ledger,
+    ingest_hermes_review_handoff,
+    provision_hermes_role_capability,
+    read_hermes_lane_run,
+    read_hermes_outcome,
+)
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -337,6 +345,33 @@ def require_local_operational_boundary(request: Request) -> None:
                 "local_operational_boundary_required",
             ).model_dump(),
         )
+
+
+async def require_authenticated_hermes_capability_provisioner(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> DashboardOperator:
+    """Require a local, enabled Operator session to mint local role capabilities."""
+
+    require_local_operational_boundary(request)
+    if not settings.lan_auth_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail=error_response(
+                "Role-capability provisioning requires authenticated private-LAN mode.",
+                "hermes_role_capability_auth_required",
+            ).model_dump(),
+        )
+    stored, _ = await load_valid_session(session, request.cookies.get(SESSION_COOKIE_NAME))
+    operator = await session.get(DashboardOperator, stored.operator_id) if stored else None
+    if stored is None or operator is None or operator.role != "operator" or not operator.enabled:
+        raise HTTPException(status_code=401, detail="Sign-in required.")
+    if not exact_https_origin(request.headers.get("origin"), settings):
+        raise HTTPException(status_code=403, detail="Authenticated origin required.")
+    csrf = request.headers.get("x-csrf-token")
+    if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+    return operator
 
 
 async def require_memory_inbox_shell_operator(request: Request, session: AsyncSession) -> None:
@@ -1656,6 +1691,41 @@ async def ingest_hermes_outcome_ledger(
             status_code=409,
             detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
         ) from exc
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post("/hermes-control-plane/role-capabilities", status_code=204)
+async def provision_hermes_role_capability_route(
+    payload: HermesRoleCapabilityProvisionRequest,
+    operator: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Provision a digest-only, task-scoped local Developer or Reviewer capability."""
+
+    try:
+        await provision_hermes_role_capability(
+            session,
+            payload,
+            provisioned_by_operator_id=str(operator.id),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "hermes_role_capability_conflict").model_dump(),
+        ) from exc
+
+
+@app.post("/hermes-control-plane/review-handoffs", response_model=HermesOutcomeProjectionApiEnvelope)
+async def ingest_hermes_review_handoff_route(
+    payload: HermesReviewHandoffRequest,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist a typed verification/review handoff; this endpoint cannot deliver or execute work."""
+    try:
+        projection = await ingest_hermes_review_handoff(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_handoff_conflict").model_dump()) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
 
 
