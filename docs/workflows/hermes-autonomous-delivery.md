@@ -64,3 +64,41 @@ disabled.
 
 Only a later explicitly approved story may install/configure Hermes, create a
 profile or board, enable a gateway, mount credentials, or admit work.
+
+## Profile Bootstrap Topology
+
+The source-only `hermes-profile-bootstrap` policy renders a plan, never a live
+Hermes configuration. It requires an explicit operator-owned runtime root and
+creates no directories, processes, credentials, network connections, provider
+calls, or delivery actions. Apply mode is intentionally a later, separately
+authorized boundary.
+
+The plan has exactly five separate identities and homes below that runtime root:
+`Coordinator`, `Developer`, `Reviewer`, `Delivery`, and `Memory`. Each profile
+defaults to no network and no credential access. Credential declarations may
+name only an adapter class or allowlisted environment-variable *name*; they
+never contain, mount, copy, log, or retain credential material.
+
+Developer alone has a bounded write root in its assigned task workspace.
+Reviewer receives a separate read-only review root; a shared or nested
+Developer/Reviewer root is rejected. Task scope carries its outcome/lane-run
+identity, read/write roots, artifact root, forbidden secret/host-credential
+paths, no-cleanup rule, rollback-to-Developer rule, and cited-diff capture rule.
+All roots must be distinct and non-overlapping so that an artifact/read root
+cannot encompass a role home or another role's workspace. The bootstrap accepts
+only a matching metadata-only result from the existing Hermes policy classifier;
+it does not accept a caller-supplied `ordinary` label or independently classify
+cost, audience, or effect.
+Delivery is read-only and may request only a future typed adapter operation:
+source edits, patch application, and source-repair shells return bounded
+rework to the owning Developer lane. Memory is cited-context-only and rejects
+uncited, unallowlisted, stale, or revoked context; it never supplies authority.
+
+Provider, billing, real-user deployment, direct GitHub, raw credential, and
+cleanup capabilities are denied by the plan. Any spend, real-user deployment,
+or uncertain external-impact request is `deniedExternalImpact` before side
+effect and remains subject to the existing scoped, expiring decision path.
+An unavailable independent Reviewer produces a metadata-only exception
+requirement with the outcome/lane-run identifiers, reason, risk class,
+compensating-review reference, recorder/time, and review-or-expiry point. It is
+not approval and is not persisted by this workflow.
