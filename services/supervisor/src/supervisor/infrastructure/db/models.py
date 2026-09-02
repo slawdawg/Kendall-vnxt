@@ -949,6 +949,56 @@ class HermesLedgerEvent(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
 
 
+class HermesBoardBinding(Base):
+    """Supervisor-owned immutable board/card identity binding."""
+
+    __tablename__ = "hermes_board_bindings"
+    __table_args__ = (
+        UniqueConstraint("issuer_id", "board_id", "card_id", name="uq_hermes_board_binding_card"),
+        UniqueConstraint("lane_run_id", name="uq_hermes_board_binding_lane_run"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_board_binding_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_board_binding_no_raw_payload"),
+    )
+
+    binding_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    issuer_id: Mapped[str] = mapped_column(String(120))
+    board_id: Mapped[str] = mapped_column(String(120))
+    card_id: Mapped[str] = mapped_column(String(120))
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+
+
+class HermesBoardEventReceipt(Base):
+    """Append-only metadata-only accepted bridge event/replay fence."""
+
+    __tablename__ = "hermes_board_event_receipts"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_board_event_receipt_idempotency"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_board_receipt_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_board_receipt_no_raw_payload"),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("hermes_board_bindings.binding_id"), index=True)
+    issuer_id: Mapped[str] = mapped_column(String(120))
+    key_id: Mapped[str] = mapped_column(String(120))
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    event_name: Mapped[str] = mapped_column(String(96))
+    result: Mapped[str] = mapped_column(String(32))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    emitted_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    canonical_digest_sha256: Mapped[str] = mapped_column(String(64))
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+
+
 class ManagerLaneClarityHandoff(Base):
     """Idempotent transport receipt, not manager lifecycle or tracker state."""
 

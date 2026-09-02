@@ -424,6 +424,7 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                     "0004_memory_proposal_write_reservation",
                     "0005_memory_proposal_write_intent",
                     "0006_hermes_outcome_ledger",
+                    "0007_hermes_board_bridge",
                 }
     finally:
         await engine.dispose()

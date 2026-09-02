@@ -170,6 +170,7 @@ from supervisor.application.manager_terminal_events import (
     persist_manager_terminal_event,
 )
 from supervisor.application.hermes_outcomes import ingest_hermes_ledger, read_hermes_lane_run, read_hermes_outcome
+from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
     persist_manager_lane_clarity_handoff,
@@ -1654,6 +1655,30 @@ async def ingest_hermes_outcome_ledger(
         raise HTTPException(
             status_code=409,
             detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
+        ) from exc
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post(
+    "/hermes-control-plane/board-events",
+    response_model=HermesOutcomeProjectionApiEnvelope,
+)
+async def ingest_hermes_board_event(
+    request: Request,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    """Verify one signed board observation; it cannot issue a delivery action."""
+    try:
+        projection = await hermes_board_bridge.ingest_board_lifecycle_event(
+            session,
+            await request.body(),
+            settings.hermes_board_bridge_issuer_registry,
+        )
+    except hermes_board_bridge.BoardBridgeRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), str(exc)).model_dump(),
         ) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
 

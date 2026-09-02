@@ -97,6 +97,18 @@ async def _apply_hermes_outcome_ledger(connection: AsyncConnection) -> None:
     )
 
 
+async def _apply_hermes_board_bridge(connection: AsyncConnection) -> None:
+    """Create only additive Supervisor-owned board binding/receipt tables."""
+
+    from supervisor.infrastructure.db.models import HermesBoardBinding, HermesBoardEventReceipt
+
+    await connection.run_sync(
+        lambda sync_connection: HermesBoardBinding.metadata.create_all(
+            sync_connection,
+            tables=[HermesBoardBinding.__table__, HermesBoardEventReceipt.__table__],
+        )
+    )
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -125,6 +137,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0006_hermes_outcome_ledger",
         _apply_hermes_outcome_ledger,
         clean_install=_apply_hermes_outcome_ledger,
+    ),
+    SchemaMigration(
+        "0007_hermes_board_bridge",
+        _apply_hermes_board_bridge,
+        clean_install=_apply_hermes_board_bridge,
     ),
 )
 
