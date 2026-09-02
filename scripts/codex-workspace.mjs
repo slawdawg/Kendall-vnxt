@@ -3330,7 +3330,7 @@ function finishPr(argv) {
   }
 
   const plan = [];
-  if (worktreeStatus.unstaged && options.stageAll) {
+  if (worktreeStatus.any && options.stageAll) {
     plan.push("git add --all");
   }
   if (verifyCommand.length > 0) {
@@ -3360,10 +3360,14 @@ function finishPr(argv) {
       appendTaskEvent(manifest, "task_lock_recovered", "same-owner stale child lock with a proven replaced PID identity archived before delivery recovery");
     }
 
+    let verificationStageAllBinding = null;
+    let deliveryStageAllBinding = null;
     worktreeStatus = parseStatus(manifest.worktree_path);
-    if (worktreeStatus.unstaged && options.stageAll) {
-      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path, externalExecution: true });
-      worktreeStatus = parseStatus(manifest.worktree_path);
+    if (worktreeStatus.any && options.stageAll) {
+      const staged = stageAllForFinishPr(manifest, worktreeStatus, "verification-admission");
+      worktreeStatus = staged.worktreeStatus;
+      verificationStageAllBinding = staged.binding;
+      deliveryStageAllBinding = staged.binding;
     }
 
     const existingPr = prView(manifest);
@@ -3373,11 +3377,15 @@ function finishPr(argv) {
 
     if (verifyCommand.length > 0) {
       lock.heartbeat();
+      if (verificationStageAllBinding) {
+        worktreeStatus = assertFinishPrStageAllBinding(manifest, verificationStageAllBinding, "verification-admission");
+      }
       if (verificationPlan.resolvedProfile === "check") {
         runResumableCheckVerification(manifest, manifestPath, verificationPlan, {
           state,
           owner: currentLaneOwner(options),
           cwd: manifest.worktree_path,
+          expectedStageAllBinding: verificationStageAllBinding,
           allowTerminalPacketRecovery: Boolean(options.stageAll),
           allowEnvironmentPreflightRetry: Boolean(options.retryEnvironmentPreflight),
           allowFreshVerificationAfterInFlightRecovery: Boolean(options.stageAll),
@@ -3417,6 +3425,14 @@ function finishPr(argv) {
     manifest.anti_churn_finalization = antiChurn.manifestRecord;
     appendTaskEvent(manifest, "anti_churn_finalized", `${antiChurn.manifestRecord.status}:${antiChurn.manifestRecord.lessons_evaluated}`);
     worktreeStatus = parseStatus(manifest.worktree_path);
+    if (verificationStageAllBinding) {
+      worktreeStatus = assertFinishPrStageAllBinding(
+        manifest,
+        verificationStageAllBinding,
+        "post-verification",
+        { allowUnstaged: true },
+      );
+    }
     manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, { worktreeStatus });
 
     if (worktreeStatus.unstaged && !options.stageAll) {
@@ -3424,10 +3440,13 @@ function finishPr(argv) {
     }
 
     if (worktreeStatus.unstaged && options.stageAll) {
-      runChecked("git", ["add", "--all"], { cwd: manifest.worktree_path, externalExecution: true });
+      const staged = stageAllForFinishPr(manifest, worktreeStatus, "delivery-finalization");
+      worktreeStatus = staged.worktreeStatus;
+      deliveryStageAllBinding = staged.binding;
     }
     if (worktreeStatus.any) {
-      runChecked("git", ["commit", "-m", commitMessage], { cwd: manifest.worktree_path, externalExecution: true });
+      if (deliveryStageAllBinding) commitFinishPrStageAllBinding(manifest, deliveryStageAllBinding, commitMessage);
+      else runChecked("git", ["commit", "-m", commitMessage], { cwd: manifest.worktree_path, externalExecution: true });
       manifest.last_commit = git(["rev-parse", "--short", "HEAD"], {
         cwd: manifest.worktree_path,
       }).stdout.trim();
@@ -16721,7 +16740,17 @@ function expandResumableCheckStage(stage) {
 function runResumableCheckVerification(manifest, manifestPath, verificationPlan, options) {
   const plan = resumableCheckPlan(options.cwd);
   const head = git(["rev-parse", "HEAD"], { cwd: options.cwd }).stdout.trim();
-  const stagedInputDigest = stagedInputDigestForWorktree(options.cwd);
+  const stagedInput = stagedInputSnapshotForWorktree(options.cwd);
+  if (options.expectedStageAllBinding && options.expectedStageAllBinding.intended.tree !== stagedInput.tree) {
+    throw finishPrStageAllBindingFailure(
+      manifest,
+      options.expectedStageAllBinding,
+      "verification-admission",
+      parseStatus(options.cwd),
+      stagedInput,
+    );
+  }
+  const stagedInputDigest = stagedInput.digest;
   const prior = manifest.check_verification_packet;
   if (!prior && !options.allowFreshVerificationAfterInFlightRecovery && inFlightCheckRecoveryRecords(options.state, manifest.task_id).length > 0) {
     throw new Error("in-flight check recovery requires an explicit fresh --stage-all --verify check before any new verification packet can begin.");
@@ -17196,11 +17225,88 @@ function validateTerminalCheckPacketForDiscard(packet, expected, options = {}) {
   }
 }
 
-function stagedInputDigestForWorktree(cwd) {
-  const indexTree = git(["write-tree"], { cwd });
+function stagedInputSnapshotForWorktree(cwd, options = {}) {
+  const indexTree = git(["write-tree"], { cwd, ...options });
   const tree = indexTree.stdout.trim();
   if (indexTree.code !== 0 || !/^[a-f0-9]{40,64}$/i.test(tree)) throw new Error("Cannot bind check verification packet to the staged input snapshot.");
-  return createHash("sha256").update(`index-tree:${tree}`).digest("hex");
+  return {
+    tree,
+    digest: createHash("sha256").update(`index-tree:${tree}`).digest("hex"),
+  };
+}
+
+function stagedInputDigestForWorktree(cwd) {
+  return stagedInputSnapshotForWorktree(cwd).digest;
+}
+
+function stagedInputSnapshotAfterStageAll(cwd, startingTree) {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "codex-finish-pr-stage-all-"));
+  const temporaryIndex = join(temporaryDirectory, "index");
+  const env = { GIT_INDEX_FILE: temporaryIndex };
+  try {
+    runChecked("git", ["read-tree", startingTree], { cwd, env });
+    runChecked("git", ["add", "--all"], { cwd, env });
+    return stagedInputSnapshotForWorktree(cwd, { env });
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+function finishPrStageAllBindingFailure(manifest, binding, phase, afterStatus, actual) {
+  const packetBinding = manifest.check_verification_packet?.staged_input_digest || "none";
+  const stoppedActions = phase === "verification-admission"
+    ? "No verification packet, commit, push, PR, merge, or cleanup action was started."
+    : "Verification may already have completed. No commit, push, PR, merge, or cleanup action was started.";
+  return new Error(
+    `finish-pr --stage-all index integrity failed at ${phase}: ` +
+    `intended_patch_status_sha256=${binding.intendedPatchStatusDigest}; ` +
+    `pre_stage_index_tree=${binding.before.tree}; intended_index_tree=${binding.intended.tree}; actual_index_tree=${actual.tree}; ` +
+    `packet_staged_input_digest=${packetBinding}; staged=${afterStatus.staged}; unstaged=${afterStatus.unstaged}. ` +
+    stoppedActions,
+  );
+}
+
+function assertFinishPrStageAllBinding(manifest, binding, phase, options = {}) {
+  const afterStatus = parseStatus(manifest.worktree_path);
+  const actual = stagedInputSnapshotForWorktree(manifest.worktree_path);
+  if ((!options.allowUnstaged && afterStatus.unstaged) || !afterStatus.staged || binding.intended.tree !== actual.tree) {
+    throw finishPrStageAllBindingFailure(manifest, binding, phase, afterStatus, actual);
+  }
+  return afterStatus;
+}
+
+function commitFinishPrStageAllBinding(manifest, binding, commitMessage) {
+  const cwd = manifest.worktree_path;
+  const worktreeStatus = assertFinishPrStageAllBinding(manifest, binding, "delivery-commit");
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "codex-finish-pr-bound-commit-"));
+  const temporaryIndex = join(temporaryDirectory, "index");
+  const env = { GIT_INDEX_FILE: temporaryIndex };
+  try {
+    runChecked("git", ["read-tree", binding.intended.tree], { cwd, env });
+    const fenced = stagedInputSnapshotForWorktree(cwd, { env });
+    if (fenced.tree !== binding.intended.tree) {
+      throw finishPrStageAllBindingFailure(manifest, binding, "delivery-commit", worktreeStatus, fenced);
+    }
+    runChecked("git", ["commit", "-m", commitMessage], { cwd, env, externalExecution: true });
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+function stageAllForFinishPr(manifest, priorStatus, phase) {
+  const cwd = manifest.worktree_path;
+  const binding = {
+    intendedPatchStatusDigest: createHash("sha256")
+      .update(`status:${priorStatus.lines.join("\\n")}`)
+      .digest("hex"),
+    before: stagedInputSnapshotForWorktree(cwd),
+  };
+  binding.intended = stagedInputSnapshotAfterStageAll(cwd, binding.before.tree);
+  runChecked("git", ["add", "--all"], { cwd, externalExecution: true });
+  return {
+    worktreeStatus: assertFinishPrStageAllBinding(manifest, binding, phase),
+    binding,
+  };
 }
 
 function createResumableCheckPacket({ taskId, owner, head, planDigest, stagedInputDigest, nextStage, packetLifetimeMs }) {

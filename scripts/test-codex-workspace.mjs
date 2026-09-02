@@ -1581,10 +1581,10 @@ try {
     assert(match, "finishPr source or anti-churn finalization helper not found");
     assert(match[0].includes('plan.push("anti-churn hook evaluate --apply-safe --format json")'), "finish-pr dry-run plan must include anti-churn hook invocation");
     assert(match[0].includes("const antiChurn = runAntiChurnFinalization(manifest, state, { worktreeStatus, pr: existingPr });"), "finish-pr must invoke anti-churn finalization with concrete PR evidence");
-    const snapshotStage = match[0].indexOf('runChecked("git", ["add", "--all"]');
+    const snapshotStage = match[0].indexOf('stageAllForFinishPr(manifest, worktreeStatus, "verification-admission")');
     const checkVerification = match[0].indexOf("runResumableCheckVerification");
     const antiChurnFinalization = match[0].indexOf("const antiChurn = runAntiChurnFinalization");
-    const deliveryStage = match[0].indexOf('runChecked("git", ["add", "--all"]', antiChurnFinalization);
+    const deliveryStage = match[0].indexOf('stageAllForFinishPr(manifest, worktreeStatus, "delivery-finalization")', antiChurnFinalization);
     const commit = match[0].indexOf('runChecked("git", ["commit", "-m", commitMessage]');
     assert(
       snapshotStage >= 0 && snapshotStage < checkVerification && checkVerification < antiChurnFinalization,
@@ -1593,6 +1593,14 @@ try {
     assert(
       antiChurnFinalization < deliveryStage && antiChurnFinalization < commit,
       "anti-churn finalization must run before post-finalization staging/commit delivery mutation",
+    );
+    const stageAllHelpers = source.match(/function finishPrStageAllBindingFailure[\s\S]*?function createResumableCheckPacket/);
+    assert(stageAllHelpers, "finish-pr stage-all index-integrity helpers not found");
+    assert(
+      stageAllHelpers[0].includes("stagedInputSnapshotAfterStageAll") &&
+      stageAllHelpers[0].includes("intended_index_tree=") &&
+      stageAllHelpers[0].includes("packet_staged_input_digest="),
+      "finish-pr stage-all helper must prove and diagnose the intended index binding",
     );
   });
 
@@ -10498,6 +10506,308 @@ try {
       const updated = readJson(manifestPath);
       assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
       assert(updated.events?.some((event) => event.type === "check_verification_packet_discarded"), JSON.stringify(updated.events));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all refuses post-stage index loss before check packet admission", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'add' && args.includes('--all') && !process.env.GIT_INDEX_FILE", ["reset"]);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "post-stage index loss unexpectedly admitted verification");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at verification-admission"), result.stderr || result.stdout);
+      assert(result.stderr.includes("intended_patch_status_sha256=") && result.stderr.includes("actual_index_tree=") && result.stderr.includes("packet_staged_input_digest=none"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "post-stage index loss launched a verification leaf");
+      const updated = readJson(manifestPath);
+      assert(!updated.check_verification_packet, JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "post-stage index loss reached commit delivery");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout.includes("reviewed-staged-input.txt"), "post-stage index loss erased the intended worktree patch");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "post-stage index loss reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "post-stage index loss reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all refuses post-stage index loss before final commit delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+      const originalStageCommand = readFileSync(stageCommand, "utf8");
+      const finalizationPath = join(fixture.worktree, "post-verification-finalization.txt");
+      writeFileSync(
+        stageCommand,
+        originalStageCommand.replace(
+          "exit 0",
+          `if [ "$stage" = "check:packet-two" ]; then printf 'late finalization input\\n' > ${JSON.stringify(finalizationPath)}; fi\nexit 0`,
+        ),
+      );
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'add' && args.includes('--all') && !process.env.GIT_INDEX_FILE", ["reset"], { afterMatchCount: 2 });
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "post-finalization index loss unexpectedly reached commit delivery");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at delivery-finalization"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "post-finalization index loss did not retain completed verification evidence");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "post-finalization index loss reached commit delivery");
+      assert(runGit(fixture.worktree, ["status", "--porcelain"]).stdout.includes("post-verification-finalization.txt"), "post-finalization index loss erased the intended worktree patch");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "post-finalization index loss reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "post-finalization index loss reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all preserves its admitted index after verification before delivery finalization", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+      const originalStageCommand = readFileSync(stageCommand, "utf8");
+      writeFileSync(
+        stageCommand,
+        originalStageCommand.replace(
+          "exit 0",
+          "if [ \"$stage\" = \"check:packet-two\" ]; then git reset; fi\nexit 0",
+        ),
+      );
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "lost admitted index unexpectedly reached delivery finalization");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at post-verification"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "post-verification preservation did not retain completed verification evidence");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "lost admitted index reached commit delivery");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "lost admitted index reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "lost admitted index reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all rejects newly staged input during verification when admission was already staged", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+      const originalStageCommand = readFileSync(stageCommand, "utf8");
+      const injectedPath = join(fixture.worktree, "injected-during-verification.txt");
+      writeFileSync(
+        stageCommand,
+        originalStageCommand.replace(
+          "exit 0",
+          `if [ "$stage" = "check:packet-two" ]; then printf 'injected staged input\\n' > ${JSON.stringify(injectedPath)}; git add --all; fi\nexit 0`,
+        ),
+      );
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      runGit(fixture.worktree, ["add", "--all"]);
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "newly staged verification input unexpectedly reached delivery");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at post-verification"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "staged-input guard did not retain completed verification evidence");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "newly staged verification input reached commit delivery");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "newly staged verification input reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "newly staged verification input reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all commits and delivers normal late finalization while retaining its admitted packet binding", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+      const originalStageCommand = readFileSync(stageCommand, "utf8");
+      const finalizationPath = join(fixture.worktree, "post-verification-finalization.txt");
+      writeFileSync(
+        stageCommand,
+        originalStageCommand.replace(
+          "exit 0",
+          `if [ "$stage" = "check:packet-two" ]; then printf 'late finalization input\\n' > ${JSON.stringify(finalizationPath)}; fi\nexit 0`,
+        ),
+      );
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      const admittedPath = join(fixture.worktree, "reviewed-staged-input.txt");
+      writeFileSync(admittedPath, "changed reviewed input\n");
+      runGit(fixture.worktree, ["add", "--all"]);
+      const admittedTree = runGit(fixture.worktree, ["write-tree"]).stdout;
+      const admittedDigest = createHash("sha256").update(`index-tree:${admittedTree}`).digest("hex");
+      runGit(fixture.worktree, ["reset"]);
+      installFixtureDeliveryProbes(fixture, { allowDelivery: true });
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "normal late finalization did not retain completed verification evidence");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(updated.check_verification_packet?.staged_input_digest === admittedDigest, JSON.stringify(updated.check_verification_packet));
+      assert(updated.last_commit, JSON.stringify(updated));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout !== beforeHead, "normal late finalization did not create a commit");
+      assert(runGit(fixture.worktree, ["show", "HEAD:reviewed-staged-input.txt"]).stdout === "changed reviewed input", "committed delivery lost admitted input");
+      assert(runGit(fixture.worktree, ["show", "HEAD:post-verification-finalization.txt"]).stdout === "late finalization input", "committed delivery omitted normal late finalization");
+      assert(existsSync(join(fixture.root, "git-push-called.txt")), "normal late finalization did not push");
+      assert(existsSync(join(fixture.root, "gh-pr-create-called.txt")), "normal late finalization did not create a PR");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all fences a final index reproof before commit delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+      const originalStageCommand = readFileSync(stageCommand, "utf8");
+      const finalizationPath = join(fixture.worktree, "post-verification-finalization.txt");
+      writeFileSync(
+        stageCommand,
+        originalStageCommand.replace(
+          "exit 0",
+          `if [ "$stage" = "check:packet-two" ]; then printf 'late finalization input\\n' > ${JSON.stringify(finalizationPath)}; fi\nexit 0`,
+        ),
+      );
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      installFixtureGitPostSuccessHook(
+        fixture,
+        "args[0] === 'write-tree' && !process.env.GIT_INDEX_FILE",
+        ["reset"],
+        { afterMatchCount: 7 },
+      );
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "post-reproof index loss unexpectedly reached commit delivery");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at delivery-commit"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "commit fence did not retain completed verification evidence");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "post-reproof index loss reached commit delivery");
+      assert(!existsSync(join(fixture.root, "git-push-called.txt")), "post-reproof index loss reached git push");
+      assert(!existsSync(join(fixture.root, "gh-pr-create-called.txt")), "post-reproof index loss reached PR creation");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all re-proves its admitted index before creating a check packet", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'write-tree' && !process.env.GIT_INDEX_FILE", ["reset"], { afterMatchCount: 2 });
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "post-assertion index loss unexpectedly admitted verification");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at verification-admission"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).length === 0, "post-assertion index loss launched a verification leaf");
+      const updated = readJson(manifestPath);
+      assert(!updated.check_verification_packet, JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "post-assertion index loss reached commit delivery");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr --stage-all re-proves its final index before commit delivery", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const stages = ["check:packet-one", "check:packet-two"];
+      const stageLog = installFixtureResumableCheckPlan(fixture, stages);
+      const stageCommand = join(fixture.fakeBin, "fixture-resumable-stage");
+      const originalStageCommand = readFileSync(stageCommand, "utf8");
+      const finalizationPath = join(fixture.worktree, "post-verification-finalization.txt");
+      writeFileSync(
+        stageCommand,
+        originalStageCommand.replace(
+          "exit 0",
+          `if [ "$stage" = "check:packet-two" ]; then printf 'late finalization input\n' > ${JSON.stringify(finalizationPath)}; fi\nexit 0`,
+        ),
+      );
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const beforeHead = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      writeFileSync(join(fixture.worktree, "reviewed-staged-input.txt"), "changed reviewed input\n");
+      installFixtureGitPostSuccessHook(fixture, "args[0] === 'write-tree' && !process.env.GIT_INDEX_FILE", ["reset"], { afterMatchCount: 5 });
+
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--stage-all", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "post-final assertion index loss unexpectedly reached commit delivery");
+      assert(result.stderr.includes("finish-pr --stage-all index integrity failed at delivery-commit"), result.stderr || result.stdout);
+      assert(readFixtureStageLog(stageLog).join(",") === stages.join(","), "post-final assertion index loss did not retain completed verification evidence");
+      const updated = readJson(manifestPath);
+      assert(updated.check_verification_packet?.status === "passed", JSON.stringify(updated.check_verification_packet));
+      assert(runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout === beforeHead, "post-final assertion index loss reached commit delivery");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
