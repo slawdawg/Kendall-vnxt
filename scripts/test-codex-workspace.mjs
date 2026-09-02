@@ -8831,10 +8831,28 @@ try {
       );
 
       // The production packet intentionally pauses before beginning a leaf
-      // when its bounded invocation window is exhausted. This aggregate has
-      // many mocked leaves, so a slower CI runner may validly require the one
-      // documented resume rather than treating elapsed wall time as failure.
-      if (result.code !== 0 && result.stderr.includes("packet paused")) {
+      // when its bounded invocation window is exhausted. Resume only the
+      // exact documented normal pause, with each pause advancing to a later
+      // fixed leaf and at most one resume per leaf after the initial run.
+      let previousPausedStageIndex = -1;
+      for (let resume = 0; result.code !== 0 && resume < supervisorLeaves.length; resume += 1) {
+        const pauseMatch = /^FAIL: Check verification packet paused before ([^\r\n;]+); resume finish-pr to continue\.$/.exec(result.stderr.trim());
+        assert(
+          pauseMatch,
+          result.stderr || result.stdout,
+        );
+        const pausedStage = pauseMatch[1];
+        const pausedStageIndex = supervisorLeaves.indexOf(pausedStage);
+        assert(pausedStageIndex >= 0, `normal pause named an unexpected stage: ${pausedStage}`);
+        assert(pausedStageIndex > previousPausedStageIndex, `normal pause did not advance to a later supervisor leaf: ${pausedStage}`);
+        const pausedManifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        assert(pausedManifest.check_verification_packet?.status === "partial", JSON.stringify(pausedManifest.check_verification_packet));
+        assert(
+          pausedManifest.check_verification_packet?.stages?.map(({ stage }) => stage).join(",") === supervisorLeaves.slice(0, pausedStageIndex).join(","),
+          JSON.stringify(pausedManifest.check_verification_packet),
+        );
+        assert(pausedManifest.check_verification_packet?.next_stage === pausedStage, JSON.stringify(pausedManifest.check_verification_packet));
+        previousPausedStageIndex = pausedStageIndex;
         result = runFixtureScript(
           fixture,
           ["finish-pr", "resumed-task", "--verify", "check", "--owner", "runner-a", "--state-root", fixture.stateRoot],
