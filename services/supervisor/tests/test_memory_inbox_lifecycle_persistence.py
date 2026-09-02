@@ -429,6 +429,9 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                     "0009_hermes_verification_revision_binding",
                     "0010_hermes_review_disposition_revision_binding",
                     "0011_hermes_verification_schema_version",
+                    "0012_hermes_role_capability_bindings",
+                    "0013_hermes_revision_binding_unknown_repair",
+                    "0014_hermes_role_capability_references",
                 }
     finally:
         await engine.dispose()
