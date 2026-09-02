@@ -822,6 +822,133 @@ class ManagerTerminalEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class HermesOutcome(Base):
+    """Current read projection; immutable changes are retained in HermesLedgerEvent."""
+
+    __tablename__ = "hermes_outcomes"
+    __table_args__ = (
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_outcome_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_outcome_no_raw_payload"),
+    )
+
+    outcome_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(240))
+    summary: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32))
+    result: Mapped[str] = mapped_column(String(32))
+    reason_code: Mapped[str] = mapped_column(String(120))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    next_action: Mapped[str] = mapped_column(String(360))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    current_event_id: Mapped[str] = mapped_column(String(120), unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesLaneRun(Base):
+    """Current lane-run projection, separate from the legacy queue/lease state."""
+
+    __tablename__ = "hermes_lane_runs"
+    __table_args__ = (
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_lane_run_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_lane_run_no_raw_payload"),
+    )
+
+    lane_run_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    lane_type: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(32))
+    result: Mapped[str] = mapped_column(String(32))
+    reason_code: Mapped[str] = mapped_column(String(120))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    next_action: Mapped[str] = mapped_column(String(360))
+    heartbeat_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    stale_deadline_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    timeout_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    retry_budget: Mapped[int] = mapped_column(Integer)
+    rework_budget: Mapped[int] = mapped_column(Integer)
+    evidence_fingerprint: Mapped[str] = mapped_column(String(240))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    current_event_id: Mapped[str] = mapped_column(String(120), unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesDeliveryEvidence(Base):
+    """Append-only cited evidence metadata; no source payload is retained."""
+
+    __tablename__ = "hermes_delivery_evidence"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_delivery_evidence_idempotency"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_delivery_evidence_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_delivery_evidence_no_raw_payload"),
+    )
+
+    delivery_evidence_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    evidence_type: Mapped[str] = mapped_column(String(120))
+    summary: Mapped[str] = mapped_column(Text)
+    source_ref: Mapped[str] = mapped_column(String(300))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesLedgerEvent(Base):
+    """Append-only lifecycle observation with exact replay fencing."""
+
+    __tablename__ = "hermes_ledger_events"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_ledger_event_idempotency"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_ledger_event_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_ledger_event_no_raw_payload"),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    event_name: Mapped[str] = mapped_column(String(96))
+    outcome_status: Mapped[str] = mapped_column(String(32))
+    lane_status: Mapped[str] = mapped_column(String(32))
+    lane_type: Mapped[str] = mapped_column(String(120))
+    result: Mapped[str] = mapped_column(String(32))
+    reason_code: Mapped[str] = mapped_column(String(120))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    next_action: Mapped[str] = mapped_column(String(360))
+    correlation_id: Mapped[str] = mapped_column(String(120))
+    causation_id: Mapped[str] = mapped_column(String(120))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    emitted_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    heartbeat_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    stale_deadline_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    timeout_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    retry_budget: Mapped[int] = mapped_column(Integer)
+    rework_budget: Mapped[int] = mapped_column(Integer)
+    evidence_fingerprint: Mapped[str] = mapped_column(String(240))
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+    authoritative: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+
+
 class ManagerLaneClarityHandoff(Base):
     """Idempotent transport receipt, not manager lifecycle or tracker state."""
 

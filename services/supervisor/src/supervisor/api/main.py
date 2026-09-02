@@ -96,6 +96,9 @@ from supervisor.api.schemas import (
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
+    HermesLedgerIngestRequest,
+    HermesLaneRunProjectionApiEnvelope,
+    HermesOutcomeProjectionApiEnvelope,
     ManagerLaneClarityHandoffApiEnvelope,
     ManagerLaneClarityHandoffRequest,
     ManagerCoordinationHealthHandoffApiEnvelope,
@@ -166,6 +169,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
+from supervisor.application.hermes_outcomes import ingest_hermes_ledger, read_hermes_lane_run, read_hermes_outcome
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
     persist_manager_lane_clarity_handoff,
@@ -1632,6 +1636,62 @@ async def record_manager_terminal_event(
             detail=error_response(str(exc), "manager_terminal_event_conflict").model_dump(),
         ) from exc
     return ManagerTerminalEventApiEnvelope(data=event)
+
+
+@app.post(
+    "/hermes-control-plane/ledger",
+    response_model=HermesOutcomeProjectionApiEnvelope,
+)
+async def ingest_hermes_outcome_ledger(
+    payload: HermesLedgerIngestRequest,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist metadata-only lifecycle evidence; this route cannot execute delivery."""
+    try:
+        projection = await ingest_hermes_ledger(session, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
+        ) from exc
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.get(
+    "/hermes-control-plane/outcomes/{outcome_id}",
+    response_model=HermesOutcomeProjectionApiEnvelope,
+)
+async def get_hermes_outcome_ledger(
+    outcome_id: str,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    projection = await read_hermes_outcome(session, outcome_id)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Hermes outcome not found.", "hermes_outcome_not_found").model_dump(),
+        )
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.get(
+    "/hermes-control-plane/lane-runs/{lane_run_id}",
+    response_model=HermesLaneRunProjectionApiEnvelope,
+)
+async def get_hermes_lane_run_ledger(
+    lane_run_id: str,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    projection = await read_hermes_lane_run(session, lane_run_id)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response("Hermes lane run not found.", "hermes_lane_run_not_found").model_dump(),
+        )
+    return HermesLaneRunProjectionApiEnvelope(data=projection)
 
 
 @app.get(

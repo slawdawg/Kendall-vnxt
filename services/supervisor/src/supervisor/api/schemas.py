@@ -8002,6 +8002,181 @@ MANAGER_TERMINAL_EVENT_API_ENVELOPE_REQUIRED_FIELDS = (
 )
 MANAGER_TERMINAL_EVENT_TYPE = "authoritative_backlog_exhausted"
 
+# Hermes ledger contracts mirror the dependency-free TypeScript V1 boundary.
+# They intentionally retain metadata only and never expose an authority action.
+HERMES_OUTCOME_SCHEMA_VERSION = "hermes_outcome.v1"
+HERMES_LANE_RUN_SCHEMA_VERSION = "hermes_lane_run.v1"
+HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION = "delivery_evidence.v1"
+HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1"
+HERMES_RESULTS = frozenset({"allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"})
+HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "completed", "blocked", "rework"})
+HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
+HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested"})
+
+
+def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> str:
+    if (
+        value != value.strip()
+        or not value
+        or len(value) > maximum
+        or not _is_safe_pipeline_evidence_ref(value)
+        or PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
+        or re.search(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY(?: BLOCK)?)-----", value, re.IGNORECASE)
+        or LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
+    ):
+        raise ValueError(f"{field_name} must be bounded safe metadata text.")
+    return value
+
+
+def _validate_hermes_timestamp(value: datetime, field_name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} must include UTC offset.")
+    return value.astimezone(timezone.utc)
+
+
+def _parse_hermes_timestamp(value: object, field_name: str) -> datetime:
+    """Admit only canonical JSON UTC timestamps before strict model validation."""
+    if isinstance(value, str):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value):
+            raise ValueError(f"{field_name} must be canonical UTC ISO-8601.")
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if not isinstance(value, datetime):
+        raise ValueError(f"{field_name} must be a UTC datetime.")
+    return _validate_hermes_timestamp(value, field_name)
+
+
+class HermesOutcomeInputV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    outcomeId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_OUTCOME_SCHEMA_VERSION]
+    title: str = Field(max_length=240)
+    summary: str = Field(max_length=500)
+    status: str
+    result: str
+    reasonCode: str = Field(max_length=120)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=32)
+    nextAction: str = Field(max_length=360)
+    observedAt: datetime
+    idempotencyKey: str = Field(max_length=180)
+    createdAt: datetime
+    updatedAt: datetime
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("outcomeId", "title", "summary", "reasonCode", "nextAction", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 500 if info.field_name == "summary" else 360)
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value): raise ValueError("evidenceRefs must be unique.")
+        return [_validate_hermes_text(item, "evidenceRefs", 255) for item in value]
+    @field_validator("observedAt", "createdAt", "updatedAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.status not in HERMES_OUTCOME_STATUSES or self.result not in HERMES_RESULTS or self.createdAt > self.observedAt or self.observedAt > self.updatedAt: raise ValueError("Outcome has invalid closed state or timestamp order.")
+        return self
+
+
+class HermesLaneRunInputV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    laneRunId: str = Field(max_length=120); outcomeId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_LANE_RUN_SCHEMA_VERSION]; laneType: str = Field(max_length=120)
+    status: str; result: str; reasonCode: str = Field(max_length=120)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=32); nextAction: str = Field(max_length=360)
+    heartbeatAt: datetime; staleDeadlineAt: datetime; timeoutAt: datetime
+    retryBudget: int = Field(ge=0, le=100); reworkBudget: int = Field(ge=0, le=100)
+    evidenceFingerprint: str = Field(max_length=240); observedAt: datetime; idempotencyKey: str = Field(max_length=180)
+    createdAt: datetime; updatedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("laneRunId", "outcomeId", "laneType", "reasonCode", "nextAction", "evidenceFingerprint", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name)
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
+    @field_validator("heartbeatAt", "staleDeadlineAt", "timeoutAt", "observedAt", "createdAt", "updatedAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.status not in HERMES_LANE_RUN_STATUSES or self.result not in HERMES_RESULTS or not (self.createdAt <= self.heartbeatAt <= self.staleDeadlineAt <= self.timeoutAt) or self.observedAt < self.createdAt or self.updatedAt < self.observedAt: raise ValueError("Lane run has invalid state or timestamp order.")
+        return self
+
+
+class HermesDeliveryEvidenceInputV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    deliveryEvidenceId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION]; evidenceType: str = Field(max_length=120); summary: str = Field(max_length=500); sourceRef: str = Field(max_length=300)
+    observedAt: datetime; evidenceRefs: list[str] = Field(min_length=1, max_length=32); idempotencyKey: str = Field(max_length=180); createdAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("deliveryEvidenceId", "outcomeId", "laneRunId", "evidenceType", "summary", "sourceRef", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name)
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
+    @field_validator("observedAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.createdAt > self.observedAt: raise ValueError("Evidence timestamp order is invalid.")
+        return self
+
+
+class HermesLifecycleEventInputV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    eventId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION]; eventName: str; result: str; reasonCode: str = Field(max_length=120)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=32); nextAction: str = Field(max_length=360); correlationId: str = Field(max_length=120); causationId: str = Field(max_length=120)
+    observedAt: datetime; idempotencyKey: str = Field(max_length=180); emittedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]; authoritative: Literal[False]
+    @field_validator("eventId", "outcomeId", "laneRunId", "reasonCode", "nextAction", "correlationId", "causationId", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name)
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
+    @field_validator("observedAt", "emittedAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.eventName not in HERMES_EVENT_NAMES or self.result not in HERMES_RESULTS or self.observedAt > self.emittedAt: raise ValueError("Lifecycle event has invalid closed state or timestamp order.")
+        return self
+
+
+class HermesLedgerIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    outcome: HermesOutcomeInputV1; laneRun: HermesLaneRunInputV1; deliveryEvidence: HermesDeliveryEvidenceInputV1; event: HermesLifecycleEventInputV1
+    @model_validator(mode="after")
+    def _identity(self):
+        if self.outcome.outcomeId != self.laneRun.outcomeId or self.outcome.outcomeId != self.deliveryEvidence.outcomeId or self.outcome.outcomeId != self.event.outcomeId or self.laneRun.laneRunId != self.deliveryEvidence.laneRunId or self.laneRun.laneRunId != self.event.laneRunId: raise ValueError("Hermes ledger identities must bind outcome and lane run exactly.")
+        if self.outcome.result != self.laneRun.result or self.outcome.result != self.event.result: raise ValueError("Hermes ledger result snapshots must agree exactly.")
+        return self
+
+
+class HermesOutcomeProjectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    outcomeId: str; title: str; lifecycle: str; currentLaneRunId: str | None; currentResult: str; reasonCode: str; evidenceRefs: list[str]; latestEvidenceAt: datetime; nextAction: str; recoveryState: str; freshness: Literal["fresh", "stale", "unknown", "unavailable"]; observedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+
+
+class HermesOutcomeProjectionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    data: HermesOutcomeProjectionV1
+
+
+class HermesLaneRunProjectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    laneRunId: str; outcomeId: str; stage: str; result: str; retryBudget: int; reworkBudget: int
+    freshness: Literal["fresh", "stale", "unknown", "unavailable"]
+    nextAction: str; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+
+
+class HermesLaneRunProjectionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    data: HermesLaneRunProjectionV1
+
 
 class ManagerTerminalEventRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)

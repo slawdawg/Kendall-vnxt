@@ -282,7 +282,7 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
 
     active_migrations = _active_migrations_module()
     later_migration = active_migrations.SchemaMigration(
-        "0005_non_idempotent_model_table",
+            "0007_non_idempotent_model_table",
         non_idempotent_later_upgrade,
         clean_install=clean_install_future_table,
     )
@@ -423,6 +423,7 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                     "0003_memory_proposal_revision",
                     "0004_memory_proposal_write_reservation",
                     "0005_memory_proposal_write_intent",
+                    "0006_hermes_outcome_ledger",
                 }
     finally:
         await engine.dispose()
