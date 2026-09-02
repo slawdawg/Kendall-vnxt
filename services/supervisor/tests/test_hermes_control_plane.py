@@ -41,5 +41,6 @@ def test_hermes_ledger_boundary_is_strict_and_metadata_only():
 def test_hermes_routes_are_local_typed_projection_boundaries():
     route = lambda path: next(item for item in app.routes if isinstance(item, APIRoute) and item.path == path)
     assert route("/hermes-control-plane/ledger").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
+    assert route("/hermes-control-plane/board-events").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/outcomes/{outcome_id}").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/lane-runs/{lane_run_id}").response_model.__name__ == "HermesLaneRunProjectionApiEnvelope"

@@ -26,6 +26,7 @@ export const HERMES_POLICY_DECISION_SCHEMA_VERSION = "policy_decision.v1" as con
 export const HERMES_EXTERNAL_IMPACT_REQUEST_SCHEMA_VERSION = "external_impact_request.v1" as const;
 export const HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION = "follow_up_work.v1" as const;
 export const HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1" as const;
+export const HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_board_lifecycle_event.v1" as const;
 
 export type HermesOutcomeStatus = "proposed" | "active" | "completed" | "blocked" | "rework";
 export type HermesLaneRunStatus = "queued" | "running" | "review" | "rework" | "completed" | "blocked";
@@ -170,6 +171,33 @@ export interface HermesLifecycleEventV1 {
   readonly observedAt: string;
   readonly idempotencyKey: HermesIdempotencyKey;
   readonly emittedAt: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+  readonly authoritative: false;
+}
+
+/** Metadata signed by the board emitter; it never carries delivery authority. */
+export interface HermesBoardLifecycleEventV1 {
+  readonly schemaVersion: typeof HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION;
+  readonly issuerId: string;
+  readonly keyId: string;
+  readonly eventId: import("./ids").HermesEventId;
+  readonly idempotencyKey: HermesIdempotencyKey;
+  readonly boardId: string;
+  readonly cardId: string;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly eventName: HermesLifecycleEventName;
+  readonly result: HermesResult;
+  readonly reasonCode: string;
+  readonly evidenceRefs: readonly HermesEvidenceRefId[];
+  readonly nextAction: string;
+  readonly correlationId: import("./ids").HermesCorrelationId;
+  readonly causationId: import("./ids").HermesCausationId;
+  readonly observedAt: string;
+  readonly emittedAt: string;
+  readonly expiresAt: string;
+  readonly signatureB64: string;
   readonly metadataOnly: true;
   readonly rawPayloadRetained: false;
   readonly authoritative: false;

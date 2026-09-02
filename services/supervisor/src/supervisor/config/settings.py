@@ -92,6 +92,10 @@ class Settings(BaseSettings):
         default="[]",
         alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_ISSUER_REGISTRY",
     )
+    hermes_board_bridge_issuer_registry: str = Field(
+        default="[]",
+        alias="SUPERVISOR_HERMES_BOARD_BRIDGE_ISSUER_REGISTRY",
+    )
     local_dogfood_attestation_socket_path: str | None = Field(
         default=None, alias="SUPERVISOR_LOCAL_DOGFOOD_ATTESTATION_SOCKET_PATH"
     )

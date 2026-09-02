@@ -129,7 +129,12 @@ async def _update_if_current(session: AsyncSession, model, identifier: str, expe
         raise ValueError("Hermes projection changed concurrently; retry with fresh ledger metadata.")
 
 
-async def ingest_hermes_ledger(session: AsyncSession, payload: HermesLedgerIngestRequest) -> HermesOutcomeProjectionV1:
+async def ingest_hermes_ledger(
+    session: AsyncSession,
+    payload: HermesLedgerIngestRequest,
+    *,
+    commit: bool = True,
+) -> HermesOutcomeProjectionV1:
     """Append an event and atomically publish its current Supervisor projection."""
     request = HermesLedgerIngestRequest.model_validate(payload.model_dump())
     digest = _request_digest(request)
@@ -172,9 +177,14 @@ async def ingest_hermes_ledger(session: AsyncSession, payload: HermesLedgerInges
     lane_value = request.laneRun
     session.add(HermesLedgerEvent(event_id=value.eventId, outcome_id=value.outcomeId, lane_run_id=value.laneRunId, schema_version=value.schemaVersion, event_name=value.eventName, outcome_status=request.outcome.status, lane_status=lane_value.status, lane_type=lane_value.laneType, result=value.result, reason_code=value.reasonCode, evidence_refs_json=value.evidenceRefs, next_action=value.nextAction, correlation_id=value.correlationId, causation_id=value.causationId, observed_at=value.observedAt, emitted_at=value.emittedAt, heartbeat_at=lane_value.heartbeatAt, stale_deadline_at=lane_value.staleDeadlineAt, timeout_at=lane_value.timeoutAt, retry_budget=lane_value.retryBudget, rework_budget=lane_value.reworkBudget, evidence_fingerprint=lane_value.evidenceFingerprint, idempotency_key=value.idempotencyKey, request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False))
     try:
-        await session.commit()
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
     except IntegrityError as exc:
         await session.rollback()
+        if not commit:
+            raise
         replay = await _existing_event(session, request, digest)
         if replay is not None:
             restored = await session.get(HermesOutcome, request.outcome.outcomeId)

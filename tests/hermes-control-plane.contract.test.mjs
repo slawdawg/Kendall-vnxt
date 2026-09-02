@@ -18,6 +18,7 @@ const contractNames = [
   "ExternalImpactRequestV1",
   "FollowUpWorkV1",
   "HermesLifecycleEventV1",
+  "HermesBoardLifecycleEventV1",
 ];
 const resultValues = ["allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"];
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -116,6 +117,7 @@ test("Hermes guards are strict, closed, and fail closed", async () => {
   assert.match(combined, /isUtcIsoTimestamp/);
   assert.match(combined, /isOpaqueId/);
   assert.match(combined, /hasExactKeys/);
+  assert.match(combined, /isTimestampOrder\(value, \["observedAt", "emittedAt", "expiresAt"\]\)/);
   assert.match(combined, /deniedExternalImpact/);
   assert.match(combined, /externalImpactType|impactType/);
   assert.match(combined, /spend/);
@@ -137,6 +139,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     for (const guardName of [
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
       "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
+      "isHermesBoardLifecycleEventV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
     const later = "2026-08-28T01:00:00Z";
@@ -180,6 +183,14 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       reasonCode: "observed", nextAction: "continue", correlationId: "correlation:one", causationId: "causation:one",
       observedAt, idempotencyKey: "idempotency:event-one", emittedAt: observedAt, authoritative: false,
     };
+    const boardEvent = {
+      ...common, schemaVersion: contracts.HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION,
+      issuerId: "issuer:one", keyId: "key:one", eventId: "event:board-one", idempotencyKey: "idempotency:board-one",
+      boardId: "board:one", cardId: "card:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      eventName: "hermes.lane.recovered", result: "retryable", reasonCode: "board_observed", nextAction: "continue",
+      correlationId: "correlation:board-one", causationId: "causation:board-one", observedAt,
+      emittedAt: later, expiresAt: "2026-08-28T02:00:00Z", signatureB64: "AA==", authoritative: false,
+    };
     assert.equal(contracts.isHermesOutcomeV1(outcome), true);
     assert.equal(contracts.isHermesLaneRunV1(laneRun), true);
     assert.equal(contracts.isDeliveryEvidenceV1(evidence), true);
@@ -187,6 +198,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isExternalImpactRequestV1(impact), true);
     assert.equal(contracts.isFollowUpWorkV1(followUp), true);
     assert.equal(contracts.isHermesLifecycleEventV1(event), true);
+    assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
@@ -200,6 +212,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       contracts.externalImpactRequestV1Fields,
       contracts.followUpWorkV1Fields,
       contracts.hermesLifecycleEventV1Fields,
+      contracts.hermesBoardLifecycleEventV1Fields,
     ]) assert.equal(Object.isFrozen(fieldMetadata), true);
     for (const name of contractNames) {
       assert.equal(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT[name].length, contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT[name].length);
@@ -237,6 +250,10 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["lane recovery timestamp order", { ...laneRun, timeoutAt: "2026-08-28T00:30:00Z" }, contracts.isHermesLaneRunV1],
       ["lane retry budget", { ...laneRun, retryBudget: -1 }, contracts.isHermesLaneRunV1],
       ["event emission order", { ...event, emittedAt: "2026-08-27T23:00:00Z" }, contracts.isHermesLifecycleEventV1],
+      ["board event expires before emission", { ...boardEvent, expiresAt: observedAt }, contracts.isHermesBoardLifecycleEventV1],
+      ["board event opaque ID exceeds API bound", { ...boardEvent, boardId: `board:${"x".repeat(120)}` }, contracts.isHermesBoardLifecycleEventV1],
+      ["board event authorizes", { ...boardEvent, authoritative: true }, contracts.isHermesBoardLifecycleEventV1],
+      ["board event unknown field", { ...boardEvent, unknown: true }, contracts.isHermesBoardLifecycleEventV1],
       ["evidence reference", { ...evidence, evidenceRefs: ["bad"] }, contracts.isDeliveryEvidenceV1],
       ["policy decision", { ...decision, decision: "unknown" }, contracts.isPolicyDecisionV1],
     ];

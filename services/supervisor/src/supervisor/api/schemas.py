@@ -8008,6 +8008,7 @@ HERMES_OUTCOME_SCHEMA_VERSION = "hermes_outcome.v1"
 HERMES_LANE_RUN_SCHEMA_VERSION = "hermes_lane_run.v1"
 HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION = "delivery_evidence.v1"
 HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1"
+HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_board_lifecycle_event.v1"
 HERMES_RESULTS = frozenset({"allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"})
 HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "completed", "blocked", "rework"})
 HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
@@ -8143,6 +8144,55 @@ class HermesLifecycleEventInputV1(BaseModel):
     @model_validator(mode="after")
     def _valid(self):
         if self.eventName not in HERMES_EVENT_NAMES or self.result not in HERMES_RESULTS or self.observedAt > self.emittedAt: raise ValueError("Lifecycle event has invalid closed state or timestamp order.")
+        return self
+
+
+class HermesBoardLifecycleEventInputV1(BaseModel):
+    """Strict metadata-only wire payload verified by the Board Bridge."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schemaVersion: Literal[HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION]
+    issuerId: str = Field(max_length=120); keyId: str = Field(max_length=120)
+    eventId: str = Field(max_length=120); idempotencyKey: str = Field(max_length=180)
+    boardId: str = Field(max_length=120); cardId: str = Field(max_length=120)
+    outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
+    eventName: str; result: str; reasonCode: str = Field(max_length=120)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=32); nextAction: str = Field(max_length=360)
+    correlationId: str = Field(max_length=120); causationId: str = Field(max_length=120)
+    observedAt: datetime; emittedAt: datetime; expiresAt: datetime; signatureB64: str = Field(max_length=256)
+    metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]; authoritative: Literal[False]
+
+    @field_validator(
+        "issuerId", "keyId", "eventId", "idempotencyKey", "boardId", "cardId",
+        "outcomeId", "laneRunId", "reasonCode", "nextAction", "correlationId", "causationId",
+    )
+    @classmethod
+    def _safe(cls, value: str, info) -> str:
+        return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 180)
+
+    @field_validator("issuerId", "keyId", "eventId", "idempotencyKey", "boardId", "cardId", "outcomeId", "laneRunId", "correlationId", "causationId")
+    @classmethod
+    def _opaque_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value):
+            raise ValueError("Board lifecycle identity must be opaque.")
+        return value
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]:
+        return HermesOutcomeInputV1._refs(value)
+
+    @field_validator("observedAt", "emittedAt", "expiresAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.eventName not in HERMES_EVENT_NAMES or self.result not in HERMES_RESULTS:
+            raise ValueError("Board lifecycle event has invalid closed state.")
+        if not self.observedAt <= self.emittedAt < self.expiresAt:
+            raise ValueError("Board lifecycle event has invalid timestamp order.")
         return self
 
 
