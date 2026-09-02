@@ -57,6 +57,7 @@
     "preflight": "node ./scripts/preflight.mjs",
     "preflight:js": "node ./scripts/preflight.mjs js",
     "preflight:python": "node ./scripts/preflight.mjs python",
+    "hermes:preflight": "node ./scripts/hermes-runtime-preflight.mjs",
     "check:fast": "node ./scripts/run-fast-workflow-checks.mjs all",
     "check:ci-fast": "node ./scripts/run-fast-workflow-checks.mjs ci",
     "check:workspace-fast": "node ./scripts/run-fast-workflow-checks.mjs workspace",
