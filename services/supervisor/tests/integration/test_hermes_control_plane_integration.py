@@ -1,7 +1,7 @@
 import copy
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.hermes_outcomes import (
@@ -14,7 +14,7 @@ from supervisor.application.hermes_outcomes import (
 from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesOutcome, HermesVerificationRecord
+from supervisor.infrastructure.db.models import HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesVerificationRecord
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from test_hermes_control_plane import payload
 
@@ -34,6 +34,9 @@ async def test_hermes_ledger_is_idempotent_conflict_fenced_and_metadata_only(tmp
         with pytest.raises(ValueError, match="idempotency"): await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(conflict))
         coupled_conflict = copy.deepcopy(payload()); coupled_conflict["outcome"]["title"] = "Changed title"  # type: ignore[index]
         with pytest.raises(ValueError, match="idempotency"): await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(coupled_conflict))
+        bypass = copy.deepcopy(payload()); bypass["event"]["eventName"] = "hermes.review.disposition.recorded"; bypass["event"]["eventId"] = "event:review-bypass"; bypass["event"]["idempotencyKey"] = "event:review-bypass"; bypass["event"]["result"] = "completed"; bypass["outcome"]["status"] = "completed"; bypass["outcome"]["result"] = "completed"; bypass["laneRun"]["status"] = "completed"; bypass["laneRun"]["result"] = "completed"  # type: ignore[index]
+        with pytest.raises(ValueError, match="independent review handoff"):
+            await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(bypass))
         projection = await read_hermes_outcome(session, "outcome:1")
         assert projection is not None and projection.reasonCode == "verification_pending"
     async with engine.begin() as connection:
@@ -138,7 +141,7 @@ async def test_hermes_verification_revision_migration_upgrades_an_existing_0008_
         await connection.execute(text("ALTER TABLE hermes_verification_records DROP COLUMN expected_lane_revision"))
         await upgrade_database(connection)
         columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(hermes_verification_records)"))).all()}
-    assert {"expected_outcome_revision", "expected_lane_revision"} <= columns
+    assert {"schema_version", "expected_outcome_revision", "expected_lane_revision"} <= columns
     await engine.dispose()
 
 
@@ -155,6 +158,9 @@ async def test_hermes_review_handoff_requires_passed_independent_verification_an
     async with sessions() as session:
         initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
         await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        bypass = copy.deepcopy(initial); bypass["event"]["eventName"] = "hermes.lane.recovered"; bypass["event"]["eventId"] = "event:review-lane-bypass"; bypass["event"]["idempotencyKey"] = "event:review-lane-bypass"; bypass["event"]["result"] = "completed"; bypass["outcome"]["status"] = "completed"; bypass["outcome"]["result"] = "completed"; bypass["laneRun"]["laneRunId"] = "lane:review-bypass"; bypass["laneRun"]["idempotencyKey"] = "lane:review-bypass"; bypass["laneRun"]["status"] = "completed"; bypass["laneRun"]["result"] = "completed"; bypass["deliveryEvidence"]["laneRunId"] = "lane:review-bypass"; bypass["deliveryEvidence"]["deliveryEvidenceId"] = "evidence:review-bypass"; bypass["deliveryEvidence"]["idempotencyKey"] = "evidence:review-bypass"; bypass["event"]["laneRunId"] = "lane:review-bypass"  # type: ignore[index]
+        with pytest.raises(ValueError, match="independent review handoff"):
+            await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(bypass))
         approved = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(review_handoff()))
         assert approved.currentResult == "completed" and approved.currentLaneRunId == "lane:1"
         assert await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(review_handoff())) == approved
@@ -173,6 +179,16 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
     async with sessions() as session:
         initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
         await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        expired = review_handoff("technical_block")
+        expired["unavailableReviewerException"] = {"exceptionId": "exception:reviewer", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reason": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2020-01-01T00:00:00Z", "reviewOrExpiryAt": "2020-01-01T01:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
+        expired_request = HermesReviewHandoffRequest.model_validate(expired)
+        with pytest.raises(ValueError, match="expired"):
+            await ingest_hermes_review_handoff(session, expired_request)
+        with pytest.raises(ValueError, match="atomic committed"):
+            await ingest_hermes_review_handoff(session, expired_request, commit=False)
+        internal_exception = copy.deepcopy(expired); internal_exception["unavailableReviewerException"]["reasonCode"] = internal_exception["unavailableReviewerException"].pop("reason")  # type: ignore[index]
+        with pytest.raises(ValueError, match="reason"):
+            HermesReviewHandoffRequest.model_validate(internal_exception)
         request = review_handoff("rework")
         projection = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))
         assert projection.currentLaneRunId == "lane:1" and projection.currentResult == "rework"
@@ -185,10 +201,6 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
         before = copy.deepcopy(request); before["disposition"]["observedAt"] = "2026-09-02T12:01:00Z"  # type: ignore[index]
         with pytest.raises(ValueError, match="timestamp"):
             HermesReviewHandoffRequest.model_validate(before)
-        expired = review_handoff("technical_block")
-        expired["unavailableReviewerException"] = {"exceptionId": "exception:reviewer", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reasonCode": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2020-01-01T00:00:00Z", "reviewBy": "2020-01-01T01:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
-        with pytest.raises(ValueError, match="unexpired"):
-            HermesReviewHandoffRequest.model_validate(expired)
     await engine.dispose()
 
 
@@ -204,8 +216,35 @@ async def test_failed_verification_persists_closed_rework_without_a_review_dispo
         projection = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))
         assert projection.currentLaneRunId == "lane:1" and projection.currentResult == "rework" and projection.reasonCode == "verification_failed"
         assert await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request)) == projection
+        verification = await session.get(HermesVerificationRecord, "verification:failed")
+        event = await session.scalar(select(HermesLedgerEvent).where(HermesLedgerEvent.event_name == "hermes.verification.recorded"))
+        outcome = await session.get(HermesOutcome, "outcome:1")
+        assert verification is not None and verification.schema_version == "verification_record.v1"
+        assert event is not None and event.emitted_at >= event.observed_at and outcome is not None and outcome.current_event_id == event.event_id
         conflicting = copy.deepcopy(request); conflicting["verification"]["target"] = "test:other"  # type: ignore[index]
         with pytest.raises(ValueError, match="idempotency"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(conflicting))
         assert can_replace_current_result(previous="completed", next_result="rework") is False
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_verification_consumes_rework_budget_and_fences_exhaustion(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'verification-budget.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    request = review_handoff(); request["verification"]["result"] = "failed"; request["verification"]["verificationRecordId"] = "verification:budget"; request["verification"]["idempotencyKey"] = "verification:budget"; request.pop("disposition")
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"; initial["laneRun"]["reworkBudget"] = 1  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        assert (await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))).currentResult == "rework"
+        lane = await session.get(HermesLaneRun, "lane:1")
+        assert lane is not None and lane.rework_budget == 0
+    exhausted = copy.deepcopy(request); exhausted["verification"]["verificationRecordId"] = "verification:exhausted"; exhausted["verification"]["idempotencyKey"] = "verification:exhausted"
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["outcomeId"] = "outcome:2"; initial["outcome"]["idempotencyKey"] = "outcome:2"; initial["laneRun"]["outcomeId"] = "outcome:2"; initial["deliveryEvidence"]["outcomeId"] = "outcome:2"; initial["event"]["outcomeId"] = "outcome:2"; initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"; initial["laneRun"]["reworkBudget"] = 0; initial["laneRun"]["laneRunId"] = "lane:2"; initial["laneRun"]["idempotencyKey"] = "lane:2"; initial["deliveryEvidence"]["laneRunId"] = "lane:2"; initial["event"]["laneRunId"] = "lane:2"; initial["deliveryEvidence"]["deliveryEvidenceId"] = "evidence:2"; initial["deliveryEvidence"]["idempotencyKey"] = "evidence:2"; initial["event"]["eventId"] = "event:2"; initial["event"]["idempotencyKey"] = "event:2"  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        exhausted["verification"]["outcomeId"] = "outcome:2"; exhausted["verification"]["laneRunId"] = "lane:2"; exhausted["verification"]["sourceFingerprint"] = "sha256:ledger-proof"; exhausted["verification"]["evidenceRefs"] = ["evidence:2"]
+        with pytest.raises(ValueError, match="budget is exhausted"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(exhausted))
     await engine.dispose()

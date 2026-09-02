@@ -146,6 +146,16 @@ async def _apply_hermes_review_disposition_revision_binding(connection: AsyncCon
         if name not in columns:
             await connection.execute(text(f"ALTER TABLE hermes_review_dispositions ADD COLUMN {name} {definition}"))
 
+
+async def _apply_hermes_verification_schema_version(connection: AsyncConnection) -> None:
+    """Preserve the immutable verification contract version on 0008 upgrades."""
+    exists = await connection.run_sync(lambda sync_connection: inspect(sync_connection).has_table("hermes_verification_records"))
+    if not exists:
+        return
+    columns = await connection.run_sync(lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_verification_records")})
+    if "schema_version" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN schema_version VARCHAR(64) NOT NULL DEFAULT 'verification_record.v1'"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -194,6 +204,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0010_hermes_review_disposition_revision_binding",
         _apply_hermes_review_disposition_revision_binding,
         clean_install=_apply_hermes_review_disposition_revision_binding,
+    ),
+    SchemaMigration(
+        "0011_hermes_verification_schema_version",
+        _apply_hermes_verification_schema_version,
+        clean_install=_apply_hermes_verification_schema_version,
     ),
 )
 

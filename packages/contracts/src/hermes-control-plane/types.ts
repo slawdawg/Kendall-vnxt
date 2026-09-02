@@ -40,7 +40,8 @@ export type HermesLifecycleEventName =
   | "hermes.lane.recovered"
   | "hermes.delivery.denied"
   | "hermes.external-impact.requested"
-  | "hermes.review.disposition.recorded";
+  | "hermes.review.disposition.recorded"
+  | "hermes.verification.recorded";
 
 export interface HermesOutcomeV1 {
   readonly outcomeId: import("./ids").HermesOutcomeId;
@@ -222,10 +223,10 @@ export interface ReviewDispositionV1 {
   readonly expectedOutcomeRevision: number; readonly expectedLaneRevision: number;
 }
 
-/** Coupled, metadata-only handoff. Individual records are not sufficient authority. */
+/** Metadata-only verification handoff; only passed verification may carry a disposition. */
 export interface ReviewHandoffV1 {
   readonly verification: VerificationRecordV1;
-  readonly disposition: ReviewDispositionV1;
+  readonly disposition?: ReviewDispositionV1;
 }
 
 export type HermesLifecycleEventEnvelopeV1 = HermesLifecycleEventV1;

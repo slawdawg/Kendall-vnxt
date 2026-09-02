@@ -8223,6 +8223,12 @@ class HermesVerificationRecordInputV1(BaseModel):
     @field_validator("verificationRecordId", "outcomeId", "laneRunId", "target", "sourceFingerprint", "developerIdentity", "developerHome", "developerWorkspace", "idempotencyKey")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
+    @field_validator("verificationRecordId", "outcomeId", "laneRunId", "idempotencyKey")
+    @classmethod
+    def _opaque_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Verification identity must be opaque.")
+        return value
     @field_validator("evidenceRefs")
     @classmethod
     def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
@@ -8248,6 +8254,12 @@ class HermesReviewDispositionInputV1(BaseModel):
     @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "reviewerIdentity", "reviewerHome", "reviewerWorkspace", "reasonCode", "nextAction", "idempotencyKey")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 240)
+    @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "idempotencyKey")
+    @classmethod
+    def _opaque_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Review disposition identity must be opaque.")
+        return value
     @field_validator("evidenceRefs")
     @classmethod
     def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
@@ -8262,7 +8274,7 @@ class HermesReviewDispositionInputV1(BaseModel):
 
 class HermesReviewerUnavailableExceptionV1(BaseModel):
     """Strict audit requirement; never an approval or authority grant."""
-    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", strict=True)
     exceptionId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
     reasonCode: str = Field(max_length=120, alias="reason"); riskClass: Literal["technical_block", "medium"] = Field(alias="riskClass"); compensatingReviewRef: str = Field(max_length=240, alias="compensatingReviewRef")
     recordedBy: str = Field(max_length=120); recordedAt: datetime; reviewBy: datetime = Field(alias="reviewOrExpiryAt"); metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
@@ -8309,7 +8321,7 @@ class HermesReviewHandoffRequest(BaseModel):
         if (disposition.expectedOutcomeRevision != verification.expectedOutcomeRevision or disposition.expectedLaneRevision != verification.expectedLaneRevision): raise ValueError("Review handoff revisions must bind verification and disposition exactly.")
         if self.unavailableReviewerException is not None:
             exception = self.unavailableReviewerException
-            if disposition.disposition != "technical_block" or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId) or exception.reviewBy <= datetime.now(timezone.utc): raise ValueError("Unavailable-reviewer exception is audit-only and must bind an unexpired blocked Developer lane.")
+            if disposition.disposition != "technical_block" or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId): raise ValueError("Unavailable-reviewer exception is audit-only and must bind the blocked Developer lane.")
         return self
 
 

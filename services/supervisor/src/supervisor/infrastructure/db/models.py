@@ -961,6 +961,7 @@ class HermesVerificationRecord(Base):
     verification_record_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
     lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64), default="verification_record.v1")
     developer_identity: Mapped[str] = mapped_column(String(120))
     developer_home: Mapped[str] = mapped_column(String(240))
     developer_workspace: Mapped[str] = mapped_column(String(240))
