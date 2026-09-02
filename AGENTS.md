@@ -77,6 +77,19 @@
     additional full run is permitted only when governed verification is
     unavailable or inconclusive, or when a recorded RCA requires that exact
     additional evidence.
+  - Hermes governed fast-profile delivery: ordinary Hermes lanes use
+    `finish-pr --verify check-fast` after focused changed-surface tests and
+    required review. Do not make `test:codex-workspace` a per-delivery gate.
+    Reserve that full suite for scheduled confidence evidence or a recorded RCA
+    that requires it. This operator-approved economy rule never permits
+    skipping focused checks, review, exact-head delivery gates, or the separate
+    Spend and real-user deployment hard stops.
+    Existing source-enforced recovery or adoption commands that explicitly
+    require `--verify check` remain mandatory exceptions to this ordinary-lane
+    default.
+    For ordinary Hermes lanes, this supersedes the preceding `finish-pr --verify
+    check` default: use `finish-pr <task> --stage-all --verify check-fast` after
+    focused changed-surface tests and required review.
   - `node ./scripts/run-manager-control-plane-shards.mjs ...` from a managed
     worktree under `.codex-workspaces`: manager tests create ignored BMAD
     fixture and worktree-local state. When the worktree is outside the sandbox
@@ -544,6 +557,8 @@ line.
 - `static`
 - `static_bundle`
 - `static_bundle_summary`
+- `workspace_behavior_shadow`
+- `supervisor_behavior_shadow`
 
 The `static` family is non-required only when the exact-head `changes` planner
 does not select static confidence. A selected static path requires its checks
