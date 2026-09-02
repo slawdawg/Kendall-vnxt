@@ -167,7 +167,8 @@ GitHub state.
 - `pnpm run test:static-bundle-summary` verifies static bundle timing reports, same-head summary evidence, and reporting-only promotion guardrails
 - `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
-- `pnpm run check:governed-worker-execution-dry-run` verifies Claude/Hermes dry-run packet guardrails, metadata-only evidence, and blocked execution authorities
+- [Hermes live-alpha authority matrix](docs/workflows/hermes-live-alpha-authority-matrix.md) governs ordinary named-lane source delivery, while preserving the recovery/adoption `--verify check` exception and its bounded GitHub gates
+- `pnpm run check:governed-worker-execution-dry-run` verifies Claude/Hermes fixture/readiness guardrails, metadata-only evidence, and blocked execution authorities; it is not ordinary delivery authority
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
 - `pnpm run check:legacy-planning-inventory` verifies legacy planning artifact inventory contract/schema/service/API metadata-only boundary alignment
 - `pnpm run check:review-resource-policy` verifies review trigger contract/schema/service/API/dashboard/catalog alignment without launching review tools

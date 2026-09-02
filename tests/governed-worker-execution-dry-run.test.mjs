@@ -53,6 +53,36 @@ const copiedWorktreeExecutionPath = fileURLToPath(copiedWorktreeExecutionSourceP
 const copiedWorktreeEvidenceExportPath = fileURLToPath(new URL("../scripts/governed-worker-copied-worktree-evidence-export.mjs", import.meta.url));
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const checkWrapperPath = new URL("../scripts/check-governed-worker-execution-dry-run.mjs", import.meta.url);
+const liveAuthorityMatrixPath = new URL("../docs/workflows/hermes-live-alpha-authority-matrix.md", import.meta.url);
+
+test("dry-run fixtures remain non-authoritative while live-alpha delivery has a bounded source policy", async () => {
+  const [legacy, matrix] = await Promise.all([readFile(new URL("../docs/workflows/governed-worker-execution-dry-run.md", import.meta.url), "utf8"), readFile(liveAuthorityMatrixPath, "utf8")]);
+  assert.match(legacy, /non-authoritative for ordinary delivery/);
+  assert.match(matrix, /Status: active source-owned policy/);
+  assert.match(matrix, /For a conflict about ordinary delivery, this matrix controls/);
+  assert.match(matrix, /An ambiguous\s+classification or conflict stops delivery/);
+  assert.match(matrix, /`--verify check-fast`/);
+  assert.match(matrix, /only that source-owned identifier can classify it/);
+  assert.match(matrix, /`--verify check` requirement remains in force/);
+  assert.match(matrix, /docs\/workflows\/end-to-end-lane-runner\.md/);
+  for (const phrase of [
+    "Source/docs/tests edit and focused verification",
+    "Commit, non-force push, PR create/update",
+    "Resolve a current fully-satisfied thread",
+    "Merge",
+    "base `dev`",
+    "terminal required checks",
+    "current terminal-check and thread/review state",
+    "new PR gates may be nonterminal",
+    "failed or ambiguous current gates stop",
+    "zero unresolved current or outdated threads",
+    "local verification, diff-risk, action record and rollback",
+    "Spend, real-user deployment, or ambiguous external impact",
+    "ambiguity fails closed",
+    "Force push, protection bypass, cross-target or unrelated mutation, credential/provider access, cleanup",
+    "cannot launch workers",
+  ]) assert.match(matrix, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
 
 const deniedFixtureExpectations = Object.freeze([
   {

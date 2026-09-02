@@ -1,11 +1,11 @@
 # Governed Worker Execution Dry-Run
 
 Date: 2026-06-26
-Status: active contract, non-executing
+Status: legacy fixture/readiness contract, non-authoritative for ordinary delivery
 
 ## Purpose
 
-This workflow contract defines the first source-owned dry-run surface for
+This workflow contract defines the retained source-owned dry-run surface for
 governed Claude and Hermes worker execution. It lets Kendall_Nxt validate and
 report what a proposed worker execution packet would request without granting
 live worker launch, provider/network access, session inheritance, source
@@ -14,8 +14,10 @@ trust authority.
 
 Local BMAD artifacts under `_bmad-output/` are planning provenance only. They
 are not required for a clean install and do not grant execution authority. This
-source-owned contract, together with the existing authority and evidence
-boundary documents, is the implementation reference for the dry-run MVP.
+source-owned contract is the implementation reference only for dry-run
+fixtures/readiness. Ordinary named-lane delivery is governed by
+`docs/workflows/hermes-live-alpha-authority-matrix.md`; this document cannot
+grant or deny that separate live-alpha delivery authority.
 
 ## Source Authority
 
