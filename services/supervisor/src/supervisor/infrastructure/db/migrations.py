@@ -74,6 +74,29 @@ async def _apply_memory_proposal_write_intent(connection: AsyncConnection) -> No
     await ensure_memory_proposal_write_intent_schema(connection)
 
 
+async def _apply_hermes_outcome_ledger(connection: AsyncConnection) -> None:
+    """Create only the additive Hermes-ledger tables for clean and upgraded DBs."""
+
+    from supervisor.infrastructure.db.models import (
+        HermesDeliveryEvidence,
+        HermesLaneRun,
+        HermesLedgerEvent,
+        HermesOutcome,
+    )
+
+    await connection.run_sync(
+        lambda sync_connection: HermesOutcome.metadata.create_all(
+            sync_connection,
+            tables=[
+                HermesOutcome.__table__,
+                HermesLaneRun.__table__,
+                HermesDeliveryEvidence.__table__,
+                HermesLedgerEvent.__table__,
+            ],
+        )
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -97,6 +120,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0005_memory_proposal_write_intent",
         _apply_memory_proposal_write_intent,
         clean_install=_apply_memory_proposal_write_intent,
+    ),
+    SchemaMigration(
+        "0006_hermes_outcome_ledger",
+        _apply_hermes_outcome_ledger,
+        clean_install=_apply_hermes_outcome_ledger,
     ),
 )
 
