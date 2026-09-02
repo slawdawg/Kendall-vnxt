@@ -168,6 +168,7 @@ GitHub state.
 - `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - [Hermes live-alpha authority matrix](docs/workflows/hermes-live-alpha-authority-matrix.md) governs ordinary named-lane source delivery, while preserving the recovery/adoption `--verify check` exception and its bounded GitHub gates
+- [Hermes autonomous delivery runtime preflight](docs/workflows/hermes-autonomous-delivery.md) records the local-only pin, health, backup, rollback, and disable posture without enabling Hermes work
 - `pnpm run check:governed-worker-execution-dry-run` verifies Claude/Hermes fixture/readiness guardrails, metadata-only evidence, and blocked execution authorities; it is not ordinary delivery authority
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
 - `pnpm run check:legacy-planning-inventory` verifies legacy planning artifact inventory contract/schema/service/API metadata-only boundary alignment
