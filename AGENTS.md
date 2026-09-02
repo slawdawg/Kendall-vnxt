@@ -557,6 +557,8 @@ line.
 - `static`
 - `static_bundle`
 - `static_bundle_summary`
+- `workspace_behavior_shadow`
+- `supervisor_behavior_shadow`
 
 The `static` family is non-required only when the exact-head `changes` planner
 does not select static confidence. A selected static path requires its checks
