@@ -14,7 +14,8 @@ from supervisor.application.hermes_outcomes import (
 from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesOutcome
+from supervisor.infrastructure.db.models import HermesOutcome, HermesVerificationRecord
+from supervisor.domain.hermes_control_plane import can_replace_current_result
 from test_hermes_control_plane import payload
 
 
@@ -122,9 +123,28 @@ async def test_hermes_ledger_migration_is_ordered_and_clean_install_aware(tmp_pa
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_hermes_verification_revision_migration_upgrades_an_existing_0008_table(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-upgrade.db'}")
+    async with engine.begin() as connection:
+        await connection.execute(text(f"CREATE TABLE {SCHEMA_MIGRATIONS_TABLE} (revision VARCHAR(80) PRIMARY KEY)"))
+        for migration in MIGRATIONS:
+            if migration.revision > "0008_hermes_review_handoff":
+                break
+            await connection.execute(text(f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (revision) VALUES (:revision)"), {"revision": migration.revision})
+        await connection.execute(text("CREATE TABLE admission_locks (scope VARCHAR(32) PRIMARY KEY, generation INTEGER NOT NULL)"))
+        await connection.run_sync(lambda sync_connection: HermesVerificationRecord.metadata.create_all(sync_connection, tables=[HermesVerificationRecord.__table__]))
+        await connection.execute(text("ALTER TABLE hermes_verification_records DROP COLUMN expected_outcome_revision"))
+        await connection.execute(text("ALTER TABLE hermes_verification_records DROP COLUMN expected_lane_revision"))
+        await upgrade_database(connection)
+        columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(hermes_verification_records)"))).all()}
+    assert {"expected_outcome_revision", "expected_lane_revision"} <= columns
+    await engine.dispose()
+
+
 def review_handoff(disposition="approve"):
     now = "2026-09-02T12:02:00Z"
-    return {"verification": {"verificationRecordId": "verification:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:one", "developerHome": "home:developer", "developerWorkspace": "workspace:developer", "evidenceRefs": ["evidence:verification"], "observedAt": now, "idempotencyKey": "verification:1", "createdAt": now, "metadataOnly": True, "rawPayloadRetained": False}, "disposition": {"reviewDispositionId": f"review:{disposition}", "verificationRecordId": "verification:1", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "review_disposition.v1", "disposition": disposition, "reviewerIdentity": "reviewer:one", "reviewerHome": "home:reviewer", "reviewerWorkspace": "workspace:reviewer", "reasonCode": "reviewed", "nextAction": "Hold for later delivery adapter.", "evidenceRefs": ["evidence:review"], "observedAt": now, "idempotencyKey": f"review:{disposition}", "createdAt": now, "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}}
+    return {"verification": {"verificationRecordId": "verification:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:one", "developerHome": "home:developer", "developerWorkspace": "workspace:developer", "evidenceRefs": ["evidence:verification"], "observedAt": now, "idempotencyKey": "verification:1", "createdAt": now, "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}, "disposition": {"reviewDispositionId": f"review:{disposition}", "verificationRecordId": "verification:1", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "review_disposition.v1", "disposition": disposition, "reviewerIdentity": "reviewer:one", "reviewerHome": "home:reviewer", "reviewerWorkspace": "workspace:reviewer", "reasonCode": "reviewed", "nextAction": "Hold for later delivery adapter.", "evidenceRefs": ["evidence:review"], "observedAt": now, "idempotencyKey": f"review:{disposition}", "createdAt": now, "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}}
 
 
 @pytest.mark.asyncio
@@ -159,6 +179,9 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
         conflicting = copy.deepcopy(request); conflicting["disposition"]["nextAction"] = "Different action"  # type: ignore[index]
         with pytest.raises(ValueError, match="idempotency"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(conflicting))
+        revision_conflict = copy.deepcopy(request); revision_conflict["verification"]["expectedOutcomeRevision"] = 2; revision_conflict["disposition"]["expectedOutcomeRevision"] = 2  # type: ignore[index]
+        with pytest.raises(ValueError, match="idempotency"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(revision_conflict))
         before = copy.deepcopy(request); before["disposition"]["observedAt"] = "2026-09-02T12:01:00Z"  # type: ignore[index]
         with pytest.raises(ValueError, match="timestamp"):
             HermesReviewHandoffRequest.model_validate(before)
@@ -166,4 +189,23 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
         expired["unavailableReviewerException"] = {"exceptionId": "exception:reviewer", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reasonCode": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2020-01-01T00:00:00Z", "reviewBy": "2020-01-01T01:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
         with pytest.raises(ValueError, match="unexpired"):
             HermesReviewHandoffRequest.model_validate(expired)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_verification_persists_closed_rework_without_a_review_disposition(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'verification-failure.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        request = review_handoff(); request["verification"]["result"] = "failed"; request["verification"]["verificationRecordId"] = "verification:failed"; request["verification"]["idempotencyKey"] = "verification:failed"; request.pop("disposition")
+        projection = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))
+        assert projection.currentLaneRunId == "lane:1" and projection.currentResult == "rework" and projection.reasonCode == "verification_failed"
+        assert await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request)) == projection
+        conflicting = copy.deepcopy(request); conflicting["verification"]["target"] = "test:other"  # type: ignore[index]
+        with pytest.raises(ValueError, match="idempotency"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(conflicting))
+        assert can_replace_current_result(previous="completed", next_result="rework") is False
     await engine.dispose()

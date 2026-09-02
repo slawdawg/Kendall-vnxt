@@ -8218,6 +8218,7 @@ class HermesVerificationRecordInputV1(BaseModel):
     developerIdentity: str = Field(max_length=120); developerHome: str = Field(max_length=240); developerWorkspace: str = Field(max_length=240)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32); observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime
     metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    expectedOutcomeRevision: int = Field(ge=1); expectedLaneRevision: int = Field(ge=1)
     @field_validator("verificationRecordId", "outcomeId", "laneRunId", "target", "sourceFingerprint", "developerIdentity", "developerHome", "developerWorkspace", "idempotencyKey")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
@@ -8278,17 +8279,33 @@ class HermesReviewerUnavailableExceptionV1(BaseModel):
 
 class HermesReviewHandoffRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    verification: HermesVerificationRecordInputV1; disposition: HermesReviewDispositionInputV1; unavailableReviewerException: HermesReviewerUnavailableExceptionV1 | None = None
+    verification: HermesVerificationRecordInputV1; disposition: HermesReviewDispositionInputV1 | None = None; unavailableReviewerException: HermesReviewerUnavailableExceptionV1 | None = None
     @model_validator(mode="after")
     def _bind(self):
         verification, disposition = self.verification, self.disposition
+        if verification.result != "passed":
+            if disposition is not None or self.unavailableReviewerException is not None: raise ValueError("Failed or inconclusive verification records a closed ledger result without review disposition.")
+            return self
+        if disposition is None: raise ValueError("Passed verification requires an independent review disposition.")
         if (verification.outcomeId != disposition.outcomeId or verification.laneRunId != disposition.developerLaneRunId or verification.verificationRecordId != disposition.verificationRecordId): raise ValueError("Review handoff identities must bind the original Developer lane exactly.")
         if verification.result != "passed": raise ValueError("Only passed verification is eligible for review.")
         if disposition.observedAt < verification.observedAt: raise ValueError("Review cannot precede verification.")
         developer = {verification.developerIdentity, verification.developerHome, verification.developerWorkspace}
         reviewer = {disposition.reviewerIdentity, disposition.reviewerHome, disposition.reviewerWorkspace}
-        if developer & reviewer or any(a.startswith(f"{b}:") or b.startswith(f"{a}:") for a in developer for b in reviewer): raise ValueError("Independent review cannot overlap Developer identity, home, or workspace.")
-        if (disposition.expectedOutcomeRevision < 1 or disposition.expectedLaneRevision < 1): raise ValueError("Review handoff requires explicit revisions.")
+        def _parts(value: str) -> tuple[str, ...]:
+            parts: list[str] = []
+            for part in re.split(r"[:\\\\/]", value.lower()):
+                if not part or part == ".": continue
+                if part == "..":
+                    if parts: parts.pop()
+                    continue
+                parts.append(part)
+            return tuple(parts)
+        def _overlap(left: str, right: str) -> bool:
+            left_parts, right_parts = _parts(left), _parts(right)
+            return left_parts == right_parts[:len(left_parts)] or right_parts == left_parts[:len(right_parts)]
+        if developer & reviewer or any(_overlap(a, b) for a in developer for b in reviewer): raise ValueError("Independent review cannot overlap Developer identity, home, or workspace.")
+        if (disposition.expectedOutcomeRevision != verification.expectedOutcomeRevision or disposition.expectedLaneRevision != verification.expectedLaneRevision): raise ValueError("Review handoff revisions must bind verification and disposition exactly.")
         if self.unavailableReviewerException is not None:
             exception = self.unavailableReviewerException
             if disposition.disposition != "technical_block" or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId) or exception.reviewBy <= datetime.now(timezone.utc): raise ValueError("Unavailable-reviewer exception is audit-only and must bind an unexpired blocked Developer lane.")

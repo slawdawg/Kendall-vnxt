@@ -120,6 +120,17 @@ async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_verification_revision_binding(connection: AsyncConnection) -> None:
+    """Add replay-bound revision columns for databases upgraded from 0008."""
+    columns = await connection.run_sync(
+        lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_verification_records")}
+    )
+    if "expected_outcome_revision" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN expected_outcome_revision INTEGER NOT NULL DEFAULT 1"))
+    if "expected_lane_revision" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN expected_lane_revision INTEGER NOT NULL DEFAULT 1"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -158,6 +169,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0008_hermes_review_handoff",
         _apply_hermes_review_handoff,
         clean_install=_apply_hermes_review_handoff,
+    ),
+    SchemaMigration(
+        "0009_hermes_verification_revision_binding",
+        _apply_hermes_verification_revision_binding,
+        clean_install=_apply_hermes_verification_revision_binding,
     ),
 )
 

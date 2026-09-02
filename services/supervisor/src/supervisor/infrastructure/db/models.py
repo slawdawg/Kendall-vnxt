@@ -969,6 +969,8 @@ class HermesVerificationRecord(Base):
     source_fingerprint: Mapped[str] = mapped_column(String(240))
     evidence_refs_json: Mapped[list] = mapped_column(JSON)
     idempotency_key: Mapped[str] = mapped_column(String(180))
+    expected_outcome_revision: Mapped[int] = mapped_column(Integer)
+    expected_lane_revision: Mapped[int] = mapped_column(Integer)
     observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
     created_at: Mapped[datetime] = mapped_column(UtcDateTime())
     metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
