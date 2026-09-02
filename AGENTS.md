@@ -61,6 +61,22 @@
     nested Node child processes are unavailable in the sandbox; run the exact
     same command outside the sandbox only when full CLI integration coverage is
     required.
+  - `pnpm run test:codex-workspace` outside the sandbox: if two exact
+    executions emit only partial passing output and their execution sessions
+    disappear without a terminal exit code, `WORKSPACE_TEST_PROFILE_SUMMARY`,
+    receipt, diagnostic, or live child process, classify this as an external
+    execution/session-output lifecycle boundary. Do not run a third full suite,
+    infer a pass, or begin delivery. Preserve the focused verification evidence,
+    record the boundary, and route durable terminal-output capture or runner
+    hardening before another full-suite attempt.
+  - Hermes delivery test economy: before a standard governed
+    `finish-pr --verify check`, run focused changed-surface tests and the
+    required bounded review; treat that governed packet as the single
+    full-suite/check authority. Do not run a duplicate direct full
+    `pnpm run test:codex-workspace` merely to pre-prove the same lane. An
+    additional full run is permitted only when governed verification is
+    unavailable or inconclusive, or when a recorded RCA requires that exact
+    additional evidence.
   - `node ./scripts/run-manager-control-plane-shards.mjs ...` from a managed
     worktree under `.codex-workspaces`: manager tests create ignored BMAD
     fixture and worktree-local state. When the worktree is outside the sandbox
