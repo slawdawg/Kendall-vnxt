@@ -28,6 +28,7 @@ const requiredFixtures = Object.freeze([
   "denied-worker-shadow-delivery-exposure.json",
 ]);
 const requiredPolicyRefs = Object.freeze([
+  "docs/workflows/hermes-live-alpha-authority-matrix.md",
   "docs/workflows/governed-worker-execution-dry-run.md",
   "docs/workflows/execution-authority-boundary.md",
   "docs/workflows/implementation-evidence-boundary.md",
