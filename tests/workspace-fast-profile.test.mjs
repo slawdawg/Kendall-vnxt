@@ -67,10 +67,11 @@ test("workspace-fast profile has the exact bounded delivery allowlist", () => {
   assert(!lifecycleWorkspaceBlock.includes('"test:codex-workspace"'), "resumable workspace expansion must not invoke the raw full fixture");
 });
 
-test("workspace-fast profile keeps the full fixture separately runnable", () => {
-  assert.equal(packageJson.scripts["test:codex-workspace"], "node ./scripts/test-codex-workspace.mjs");
-  assert(pnpmStages(packageJson.scripts.check).includes("test:codex-workspace"), "full check must retain the raw full fixture as an exact stage");
-  assert(pnpmStages(packageJson.scripts["check:static"]).includes("test:codex-workspace"), "full static must retain the raw full fixture as an exact stage");
+test("workspace-fast profile keeps the capture-enabled full fixture separately runnable", () => {
+  assert.equal(packageJson.scripts["test:codex-workspace"], "node ./scripts/codex-workspace.mjs workspace-suite");
+  assert(workspaceLifecycle.includes('case "workspace-suite":'), "full fixture must use the terminal-evidence wrapper");
+  assert(pnpmStages(packageJson.scripts.check).includes("test:codex-workspace"), "full check must retain the capture-enabled full fixture as an exact stage");
+  assert(pnpmStages(packageJson.scripts["check:static"]).includes("test:codex-workspace"), "full static must retain the capture-enabled full fixture as an exact stage");
   assert(workspaceFixtures.includes(`test("${focusedDeliveryFilter}"`), "focused delivery fixture must remain available");
   assert(workspaceFixtures.includes("CODEX_WORKSPACE_TEST_FILTER matched no tests"), "focused fixture filter must fail closed");
 });

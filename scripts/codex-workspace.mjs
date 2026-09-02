@@ -51,6 +51,12 @@ const checkVerificationTimeoutMs = 900_000;
 const verificationDiagnosticSchemaVersion = 2;
 const verificationDiagnosticTailMaxBytes = 2_048;
 const verificationDiagnosticCaptureMaxBytes = 4 * 1024 * 1024;
+const workspaceSuiteReceiptSchemaVersion = 1;
+const workspaceSuiteReceiptTailMaxBytes = 2_048;
+const workspaceSuiteReceiptRetentionLimit = 12;
+const workspaceSuiteInterruptionGraceMs = 5_000;
+const workspaceSuiteReceiptDirectoryName = "workspace-suite-terminal-receipts";
+const workspaceSuiteFixtureReceiptDirectoryName = "workspace-suite-fixture-receipts";
 // Recovery proof is intentionally bounded: Git patch output is untrusted
 // process output, but the documented recovery must support ordinary binary or
 // generated changes larger than Node's 1 MiB default capture.
@@ -411,6 +417,18 @@ try {
     case "delivery-readiness":
       deliveryReadinessCommand(commandArgs);
       break;
+    case "workspace-suite":
+      await workspaceSuite(commandArgs, { kind: "workspace-suite", command: workspaceSuiteCommand() });
+      break;
+    case "workspace-suite-fixture":
+      await workspaceSuiteFixture(commandArgs);
+      break;
+    case "workspace-suite-fixture-receipt":
+      workspaceSuiteFixtureReceipt(commandArgs);
+      break;
+    case "workspace-suite-receipt":
+      workspaceSuiteReceipt(commandArgs);
+      break;
     case "record-check-stage-evidence":
       recordCheckStageEvidence(commandArgs);
       break;
@@ -520,6 +538,8 @@ Commands:
   emergency-stop            Preview, apply, or clear a metadata-only emergency stop checkpoint.
   resume <query>            Print the matching task worktree and branch.
   delivery-readiness <task-id> Inspect one exact owned lane's local delivery prerequisites without mutation.
+  workspace-suite           Run the exact workspace suite with a bounded durable terminal receipt.
+  workspace-suite-receipt [invocation-id] Read and validate the latest or named workspace-suite receipt.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   inspect-task-lock <task-id> Read a redacted, exact-task lock inspection packet.
   adopt-legacy-recovery  Preview or apply the one governed v1-to-v2 recovery adoption.
@@ -17443,6 +17463,465 @@ function verificationOutcome(result) {
   if (!Number.isInteger(result.status)) return "ambiguous-result";
   if (result.status !== 0) return "nonzero-exit";
   return "success";
+}
+
+function workspaceSuiteReceiptDirectory(state, directoryName = workspaceSuiteReceiptDirectoryName) {
+  mkdirSync(state.root, { recursive: true, mode: 0o700 });
+  const rootStats = lstatSync(state.root);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error("workspace-suite receipt storage root is not a regular directory");
+  }
+  if (![workspaceSuiteReceiptDirectoryName, workspaceSuiteFixtureReceiptDirectoryName].includes(directoryName)) {
+    throw new Error("workspace-suite receipt directory is invalid");
+  }
+  const directory = join(state.root, directoryName);
+  ensureDurableDirectory(directory, state.root);
+  return directory;
+}
+
+function workspaceSuiteCommand() {
+  return [process.execPath, "./scripts/test-codex-workspace.mjs"];
+}
+
+function workspaceSuiteCommandDigest(command) {
+  return createHash("sha256").update(JSON.stringify(command)).digest("hex");
+}
+
+function workspaceSuiteCwdDigest(cwd) {
+  return createHash("sha256").update(resolve(cwd)).digest("hex");
+}
+
+function workspaceSuiteChildEnvironment(kind, receipt) {
+  const environment = { ...process.env };
+  // A detached child must stop itself if an uncatchable parent death lands
+  // between spawn and durable receipt binding. The test harness verifies the
+  // PID/start identity before each bounded run and exits nonzero on mismatch.
+  environment.CODEX_WORKSPACE_SUITE_PARENT_PID = String(receipt.runner_pid);
+  environment.CODEX_WORKSPACE_SUITE_PARENT_PROCESS_START_IDENTITY = receipt.runner_process_start_identity || "";
+  if (kind === "workspace-suite") {
+    // The package command is the full-suite contract. Focus/profile controls
+    // remain available on their explicit package scripts, never on this route.
+    delete environment.CODEX_WORKSPACE_TEST_FILTER;
+    delete environment.CODEX_WORKSPACE_TEST_PROFILE;
+  }
+  return environment;
+}
+
+function workspaceSuiteReceiptPath(directory, invocationId) {
+  if (!isUuid(invocationId)) throw new Error("workspace-suite receipt invocation id is invalid");
+  return join(directory, `${invocationId}.json`);
+}
+
+function workspaceSuiteActiveReceiptPath(directory) {
+  return join(directory, "active.json");
+}
+
+function readWorkspaceSuiteReceipt(path) {
+  const record = readRegularJson(path, 16_384);
+  const expectedCommand = workspaceSuiteCommand();
+  if (!record || record.schema_version !== workspaceSuiteReceiptSchemaVersion || !isUuid(record.invocation_id) ||
+      !["workspace-suite", "workspace-suite-fixture"].includes(record.kind) ||
+      !Array.isArray(record.command) || record.command.some((part) => typeof part !== "string") ||
+      (record.kind === "workspace-suite" && JSON.stringify(record.command) !== JSON.stringify(expectedCommand)) ||
+      (record.kind === "workspace-suite-fixture" && (record.command.length !== 3 || record.command[0] !== process.execPath || record.command[1] !== "-e")) ||
+      typeof record.command_digest !== "string" || !/^[a-f0-9]{64}$/i.test(record.command_digest) ||
+      record.command_digest !== workspaceSuiteCommandDigest(record.command) ||
+      typeof record.cwd_digest !== "string" || !/^[a-f0-9]{64}$/i.test(record.cwd_digest) ||
+      record.cwd_digest !== workspaceSuiteCwdDigest(repoRoot) ||
+      !isCanonicalIsoTimestamp(record.started_at) || !["running", "completed"].includes(record.status)) {
+    throw new Error("workspace-suite receipt is invalid");
+  }
+  if (record.status === "running") {
+    if (Object.hasOwn(record, "completed_at") || Object.hasOwn(record, "terminal")) {
+      throw new Error("workspace-suite incomplete receipt is invalid");
+    }
+    const hasChildBinding = ["child_pid", "child_process_start_identity", "child_group_id"].some((key) => Object.hasOwn(record, key));
+    if (hasChildBinding && (!Number.isSafeInteger(record.child_pid) || record.child_pid <= 0 ||
+        typeof record.child_process_start_identity !== "string" || !record.child_process_start_identity ||
+        !Number.isSafeInteger(record.child_group_id) || record.child_group_id <= 0)) {
+      throw new Error("workspace-suite child binding is invalid");
+    }
+    return record;
+  }
+  const terminal = record.terminal;
+  if (!isCanonicalIsoTimestamp(record.completed_at) || Date.parse(record.completed_at) < Date.parse(record.started_at) ||
+      !terminal || typeof terminal !== "object" || Array.isArray(terminal) ||
+      !["success", "nonzero-exit", "signal", "launch-error", "incomplete"].includes(terminal.outcome) ||
+      (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) ||
+      (terminal.signal !== null && typeof terminal.signal !== "string") ||
+      (terminal.error_code !== null && typeof terminal.error_code !== "string") ||
+      typeof terminal.failure_marker !== "string" || terminal.failure_marker.length > 160 ||
+      !terminal.output || typeof terminal.output !== "object" || Array.isArray(terminal.output)) {
+    throw new Error("workspace-suite terminal receipt is invalid");
+  }
+  for (const stream of [terminal.output.stdout, terminal.output.stderr]) {
+    if (!stream || typeof stream !== "object" || Array.isArray(stream) ||
+        !Number.isSafeInteger(stream.bytes) || stream.bytes < 0 ||
+        !Number.isSafeInteger(stream.retained_bytes) || stream.retained_bytes < 0 || stream.retained_bytes > workspaceSuiteReceiptTailMaxBytes ||
+        typeof stream.value !== "string" || Buffer.byteLength(stream.value, "utf8") !== stream.retained_bytes) {
+      throw new Error("workspace-suite terminal output is invalid");
+    }
+  }
+  if (record.kind === "workspace-suite" && terminal.outcome === "success" &&
+      (terminal.exit_code !== 0 || terminal.signal !== null || terminal.error_code !== null ||
+       terminal.profile_summary?.profile !== "all" || !Number.isSafeInteger(terminal.profile_summary?.executedTestCount) || terminal.profile_summary.executedTestCount <= 0)) {
+    throw new Error("workspace-suite success receipt lacks full-suite proof");
+  }
+  return record;
+}
+
+function writeWorkspaceSuiteActiveReceipt(directory, receipt) {
+  writeDurableJsonAtomic(workspaceSuiteActiveReceiptPath(directory), {
+    schema_version: workspaceSuiteReceiptSchemaVersion,
+    invocation_id: receipt.invocation_id,
+    receipt_file: basename(workspaceSuiteReceiptPath(directory, receipt.invocation_id)),
+    command_digest: receipt.command_digest,
+    started_at: receipt.started_at,
+  });
+}
+
+function readWorkspaceSuiteActiveReceipt(directory) {
+  const active = readRegularJson(workspaceSuiteActiveReceiptPath(directory), 2_048);
+  if (!active || active.schema_version !== workspaceSuiteReceiptSchemaVersion || !isUuid(active.invocation_id) ||
+      active.receipt_file !== `${active.invocation_id}.json` ||
+      typeof active.command_digest !== "string" || !/^[a-f0-9]{64}$/i.test(active.command_digest) ||
+      !isCanonicalIsoTimestamp(active.started_at)) {
+    throw new Error("workspace-suite active receipt pointer is invalid");
+  }
+  return active;
+}
+
+function workspaceSuiteTerminalRecord(result, stdout, stderr, outputBytes = {}, kind = "workspace-suite") {
+  const initialOutcome = result.errorCode
+    ? "launch-error"
+    : result.signal
+      ? "signal"
+      : result.status === 0
+        ? "success"
+        : "nonzero-exit";
+  const summary = workspaceSuiteProfileSummary(stdout);
+  const outcome = initialOutcome === "success" && kind === "workspace-suite" &&
+      (!summary || summary.profile !== "all" || summary.executedTestCount <= 0)
+    ? "incomplete"
+    : initialOutcome;
+  return {
+    outcome,
+    exit_code: Number.isInteger(result.status) ? result.status : null,
+    signal: result.signal || null,
+    error_code: result.errorCode || null,
+    failure_marker: outcome === "success" ? "" : "WORKSPACE_SUITE_TERMINAL_FAILURE",
+    output: {
+      // Stream output remains visible to the caller, but no raw child output is
+      // persisted. A truncated token can evade a tail-only redactor, so durable
+      // evidence keeps only bounded byte counts and the structured summary.
+      stdout: { bytes: outputBytes.stdout || 0, retained_bytes: 0, value: "" },
+      stderr: { bytes: outputBytes.stderr || 0, retained_bytes: 0, value: "" },
+    },
+    ...(summary ? { profile_summary: summary } : {}),
+  };
+}
+
+function workspaceSuiteProfileSummary(output) {
+  const lines = String(output || "").split(/\r?\n/).reverse();
+  const line = lines.find((value) => value.startsWith("WORKSPACE_TEST_PROFILE_SUMMARY="));
+  if (!line) return null;
+  try {
+    const value = JSON.parse(line.slice("WORKSPACE_TEST_PROFILE_SUMMARY=".length));
+    if (typeof value?.profile !== "string" || !Number.isSafeInteger(value.executedTestCount) || value.executedTestCount < 0) return null;
+    return { profile: value.profile, executedTestCount: value.executedTestCount };
+  } catch {
+    return null;
+  }
+}
+
+function retainBoundedWorkspaceSuiteReceipts(directory, activeInvocationId) {
+  const candidates = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/i.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    try {
+      const receipt = readWorkspaceSuiteReceipt(path);
+      if (receipt.invocation_id !== activeInvocationId && (receipt.status === "completed" || workspaceSuiteReceiptRunnerIsAbsent(receipt))) {
+        candidates.push({ path, completedAt: Date.parse(receipt.completed_at || receipt.started_at) });
+      }
+    } catch {
+      // Invalid evidence is retained as a fail-closed diagnostic instead of being silently erased.
+    }
+  }
+  candidates.sort((left, right) => right.completedAt - left.completedAt);
+  for (const candidate of candidates.slice(workspaceSuiteReceiptRetentionLimit - 1)) {
+    try { rmSync(candidate.path, { force: true }); } catch { /* bounded retention is best-effort after terminal evidence is durable */ }
+  }
+}
+
+function workspaceSuiteReceiptRunnerIsAbsent(receipt) {
+  if (receipt.status !== "running" || !Number.isSafeInteger(receipt.runner_pid) || receipt.runner_pid <= 0 ||
+      !Number.isSafeInteger(receipt.child_pid) || receipt.child_pid <= 0 ||
+      typeof receipt.child_process_start_identity !== "string" || !receipt.child_process_start_identity ||
+      !Number.isSafeInteger(receipt.child_group_id) || receipt.child_group_id <= 0) return false;
+  if (process.platform === "linux") {
+    const observed = processStartIdentity(receipt.runner_pid);
+    const runnerAbsent = receipt.runner_process_start_identity && observed !== receipt.runner_process_start_identity
+      ? true
+      : processIsAbsent(receipt.runner_pid);
+    if (!runnerAbsent) return false;
+    const childObserved = processStartIdentity(receipt.child_pid);
+    if (childObserved === receipt.child_process_start_identity) return false;
+    return probeProcessGroupAbsence(receipt.child_group_id, "workspace-suite child group") === null;
+  }
+  return processIsAbsent(receipt.runner_pid) && processIsAbsent(receipt.child_pid);
+}
+
+function signalWorkspaceSuiteChild(child, signal) {
+  if (!child || child.exitCode !== null || !Number.isInteger(child.pid) || child.pid <= 0) return;
+  try {
+    if (process.platform === "linux") process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+function workspaceSuiteFixtureCommand(mode) {
+  const parentWatchdog = [
+    "const parent = Number(process.env.CODEX_WORKSPACE_SUITE_PARENT_PID);",
+    "const expected = String(process.env.CODEX_WORKSPACE_SUITE_PARENT_PROCESS_START_IDENTITY || '');",
+    "const alive = () => { try { const stat = require('node:fs').readFileSync('/proc/' + parent + '/stat', 'utf8'); const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/); return fields[0] !== 'Z' && (!expected || ('linux-proc-start-ticks:' + parent + ':' + fields[19]) === expected); } catch { try { process.kill(parent, 0); return true; } catch { return false; } } };",
+    "if (!Number.isSafeInteger(parent) || parent <= 0 || !alive()) process.exit(1);",
+    "setInterval(() => { if (!alive()) process.exit(1); }, 25).unref();",
+  ].join("");
+  const scripts = {
+    success: `${parentWatchdog}console.log('WORKSPACE_TEST_PROFILE_SUMMARY={\\\"profile\\\":\\\"fixture\\\",\\\"executedTestCount\\\":1}');`,
+    "success-linger": `${parentWatchdog}console.log('WORKSPACE_TEST_PROFILE_SUMMARY={\\\"profile\\\":\\\"fixture\\\",\\\"executedTestCount\\\":1}');`,
+    "assertion-failure": `${parentWatchdog}require('node:assert/strict').fail('fixture-secret-token-123 ${"x".repeat(4_096)}');`,
+    hold: `${parentWatchdog}setInterval(() => {}, 1000);`,
+  };
+  if (!Object.hasOwn(scripts, mode)) throw new Error("workspace-suite-fixture requires success, success-linger, assertion-failure, or hold");
+  return [process.execPath, "-e", scripts[mode]];
+}
+
+async function workspaceSuiteFixture(argv) {
+  if (argv.length !== 1) throw new Error("workspace-suite-fixture requires one bounded fixture name");
+  await workspaceSuite([], {
+    kind: "workspace-suite-fixture",
+    command: workspaceSuiteFixtureCommand(argv[0]),
+    receiptDirectoryName: workspaceSuiteFixtureReceiptDirectoryName,
+    postTerminalSuccessWaitMs: argv[0] === "success-linger" ? 300 : 0,
+  });
+}
+
+async function workspaceSuite(argv, descriptor = {}) {
+  if (argv.length > 0) throw new Error("workspace-suite does not accept arguments");
+  const { state } = assertWorkspaceStateStorage();
+  const directory = workspaceSuiteReceiptDirectory(state, descriptor.receiptDirectoryName || workspaceSuiteReceiptDirectoryName);
+  const kind = descriptor.kind === "workspace-suite-fixture" ? "workspace-suite-fixture" : "workspace-suite";
+  const executionCommand = Array.isArray(descriptor.command) ? descriptor.command : workspaceSuiteCommand();
+  // Fixture commands deliberately contain assertion payloads. Persist only a
+  // fixed fixture identity, never their raw inline program text.
+  const command = kind === "workspace-suite-fixture"
+    ? [process.execPath, "-e", "<workspace-suite-fixture>"]
+    : executionCommand;
+  const startedAt = new Date().toISOString();
+  let child = null;
+  let interruptionSignal = null;
+  let interruptionEscalation = null;
+  let persistedTerminal = null;
+  const interrupt = (signal) => {
+    if (interruptionSignal) return;
+    interruptionSignal = signal;
+    try { signalWorkspaceSuiteChild(child, signal); } catch { /* close result remains authoritative */ }
+    if (child?.exitCode === null) {
+      interruptionEscalation = setTimeout(() => {
+        try { signalWorkspaceSuiteChild(child, "SIGKILL"); } catch { /* terminal record remains fail-closed */ }
+      }, workspaceSuiteInterruptionGraceMs);
+    }
+    // Leave success handlers installed until process exit. A signal delivered
+    // just after the success write must supersede it rather than returning a
+    // durable false-success receipt.
+    if (persistedTerminal?.terminal?.outcome === "success") {
+      const terminal = {
+        ...persistedTerminal.terminal,
+        outcome: "signal",
+        exit_code: null,
+        signal,
+        failure_marker: "WORKSPACE_SUITE_TERMINAL_FAILURE",
+      };
+      try {
+        // Invalidate the active binding before replacing success. If either
+        // subsequent write fails, readers see a stale receipt rather than
+        // reusing the former active success record.
+        writeWorkspaceSuiteActiveReceipt(directory, {
+          ...receipt,
+          command_digest: "0".repeat(64),
+        });
+        writeDurableJsonAtomic(receiptPath, {
+          ...receipt,
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          terminal,
+        });
+        writeWorkspaceSuiteActiveReceipt(directory, receipt);
+        persistedTerminal = { terminal };
+      } catch {
+        // If invalidation itself failed, remove only the owned active pointer
+        // as a final fail-closed fallback; no prior receipt may stay current.
+        try { rmSync(workspaceSuiteActiveReceiptPath(directory), { force: true }); } catch { /* runner still exits nonzero */ }
+      }
+      process.exitCode = 1;
+    }
+  };
+  const interruptionHandlers = new Map();
+  for (const signal of ["SIGINT", "SIGHUP", "SIGTERM"]) {
+    const listener = () => interrupt(signal);
+    interruptionHandlers.set(signal, listener);
+    process.on(signal, listener);
+  }
+  const receipt = {
+    schema_version: workspaceSuiteReceiptSchemaVersion,
+    invocation_id: randomUUID(),
+    kind,
+    command,
+    command_digest: workspaceSuiteCommandDigest(command),
+    cwd_digest: workspaceSuiteCwdDigest(repoRoot),
+    started_at: startedAt,
+    runner_pid: process.pid,
+    runner_process_start_identity: processStartIdentity(process.pid),
+    status: "running",
+  };
+  const receiptPath = workspaceSuiteReceiptPath(directory, receipt.invocation_id);
+  // Publish the new active binding first. If the process is interrupted before
+  // its initial receipt is durable, the reader fails closed on the missing
+  // active record instead of accepting the prior invocation as current.
+  writeWorkspaceSuiteActiveReceipt(directory, receipt);
+  console.log(`WORKSPACE_SUITE_RECEIPT=${JSON.stringify({ invocation_id: receipt.invocation_id, receipt_path: receiptPath, status: "running" })}`);
+
+  try {
+    child = spawn(executionCommand[0], executionCommand.slice(1), {
+      cwd: repoRoot,
+      env: workspaceSuiteChildEnvironment(kind, receipt),
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform === "linux",
+    });
+    const childStartIdentity = processStartIdentityIncludingZombie(child.pid);
+    if (!childStartIdentity || !Number.isInteger(child.pid) || child.pid <= 0) {
+      signalWorkspaceSuiteChild(child, "SIGKILL");
+      throw new Error("workspace-suite child process identity is unavailable");
+    }
+    Object.assign(receipt, {
+      child_pid: child.pid,
+      child_process_start_identity: childStartIdentity,
+      child_group_id: child.pid,
+    });
+    // Do not persist a running receipt until its child is bound. A hard kill
+    // before this point leaves only the active pointer, which the reader
+    // rejects rather than preserving an unbounded, unaccountable receipt.
+    writeNewJson(receiptPath, receipt);
+    retainBoundedWorkspaceSuiteReceipts(directory, receipt.invocation_id);
+    if (interruptionSignal) signalWorkspaceSuiteChild(child, interruptionSignal);
+  } catch (error) {
+    for (const [signal, listener] of interruptionHandlers) process.removeListener(signal, listener);
+    if (interruptionEscalation) clearTimeout(interruptionEscalation);
+    const terminal = workspaceSuiteTerminalRecord({ status: null, signal: null, errorCode: error?.code || "ERR_CHILD_PROCESS" }, "", error?.message || String(error), {}, kind);
+    writeDurableJsonAtomic(receiptPath, { ...receipt, status: "completed", completed_at: new Date().toISOString(), terminal });
+    console.error(`WORKSPACE_SUITE_TERMINAL_RECEIPT=${JSON.stringify({ invocation_id: receipt.invocation_id, outcome: terminal.outcome, receipt_path: receiptPath })}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  let stdout = "";
+  let stderr = "";
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  child.stdout.on("data", (chunk) => {
+    const value = Buffer.from(chunk);
+    stdoutBytes += value.length;
+    // Retain only enough transient text to recognize the existing structured
+    // profile summary; all other child output is deliberately non-durable.
+    stdout = boundedUtf8Tail(`${stdout}${value.toString("utf8")}`, workspaceSuiteReceiptTailMaxBytes);
+    process.stdout.write(value);
+  });
+  child.stderr.on("data", (chunk) => {
+    const value = Buffer.from(chunk);
+    stderrBytes += value.length;
+    stderr = boundedUtf8Tail(`${stderr}${value.toString("utf8")}`, workspaceSuiteReceiptTailMaxBytes);
+    process.stderr.write(value);
+  });
+  const result = await new Promise((resolveResult) => {
+    child.once("error", (error) => resolveResult({ status: null, signal: null, errorCode: error?.code || "ERR_CHILD_PROCESS", errorMessage: error?.message || String(error) }));
+    child.once("close", (status, signal) => resolveResult({ status, signal: signal || null, errorCode: null, errorMessage: "" }));
+  });
+  // Let any signal already delivered while the child closed run its handler
+  // before deriving the durable result. That closes the event-loop handoff
+  // between a zero exit and receipt terminalization.
+  await new Promise((resolveCheckpoint) => setImmediate(resolveCheckpoint));
+  const terminal = workspaceSuiteTerminalRecord(
+    { ...result, signal: result.signal || interruptionSignal },
+    stdout,
+    `${stderr}${result.errorMessage || ""}`,
+    { stdout: stdoutBytes, stderr: stderrBytes + Buffer.byteLength(result.errorMessage || "", "utf8") },
+    kind,
+  );
+  try {
+    const existing = readWorkspaceSuiteReceipt(receiptPath);
+    if (existing.status !== "running" || existing.invocation_id !== receipt.invocation_id) {
+      throw new Error("workspace-suite receipt changed before terminalization");
+    }
+    writeDurableJsonAtomic(receiptPath, { ...receipt, status: "completed", completed_at: new Date().toISOString(), terminal });
+    persistedTerminal = { terminal };
+    retainBoundedWorkspaceSuiteReceipts(directory, receipt.invocation_id);
+  } catch (error) {
+    for (const [signal, listener] of interruptionHandlers) process.removeListener(signal, listener);
+    if (interruptionEscalation) clearTimeout(interruptionEscalation);
+    console.error(`FAIL: workspace-suite terminal receipt could not be recorded: ${error?.message || error}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (terminal.outcome === "success" && Number.isSafeInteger(descriptor.postTerminalSuccessWaitMs) && descriptor.postTerminalSuccessWaitMs > 0) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, descriptor.postTerminalSuccessWaitMs));
+  }
+  const terminalOutcome = persistedTerminal?.terminal?.outcome || terminal.outcome;
+  if (terminalOutcome !== "success") {
+    for (const [signal, listener] of interruptionHandlers) process.removeListener(signal, listener);
+  }
+  if (interruptionEscalation) clearTimeout(interruptionEscalation);
+  console.log(`WORKSPACE_SUITE_TERMINAL_RECEIPT=${JSON.stringify({ invocation_id: receipt.invocation_id, outcome: terminalOutcome, receipt_path: receiptPath })}`);
+  process.exitCode = terminalOutcome === "success" ? 0 : 1;
+}
+
+function workspaceSuiteReceipt(argv) {
+  workspaceSuiteReceiptAtDirectory(argv, workspaceSuiteReceiptDirectoryName);
+}
+
+function workspaceSuiteFixtureReceipt(argv) {
+  workspaceSuiteReceiptAtDirectory(argv, workspaceSuiteFixtureReceiptDirectoryName);
+}
+
+function workspaceSuiteReceiptAtDirectory(argv, directoryName) {
+  const { positional, options } = parseOptions(argv);
+  if (Object.keys(options).some((key) => key !== "summaryJson") || positional.length > 1 || options.summaryJson === false) {
+    throw new Error("workspace-suite-receipt accepts at most one invocation id and optional --summary-json");
+  }
+  const { state } = assertWorkspaceStateStorage();
+  const directory = workspaceSuiteReceiptDirectory(state, directoryName);
+  const active = readWorkspaceSuiteActiveReceipt(directory);
+  const invocationId = positional[0] || active.invocation_id;
+  const receipt = readWorkspaceSuiteReceipt(workspaceSuiteReceiptPath(directory, invocationId));
+  const activeMatch = active.invocation_id === receipt.invocation_id && active.command_digest === receipt.command_digest;
+  const terminal = receipt.status === "completed" ? receipt.terminal : null;
+  const success = receipt.kind === "workspace-suite" && activeMatch && terminal?.outcome === "success" && terminal.exit_code === 0 && terminal.signal === null && terminal.error_code === null && terminal.profile_summary?.profile === "all" && terminal.profile_summary.executedTestCount > 0;
+  const status = success ? "passed" : !activeMatch ? "stale" : receipt.status === "running" ? "incomplete" : "failed";
+  const projection = {
+    invocation_id: receipt.invocation_id,
+    status,
+    command_digest: receipt.command_digest,
+    started_at: receipt.started_at,
+    completed_at: receipt.completed_at || null,
+    terminal: terminal ? { outcome: terminal.outcome, exit_code: terminal.exit_code, signal: terminal.signal, error_code: terminal.error_code, failure_marker: terminal.failure_marker } : null,
+    profile_summary: terminal?.profile_summary || null,
+  };
+  if (options.summaryJson) console.log(JSON.stringify(projection));
+  else console.log(`WORKSPACE_SUITE_RECEIPT_STATUS=${JSON.stringify(projection)}`);
+  if (!success) process.exitCode = 1;
 }
 
 function requireGh(commandName) {

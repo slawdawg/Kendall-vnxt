@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,6 +11,36 @@ import { isWorkspaceTestProfile, workspaceTestProfileForName } from "./lib/codex
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = join(rootDir, "scripts", "codex-workspace.mjs");
+const workspaceSuiteParentPid = Number(process.env.CODEX_WORKSPACE_SUITE_PARENT_PID);
+const workspaceSuiteParentStartIdentity = String(process.env.CODEX_WORKSPACE_SUITE_PARENT_PROCESS_START_IDENTITY || "");
+
+function workspaceSuiteParentIsLive() {
+  if (!Number.isSafeInteger(workspaceSuiteParentPid) || workspaceSuiteParentPid <= 0) return false;
+  if (process.platform === "linux" && workspaceSuiteParentStartIdentity) {
+    try {
+      const stat = readFileSync(`/proc/${workspaceSuiteParentPid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+      return `linux-proc-start-ticks:${workspaceSuiteParentPid}:${fields[19]}` === workspaceSuiteParentStartIdentity;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    process.kill(workspaceSuiteParentPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (process.env.CODEX_WORKSPACE_SUITE_PARENT_PID) {
+  if (!workspaceSuiteParentIsLive()) throw new Error("workspace-suite parent is absent before test execution");
+  setInterval(() => {
+    if (workspaceSuiteParentIsLive()) return;
+    console.error("FAIL: workspace-suite parent disappeared; terminating detached test child.");
+    process.exit(1);
+  }, 25).unref();
+}
 const testFilter = String(process.env.CODEX_WORKSPACE_TEST_FILTER || "").trim().toLowerCase();
 const workspaceTestProfile = String(process.env.CODEX_WORKSPACE_TEST_PROFILE || "all").trim().toLowerCase();
 if (!isWorkspaceTestProfile(workspaceTestProfile)) {
@@ -62,6 +92,135 @@ if (nestedNodeProbe.error?.code === "EPERM") {
 }
 
 try {
+  test("workspace-suite persists bounded terminal evidence without changing the profile summary contract", () => {
+    const fixture = createWorkspaceSuiteReceiptFixture();
+    try {
+      const packageManifest = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
+      assert(packageManifest.scripts?.["test:codex-workspace"] === "node ./scripts/codex-workspace.mjs workspace-suite", JSON.stringify(packageManifest.scripts?.["test:codex-workspace"]));
+      const runnerSource = readFileSync(scriptPath, "utf8");
+      assert(runnerSource.includes("delete environment.CODEX_WORKSPACE_TEST_FILTER;"), "workspace-suite did not scrub focused-test selection");
+      assert(runnerSource.includes("delete environment.CODEX_WORKSPACE_TEST_PROFILE;"), "workspace-suite did not scrub profile selection");
+      const result = runWorkspaceSuiteReceiptFixture("success", fixture.stateRoot);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes('WORKSPACE_TEST_PROFILE_SUMMARY={"profile":"fixture","executedTestCount":1}'), result.stdout);
+      const receipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+      assert(receipt.status === "completed", JSON.stringify(receipt));
+      assert(receipt.terminal?.outcome === "success", JSON.stringify(receipt));
+      assert(receipt.terminal?.exit_code === 0, JSON.stringify(receipt));
+      assert(receipt.terminal?.profile_summary?.executedTestCount === 1, JSON.stringify(receipt));
+    } finally {
+      cleanupWorkspaceSuiteReceiptFixture(fixture);
+    }
+  });
+
+  test("workspace-suite persists an assertion failure with redacted bounded terminal evidence", () => {
+    const fixture = createWorkspaceSuiteReceiptFixture();
+    try {
+      const result = runWorkspaceSuiteReceiptFixture("assertion-failure", fixture.stateRoot);
+      assert(result.code !== 0, "assertion failure unexpectedly succeeded");
+      const receipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+      assert(receipt.status === "completed", JSON.stringify(receipt));
+      assert(receipt.terminal?.outcome === "nonzero-exit", JSON.stringify(receipt));
+      assert(receipt.terminal?.failure_marker === "WORKSPACE_SUITE_TERMINAL_FAILURE", JSON.stringify(receipt));
+      assert(receipt.terminal?.output?.stderr?.retained_bytes <= 2048, JSON.stringify(receipt));
+      assert(!receipt.terminal?.output?.stderr?.value.includes("fixture-secret-token-123"), JSON.stringify(receipt));
+      assert(!JSON.stringify(receipt).includes("fixture-secret-token-123"), JSON.stringify(receipt));
+    } finally {
+      cleanupWorkspaceSuiteReceiptFixture(fixture);
+    }
+  });
+
+  test("workspace-suite records child interruption as terminal non-success", () => {
+    const fixture = createWorkspaceSuiteReceiptFixture();
+    try {
+      runWorkspaceSuiteWrapperSignalFixture(fixture.stateRoot);
+      const receipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+      assert(receipt.status === "completed", JSON.stringify(receipt));
+      assert(receipt.terminal?.outcome === "signal", JSON.stringify(receipt));
+      assert(receipt.terminal?.signal === "SIGTERM", JSON.stringify(receipt));
+    } finally {
+      cleanupWorkspaceSuiteReceiptFixture(fixture);
+    }
+  });
+
+  test("workspace-suite supersedes a completed success when the wrapper is signaled", () => {
+    const fixture = createWorkspaceSuiteReceiptFixture();
+    try {
+      runWorkspaceSuiteWrapperLateSignalFixture(fixture.stateRoot);
+      const receipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+      assert(receipt.status === "completed", JSON.stringify(receipt));
+      assert(receipt.terminal?.outcome === "signal", JSON.stringify(receipt));
+      assert(receipt.terminal?.signal === "SIGTERM", JSON.stringify(receipt));
+    } finally {
+      cleanupWorkspaceSuiteReceiptFixture(fixture);
+    }
+  });
+
+  test("workspace-suite leaves an abruptly killed wrapper receipt explicitly incomplete", () => {
+    if (process.platform === "linux") {
+      const fixture = createWorkspaceSuiteReceiptFixture();
+      try {
+        const invocationId = runWorkspaceSuiteWrapperAbruptFixture(fixture.stateRoot);
+        const receipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+        assert(receipt.invocation_id === invocationId, JSON.stringify(receipt));
+        assert(receipt.status === "running", JSON.stringify(receipt));
+        const incomplete = readWorkspaceSuiteReceiptStatusFixture(invocationId, fixture.stateRoot);
+        assert(incomplete.code !== 0, "abrupt wrapper interruption was accepted");
+        assert(JSON.parse(incomplete.stdout).status === "incomplete", incomplete.stdout || incomplete.stderr);
+      } finally {
+        cleanupWorkspaceSuiteReceiptFixture(fixture);
+      }
+    }
+  });
+
+  test("workspace-suite rejects stale and incomplete receipts", () => {
+    const fixture = createWorkspaceSuiteReceiptFixture();
+    try {
+      const first = runWorkspaceSuiteReceiptFixture("success", fixture.stateRoot);
+      assert(first.code === 0, first.stderr || first.stdout);
+      const firstReceipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+      const second = runWorkspaceSuiteReceiptFixture("success", fixture.stateRoot);
+      assert(second.code === 0, second.stderr || second.stdout);
+      const stale = readWorkspaceSuiteReceiptStatusFixture(firstReceipt.invocation_id, fixture.stateRoot);
+      assert(stale.code !== 0, "superseded receipt was accepted");
+      assert(stale.stdout.trim(), stale.stderr || "stale receipt returned no status");
+      assert(JSON.parse(stale.stdout).status === "stale", stale.stdout);
+
+      const active = readJson(join(fixture.stateRoot, "workspace-suite-fixture-receipts", "active.json"));
+      const currentReceipt = readWorkspaceSuiteActiveReceiptFixture(fixture.stateRoot);
+      const interruptedStartId = "22222222-2222-4222-8222-222222222222";
+      writeFileSync(join(fixture.stateRoot, "workspace-suite-fixture-receipts", "active.json"), `${JSON.stringify({
+        ...active,
+        invocation_id: interruptedStartId,
+        receipt_file: `${interruptedStartId}.json`,
+      })}\n`);
+      const interruptedStart = readWorkspaceSuiteReceiptStatusFixture(firstReceipt.invocation_id, fixture.stateRoot);
+      assert(interruptedStart.code !== 0, "prior receipt was accepted after a newer interrupted start");
+
+      const runningId = "11111111-1111-4111-8111-111111111111";
+      const incompleteReceipt = {
+        ...currentReceipt,
+        invocation_id: runningId,
+        status: "running",
+      };
+      delete incompleteReceipt.completed_at;
+      delete incompleteReceipt.terminal;
+      writeFileSync(join(fixture.stateRoot, "workspace-suite-fixture-receipts", `${runningId}.json`), `${JSON.stringify(incompleteReceipt)}\n`);
+      writeFileSync(join(fixture.stateRoot, "workspace-suite-fixture-receipts", "active.json"), `${JSON.stringify({
+        ...active,
+        invocation_id: runningId,
+        receipt_file: `${runningId}.json`,
+        command_digest: incompleteReceipt.command_digest,
+      })}\n`);
+      const incomplete = readWorkspaceSuiteReceiptStatusFixture(runningId, fixture.stateRoot);
+      assert(incomplete.code !== 0, "incomplete receipt was accepted");
+      assert(incomplete.stdout.trim(), incomplete.stderr || "incomplete receipt returned no status");
+      assert(JSON.parse(incomplete.stdout).status === "incomplete", incomplete.stdout);
+    } finally {
+      cleanupWorkspaceSuiteReceiptFixture(fixture);
+    }
+  });
+
   test("child JSON command guard reports empty stdout as sandbox/process boundary", () => {
     const guarded = guardExpectedJsonResult(["list", "--summary-json"], {
       code: 1,
@@ -24754,6 +24913,136 @@ function processGroupIdForTest() {
   const groupId = result.status === 0 ? Number.parseInt(String(result.stdout || "").trim(), 10) : NaN;
   assert(Number.isSafeInteger(groupId) && groupId > 0, "test process group identity is unavailable");
   return groupId;
+}
+
+function createWorkspaceSuiteReceiptFixture() {
+  const root = mkdtempSync(join(tmpdir(), "codex-workspace-suite-receipt-"));
+  return { root, stateRoot: join(root, "state") };
+}
+
+function cleanupWorkspaceSuiteReceiptFixture(fixture) {
+  if (fixture?.root) rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function runWorkspaceSuiteReceiptFixture(mode, suiteStateRoot) {
+  const result = spawnSync(process.execPath, [scriptPath, "workspace-suite-fixture", mode], {
+    cwd: rootDir,
+    encoding: "utf8",
+    env: { ...process.env, CODEX_WORKSPACE_ROOT: suiteStateRoot },
+    stdio: "pipe",
+  });
+  return { code: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || result.error?.message || "" };
+}
+
+function runWorkspaceSuiteWrapperSignalFixture(suiteStateRoot) {
+  const child = spawn(process.execPath, [scriptPath, "workspace-suite-fixture", "hold"], {
+    cwd: rootDir,
+    env: { ...process.env, CODEX_WORKSPACE_ROOT: suiteStateRoot },
+    stdio: "ignore",
+  });
+  const activePath = join(suiteStateRoot, "workspace-suite-fixture-receipts", "active.json");
+  waitForWorkspaceSuiteFixture(() => existsSync(activePath), "workspace-suite wrapper did not create its initial receipt");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  process.kill(child.pid, "SIGTERM");
+  waitForWorkspaceSuiteFixture(() => {
+    try {
+      return readWorkspaceSuiteActiveReceiptFixture(suiteStateRoot).status === "completed";
+    } catch {
+      return false;
+    }
+  }, "workspace-suite wrapper did not terminalize its receipt after SIGTERM");
+}
+
+function runWorkspaceSuiteWrapperLateSignalFixture(suiteStateRoot) {
+  const wrapper = spawn(process.execPath, [scriptPath, "workspace-suite-fixture", "success-linger"], {
+    cwd: rootDir,
+    env: { ...process.env, CODEX_WORKSPACE_ROOT: suiteStateRoot },
+    stdio: "ignore",
+  });
+  try {
+    waitForWorkspaceSuiteFixture(() => {
+      try {
+        const receipt = readWorkspaceSuiteActiveReceiptFixture(suiteStateRoot);
+        return receipt.status === "completed" && receipt.terminal?.outcome === "success";
+      } catch {
+        return false;
+      }
+    }, "workspace-suite wrapper did not persist a success receipt before late signal");
+    process.kill(wrapper.pid, "SIGTERM");
+    waitForWorkspaceSuiteFixture(() => {
+      try {
+        const receipt = readWorkspaceSuiteActiveReceiptFixture(suiteStateRoot);
+        return receipt.terminal?.outcome === "signal" && receipt.terminal?.signal === "SIGTERM";
+      } catch {
+        return false;
+      }
+    }, "workspace-suite success receipt was not superseded by late signal");
+  } finally {
+    try { process.kill(wrapper.pid, "SIGKILL"); } catch (error) { if (error?.code !== "ESRCH") throw error; }
+  }
+}
+
+function runWorkspaceSuiteWrapperAbruptFixture(suiteStateRoot) {
+  const wrapper = spawn(process.execPath, [scriptPath, "workspace-suite-fixture", "hold"], {
+    cwd: rootDir,
+    env: { ...process.env, CODEX_WORKSPACE_ROOT: suiteStateRoot },
+    stdio: "ignore",
+  });
+  const activePath = join(suiteStateRoot, "workspace-suite-fixture-receipts", "active.json");
+  let childPid = null;
+  try {
+    waitForWorkspaceSuiteFixture(() => existsSync(activePath), "workspace-suite wrapper did not create its initial receipt");
+    waitForWorkspaceSuiteFixture(() => {
+      const result = spawnSync("ps", ["-o", "pid=", "--ppid", String(wrapper.pid)], { encoding: "utf8", stdio: "pipe" });
+      const candidate = Number.parseInt(String(result.stdout || "").trim(), 10);
+      if (Number.isSafeInteger(candidate) && candidate > 0) childPid = candidate;
+      return childPid !== null;
+    }, "workspace-suite fixture child was not observed before abrupt interruption");
+    const active = readJson(activePath);
+    const receiptPath = join(suiteStateRoot, "workspace-suite-fixture-receipts", active.receipt_file);
+    waitForWorkspaceSuiteFixture(
+      () => existsSync(receiptPath),
+      "workspace-suite wrapper did not persist its child-bound running receipt before abrupt interruption",
+    );
+    process.kill(wrapper.pid, "SIGKILL");
+    waitForWorkspaceSuiteFixture(() => {
+      try {
+        process.kill(childPid, 0);
+        return false;
+      } catch (error) {
+        return error?.code === "ESRCH";
+      }
+    }, "workspace-suite fixture child survived an abruptly killed wrapper");
+    return active.invocation_id;
+  } finally {
+    if (Number.isSafeInteger(childPid) && childPid > 0) {
+      try { process.kill(childPid, "SIGKILL"); } catch (error) { if (error?.code !== "ESRCH") throw error; }
+    }
+  }
+}
+
+function waitForWorkspaceSuiteFixture(predicate, message) {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  assert(predicate(), message);
+}
+
+function readWorkspaceSuiteActiveReceiptFixture(suiteStateRoot) {
+  const active = readJson(join(suiteStateRoot, "workspace-suite-fixture-receipts", "active.json"));
+  return readJson(join(suiteStateRoot, "workspace-suite-fixture-receipts", active.receipt_file));
+}
+
+function readWorkspaceSuiteReceiptStatusFixture(invocationId, suiteStateRoot) {
+  const result = spawnSync(process.execPath, [scriptPath, "workspace-suite-fixture-receipt", invocationId, "--summary-json"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    env: { ...process.env, CODEX_WORKSPACE_ROOT: suiteStateRoot },
+    stdio: "pipe",
+  });
+  return { code: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || result.error?.message || "" };
 }
 
 function test(name, fn) {
