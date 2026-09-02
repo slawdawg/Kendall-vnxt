@@ -142,6 +142,11 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
+For durable evidence around the required unfiltered workspace fixture command,
+including terminal-success proof, bounded process-group recovery, and the
+inconclusive stop line, see the
+[Durable verification receipts runbook](docs/workflows/durable-verification-receipts.md).
+
 For managed workspace recovery and cleanup, including the exact-full immutable
 lease-ledger rollover procedure, see the
 [Codex workspace cleanup runbook](docs/codex-workspace-cleanup-runbook.md).
@@ -234,6 +239,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Bounded-write plan runbook: [docs/workflows/bounded-write-plan-runbook.md](docs/workflows/bounded-write-plan-runbook.md)
 - Provider-routing gateway note: [docs/workflows/provider-routing-gateway-note.md](docs/workflows/provider-routing-gateway-note.md) — report-only disclosure packets only; it does not execute provider calls.
 - Managed workspace cleanup runbook: [docs/codex-workspace-cleanup-runbook.md](docs/codex-workspace-cleanup-runbook.md)
+- Durable full-suite verification receipts: [docs/workflows/durable-verification-receipts.md](docs/workflows/durable-verification-receipts.md)
 - Closed-PR exact-tree cleanup: [Lane Lifecycle cleanup guidance](docs/workflows/end-to-end-lane-runner.md#lane-lifecycle)
 - Missing merged-PR gate evidence: [Exceptional post-merge recovery](docs/workflows/end-to-end-lane-runner.md#exceptional-post-merge-gate-evidence-recovery)
 - Rebasing a managed delivery head: [Patch-equivalent rebased-head recovery](docs/workflows/end-to-end-lane-runner.md#patch-equivalent-rebased-head-recovery)
