@@ -22,7 +22,7 @@ const LANE_RUN_FIELDS = [
   "nextAction", "heartbeatAt", "staleDeadlineAt", "timeoutAt", "retryBudget", "reworkBudget", "evidenceFingerprint",
   "observedAt", "idempotencyKey", "createdAt", "updatedAt", "metadataOnly", "rawPayloadRetained",
 ] as const;
-const OUTCOME_STATUSES = Object.freeze(["proposed", "active", "completed", "blocked", "rework"] as const);
+const OUTCOME_STATUSES = Object.freeze(["proposed", "active", "review", "completed", "blocked", "rework"] as const);
 const LANE_RUN_STATUSES = Object.freeze(["queued", "running", "review", "rework", "completed", "blocked"] as const);
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {

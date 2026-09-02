@@ -9,7 +9,7 @@ import test from "node:test";
 const contractsRoot = new URL("../packages/contracts/src/", import.meta.url);
 const hermesRoot = new URL("../packages/contracts/src/hermes-control-plane/", import.meta.url);
 
-const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "schema-json.ts"];
+const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "schema-json.ts"];
 const contractNames = [
   "HermesOutcomeV1",
   "HermesLaneRunV1",
@@ -19,6 +19,8 @@ const contractNames = [
   "FollowUpWorkV1",
   "HermesLifecycleEventV1",
   "HermesBoardLifecycleEventV1",
+  "VerificationRecordV1",
+  "ReviewDispositionV1",
 ];
 const resultValues = ["allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"];
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -139,7 +141,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     for (const guardName of [
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
       "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
-      "isHermesBoardLifecycleEventV1",
+      "isHermesBoardLifecycleEventV1", "isVerificationRecordV1", "isReviewDispositionV1",
+      "isReviewHandoffV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
     const later = "2026-08-28T01:00:00Z";
@@ -183,6 +186,24 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       reasonCode: "observed", nextAction: "continue", correlationId: "correlation:one", causationId: "causation:one",
       observedAt, idempotencyKey: "idempotency:event-one", emittedAt: observedAt, authoritative: false,
     };
+    const verification = {
+      ...common, verificationRecordId: "verification:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      schemaVersion: contracts.HERMES_VERIFICATION_RECORD_SCHEMA_VERSION, result: "passed", target: "test:contract",
+      sourceFingerprint: "sha256:one", developerIdentity: "developer:one", developerHome: "home:developer",
+      developerWorkspace: "workspace:developer", observedAt, createdAt: observedAt,
+      expectedOutcomeRevision: 1, expectedLaneRevision: 1,
+    };
+    const disposition = {
+      ...common, reviewDispositionId: "review:one", verificationRecordId: verification.verificationRecordId,
+      outcomeId: outcome.outcomeId, developerLaneRunId: laneRun.laneRunId,
+      schemaVersion: contracts.HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION, disposition: "approve",
+      reviewerIdentity: "reviewer:one", reviewerHome: "home:reviewer", reviewerWorkspace: "workspace:reviewer",
+      reasonCode: "approved", nextAction: "hold", observedAt: later, createdAt: observedAt,
+      expectedOutcomeRevision: 1, expectedLaneRevision: 1,
+    };
+    const reviewEvent = { ...event, eventId: "event:review-one", idempotencyKey: "idempotency:review-one", eventName: "hermes.review.disposition.recorded" };
+    const verificationEvent = { ...event, eventId: "event:verification-one", idempotencyKey: "idempotency:verification-one", eventName: "hermes.verification.recorded" };
+    const unavailableReviewerException = { exceptionId: "exception:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, reason: "reviewer_unavailable", riskClass: "technical_block", compensatingReviewRef: "evidence:compensating", recordedBy: "coordinator:one", recordedAt: observedAt, reviewOrExpiryAt: later, metadataOnly: true, rawPayloadRetained: false };
     const boardEvent = {
       ...common, schemaVersion: contracts.HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION,
       issuerId: "issuer:one", keyId: "key:one", eventId: "event:board-one", idempotencyKey: "idempotency:board-one",
@@ -199,11 +220,22 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isFollowUpWorkV1(followUp), true);
     assert.equal(contracts.isHermesLifecycleEventV1(event), true);
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
+    assert.equal(contracts.isHermesLifecycleEventV1(reviewEvent), true);
+    assert.equal(contracts.HERMES_LIFECYCLE_EVENT_NAMES.includes("hermes.verification.recorded"), true);
+    assert.equal(contracts.isHermesLifecycleEventV1(verificationEvent), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, exceptionId: "not opaque" } }), false);
+    assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, eventName: "hermes.review.disposition.recorded" }), false);
+    assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, issuerId: "tenant:job:attempt" }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, result: "failed", verificationRecordId: "verification:failed", idempotencyKey: "idempotency:failed" } }), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.HermesLaneRunV1), true);
     assert.equal(Object.isFrozen(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.HermesFollowUpWorkV1), true);
+    assert.deepEqual(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.VerificationRecordV1.slice(-2), ["expectedOutcomeRevision", "expectedLaneRevision"]);
+    assert.deepEqual(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.VerificationRecordV1.slice(-2), ["expected_outcome_revision", "expected_lane_revision"]);
     for (const fieldMetadata of [
       contracts.hermesOutcomeV1Fields,
       contracts.hermesLaneRunV1Fields,
@@ -255,6 +287,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["board event authorizes", { ...boardEvent, authoritative: true }, contracts.isHermesBoardLifecycleEventV1],
       ["board event unknown field", { ...boardEvent, unknown: true }, contracts.isHermesBoardLifecycleEventV1],
       ["evidence reference", { ...evidence, evidenceRefs: ["bad"] }, contracts.isDeliveryEvidenceV1],
+      ["passed verification without disposition", { verification }, contracts.isReviewHandoffV1],
+      ["review instant before verification", { verification: { ...verification, observedAt: "2026-08-28T00:00:00.100Z", createdAt: "2026-08-28T00:00:00.100Z" }, disposition: { ...disposition, observedAt, createdAt: observedAt } }, contracts.isReviewHandoffV1],
       ["policy decision", { ...decision, decision: "unknown" }, contracts.isPolicyDecisionV1],
     ];
     for (const [label, value, guard] of invalidCases) assert.equal(guard(value), false, label);

@@ -109,6 +109,53 @@ async def _apply_hermes_board_bridge(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
+    """Create additive verification and independent-review records."""
+    from supervisor.infrastructure.db.models import HermesReviewDisposition, HermesVerificationRecord
+    await connection.run_sync(
+        lambda sync_connection: HermesVerificationRecord.metadata.create_all(
+            sync_connection,
+            tables=[HermesVerificationRecord.__table__, HermesReviewDisposition.__table__],
+        )
+    )
+
+
+async def _apply_hermes_verification_revision_binding(connection: AsyncConnection) -> None:
+    """Add replay-bound revision columns for databases upgraded from 0008."""
+    columns = await connection.run_sync(
+        lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_verification_records")}
+    )
+    if "expected_outcome_revision" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN expected_outcome_revision INTEGER NOT NULL DEFAULT 1"))
+    if "expected_lane_revision" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN expected_lane_revision INTEGER NOT NULL DEFAULT 1"))
+
+
+async def _apply_hermes_review_disposition_revision_binding(connection: AsyncConnection) -> None:
+    """Add immutable schema and projection-revision audit fields for 0008 upgrades."""
+    exists = await connection.run_sync(lambda sync_connection: inspect(sync_connection).has_table("hermes_review_dispositions"))
+    if not exists:
+        return
+    columns = await connection.run_sync(lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_review_dispositions")})
+    for name, definition in (
+        ("schema_version", "VARCHAR(64) NOT NULL DEFAULT 'review_disposition.v1'"),
+        ("expected_outcome_revision", "INTEGER NOT NULL DEFAULT 1"),
+        ("expected_lane_revision", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        if name not in columns:
+            await connection.execute(text(f"ALTER TABLE hermes_review_dispositions ADD COLUMN {name} {definition}"))
+
+
+async def _apply_hermes_verification_schema_version(connection: AsyncConnection) -> None:
+    """Preserve the immutable verification contract version on 0008 upgrades."""
+    exists = await connection.run_sync(lambda sync_connection: inspect(sync_connection).has_table("hermes_verification_records"))
+    if not exists:
+        return
+    columns = await connection.run_sync(lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_verification_records")})
+    if "schema_version" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN schema_version VARCHAR(64) NOT NULL DEFAULT 'verification_record.v1'"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -142,6 +189,26 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0007_hermes_board_bridge",
         _apply_hermes_board_bridge,
         clean_install=_apply_hermes_board_bridge,
+    ),
+    SchemaMigration(
+        "0008_hermes_review_handoff",
+        _apply_hermes_review_handoff,
+        clean_install=_apply_hermes_review_handoff,
+    ),
+    SchemaMigration(
+        "0009_hermes_verification_revision_binding",
+        _apply_hermes_verification_revision_binding,
+        clean_install=_apply_hermes_verification_revision_binding,
+    ),
+    SchemaMigration(
+        "0010_hermes_review_disposition_revision_binding",
+        _apply_hermes_review_disposition_revision_binding,
+        clean_install=_apply_hermes_review_disposition_revision_binding,
+    ),
+    SchemaMigration(
+        "0011_hermes_verification_schema_version",
+        _apply_hermes_verification_schema_version,
+        clean_install=_apply_hermes_verification_schema_version,
     ),
 )
 
