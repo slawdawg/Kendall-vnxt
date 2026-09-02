@@ -109,6 +109,17 @@ async def _apply_hermes_board_bridge(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
+    """Create additive verification and independent-review records."""
+    from supervisor.infrastructure.db.models import HermesReviewDisposition, HermesVerificationRecord
+    await connection.run_sync(
+        lambda sync_connection: HermesVerificationRecord.metadata.create_all(
+            sync_connection,
+            tables=[HermesVerificationRecord.__table__, HermesReviewDisposition.__table__],
+        )
+    )
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -142,6 +153,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0007_hermes_board_bridge",
         _apply_hermes_board_bridge,
         clean_install=_apply_hermes_board_bridge,
+    ),
+    SchemaMigration(
+        "0008_hermes_review_handoff",
+        _apply_hermes_review_handoff,
+        clean_install=_apply_hermes_review_handoff,
     ),
 )
 

@@ -949,6 +949,62 @@ class HermesLedgerEvent(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
 
 
+class HermesVerificationRecord(Base):
+    """Immutable metadata-only verification precondition for a review handoff."""
+
+    __tablename__ = "hermes_verification_records"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_verification_idempotency"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_verification_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_verification_no_raw_payload"),
+    )
+    verification_record_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    developer_identity: Mapped[str] = mapped_column(String(120))
+    developer_home: Mapped[str] = mapped_column(String(240))
+    developer_workspace: Mapped[str] = mapped_column(String(240))
+    result: Mapped[str] = mapped_column(String(32))
+    target: Mapped[str] = mapped_column(String(240))
+    source_fingerprint: Mapped[str] = mapped_column(String(240))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesReviewDisposition(Base):
+    """One atomic, independently-bound Reviewer decision; never delivery authority."""
+
+    __tablename__ = "hermes_review_dispositions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_review_disposition_idempotency"),
+        UniqueConstraint("verification_record_id", name="uq_hermes_review_disposition_verification"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_review_disposition_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_review_disposition_no_raw_payload"),
+    )
+    review_disposition_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    verification_record_id: Mapped[str] = mapped_column(ForeignKey("hermes_verification_records.verification_record_id"), index=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    developer_lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    disposition: Mapped[str] = mapped_column(String(32))
+    reviewer_identity: Mapped[str] = mapped_column(String(120))
+    reviewer_home: Mapped[str] = mapped_column(String(240))
+    reviewer_workspace: Mapped[str] = mapped_column(String(240))
+    reason_code: Mapped[str] = mapped_column(String(120))
+    next_action: Mapped[str] = mapped_column(String(360))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    exception_requirement_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HermesBoardBinding(Base):
     """Supervisor-owned immutable board/card identity binding."""
 

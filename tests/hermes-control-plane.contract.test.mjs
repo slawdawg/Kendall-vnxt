@@ -9,7 +9,7 @@ import test from "node:test";
 const contractsRoot = new URL("../packages/contracts/src/", import.meta.url);
 const hermesRoot = new URL("../packages/contracts/src/hermes-control-plane/", import.meta.url);
 
-const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "schema-json.ts"];
+const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "schema-json.ts"];
 const contractNames = [
   "HermesOutcomeV1",
   "HermesLaneRunV1",
@@ -19,6 +19,8 @@ const contractNames = [
   "FollowUpWorkV1",
   "HermesLifecycleEventV1",
   "HermesBoardLifecycleEventV1",
+  "VerificationRecordV1",
+  "ReviewDispositionV1",
 ];
 const resultValues = ["allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"];
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -139,7 +141,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     for (const guardName of [
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
       "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
-      "isHermesBoardLifecycleEventV1",
+      "isHermesBoardLifecycleEventV1", "isVerificationRecordV1", "isReviewDispositionV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
     const later = "2026-08-28T01:00:00Z";

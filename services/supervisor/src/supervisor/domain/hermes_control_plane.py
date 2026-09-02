@@ -16,7 +16,7 @@ HERMES_RESULT_VALUES = frozenset({
     "blockedTechnical",
     "completed",
 })
-HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "completed", "blocked", "rework"})
+HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "review", "completed", "blocked", "rework"})
 HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
 HERMES_LIFECYCLE_EVENT_NAMES = frozenset({
     "hermes.outcome.created",

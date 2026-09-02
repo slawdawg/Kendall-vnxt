@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from supervisor.application.hermes_outcomes import (
     _update_if_current,
     ingest_hermes_ledger,
+    ingest_hermes_review_handoff,
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesLedgerIngestRequest
+from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
 from supervisor.infrastructure.db.models import HermesOutcome
@@ -117,5 +118,52 @@ async def test_hermes_ledger_migration_is_ordered_and_clean_install_aware(tmp_pa
         revisions = tuple((await connection.execute(text(f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"))).scalars())
         tables = set((await connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))).scalars())
     assert revisions == tuple(migration.revision for migration in MIGRATIONS)
-    assert {"hermes_outcomes", "hermes_lane_runs", "hermes_delivery_evidence", "hermes_ledger_events"} <= tables
+    assert {"hermes_outcomes", "hermes_lane_runs", "hermes_delivery_evidence", "hermes_ledger_events", "hermes_verification_records", "hermes_review_dispositions"} <= tables
+    await engine.dispose()
+
+
+def review_handoff(disposition="approve"):
+    now = "2026-09-02T12:02:00Z"
+    return {"verification": {"verificationRecordId": "verification:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:one", "developerHome": "home:developer", "developerWorkspace": "workspace:developer", "evidenceRefs": ["evidence:verification"], "observedAt": now, "idempotencyKey": "verification:1", "createdAt": now, "metadataOnly": True, "rawPayloadRetained": False}, "disposition": {"reviewDispositionId": f"review:{disposition}", "verificationRecordId": "verification:1", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "review_disposition.v1", "disposition": disposition, "reviewerIdentity": "reviewer:one", "reviewerHome": "home:reviewer", "reviewerWorkspace": "workspace:reviewer", "reasonCode": "reviewed", "nextAction": "Hold for later delivery adapter.", "evidenceRefs": ["evidence:review"], "observedAt": now, "idempotencyKey": f"review:{disposition}", "createdAt": now, "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}}
+
+
+@pytest.mark.asyncio
+async def test_hermes_review_handoff_requires_passed_independent_verification_and_reworks_original_lane(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-handoff.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        approved = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(review_handoff()))
+        assert approved.currentResult == "completed" and approved.currentLaneRunId == "lane:1"
+        assert await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(review_handoff())) == approved
+    async with sessions() as session:
+        invalid = review_handoff(); invalid["disposition"]["reviewerWorkspace"] = "workspace:developer"  # type: ignore[index]
+        with pytest.raises(ValueError, match="Independent review"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(invalid))
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-rework.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        initial = payload(); initial["outcome"]["status"] = "review"; initial["laneRun"]["status"] = "review"  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        request = review_handoff("rework")
+        projection = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))
+        assert projection.currentLaneRunId == "lane:1" and projection.currentResult == "rework"
+        conflicting = copy.deepcopy(request); conflicting["disposition"]["nextAction"] = "Different action"  # type: ignore[index]
+        with pytest.raises(ValueError, match="idempotency"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(conflicting))
+        before = copy.deepcopy(request); before["disposition"]["observedAt"] = "2026-09-02T12:01:00Z"  # type: ignore[index]
+        with pytest.raises(ValueError, match="timestamp"):
+            HermesReviewHandoffRequest.model_validate(before)
+        expired = review_handoff("technical_block")
+        expired["unavailableReviewerException"] = {"exceptionId": "exception:reviewer", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reasonCode": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2020-01-01T00:00:00Z", "reviewBy": "2020-01-01T01:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
+        with pytest.raises(ValueError, match="unexpired"):
+            HermesReviewHandoffRequest.model_validate(expired)
     await engine.dispose()

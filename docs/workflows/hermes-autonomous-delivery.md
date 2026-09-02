@@ -102,3 +102,21 @@ An unavailable independent Reviewer produces a metadata-only exception
 requirement with the outcome/lane-run identifiers, reason, risk class,
 compensating-review reference, recorder/time, and review-or-expiry point. It is
 not approval and is not persisted by this workflow.
+
+## Verification and Independent Review Handoff
+
+The Supervisor ledger accepts a metadata-only verification record before an
+independent review disposition. A record binds the existing Outcome and
+Developer lane to an opaque record/idempotency identity, passed/failed/
+inconclusive result, cited evidence, and the current source fingerprint. Only
+`passed` may enter review; missing, stale, failed, inconclusive, malformed, or
+replay-conflicting evidence stops at the ledger boundary.
+
+A disposition is exactly `approve`, `rework`, or `technical_block`. It is
+atomically bound to that verification record, the original Developer lane, and
+distinct Reviewer identity, home, and workspace metadata. Self-review or any
+overlap is denied. Approval records only post-review completion: it is not a
+GitHub, delivery, merge, provider, or runtime action. Rework returns to the
+same recorded Developer lane with cited evidence; a technical block stays
+blocked. The unavailable-Reviewer exception remains audit-only and cannot waive
+verification or become an approval.
