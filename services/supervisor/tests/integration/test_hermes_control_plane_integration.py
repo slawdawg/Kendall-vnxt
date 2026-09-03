@@ -54,7 +54,7 @@ async def test_hermes_ledger_is_idempotent_conflict_fenced_and_metadata_only(tmp
         coupled_conflict = copy.deepcopy(payload()); coupled_conflict["outcome"]["title"] = "Changed title"  # type: ignore[index]
         with pytest.raises(ValueError, match="idempotency"): await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(coupled_conflict))
         bypass = copy.deepcopy(payload()); bypass["event"]["eventName"] = "hermes.review.disposition.recorded"; bypass["event"]["eventId"] = "event:review-bypass"; bypass["event"]["idempotencyKey"] = "event:review-bypass"; bypass["event"]["result"] = "completed"; bypass["outcome"]["status"] = "completed"; bypass["outcome"]["result"] = "completed"; bypass["laneRun"]["status"] = "completed"; bypass["laneRun"]["result"] = "completed"  # type: ignore[index]
-        with pytest.raises(ValueError, match="independent review handoff"):
+        with pytest.raises(ValueError, match="invalid closed state|independent review handoff"):
             await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(bypass))
         bypass = copy.deepcopy(payload()); bypass["event"]["eventName"] = "hermes.lane.recovered"; bypass["event"]["eventId"] = "event:completion-bypass"; bypass["event"]["idempotencyKey"] = "event:completion-bypass"; bypass["event"]["result"] = "completed"; bypass["outcome"]["status"] = "completed"; bypass["outcome"]["result"] = "completed"; bypass["laneRun"]["status"] = "completed"; bypass["laneRun"]["result"] = "completed"  # type: ignore[index]
         with pytest.raises(ValueError, match="independent review handoff"):
@@ -72,23 +72,10 @@ async def test_hermes_ledger_is_idempotent_conflict_fenced_and_metadata_only(tmp
     await engine.dispose()
 
 
-@pytest.mark.asyncio
-async def test_hermes_ledger_replays_exact_pre_handoff_restricted_event(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-restricted-replay.db'}")
-    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+def test_hermes_ledger_rejects_pre_handoff_restricted_event_at_public_ingress():
     legacy = payload(); legacy["event"]["eventName"] = "hermes.review.disposition.recorded"  # type: ignore[index]
-    request = HermesLedgerIngestRequest.model_validate(legacy)
-    digest = sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-    async with sessions() as session:
-        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
-        event = await session.get(HermesLedgerEvent, "event:1")
-        assert event is not None
-        event.event_name = request.event.eventName
-        event.request_digest_sha256 = digest
-        await session.commit()
-        assert (await ingest_hermes_ledger(session, request)).currentLaneRunId == "lane:1"
-    await engine.dispose()
+    with pytest.raises(ValueError, match="invalid closed state"):
+        HermesLedgerIngestRequest.model_validate(legacy)
 
 
 @pytest.mark.asyncio
@@ -294,22 +281,27 @@ async def test_role_capability_provisioning_requires_one_owner_private_runtime_p
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-runtime-parent.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    runtime_root, other_root = tmp_path / "runtime", tmp_path / "other-runtime"
-    runtime_root.mkdir(mode=0o700); other_root.mkdir(mode=0o700)
+    runtime_root, profiles_root, workspace_root, other_root = tmp_path / "runtime", tmp_path / "runtime" / "profiles", tmp_path / "workspace", tmp_path / "other-runtime"
+    runtime_root.mkdir(mode=0o700); profiles_root.mkdir(mode=0o700); workspace_root.mkdir(mode=0o700); other_root.mkdir(mode=0o700)
+    workspace = workspace_root / "operator-workspace"; workspace.mkdir(mode=0o700)
     request_data = {
         "capabilityBindingId": "capability:runtime-parent", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
-        "identity": "operator:one", "home": str(runtime_root / "operator-home"), "workspace": str(other_root / "operator-workspace"), "capabilitySecret": "o" * 32,
+        "identity": "operator:one", "home": str(other_root / "operator-home"), "workspace": str(workspace), "capabilitySecret": "o" * 32,
         "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
     }
     async with sessions() as session:
         await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
-        with pytest.raises(ValueError, match="share one runtime profile parent"):
-            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture")
-        request_data["workspace"] = str(runtime_root / "operator-workspace")
-        runtime_root.chmod(0o755)
+        with pytest.raises(ValueError, match="inside the configured runtime root"):
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture", runtime_root=str(runtime_root))
+        request_data["home"] = str(profiles_root / "operator-home")
+        binding = await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture", runtime_root=str(runtime_root))
+        assert binding.home == str((profiles_root / "operator-home").resolve()) and binding.workspace == str(workspace.resolve())
+        runtime_root.chmod(0o700)
+        profiles_root.chmod(0o755)
+        request_data.update({"capabilityBindingId": "capability:runtime-parent-private", "home": str(profiles_root / "operator-home-private")})
         with pytest.raises(ValueError, match="owner-private"):
-            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture")
-        assert not (runtime_root / "operator-home").exists() and not (runtime_root / "operator-workspace").exists()
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture", runtime_root=str(runtime_root))
+        assert not (profiles_root / "operator-home-private").exists()
     await engine.dispose()
 
 
@@ -318,8 +310,9 @@ async def test_role_capability_provisioning_removes_bootstrapped_roots_after_com
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-bootstrap-commit-conflict.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    runtime_root = tmp_path / "runtime"; runtime_root.mkdir(mode=0o700)
-    home, workspace = runtime_root / "operator-home", runtime_root / "operator-workspace"
+    runtime_root = tmp_path / "runtime"; profiles_root = runtime_root / "profiles"; workspace_root = tmp_path / "workspace"
+    runtime_root.mkdir(mode=0o700); profiles_root.mkdir(mode=0o700); workspace_root.mkdir(mode=0o700)
+    home, workspace = profiles_root / "operator-home", workspace_root / "operator-workspace"; workspace.mkdir(mode=0o700)
     async with sessions() as session:
         await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
         request = HermesRoleCapabilityProvisionRequest.model_validate({
@@ -331,8 +324,8 @@ async def test_role_capability_provisioning_removes_bootstrapped_roots_after_com
             raise IntegrityError("INSERT", {}, RuntimeError("forced conflict"))
         monkeypatch.setattr(session, "commit", conflict_commit)
         with pytest.raises(ValueError, match="persistence conflict"):
-            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
-        assert not home.exists() and not workspace.exists()
+            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture", runtime_root=str(runtime_root))
+        assert not home.exists() and workspace.exists()
     await engine.dispose()
 
 
@@ -627,6 +620,11 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
         pre_verification_exception = copy.deepcopy(request); pre_verification_exception["unavailableReviewerException"]["recordedAt"] = "2026-09-02T12:01:59Z"
         with pytest.raises(ValueError, match="preserve verification revisions and timestamps"):
             HermesReviewHandoffRequest.model_validate(pre_verification_exception)
+        review_by_before_block = copy.deepcopy(request)
+        review_by_before_block["unavailableReviewerException"]["reviewOrExpiryAt"] = "2098-01-01T00:00:00Z"
+        review_by_before_block["unavailableReviewerBlock"].update({"observedAt": "2099-01-01T00:00:00Z", "createdAt": "2099-01-01T00:00:00Z"})
+        with pytest.raises(ValueError, match="preserve verification revisions and timestamps"):
+            HermesReviewHandoffRequest.model_validate(review_by_before_block)
         bypass = _developer_request(handoff); bypass["unavailableReviewerException"] = request["unavailableReviewerException"]
         with pytest.raises(ValueError, match="cannot carry a Reviewer capability or exception"):
             HermesReviewHandoffRequest.model_validate(bypass)
@@ -1106,6 +1104,16 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
             await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         old_lane.retry_budget = 1
         await session.commit()
+        outcome.updated_at = old_lane.updated_at = datetime(2026, 9, 2, 12, 4, tzinfo=timezone.utc)
+        await session.commit()
+        with pytest.raises(ValueError, match="predates the blocked projection"):
+            await recover_hermes_technical_block(
+                session,
+                HermesTechnicalBlockRecoveryRequest.model_validate(recovery),
+                recovered_by_operator_id="operator:fixture",
+            )
+        outcome.updated_at = old_lane.updated_at = datetime(2026, 9, 2, 12, 2, tzinfo=timezone.utc)
+        await session.commit()
         expired_replacement = copy.deepcopy(recovery)
         expired_at = datetime.now(timezone.utc).replace(microsecond=0)
         expired_replacement["replacementLaneRun"]["staleDeadlineAt"] = expired_at.isoformat().replace("+00:00", "Z")  # type: ignore[index]
@@ -1117,6 +1125,18 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         blocked_stale_evidence["deliveryEvidence"].update({"observedAt": "2026-09-02T12:01:00Z", "createdAt": "2026-09-02T12:01:00Z"})  # type: ignore[index]
         with pytest.raises(ValueError, match="predates the blocked projection"):
             await recover_hermes_technical_block(session, HermesTechnicalBlockRecoveryRequest.model_validate(blocked_stale_evidence), recovered_by_operator_id="operator:fixture")
+        preblocked_replacement = copy.deepcopy(recovery)
+        preblocked_replacement["replacementLaneRun"].update({  # type: ignore[index]
+            "heartbeatAt": "2026-09-02T12:01:00Z", "observedAt": "2026-09-02T12:01:00Z",
+            "createdAt": "2026-09-02T12:01:00Z", "updatedAt": "2026-09-02T12:01:00Z",
+        })
+        preblocked_replacement["deliveryEvidence"].update({"observedAt": "2026-09-02T12:03:00Z", "createdAt": "2026-09-02T12:03:00Z"})  # type: ignore[index]
+        with pytest.raises(ValueError, match="replacement lane predates the blocked projection"):
+            await recover_hermes_technical_block(
+                session,
+                HermesTechnicalBlockRecoveryRequest.model_validate(preblocked_replacement),
+                recovered_by_operator_id="operator:fixture",
+            )
         projection = await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         assert projection.currentLaneRunId == "lane:replacement-1" and projection.currentResult == "retryable"
         old_lane = await session.get(HermesLaneRun, "lane:1")

@@ -144,6 +144,10 @@ class Settings(BaseSettings):
     memory_inbox_upload_storage_quota_bytes: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024, alias="SUPERVISOR_MEMORY_INBOX_UPLOAD_STORAGE_QUOTA_BYTES")
     lease_ttl_seconds: int = 30
     review_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_REVIEW_WIP_LIMIT")
+    hermes_role_capability_runtime_root: str | None = Field(
+        default=None,
+        alias="SUPERVISOR_HERMES_ROLE_CAPABILITY_RUNTIME_ROOT",
+    )
     deliver_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_DELIVER_WIP_LIMIT")
     verification_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_VERIFICATION_WIP_LIMIT")
     operator_testing_wip_limit: int = Field(default=1, ge=1, alias="SUPERVISOR_OPERATOR_TESTING_WIP_LIMIT")

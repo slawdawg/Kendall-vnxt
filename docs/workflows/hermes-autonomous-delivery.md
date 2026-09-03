@@ -74,11 +74,14 @@ calls, or delivery actions. Apply mode is intentionally a later, separately
 authorized boundary.
 
 When a local Coordinator provisions the corresponding task-scoped capability,
-the requested home and workspace must be disjoint direct children of one
-existing canonical runtime profile parent. That parent must be owned by the
-Supervisor process owner and have no group or other permissions; a conflict
-removes only roots created by the losing request unless a matching persisted
-binding proves they belong to the exact replay.
+`SUPERVISOR_HERMES_ROLE_CAPABILITY_RUNTIME_ROOT` must name the existing,
+canonical, owner-private runtime root. A role home must be beneath that root;
+the manifest's separate Developer or Reviewer workspace remains allowed only
+when it already exists, is canonical and owner-private, and does not overlap a
+profile root. Provisioning may create only the explicit role-home leaf under
+the configured root. A conflict removes only roots created by the losing
+request unless a matching persisted binding proves they belong to the exact
+replay.
 
 The plan has exactly five separate identities and homes below that runtime root:
 `Coordinator`, `Developer`, `Reviewer`, `Delivery`, and `Memory`. Each profile
@@ -119,8 +122,11 @@ inconclusive result, cited evidence, and the current source fingerprint. Only
 `passed` may enter review; missing, stale, failed, inconclusive, malformed, or
 replay-conflicting evidence stops at the ledger boundary.
 
-A local authenticated Coordinator may provision a task-scoped Developer or
-Reviewer capability at `/hermes-control-plane/role-capabilities`. The
+A local authenticated Coordinator may provision a task-scoped Developer,
+Reviewer, or Operator capability at `/hermes-control-plane/role-capabilities`.
+The Operator binding is required only for the audit-only unavailable-Reviewer
+block and the same authenticated Operator identity is persisted with that
+exception; it is never a Reviewer substitute or approval. The
 Supervisor stores only its digest, role, outcome/lane binding, expiry,
 revocation state, and provisioner identity; it never returns, logs, or retains
 the supplied capability value. Caller-supplied profile fields are compared to

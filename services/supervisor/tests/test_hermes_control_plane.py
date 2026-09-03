@@ -43,6 +43,8 @@ def test_hermes_ledger_boundary_is_strict_and_metadata_only():
     with pytest.raises(ValidationError): HermesLedgerIngestRequest.model_validate(password)
     mismatched_result = payload(); mismatched_result["event"]["result"] = "completed"  # type: ignore[index]
     with pytest.raises(ValidationError): HermesLedgerIngestRequest.model_validate(mismatched_result)
+    typed_review_event = payload(); typed_review_event["event"]["eventName"] = "hermes.review.disposition.recorded"  # type: ignore[index]
+    with pytest.raises(ValidationError): HermesLedgerIngestRequest.model_validate(typed_review_event)
 
 
 def test_hermes_routes_are_local_typed_projection_boundaries():
@@ -73,9 +75,13 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
 
 
 @pytest.mark.asyncio
-async def test_hermes_validation_errors_redact_capability_and_proof_input():
+@pytest.mark.parametrize("path", [
+    "/hermes-control-plane/review-handoffs",
+    "/hermes-control-plane/role-capability-revocations",
+])
+async def test_hermes_validation_errors_redact_capability_and_proof_input(path):
     secret = "capability-secret-must-never-appear"
-    request = Request({"type": "http", "method": "POST", "path": "/hermes-control-plane/review-handoffs", "headers": []})
+    request = Request({"type": "http", "method": "POST", "path": path, "headers": []})
     response = await redact_hermes_capability_validation_error(
         request,
         RequestValidationError([{"type": "string_too_short", "loc": ("body", "operatorCapabilityProof"), "msg": "String should have at least 24 characters", "input": secret}]),

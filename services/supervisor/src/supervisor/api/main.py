@@ -315,6 +315,7 @@ async def redact_hermes_capability_validation_error(request: Request, exc: Reque
     """Never echo local capability/proof input when a Hermes request is malformed."""
     if request.url.path not in {
         "/hermes-control-plane/role-capabilities",
+        "/hermes-control-plane/role-capability-revocations",
         "/hermes-control-plane/review-handoffs",
         "/hermes-control-plane/technical-block-recoveries",
     }:
@@ -1735,10 +1736,13 @@ async def provision_hermes_role_capability_route(
     """Provision a digest-only, task-scoped local Developer or Reviewer capability."""
 
     try:
+        if not settings.hermes_role_capability_runtime_root:
+            raise ValueError("Role capability provisioning requires a configured runtime root.")
         await provision_hermes_role_capability(
             session,
             payload,
             provisioned_by_operator_id=str(operator.id),
+            runtime_root=settings.hermes_role_capability_runtime_root,
         )
     except ValueError as exc:
         raise HTTPException(

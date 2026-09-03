@@ -8014,8 +8014,8 @@ HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION = "review_disposition.v1"
 HERMES_RESULTS = frozenset({"allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"})
 HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "review", "completed", "blocked", "rework"})
 HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
-HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested", "hermes.review.disposition.recorded"})
-HERMES_BOARD_EVENT_NAMES = HERMES_EVENT_NAMES - {"hermes.review.disposition.recorded"}
+HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested"})
+HERMES_BOARD_EVENT_NAMES = HERMES_EVENT_NAMES
 
 
 def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> str:
@@ -8456,7 +8456,7 @@ class HermesReviewHandoffRequest(BaseModel):
                 raise ValueError("Unavailable-reviewer blocking requires only a typed Operator capability, block, and exception.")
             if verification.result != "passed" or (unavailable_block.outcomeId, unavailable_block.developerLaneRunId, unavailable_block.verificationRecordId) != (verification.outcomeId, verification.laneRunId, verification.verificationRecordId) or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId):
                 raise ValueError("Unavailable-reviewer block must bind a passed verification and original Developer lane exactly.")
-            if (unavailable_block.expectedOutcomeRevision, unavailable_block.expectedLaneRevision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision) or unavailable_block.observedAt < verification.observedAt or exception.recordedAt < verification.observedAt or exception.recordedAt > unavailable_block.observedAt:
+            if (unavailable_block.expectedOutcomeRevision, unavailable_block.expectedLaneRevision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision) or unavailable_block.observedAt < verification.observedAt or exception.recordedAt < verification.observedAt or exception.recordedAt > unavailable_block.observedAt or exception.reviewBy <= unavailable_block.observedAt:
                 raise ValueError("Unavailable-reviewer block must preserve verification revisions and timestamps.")
             return self
         if verification.result != "passed":

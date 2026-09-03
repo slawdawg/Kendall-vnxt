@@ -204,7 +204,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     const reviewEvent = { ...event, eventId: "event:review-one", idempotencyKey: "idempotency:review-one", eventName: "hermes.review.disposition.recorded" };
     const verificationEvent = { ...event, eventId: "event:verification-one", idempotencyKey: "idempotency:verification-one", eventName: "hermes.verification.recorded" };
     const unavailableReviewerBlockEvent = { ...event, eventId: "event:operator-block-one", idempotencyKey: "idempotency:operator-block-one", eventName: "hermes.review.unavailable_reviewer.blocked" };
-    const unavailableReviewerException = { exceptionId: "exception:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, reason: "reviewer_unavailable", riskClass: "technical_block", compensatingReviewRef: "evidence:compensating", recordedBy: "coordinator:one", recordedAt: observedAt, reviewOrExpiryAt: later, metadataOnly: true, rawPayloadRetained: false };
+    const unavailableReviewerException = { exceptionId: "exception:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, reason: "reviewer_unavailable", riskClass: "technical_block", compensatingReviewRef: "evidence:compensating", recordedBy: "coordinator:one", recordedAt: observedAt, reviewOrExpiryAt: "2026-08-28T02:00:00Z", metadataOnly: true, rawPayloadRetained: false };
     const developerCapability = { developerCapabilityBindingId: "capability:developer", developerCapabilityProof: "d".repeat(32) };
     const reviewerCapability = { reviewerCapabilityBindingId: "capability:reviewer", reviewerCapabilityProof: "eyJhbGciOiJIUzI1NiJ9.payload.signature" };
     const operatorUnavailableReviewerBlock = { unavailableReviewerBlockId: "block:operator-one", verificationRecordId: verification.verificationRecordId, outcomeId: outcome.outcomeId, developerLaneRunId: laneRun.laneRunId, schemaVersion: "unavailable_reviewer_block.v1", expectedOutcomeRevision: 1, expectedLaneRevision: 1, reasonCode: "reviewer_unavailable", nextAction: "await replacement review", evidenceRefs: [evidence.deliveryEvidenceId], observedAt: later, idempotencyKey: "block:operator-one", createdAt: observedAt, metadataOnly: true, rawPayloadRetained: false };
@@ -234,8 +234,12 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition, unavailableReviewerException: null, unavailableReviewerBlock: null, developerCapabilityBindingId: null, developerCapabilityProof: null, operatorCapabilityBindingId: null, operatorCapabilityProof: null, ...reviewerCapability }), true);
     const overlongVerificationId = `verification:${"a".repeat(108)}`;
     const overlongDispositionId = `review:${"a".repeat(114)}`;
+    const overlongDeveloperIdentity = `developer:${"a".repeat(111)}`;
+    const overlongReviewerIdentity = `reviewer:${"a".repeat(112)}`;
     assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, verificationRecordId: overlongVerificationId }, ...developerCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, reviewDispositionId: overlongDispositionId }, ...reviewerCapability }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, developerIdentity: overlongDeveloperIdentity }, ...developerCapability }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, reviewerIdentity: overlongReviewerIdentity }, ...reviewerCapability }), false);
     const caseDistinctReview = {
       verification: { ...verification, developerHome: "/Profiles/Developer", developerWorkspace: "/Work/Developer" },
       disposition: { ...disposition, reviewerHome: "/profiles/developer", reviewerWorkspace: "/Work/Reviewer" },
@@ -249,6 +253,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, recordedAt: "2026-08-28T01:00:01Z", reviewOrExpiryAt: "2026-08-28T02:00:00Z" }, ...reviewerCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), true);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException: { ...unavailableReviewerException, recordedAt: "2026-08-27T23:59:59Z" }, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException: { ...unavailableReviewerException, reviewOrExpiryAt: later }, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability, reviewerCapabilityProof: "r".repeat(32) }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: { ...operatorUnavailableReviewerBlock, evidenceRefs: Array.from({ length: 26 }, (_, index) => `evidence:${index}`) }, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException: { ...unavailableReviewerException, exceptionId: `exception:${"a".repeat(111)}` }, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), false);
