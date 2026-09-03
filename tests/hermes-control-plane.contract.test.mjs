@@ -250,6 +250,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isReviewHandoffV1({ ...caseDistinctReview, verification: { ...caseDistinctReview.verification, developerIdentity: "developer:ß" }, disposition: { ...caseDistinctReview.disposition, reviewerIdentity: "developer:ss" } }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, ...developerCapability }), true);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException, ...reviewerCapability }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, target: " test:contract" }, ...developerCapability }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, reviewOrExpiryAt: later }, ...reviewerCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, recordedAt: "2026-08-28T01:00:01Z", reviewOrExpiryAt: "2026-08-28T02:00:00Z" }, ...reviewerCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), true);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException: { ...unavailableReviewerException, recordedAt: "2026-08-27T23:59:59Z" }, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), false);

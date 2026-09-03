@@ -31,7 +31,9 @@ from test_hermes_control_plane import payload
 
 ROLE_PROFILE_ROOT = Path(mkdtemp(prefix="hermes-role-profile-"))
 for _profile_name in ("developer-home", "developer-workspace", "reviewer-home", "reviewer-workspace", "operator-home", "operator-workspace"):
-    (ROLE_PROFILE_ROOT / _profile_name).mkdir()
+    profile_root = ROLE_PROFILE_ROOT / _profile_name
+    profile_root.mkdir(mode=0o700)
+    profile_root.chmod(0o700)
 
 
 @pytest.mark.asyncio
@@ -915,7 +917,7 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
     async with sessions() as session:
         await _seed_review_lane(session)
         expired = review_handoff("technical_block")
-        expired["unavailableReviewerException"] = {"exceptionId": "exception:reviewer", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reason": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2020-01-01T00:00:00Z", "reviewOrExpiryAt": "2020-01-01T01:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
+        expired["unavailableReviewerException"] = {"exceptionId": "exception:reviewer", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reason": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "coordinator:one", "recordedAt": "2026-09-02T12:02:00Z", "reviewOrExpiryAt": "2026-09-03T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
         await _record_verification(session, expired)
         expired_request = HermesReviewHandoffRequest.model_validate(_reviewer_request(expired))
         with pytest.raises(ValueError, match="expired"):

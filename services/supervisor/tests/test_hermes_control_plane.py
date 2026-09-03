@@ -7,7 +7,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app, redact_hermes_capability_validation_error, require_authenticated_hermes_capability_provisioner, require_authenticated_hermes_role_handoff
-from supervisor.api.schemas import HermesLedgerIngestRequest
+from supervisor.api.schemas import HermesLedgerIngestRequest, HermesRoleCapabilityProvisionRequest
 from supervisor.domain.hermes_control_plane import HERMES_LIFECYCLE_EVENT_NAMES
 
 
@@ -45,6 +45,18 @@ def test_hermes_ledger_boundary_is_strict_and_metadata_only():
     with pytest.raises(ValidationError): HermesLedgerIngestRequest.model_validate(mismatched_result)
     typed_review_event = payload(); typed_review_event["event"]["eventName"] = "hermes.review.disposition.recorded"  # type: ignore[index]
     with pytest.raises(ValidationError): HermesLedgerIngestRequest.model_validate(typed_review_event)
+
+
+def test_hermes_role_capability_binding_id_is_safe_metadata_not_secret_text():
+    request = {
+        "capabilityBindingId": "capability:sk_test_abcdefghijklmnopqrstuvwxyz",
+        "role": "developer", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+        "identity": "developer:one", "home": "/tmp/developer", "workspace": "/tmp/workspace",
+        "capabilitySecret": "x" * 32, "expiresAt": "2099-01-01T00:00:00Z",
+        "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+    }
+    with pytest.raises(ValidationError):
+        HermesRoleCapabilityProvisionRequest.model_validate(request)
 
 
 def test_hermes_routes_are_local_typed_projection_boundaries():

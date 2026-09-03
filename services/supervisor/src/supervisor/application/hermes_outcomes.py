@@ -132,9 +132,14 @@ async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[
         raise ValueError("Review evidence must resolve to the current bound outcome and Developer lane revision.")
 
 
-def _require_live_handoff_lane(lane: HermesLaneRun) -> None:
+def _decision_now(decision_at: datetime | None = None) -> datetime:
+    """Never let a caller backdate a decision around a live-state fence."""
     now = datetime.now(UTC)
-    if lane.stale_deadline_at <= now or lane.timeout_at <= now:
+    return max(now, decision_at) if decision_at is not None else now
+
+
+def _require_live_handoff_lane(lane: HermesLaneRun, *, decision_at: datetime | None = None) -> None:
+    if lane.stale_deadline_at <= _decision_now(decision_at) or lane.timeout_at <= _decision_now(decision_at):
         raise ValueError("Review handoff cannot mutate a stale or timed-out Developer lane.")
 
 
@@ -554,6 +559,9 @@ async def provision_hermes_role_capability(
             raise ValueError("Role capability binding is revoked; provision a distinct binding.")
         if not _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=str(planned_home), workspace=str(planned_workspace)):
             raise ValueError("Role capability binding conflicts with persisted metadata.")
+        canonical_home, canonical_workspace = _canonical_role_profile(str(planned_home), str(planned_workspace))
+        _owner_private_directory(Path(canonical_home), label="home")
+        _owner_private_directory(Path(canonical_workspace), label="workspace")
         return existing
     home, workspace, created_roots = _bootstrap_role_profile(str(planned_home), str(planned_workspace), runtime_root=runtime_root)
     binding = HermesRoleCapabilityBinding(
@@ -601,14 +609,14 @@ async def revoke_hermes_role_capability(session: AsyncSession, *, capability_bin
     raise ValueError("Role capability binding was already revoked by another Operator.")
 
 
-async def _require_role_capability(session: AsyncSession, *, binding_id: str, secret: str, role: str, outcome_id: str, lane_run_id: str, identity: str, home: str, workspace: str, lock: bool = False) -> HermesRoleCapabilityBinding:
+async def _require_role_capability(session: AsyncSession, *, binding_id: str, secret: str, role: str, outcome_id: str, lane_run_id: str, identity: str, home: str, workspace: str, lock: bool = False, decision_at: datetime | None = None) -> HermesRoleCapabilityBinding:
     statement = select(HermesRoleCapabilityBinding).where(HermesRoleCapabilityBinding.capability_binding_id == binding_id)
     if lock:
         statement = statement.with_for_update()
     binding = await session.scalar(statement)
     if binding is None or binding.role != role or binding.outcome_id != outcome_id or binding.lane_run_id != lane_run_id:
         raise ValueError("Role capability is not bound to this outcome and Developer lane.")
-    if binding.revoked_at is not None or binding.expires_at <= datetime.now(UTC):
+    if binding.revoked_at is not None or binding.expires_at <= _decision_now(decision_at):
         raise ValueError("Role capability is revoked or expired.")
     digest = sha256(secret.encode("utf-8")).hexdigest()
     if not hmac.compare_digest(binding.capability_digest_sha256, digest):
@@ -616,17 +624,19 @@ async def _require_role_capability(session: AsyncSession, *, binding_id: str, se
     canonical_home, canonical_workspace = _canonical_role_profile(home, workspace)
     if (binding.identity, binding.home, binding.workspace) != (identity, canonical_home, canonical_workspace):
         raise ValueError("Caller-supplied role profile does not match the Coordinator binding.")
+    _owner_private_directory(Path(canonical_home), label="home")
+    _owner_private_directory(Path(canonical_workspace), label="workspace")
     return binding
 
 
-async def _fence_unrevoked_role_capability(session: AsyncSession, binding: HermesRoleCapabilityBinding) -> None:
+async def _fence_unrevoked_role_capability(session: AsyncSession, binding: HermesRoleCapabilityBinding, *, decision_at: datetime | None = None) -> None:
     """Serialize a write-capable handoff against revocation on every supported database."""
     result = await session.execute(
         update(HermesRoleCapabilityBinding)
         .where(
             HermesRoleCapabilityBinding.capability_binding_id == binding.capability_binding_id,
             HermesRoleCapabilityBinding.revoked_at.is_(None),
-            HermesRoleCapabilityBinding.expires_at > datetime.now(UTC),
+            HermesRoleCapabilityBinding.expires_at > _decision_now(decision_at),
         )
         .values(revoked_at=None)
     )
@@ -634,10 +644,10 @@ async def _fence_unrevoked_role_capability(session: AsyncSession, binding: Herme
         raise ValueError("Role capability is revoked or expired.")
 
 
-async def _fence_role_capability_before_commit(session: AsyncSession, binding: HermesRoleCapabilityBinding) -> None:
+async def _fence_role_capability_before_commit(session: AsyncSession, binding: HermesRoleCapabilityBinding, *, decision_at: datetime | None = None) -> None:
     """Fail closed without retaining staged handoff writes when a final fence loses."""
     try:
-        await _fence_unrevoked_role_capability(session, binding)
+        await _fence_unrevoked_role_capability(session, binding, decision_at=decision_at)
     except ValueError:
         await session.rollback()
         raise
@@ -652,6 +662,7 @@ async def _require_operator_role_capability(
     lane_run_id: str,
     authenticated_operator_id: str,
     lock: bool = False,
+    decision_at: datetime | None = None,
 ) -> HermesRoleCapabilityBinding:
     """Require the task-scoped Operator capability without accepting caller profile claims."""
     statement = select(HermesRoleCapabilityBinding).where(
@@ -668,11 +679,14 @@ async def _require_operator_role_capability(
         or binding.identity != authenticated_operator_id
     ):
         raise ValueError("Operator capability is not bound to this authenticated outcome and Developer lane.")
-    if binding.revoked_at is not None or binding.expires_at <= datetime.now(UTC):
+    if binding.revoked_at is not None or binding.expires_at <= _decision_now(decision_at):
         raise ValueError("Role capability is revoked or expired.")
     digest = sha256(secret.encode("utf-8")).hexdigest()
     if not hmac.compare_digest(binding.capability_digest_sha256, digest):
         raise ValueError("Role capability proof is invalid.")
+    canonical_home, canonical_workspace = _canonical_role_profile(binding.home, binding.workspace)
+    _owner_private_directory(Path(canonical_home), label="home")
+    _owner_private_directory(Path(canonical_workspace), label="workspace")
     return binding
 
 
@@ -747,6 +761,8 @@ async def _replay_disposition(
         return None
     if prior.review_disposition_id != disposition.reviewDispositionId or prior.request_digest_sha256 not in digests:
         raise ValueError("Review disposition idempotency key conflicts with persisted metadata.")
+    if not prior.revision_binding_known:
+        raise ValueError("Review disposition replay lacks a trusted revision binding.")
     if authenticated_recorder_id is not None and prior.exception_requirement_json is not None and prior.exception_requirement_json.get("recordedBy") != authenticated_recorder_id:
         raise ValueError("Review disposition exception recorder conflicts with persisted metadata.")
     outcome = await session.get(HermesOutcome, prior.outcome_id)
@@ -774,6 +790,12 @@ async def ingest_hermes_review_handoff(
             ),
         })
     verification, disposition = request.verification, request.disposition
+    if verification.observedAt > datetime.now(UTC) + timedelta(minutes=5):
+        raise ValueError("Verification evidence cannot be materially future-dated.")
+    if disposition is not None and disposition.observedAt > datetime.now(UTC) + timedelta(minutes=5):
+        raise ValueError("Review disposition cannot be materially future-dated.")
+    if request.unavailableReviewerBlock is not None and request.unavailableReviewerBlock.observedAt > datetime.now(UTC) + timedelta(minutes=5):
+        raise ValueError("Unavailable-reviewer block cannot be materially future-dated.")
     if not commit and request.unavailableReviewerException is not None:
         raise ValueError("Unavailable-reviewer exceptions require an atomic committed handoff.")
     if request.unavailableReviewerBlock is not None:
@@ -788,6 +810,7 @@ async def ingest_hermes_review_handoff(
             lane_run_id=verification.laneRunId,
             authenticated_operator_id=authenticated_recorder_id,
             lock=True,
+            decision_at=block.observedAt,
         )
         digest = _handoff_digest(request)
         replay = await _replay_unavailable_reviewer_block(
@@ -807,8 +830,9 @@ async def ingest_hermes_review_handoff(
             outcome_id=verification.outcomeId,
             lane_run_id=verification.laneRunId,
             authenticated_operator_id=authenticated_recorder_id,
+            decision_at=block.observedAt,
         )
-        await _fence_unrevoked_role_capability(session, operator_capability)
+        await _fence_unrevoked_role_capability(session, operator_capability, decision_at=block.observedAt)
         replay = await _replay_unavailable_reviewer_block(
             session,
             block,
@@ -819,8 +843,8 @@ async def ingest_hermes_review_handoff(
             return replay
         if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
             raise ValueError("Unavailable-reviewer block requires the current bound outcome and Developer lane.")
-        _require_live_handoff_lane(lane)
-        if exception.reviewBy <= datetime.now(UTC):
+        _require_live_handoff_lane(lane, decision_at=block.observedAt)
+        if exception.reviewBy <= _decision_now(block.observedAt):
             raise ValueError("Unavailable-reviewer exception expired before persistence.")
         record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
         if record is None or record.verification_record_id != verification.verificationRecordId or not _same_verification(record, verification) or record.result != "passed":
@@ -834,7 +858,7 @@ async def ingest_hermes_review_handoff(
         recovered_review_entry = (
             current_event is not None
             and current_event.event_name == "hermes.lane.recovered"
-            and (outcome.revision, lane.revision) == (block.expectedOutcomeRevision + 1, block.expectedLaneRevision + 1)
+            and (outcome.revision, lane.revision) == (block.expectedOutcomeRevision, block.expectedLaneRevision)
         )
         if (outcome.revision, lane.revision) != (block.expectedOutcomeRevision, block.expectedLaneRevision) and not (typed_review_entry or recovered_review_entry):
             raise ValueError("Unavailable-reviewer block revision is stale.")
@@ -860,7 +884,7 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Unavailable-reviewer block cannot overwrite a terminal ledger transition.")
         # The validation above can span awaits; fence the live deadline again
         # directly before admitting the new blocked transition.
-        _require_live_handoff_lane(lane)
+        _require_live_handoff_lane(lane, decision_at=block.observedAt)
         event_id = f"event:unavailable-reviewer:{sha256(block.unavailableReviewerBlockId.encode('utf-8')).hexdigest()}"
         session.add(HermesLedgerEvent(
             event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id,
@@ -896,8 +920,9 @@ async def ingest_hermes_review_handoff(
             observed_at=block.observedAt, created_at=block.createdAt, metadata_only=True, raw_payload_retained=False,
         ))
         try:
-            await _fence_role_capability_before_commit(session, operator_capability)
-            if exception.reviewBy <= datetime.now(UTC):
+            await _fence_role_capability_before_commit(session, operator_capability, decision_at=block.observedAt)
+            _require_live_handoff_lane(lane, decision_at=block.observedAt)
+            if exception.reviewBy <= _decision_now(block.observedAt):
                 await session.rollback()
                 raise ValueError("Unavailable-reviewer exception expired before persistence.")
             await session.commit()
@@ -916,7 +941,7 @@ async def ingest_hermes_review_handoff(
         return _projection(outcome, lane, await _latest_evidence(session, lane))
     if disposition is None:
         assert request.developerCapabilityBindingId is not None and request.developerCapabilityProof is not None
-        developer_capability = await _require_role_capability(session, binding_id=request.developerCapabilityBindingId, secret=request.developerCapabilityProof, role="developer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=verification.developerIdentity, home=verification.developerHome, workspace=verification.developerWorkspace, lock=True)
+        developer_capability = await _require_role_capability(session, binding_id=request.developerCapabilityBindingId, secret=request.developerCapabilityProof, role="developer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=verification.developerIdentity, home=verification.developerHome, workspace=verification.developerWorkspace, lock=True, decision_at=verification.observedAt)
         replay = await _replay_verification(
             session,
             verification,
@@ -926,8 +951,8 @@ async def ingest_hermes_review_handoff(
             return replay
         outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
         lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
-        developer_capability = await _require_role_capability(session, binding_id=request.developerCapabilityBindingId, secret=request.developerCapabilityProof, role="developer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=verification.developerIdentity, home=verification.developerHome, workspace=verification.developerWorkspace)
-        await _fence_unrevoked_role_capability(session, developer_capability)
+        developer_capability = await _require_role_capability(session, binding_id=request.developerCapabilityBindingId, secret=request.developerCapabilityProof, role="developer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=verification.developerIdentity, home=verification.developerHome, workspace=verification.developerWorkspace, decision_at=verification.observedAt)
+        await _fence_unrevoked_role_capability(session, developer_capability, decision_at=verification.observedAt)
         if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
             raise ValueError("Verification result requires the current bound outcome and Developer lane.")
         # A concurrent exact request may have committed while this request was
@@ -939,21 +964,23 @@ async def ingest_hermes_review_handoff(
         )
         if replay is not None:
             return replay
-        _require_live_handoff_lane(lane)
+        _require_live_handoff_lane(lane, decision_at=verification.observedAt)
         if (outcome.revision, lane.revision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision):
             raise ValueError("Verification result revision is stale.")
+        current_event = await session.get(HermesLedgerEvent, outcome.current_event_id)
         initial_verification = outcome.status == "active" and lane.status == "running"
+        recovered_review_lane = current_event is not None and current_event.event_name == "hermes.lane.recovered" and outcome.status == lane.status == "review"
+        eligible_verification = initial_verification or recovered_review_lane
         enter_review = verification.result == "passed" and initial_verification
-        if verification.result != "passed" and not initial_verification:
+        if verification.result != "passed" and not eligible_verification:
             raise ValueError("Failed or inconclusive verification requires the initial active Developer lane.")
-        if (not initial_verification and (outcome.status != "review" or lane.status != "review")) or lane.evidence_fingerprint != verification.sourceFingerprint:
+        if (not eligible_verification and (outcome.status != "review" or lane.status != "review")) or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Verification result is stale for the current review lane.")
         if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at:
             raise ValueError("Verification evidence predates the current ledger projection.")
         if verification.observedAt > datetime.now(UTC) + timedelta(minutes=5):
             raise ValueError("Verification evidence cannot be materially future-dated.")
-        current_event = await session.get(HermesLedgerEvent, outcome.current_event_id)
-        carry_forward_recovery_evidence = current_event is not None and current_event.event_name == "hermes.lane.recovered" and verification.evidenceRefs == lane.evidence_refs_json
+        carry_forward_recovery_evidence = recovered_review_lane and verification.evidenceRefs == lane.evidence_refs_json
         await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane, decision_at=verification.observedAt, require_current_projection=not carry_forward_recovery_evidence)
         if verification.result == "passed":
             if not can_replace_current_result(previous=outcome.result, next_result="retryable") or not can_replace_current_result(previous=lane.result, next_result="retryable"):
@@ -965,7 +992,7 @@ async def ingest_hermes_review_handoff(
                 await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": "review", "result": "retryable", "reason_code": "verification_passed", "evidence_refs_json": verification.evidenceRefs, "next_action": "Await independent Reviewer disposition.", "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
                 await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": "review", "result": "retryable", "reason_code": "verification_passed", "evidence_refs_json": verification.evidenceRefs, "next_action": "Await independent Reviewer disposition.", "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
             try:
-                await _fence_role_capability_before_commit(session, developer_capability)
+                await _fence_role_capability_before_commit(session, developer_capability, decision_at=verification.observedAt)
                 if commit: await session.commit()
                 else: await session.flush()
             except IntegrityError as exc:
@@ -989,7 +1016,7 @@ async def ingest_hermes_review_handoff(
         await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": status, "result": result, "reason_code": reason, "evidence_refs_json": verification.evidenceRefs, "next_action": action, "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
         await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": status, "result": result, "reason_code": reason, "evidence_refs_json": verification.evidenceRefs, "next_action": action, "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id, "rework_budget": lane.rework_budget - (1 if result == "rework" else 0)})
         try:
-            await _fence_role_capability_before_commit(session, developer_capability)
+            await _fence_role_capability_before_commit(session, developer_capability, decision_at=verification.observedAt)
             if commit: await session.commit()
             else: await session.flush()
         except IntegrityError as exc:
@@ -1006,7 +1033,7 @@ async def ingest_hermes_review_handoff(
         return _projection(outcome, lane, await _latest_evidence(session, lane))
     assert disposition is not None
     assert request.reviewerCapabilityBindingId is not None and request.reviewerCapabilityProof is not None
-    reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace, lock=True)
+    reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace, lock=True, decision_at=disposition.observedAt)
     digest = _handoff_digest(request)
     replay_digests = _handoff_replay_digests(request) | _handoff_replay_digests(raw_request)
     replay = await _replay_disposition(session, disposition, replay_digests, authenticated_recorder_id=authenticated_recorder_id)
@@ -1014,8 +1041,8 @@ async def ingest_hermes_review_handoff(
         return replay
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
-    reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace)
-    await _fence_unrevoked_role_capability(session, reviewer_capability)
+    reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace, decision_at=disposition.observedAt)
+    await _fence_unrevoked_role_capability(session, reviewer_capability, decision_at=disposition.observedAt)
     if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id:
         raise ValueError("Review handoff requires an existing bound outcome and Developer lane.")
     # A concurrent exact handoff can commit while this request waits for the
@@ -1023,12 +1050,12 @@ async def ingest_hermes_review_handoff(
     replay = await _replay_disposition(session, disposition, replay_digests, authenticated_recorder_id=authenticated_recorder_id)
     if replay is not None:
         return replay
-    _require_live_handoff_lane(lane)
+    _require_live_handoff_lane(lane, decision_at=disposition.observedAt)
     if outcome.current_event_id != lane.current_event_id:
         raise ValueError("Review handoff lane is no longer current for its outcome.")
     if outcome.status != "review" or lane.status != "review":
         raise ValueError("Review handoff requires the current outcome and lane in review state.")
-    if request.unavailableReviewerException is not None and request.unavailableReviewerException.reviewBy <= datetime.now(UTC):
+    if request.unavailableReviewerException is not None and request.unavailableReviewerException.reviewBy <= _decision_now(disposition.observedAt):
         raise ValueError("Unavailable-reviewer exception expired before persistence.")
     record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
     if record is None:
@@ -1110,8 +1137,9 @@ async def ingest_hermes_review_handoff(
         exception_requirement_json=request.unavailableReviewerException.model_dump(mode="json", by_alias=True) if request.unavailableReviewerException else None,
     ))
     try:
-        await _fence_role_capability_before_commit(session, reviewer_capability)
-        if request.unavailableReviewerException is not None and request.unavailableReviewerException.reviewBy <= datetime.now(UTC):
+        await _fence_role_capability_before_commit(session, reviewer_capability, decision_at=disposition.observedAt)
+        _require_live_handoff_lane(lane, decision_at=disposition.observedAt)
+        if request.unavailableReviewerException is not None and request.unavailableReviewerException.reviewBy <= _decision_now(disposition.observedAt):
             await session.rollback()
             raise ValueError("Unavailable-reviewer exception expired before persistence.")
         if commit: await session.commit()

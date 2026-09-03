@@ -8025,6 +8025,7 @@ def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> st
         or len(value) > maximum
         or not _is_safe_pipeline_evidence_ref(value)
         or PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
+        or (field_name == "capabilityBindingId" and re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)_[A-Za-z0-9_-]+", value, re.IGNORECASE))
         or re.search(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY(?: BLOCK)?)-----", value, re.IGNORECASE)
         or LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
         or (field_name in {"verificationRecordId", "outcomeId", "laneRunId", "reviewDispositionId", "developerLaneRunId", "idempotencyKey", "exceptionId"} and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}(?:[-_:][A-Za-z0-9._/@-]+)+", value))
@@ -8361,7 +8362,7 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
             return value
         if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None: raise ValueError("Role capability identity must be opaque.")
         return value
-    @field_validator("identity", "home", "workspace")
+    @field_validator("capabilityBindingId", "identity", "home", "workspace")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
     @field_validator("expiresAt", "createdAt", mode="before")
@@ -8487,7 +8488,7 @@ class HermesReviewHandoffRequest(BaseModel):
         if (disposition.expectedOutcomeRevision != verification.expectedOutcomeRevision or disposition.expectedLaneRevision != verification.expectedLaneRevision): raise ValueError("Review handoff revisions must bind verification and disposition exactly.")
         if exception is not None:
             if disposition.disposition != "technical_block" or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId): raise ValueError("Unavailable-reviewer exception is audit-only and must bind the blocked Developer lane.")
-            if exception.recordedAt > disposition.observedAt: raise ValueError("Unavailable-reviewer exception cannot postdate its disposition.")
+            if exception.recordedAt > disposition.observedAt or exception.reviewBy <= disposition.observedAt: raise ValueError("Unavailable-reviewer exception must outlive its disposition.")
         return self
 
 
