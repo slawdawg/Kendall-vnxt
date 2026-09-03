@@ -23,7 +23,7 @@ from supervisor.application.hermes_outcomes import (
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesBoardLifecycleEventInputV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequest, HermesTechnicalBlockRecoveryRequest
+from supervisor.api.schemas import HermesBoardLifecycleEventInputV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequest, HermesTechnicalBlockRecoveryRequest, HermesUnavailableReviewerBlockInputV1
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
 from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesReviewDisposition, HermesRoleCapabilityBinding, HermesUnavailableReviewerRequirement, HermesVerificationRecord
@@ -732,6 +732,10 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
         review_by_before_block["unavailableReviewerBlock"].update({"observedAt": "2099-01-01T00:00:00Z", "createdAt": "2099-01-01T00:00:00Z"})
         with pytest.raises(ValueError, match="preserve verification revisions and timestamps"):
             HermesReviewHandoffRequest.model_validate(review_by_before_block)
+        secret_block = copy.deepcopy(request["unavailableReviewerBlock"])
+        secret_block["idempotencyKey"] = "block:sk_live_abcdefghijklmnop"
+        with pytest.raises(ValueError, match="bounded safe metadata"):
+            HermesUnavailableReviewerBlockInputV1.model_validate(secret_block)
         bypass = _developer_request(handoff); bypass["unavailableReviewerException"] = request["unavailableReviewerException"]
         with pytest.raises(ValueError, match="cannot carry a Reviewer capability or exception"):
             HermesReviewHandoffRequest.model_validate(bypass)
@@ -1188,6 +1192,10 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         stale_evidence["replacementLaneRun"]["updatedAt"] = "2026-09-02T12:04:00Z"  # type: ignore[index]
         with pytest.raises(ValueError, match="cannot postdate its decision"):
             HermesTechnicalBlockRecoveryRequest.model_validate(stale_evidence)
+        stale_heartbeat = copy.deepcopy(recovery)
+        stale_heartbeat["replacementLaneRun"]["heartbeatAt"] = "2026-09-02T12:04:00Z"  # type: ignore[index]
+        with pytest.raises(ValueError, match="cannot postdate its decision"):
+            HermesTechnicalBlockRecoveryRequest.model_validate(stale_heartbeat)
         ordered = copy.deepcopy(recovery)
         ordered["observedAt"] = ordered["createdAt"] = "2026-09-02T12:05:00Z"
         ordered["replacementLaneRun"]["heartbeatAt"] = ordered["replacementLaneRun"]["observedAt"] = ordered["replacementLaneRun"]["updatedAt"] = "2026-09-02T12:03:30Z"  # type: ignore[index]
@@ -1309,6 +1317,10 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         developer_request = _developer_request(recovered_handoff)
         developer_request.update({"developerCapabilityBindingId": "capability:recovery-developer", "developerCapabilityProof": "x" * 32})
         assert (await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(developer_request))).currentLaneRunId == replacement_lane.lane_run_id
+        second_passed = copy.deepcopy(developer_request)
+        second_passed["verification"].update({"verificationRecordId": "verification:recovery-second", "idempotencyKey": "verification:recovery-second"})
+        with pytest.raises(ValueError, match="cannot replace an existing lane verification"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(second_passed))
         reviewer_request = _reviewer_request(recovered_handoff)
         reviewer_request.update({"reviewerCapabilityBindingId": "capability:recovery-reviewer", "reviewerCapabilityProof": "y" * 32})
         assert (await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(reviewer_request))).currentResult == "completed"

@@ -20711,9 +20711,15 @@ function releasedSourcePrRecoveryEvidence(manifest, evidence, lock) {
 }
 
 function strictGithubRecordedSourcePrProof(manifest, worktreePath, branchEvidence) {
+  const origins = originRepositoryIdentities(worktreePath);
+  if (!origins || origins.length !== 1) {
+    return { status: "blocked", reason: "released source-PR recovery requires one canonical GitHub origin" };
+  }
+  const repository = `${origins[0].owner}/${origins[0].name}`;
   const result = run("gh", [
     "pr", "list", "--head", branchEvidence.branch, "--state", "open",
     "--json", "number,url,state,mergedAt,baseRefName,headRefName,headRefOid,isCrossRepository",
+    "--repo", repository,
   ], { cwd: worktreePath });
   if (result.code !== 0) {
     return { status: "blocked", reason: "live source-PR proof is unavailable" };

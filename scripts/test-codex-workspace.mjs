@@ -7088,7 +7088,7 @@ try {
   });
 
   test("takeover apply recovers a released idle dirty lane only through its exact recorded source PR", () => {
-    const fixture = createDirtyTakeoverFixture("released-source-pr", { sourcePr: true });
+    const fixture = createDirtyTakeoverFixture("released-source-pr", { sourcePr: true, expectSourcePrRepository: true });
     try {
       writeFileSync(join(fixture.worktree, "dirty.txt"), "reviewed delivery repair\n");
       const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
@@ -24877,6 +24877,7 @@ function createDirtyTakeoverFixture(name, options = {}) {
   runGit(root, ["add", "tracked.txt", "scripts"]);
   runGit(root, ["commit", "-q", "-m", "fixture base"]);
   runGit(root, ["checkout", "-q", "-b", branch]);
+  runGit(root, ["remote", "add", "origin", "https://github.com/owner/repo.git"]);
   const sourcePr = options.sourcePr
     ? {
         number: options.sourcePr?.number || 91,
@@ -24911,6 +24912,8 @@ function createDirtyTakeoverFixture(name, options = {}) {
       "#!/usr/bin/env node",
       "const args = process.argv.slice(2);",
       "if (args[0] === 'pr' && args[1] === 'list') {",
+      "  const expectedRepository = process.env.CODEX_WORKSPACE_TEST_DIRTY_GH_EXPECT_REPO;",
+      "  if (expectedRepository && (args.indexOf('--repo') < 0 || args[args.indexOf('--repo') + 1] !== expectedRepository)) process.exit(2);",
       "  if (process.env.CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_EXIT) process.exit(Number(process.env.CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_EXIT));",
       "  console.log(process.env.CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON || '[]');",
       "  process.exit(0);",
@@ -24935,6 +24938,7 @@ function createDirtyTakeoverFixture(name, options = {}) {
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
       PATH: `${fakeBin}:${process.env.PATH || ""}`,
       CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: options.prListJson || JSON.stringify(sourcePr ? [sourcePr] : []),
+      ...(options.expectSourcePrRepository ? { CODEX_WORKSPACE_TEST_DIRTY_GH_EXPECT_REPO: "owner/repo" } : {}),
     },
   };
 }

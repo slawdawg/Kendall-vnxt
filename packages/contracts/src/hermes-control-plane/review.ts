@@ -12,20 +12,24 @@ const isReviewText = (value: unknown, maximum: number) => isSafeText(value, maxi
 const isReviewMetadataOnlyRecord = (value: Record<string, unknown>, schemaVersion: string) =>
   isMetadataOnlyRecord(value, schemaVersion, ["observedAt", "createdAt"]) &&
   typeof value.idempotencyKey === "string" && value.idempotencyKey.length <= 180;
+const hasOnlyEnumerableStringOwnKeys = (value: Record<string, unknown>) => Reflect.ownKeys(value)
+  .every((key) => typeof key === "string" && Object.prototype.propertyIsEnumerable.call(value, key));
 
 export function isVerificationRecordV1(value: unknown): value is VerificationRecordV1 {
+  if (!isRecord(value) || !hasOnlyEnumerableStringOwnKeys(value) || !isHermesOutcomeId(value.outcomeId) || value.outcomeId.length > 120 || !isHermesLaneRunId(value.laneRunId) || value.laneRunId.length > 120) return false;
   return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, VERIFICATION_FIELDS) && isVerificationRecordId(value.verificationRecordId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isReviewMetadataOnlyRecord(value, HERMES_VERIFICATION_RECORD_SCHEMA_VERSION) && isTimestampOrder(value, ["createdAt", "observedAt"]) && ["passed", "failed", "inconclusive"].includes(value.result as string) && isReviewText(value.target, 240) && isReviewText(value.sourceFingerprint, 240) && isOpaqueId(value.developerIdentity) && value.developerIdentity.length <= 120 && isReviewText(value.developerHome, 240) && isReviewText(value.developerWorkspace, 240) && distinct(value.developerIdentity, value.developerHome, value.developerWorkspace) && isEvidenceRefs(value.evidenceRefs) && Number.isInteger(value.expectedOutcomeRevision) && (value.expectedOutcomeRevision as number) > 0 && Number.isInteger(value.expectedLaneRevision) && (value.expectedLaneRevision as number) > 0);
 }
 export function isReviewDispositionV1(value: unknown): value is ReviewDispositionV1 {
+  if (!isRecord(value) || !hasOnlyEnumerableStringOwnKeys(value) || !isHermesOutcomeId(value.outcomeId) || value.outcomeId.length > 120 || !isHermesLaneRunId(value.developerLaneRunId) || value.developerLaneRunId.length > 120) return false;
   return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, DISPOSITION_FIELDS) && isReviewDispositionId(value.reviewDispositionId) && isVerificationRecordId(value.verificationRecordId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.developerLaneRunId) && isReviewMetadataOnlyRecord(value, HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION) && isTimestampOrder(value, ["createdAt", "observedAt"]) && ["approve", "rework", "technical_block"].includes(value.disposition as string) && isOpaqueId(value.reviewerIdentity) && value.reviewerIdentity.length <= 120 && isReviewText(value.reviewerHome, 240) && isReviewText(value.reviewerWorkspace, 240) && distinct(value.reviewerIdentity, value.reviewerHome, value.reviewerWorkspace) && Number.isInteger(value.expectedOutcomeRevision) && (value.expectedOutcomeRevision as number) > 0 && Number.isInteger(value.expectedLaneRevision) && (value.expectedLaneRevision as number) > 0 && isReviewText(value.reasonCode, 120) && isReviewText(value.nextAction, 360) && isEvidenceRefs(value.evidenceRefs));
 }
 
 export function isHermesReviewerUnavailableExceptionV1(value: unknown): value is HermesReviewerUnavailableExceptionV1 {
-  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && value.exceptionId.length <= 120 && isHermesOutcomeId(value.outcomeId) && value.outcomeId.length <= 120 && isHermesLaneRunId(value.laneRunId) && value.laneRunId.length <= 120 && isReviewText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isReviewText(value.compensatingReviewRef, 240) && isReviewText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]) && Date.parse(value.recordedAt as string) < Date.parse(value.reviewOrExpiryAt as string));
+  return guardFailsClosed(() => !!isRecord(value) && hasOnlyEnumerableStringOwnKeys(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && value.exceptionId.length <= 120 && isHermesOutcomeId(value.outcomeId) && value.outcomeId.length <= 120 && isHermesLaneRunId(value.laneRunId) && value.laneRunId.length <= 120 && isReviewText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isReviewText(value.compensatingReviewRef, 240) && isReviewText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]) && Date.parse(value.recordedAt as string) < Date.parse(value.reviewOrExpiryAt as string));
 }
 
 export function isHermesUnavailableReviewerBlockV1(value: unknown): value is HermesUnavailableReviewerBlockV1 {
-  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_BLOCK_FIELDS) &&
+  return guardFailsClosed(() => !!isRecord(value) && hasOnlyEnumerableStringOwnKeys(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_BLOCK_FIELDS) &&
     isOpaqueId(value.unavailableReviewerBlockId) && value.unavailableReviewerBlockId.length <= 120 && isVerificationRecordId(value.verificationRecordId) &&
     isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.developerLaneRunId) &&
     isMetadataOnlyRecord(value, "unavailable_reviewer_block.v1", ["observedAt", "createdAt"]) &&
@@ -60,7 +64,7 @@ const isCapabilityProof = (value: unknown) => typeof value === "string" && value
 /** Reject independently-valid records unless their identity, chronology, and isolation bind together. */
 export function isReviewHandoffV1(value: unknown): value is ReviewHandoffV1 {
   return guardFailsClosed(() => {
-    if (!isRecord(value) || !isVerificationRecordV1(value.verification)) return false;
+    if (!isRecord(value) || !hasOnlyEnumerableStringOwnKeys(value) || !isVerificationRecordV1(value.verification)) return false;
     const handoff = Object.fromEntries(Object.entries(value).filter(([field, fieldValue]) => !(fieldValue === null && NULLABLE_HANDOFF_FIELDS.has(field))));
     if (!isRecord(handoff) || !isVerificationRecordV1(handoff.verification)) return false;
     const verification = handoff.verification;

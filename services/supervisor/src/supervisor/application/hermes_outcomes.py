@@ -373,11 +373,14 @@ async def recover_hermes_technical_block(
         idempotency_key=request.idempotencyKey, request_digest_sha256=digest, recovered_by_operator_id=recovered_by_operator_id,
         metadata_only=True, raw_payload_retained=False, authoritative=False,
     ))
-    await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {
-        "status": "review", "result": "retryable", "reason_code": request.reasonCode,
-        "evidence_refs_json": replacement.evidenceRefs, "next_action": request.nextAction,
-        "observed_at": request.observedAt, "updated_at": request.observedAt, "current_event_id": event_id,
-    })
+    # Do not let the revision fence trigger an autoflush outside the recovery
+    # conflict handler; commit/flush below owns every persistence failure.
+    with session.no_autoflush:
+        await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {
+            "status": "review", "result": "retryable", "reason_code": request.reasonCode,
+            "evidence_refs_json": replacement.evidenceRefs, "next_action": request.nextAction,
+            "observed_at": request.observedAt, "updated_at": request.observedAt, "current_event_id": event_id,
+        })
     try:
         if commit:
             await session.commit()
@@ -542,12 +545,19 @@ async def _lock_role_profile_parents(*roots: Path):
             acquired_locks.append(lock)
         for parent in parent_paths:
             descriptor = os.open(parent, os.O_RDONLY)
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            lock_task = asyncio.create_task(asyncio.to_thread(fcntl.flock, descriptor, fcntl.LOCK_EX))
+            try:
+                await asyncio.shield(lock_task)
+            except asyncio.CancelledError:
+                await lock_task
+                await asyncio.to_thread(fcntl.flock, descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+                raise
             descriptors.append(descriptor)
         yield
     finally:
         for descriptor in reversed(descriptors):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            await asyncio.to_thread(fcntl.flock, descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
         for lock in reversed(acquired_locks):
             lock.release()
@@ -1029,7 +1039,7 @@ async def ingest_hermes_review_handoff(
         recovered_review_lane = current_event is not None and current_event.event_name == "hermes.lane.recovered" and outcome.status == lane.status == "review"
         eligible_verification = initial_verification or recovered_review_lane
         enter_review = verification.result == "passed" and initial_verification
-        if verification.result == "passed" and not eligible_verification:
+        if verification.result == "passed" and (recovered_review_lane or not eligible_verification):
             prior_passed = await session.scalar(
                 select(HermesVerificationRecord.verification_record_id).where(
                     HermesVerificationRecord.outcome_id == verification.outcomeId,
@@ -1038,7 +1048,7 @@ async def ingest_hermes_review_handoff(
                 )
             )
             if prior_passed is not None:
-                raise ValueError("Passed verification cannot replace the existing ordinary review-lane verification.")
+                raise ValueError("Passed verification cannot replace an existing lane verification.")
         if verification.result != "passed" and not eligible_verification:
             raise ValueError("Failed or inconclusive verification requires the initial active Developer lane.")
         if (not eligible_verification and (outcome.status != "review" or lane.status != "review")) or lane.evidence_fingerprint != verification.sourceFingerprint:

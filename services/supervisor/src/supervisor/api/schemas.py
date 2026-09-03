@@ -8025,7 +8025,7 @@ def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> st
         or len(value) > maximum
         or not _is_safe_pipeline_evidence_ref(value)
         or PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
-        or (field_name == "capabilityBindingId" and re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)_[A-Za-z0-9_-]+", value, re.IGNORECASE))
+        or (field_name in {"capabilityBindingId", "unavailableReviewerBlockId", "idempotencyKey"} and re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)_[A-Za-z0-9_-]+", value, re.IGNORECASE))
         or re.search(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY(?: BLOCK)?)-----", value, re.IGNORECASE)
         or LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
         or (field_name in {"verificationRecordId", "outcomeId", "laneRunId", "reviewDispositionId", "developerLaneRunId", "idempotencyKey", "exceptionId"} and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}(?:[-_:][A-Za-z0-9._/@-]+)+", value))
@@ -8322,6 +8322,11 @@ class HermesUnavailableReviewerBlockInputV1(BaseModel):
     def _safe(cls, value: str, info) -> str:
         return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 240)
 
+    @field_validator("unavailableReviewerBlockId", "idempotencyKey")
+    @classmethod
+    def _safe_identity(cls, value: str, info) -> str:
+        return _validate_hermes_text(value, info.field_name, 240)
+
     @field_validator("evidenceRefs")
     @classmethod
     def _refs(cls, value: list[str]) -> list[str]:
@@ -8433,9 +8438,9 @@ class HermesTechnicalBlockRecoveryRequest(BaseModel):
         if evidence.observedAt > self.observedAt:
             raise ValueError("Technical-block recovery evidence cannot postdate its decision.")
         now = datetime.now(timezone.utc)
-        if any(value > now + timedelta(minutes=5) for value in (self.observedAt, lane.observedAt, lane.updatedAt, evidence.observedAt)):
+        if any(value > now + timedelta(minutes=5) for value in (self.observedAt, lane.heartbeatAt, lane.observedAt, lane.updatedAt, evidence.observedAt)):
             raise ValueError("Technical-block recovery metadata cannot be materially future-dated.")
-        if lane.observedAt > self.observedAt or lane.updatedAt > self.observedAt:
+        if lane.heartbeatAt > self.observedAt or lane.observedAt > self.observedAt or lane.updatedAt > self.observedAt:
             raise ValueError("Technical-block recovery replacement metadata cannot postdate its decision.")
         if evidence.observedAt < lane.updatedAt:
             raise ValueError("Technical-block recovery evidence predates its replacement lane update.")

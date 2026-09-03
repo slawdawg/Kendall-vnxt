@@ -21,6 +21,7 @@ const contractNames = [
   "HermesBoardLifecycleEventV1",
   "VerificationRecordV1",
   "ReviewDispositionV1",
+  "HermesUnavailableReviewerBlockV1",
 ];
 const resultValues = ["allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"];
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -231,6 +232,15 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesLifecycleEventV1(verificationEvent), false);
     assert.equal(contracts.isHermesLifecycleEventV1(unavailableReviewerBlockEvent), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition, ...reviewerCapability }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, outcomeId: `outcome:${"a".repeat(113)}` }, ...developerCapability }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, developerLaneRunId: `lane:${"a".repeat(116)}` }, ...reviewerCapability }), false);
+    const handoffWithHiddenProperty = { verification, ...developerCapability };
+    Object.defineProperty(handoffWithHiddenProperty, "hidden", { value: true });
+    assert.equal(contracts.isReviewHandoffV1(handoffWithHiddenProperty), false);
+    assert.equal(contracts.isReviewHandoffV1(Object.assign({ verification, ...developerCapability }, { [Symbol("hidden")]: true })), false);
+    const nestedVerificationWithHiddenProperty = { ...verification };
+    Object.defineProperty(nestedVerificationWithHiddenProperty, "hidden", { value: true });
+    assert.equal(contracts.isReviewHandoffV1({ verification: nestedVerificationWithHiddenProperty, ...developerCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition, unavailableReviewerException: null, unavailableReviewerBlock: null, developerCapabilityBindingId: null, developerCapabilityProof: null, operatorCapabilityBindingId: null, operatorCapabilityProof: null, ...reviewerCapability }), true);
     const overlongVerificationId = `verification:${"a".repeat(108)}`;
     const overlongDispositionId = `review:${"a".repeat(114)}`;
@@ -261,6 +271,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: { ...operatorUnavailableReviewerBlock, unavailableReviewerBlockId: `block:${"a".repeat(115)}` }, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: { ...operatorUnavailableReviewerBlock, idempotencyKey: `block:${"a".repeat(175)}` }, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: { ...operatorUnavailableReviewerBlock, idempotencyKey: "not opaque" }, ...operatorCapability }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: { ...operatorUnavailableReviewerBlock, unavailableReviewerBlockId: "block:sk_live_abcdefghijklmnop" }, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException: { ...unavailableReviewerException, exceptionId: `exception:${"a".repeat(111)}` }, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, exceptionId: "not opaque" }, ...reviewerCapability }), false);
     assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, eventName: "hermes.review.disposition.recorded" }), false);
@@ -273,6 +284,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(Object.isFrozen(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.HermesFollowUpWorkV1), true);
     assert.deepEqual(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.VerificationRecordV1.slice(-2), ["expectedOutcomeRevision", "expectedLaneRevision"]);
     assert.deepEqual(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.VerificationRecordV1.slice(-2), ["expected_outcome_revision", "expected_lane_revision"]);
+    assert.equal(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.HermesUnavailableReviewerBlockV1.includes("unavailableReviewerBlockId"), true);
+    assert.equal(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.HermesUnavailableReviewerBlockV1.includes("unavailable_reviewer_block_id"), true);
     for (const fieldMetadata of [
       contracts.hermesOutcomeV1Fields,
       contracts.hermesLaneRunV1Fields,

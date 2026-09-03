@@ -400,18 +400,19 @@ This authority is recorded at the repository-policy level and does not require
 repeated lane-specific approval prompts after the worker has proven the normal
 scope, verification, review, and delivery gates.
 
-The operator also durably authorizes a worker to recover an ordinary delivery
-deadlock for its own released, idle lane. A worker may repair the directly
-blocking control-plane code and take over that lane without a further per-lane
-prompt only when all of the following are recorded: the lease is explicitly
-released and has no live intent or heartbeat; the task, manifest, worktree,
-branch, repository, and recorded PR agree; the dirty paths are the reviewed
-in-lane paths; and the takeover reason is bound to that evidence. The recovery
-must establish manifest ownership before delivery readiness and retain normal
-verification, review, push, and PR gates. It must fail closed for active or
-ambiguous owners, retained locks, cross-task/repository/PR cases, unreviewed
-dirty paths, force-pushes, history rewrites, cleanup, or merge. This authority
-is intended to remove routine delivery babysitting, not to bypass safety gates.
+The operator also durably authorizes Hermes to repair and use a fail-closed
+takeover path for a released, idle lane when it is the same task, repository,
+branch, recorded PR, and reviewed dirty-path set. Before takeover Hermes must
+record the admission evidence: the explicitly released lease, prior owner,
+absence of live intent/heartbeat and retained locks, exact manifest/worktree/
+branch/repository/recorded-PR agreement, reviewed relative dirty paths, stable
+path fingerprints, and the takeover reason. The recovery must establish
+manifest ownership before delivery readiness and retain normal verification,
+review, push, and PR gates. It must reject active or ambiguous owners, live
+intent/heartbeat, retained locks, path drift, cross-task/repository/PR
+transfer, force-pushes, cleanup, merge, deployment, spending, credentials, and
+migrations. This authority is intended to remove routine delivery babysitting,
+not to bypass safety gates.
 
 The authority does not permit manager-local source or delivery mutations,
 force-pushes, bypassing failed checks or unresolved review threads, unrelated
