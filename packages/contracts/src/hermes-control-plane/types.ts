@@ -35,13 +35,18 @@ export type HermesLaneRunStatus = "queued" | "running" | "review" | "rework" | "
 export type HermesFollowUpWorkStatus = "proposed" | "queued" | "active" | "completed" | "blocked";
 export type HermesFollowUpCapacityState = "available" | "atCapacity" | "admissionBlocked";
 export type HermesImpactType = "spend" | "realUserDeployment";
-export type HermesLifecycleEventName =
+export type HermesPersistedLifecycleEventName =
   | "hermes.outcome.created"
   | "hermes.lane.recovered"
   | "hermes.delivery.denied"
   | "hermes.external-impact.requested"
   | "hermes.review.disposition.recorded"
   | "hermes.verification.recorded";
+export type HermesPublicLifecycleEventName = Exclude<
+  HermesPersistedLifecycleEventName,
+  "hermes.review.disposition.recorded" | "hermes.verification.recorded"
+>;
+export type HermesLifecycleEventName = HermesPersistedLifecycleEventName;
 
 export interface HermesOutcomeV1 {
   readonly outcomeId: import("./ids").HermesOutcomeId;
@@ -165,7 +170,7 @@ export interface HermesLifecycleEventV1 {
   readonly outcomeId: import("./ids").HermesOutcomeId;
   readonly laneRunId: import("./ids").HermesLaneRunId;
   readonly schemaVersion: typeof HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION;
-  readonly eventName: HermesLifecycleEventName;
+  readonly eventName: HermesPublicLifecycleEventName;
   readonly result: HermesResult;
   readonly reasonCode: string;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];
@@ -191,7 +196,7 @@ export interface HermesBoardLifecycleEventV1 {
   readonly cardId: string;
   readonly outcomeId: import("./ids").HermesOutcomeId;
   readonly laneRunId: import("./ids").HermesLaneRunId;
-  readonly eventName: HermesLifecycleEventName;
+  readonly eventName: HermesPublicLifecycleEventName;
   readonly result: HermesResult;
   readonly reasonCode: string;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];

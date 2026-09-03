@@ -114,13 +114,16 @@ async def _latest_evidence(session: AsyncSession, lane: HermesLaneRun | None) ->
     )
 
 
-async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[str], outcome: HermesOutcome, lane: HermesLaneRun) -> None:
+async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[str], outcome: HermesOutcome, lane: HermesLaneRun, decision_at: datetime) -> None:
     evidence = (await session.scalars(select(HermesDeliveryEvidence).where(
         HermesDeliveryEvidence.delivery_evidence_id.in_(evidence_refs),
         HermesDeliveryEvidence.outcome_id == outcome.outcome_id,
         HermesDeliveryEvidence.lane_run_id == lane.lane_run_id,
     ))).all()
-    if len(evidence) != len(set(evidence_refs)) or any(item.observed_at < max(outcome.updated_at, lane.updated_at) for item in evidence):
+    if len(evidence) != len(set(evidence_refs)) or any(
+        item.observed_at < max(outcome.updated_at, lane.updated_at) or item.observed_at > decision_at
+        for item in evidence
+    ):
         raise ValueError("Review evidence must resolve to the current bound outcome and Developer lane revision.")
 
 
@@ -250,23 +253,33 @@ def _technical_block_recovery_digest(request: HermesTechnicalBlockRecoveryReques
     return sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+async def _replay_technical_block_recovery(session: AsyncSession, request: HermesTechnicalBlockRecoveryRequest, digest: str) -> HermesOutcomeProjectionV1 | None:
+    existing = await session.scalar(select(HermesLedgerEvent).where(HermesLedgerEvent.idempotency_key == request.idempotencyKey))
+    if existing is None:
+        return None
+    if existing.request_digest_sha256 != digest or existing.event_name != "hermes.lane.recovered":
+        raise ValueError("Technical-block recovery idempotency key conflicts with persisted metadata.")
+    outcome = await session.get(HermesOutcome, request.outcomeId)
+    lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.current_event_id == outcome.current_event_id)) if outcome else None
+    if outcome is None or lane is None:
+        raise ValueError("Persisted technical-block recovery lacks its current projection.")
+    return _projection(outcome, lane, await _latest_evidence(session, lane))
+
+
 async def recover_hermes_technical_block(
     session: AsyncSession, payload: HermesTechnicalBlockRecoveryRequest, *, commit: bool = True,
 ) -> HermesOutcomeProjectionV1:
     """Replace one current technical block with a separately fenced review lane."""
     request = HermesTechnicalBlockRecoveryRequest.model_validate(payload.model_dump())
     digest = _technical_block_recovery_digest(request)
-    existing = await session.scalar(select(HermesLedgerEvent).where(HermesLedgerEvent.idempotency_key == request.idempotencyKey))
-    if existing is not None:
-        if existing.request_digest_sha256 != digest or existing.event_name != "hermes.lane.recovered":
-            raise ValueError("Technical-block recovery idempotency key conflicts with persisted metadata.")
-        outcome = await session.get(HermesOutcome, request.outcomeId)
-        lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.current_event_id == outcome.current_event_id)) if outcome else None
-        if outcome is None or lane is None:
-            raise ValueError("Persisted technical-block recovery lacks its current projection.")
-        return _projection(outcome, lane, await _latest_evidence(session, lane))
+    replay = await _replay_technical_block_recovery(session, request, digest)
+    if replay is not None:
+        return replay
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcomeId).with_for_update())
     blocked_lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.blockedLaneRunId).with_for_update())
+    replay = await _replay_technical_block_recovery(session, request, digest)
+    if replay is not None:
+        return replay
     if outcome is None or blocked_lane is None or blocked_lane.outcome_id != outcome.outcome_id:
         raise ValueError("Technical-block recovery requires an existing bound outcome and blocked lane.")
     if outcome.current_event_id != blocked_lane.current_event_id or outcome.status != "blocked" or blocked_lane.status != "blocked" or outcome.result != "blockedTechnical" or blocked_lane.result != "blockedTechnical":
@@ -362,12 +375,16 @@ def _same_verification(record: HermesVerificationRecord, value) -> bool:
     )
 
 
+def _same_role_capability(existing: HermesRoleCapabilityBinding, request, digest: str, provisioned_by_operator_id: str) -> bool:
+    return (existing.role, existing.outcome_id, existing.lane_run_id, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.expires_at, existing.provisioned_by_operator_id) == (request.role, request.outcomeId, request.laneRunId, request.identity, request.home, request.workspace, digest, request.expiresAt, provisioned_by_operator_id)
+
+
 async def provision_hermes_role_capability(session: AsyncSession, request, *, provisioned_by_operator_id: str) -> HermesRoleCapabilityBinding:
     """Persist only a Coordinator-provisioned local capability digest."""
     digest = sha256(request.capabilitySecret.encode("utf-8")).hexdigest()
     existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
     if existing is not None:
-        if (existing.role, existing.outcome_id, existing.lane_run_id, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.expires_at, existing.provisioned_by_operator_id) != (request.role, request.outcomeId, request.laneRunId, request.identity, request.home, request.workspace, digest, request.expiresAt, provisioned_by_operator_id):
+        if not _same_role_capability(existing, request, digest, provisioned_by_operator_id):
             raise ValueError("Role capability binding conflicts with persisted metadata.")
         return existing
     lane = await session.get(HermesLaneRun, request.laneRunId)
@@ -380,7 +397,14 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
         provisioned_by_operator_id=provisioned_by_operator_id, metadata_only=True, raw_payload_retained=False,
     )
     session.add(binding)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
+        if existing is not None and _same_role_capability(existing, request, digest, provisioned_by_operator_id):
+            return existing
+        raise ValueError("Role capability binding persistence conflict.") from exc
     return binding
 
 
@@ -451,9 +475,19 @@ async def _replay_disposition(
 
 async def ingest_hermes_review_handoff(
     session: AsyncSession, payload: HermesReviewHandoffRequest, *, commit: bool = True,
+    authenticated_recorder_id: str | None = None,
 ) -> HermesOutcomeProjectionV1:
     """Persist a verification-gated independent review and its ledger projection atomically."""
-    request = HermesReviewHandoffRequest.model_validate(payload.model_dump(by_alias=True))
+    raw_request = HermesReviewHandoffRequest.model_validate(payload.model_dump(by_alias=True))
+    request = raw_request
+    if request.unavailableReviewerException is not None:
+        if authenticated_recorder_id is None:
+            raise ValueError("Unavailable-reviewer exceptions require an authenticated recorder.")
+        request = request.model_copy(update={
+            "unavailableReviewerException": request.unavailableReviewerException.model_copy(
+                update={"recordedBy": authenticated_recorder_id},
+            ),
+        })
     verification, disposition = request.verification, request.disposition
     if not commit and request.unavailableReviewerException is not None:
         raise ValueError("Unavailable-reviewer exceptions require an atomic committed handoff.")
@@ -482,13 +516,20 @@ async def ingest_hermes_review_handoff(
             return replay
         if (outcome.revision, lane.revision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision):
             raise ValueError("Verification result revision is stale.")
-        if outcome.status != "review" or lane.status != "review" or lane.evidence_fingerprint != verification.sourceFingerprint:
+        initial_verification = outcome.status == "active" and lane.status == "running"
+        enter_review = verification.result == "passed" and initial_verification
+        if (not initial_verification and (outcome.status != "review" or lane.status != "review")) or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Verification result is stale for the current review lane.")
         if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at:
             raise ValueError("Verification evidence predates the current ledger projection.")
-        await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
+        await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane, decision_at=verification.observedAt)
         if verification.result == "passed":
             session.add(HermesVerificationRecord(verification_record_id=verification.verificationRecordId, outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, schema_version=verification.schemaVersion, developer_identity=verification.developerIdentity, developer_home=verification.developerHome, developer_workspace=verification.developerWorkspace, developer_capability_binding_id=developer_capability.capability_binding_id, result=verification.result, target=verification.target, source_fingerprint=verification.sourceFingerprint, evidence_refs_json=verification.evidenceRefs, idempotency_key=verification.idempotencyKey, expected_outcome_revision=verification.expectedOutcomeRevision, expected_lane_revision=verification.expectedLaneRevision, revision_binding_known=True, observed_at=verification.observedAt, created_at=verification.createdAt, metadata_only=True, raw_payload_retained=False))
+            if enter_review:
+                event_id = f"event:verification:{sha256(verification.verificationRecordId.encode('utf-8')).hexdigest()}"
+                session.add(HermesLedgerEvent(event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id, schema_version="hermes_lifecycle_event.v1", event_name="hermes.verification.recorded", outcome_status="review", lane_status="review", lane_type=lane.lane_type, result="retryable", reason_code="verification_passed", evidence_refs_json=verification.evidenceRefs, next_action="Await independent Reviewer disposition.", correlation_id=verification.verificationRecordId, causation_id=verification.verificationRecordId, observed_at=verification.observedAt, emitted_at=_emitted_at(verification.observedAt), heartbeat_at=lane.heartbeat_at, stale_deadline_at=lane.stale_deadline_at, timeout_at=lane.timeout_at, retry_budget=lane.retry_budget, rework_budget=lane.rework_budget, evidence_fingerprint=lane.evidence_fingerprint, idempotency_key=f"event:verification:{sha256(verification.idempotencyKey.encode('utf-8')).hexdigest()}", request_digest_sha256=_handoff_digest(request), metadata_only=True, raw_payload_retained=False, authoritative=False))
+                await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": "review", "result": "retryable", "reason_code": "verification_passed", "evidence_refs_json": verification.evidenceRefs, "next_action": "Await independent Reviewer disposition.", "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
+                await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": "review", "result": "retryable", "reason_code": "verification_passed", "evidence_refs_json": verification.evidenceRefs, "next_action": "Await independent Reviewer disposition.", "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
             try:
                 if commit: await session.commit()
                 else: await session.flush()
@@ -531,12 +572,13 @@ async def ingest_hermes_review_handoff(
     assert request.reviewerCapabilityBindingId is not None and request.reviewerCapabilityProof is not None
     reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace)
     digest = _handoff_digest(request)
-    replay_digests = _handoff_replay_digests(request)
+    replay_digests = _handoff_replay_digests(request) | _handoff_replay_digests(raw_request)
     replay = await _replay_disposition(session, disposition, replay_digests)
     if replay is not None:
         return replay
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
+    reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace)
     if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id:
         raise ValueError("Review handoff requires an existing bound outcome and Developer lane.")
     # A concurrent exact handoff can commit while this request waits for the
@@ -550,10 +592,6 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Review handoff requires the current outcome and lane in review state.")
     if request.unavailableReviewerException is not None and request.unavailableReviewerException.reviewBy <= datetime.now(UTC):
         raise ValueError("Unavailable-reviewer exception expired before persistence.")
-    if (outcome.revision, lane.revision) != (disposition.expectedOutcomeRevision, disposition.expectedLaneRevision):
-        raise ValueError("Review handoff revision is stale.")
-    if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or disposition.observedAt < outcome.observed_at or disposition.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at or disposition.observedAt < outcome.updated_at or disposition.observedAt < lane.updated_at:
-        raise ValueError("Review handoff evidence predates the current ledger projection.")
     record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
     if record is None:
         raise ValueError("Reviewer disposition requires a previously recorded Developer verification.")
@@ -561,10 +599,19 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Verification idempotency key conflicts with persisted metadata.")
     if record.developer_capability_binding_id is None or record.developer_capability_binding_id == reviewer_capability.capability_binding_id:
         raise ValueError("Independent review requires a distinct Coordinator-provisioned Reviewer capability.")
+    verification_event_id = f"event:verification:{sha256(verification.verificationRecordId.encode('utf-8')).hexdigest()}"
+    typed_review_entry = (
+        outcome.current_event_id == lane.current_event_id == verification_event_id
+        and (outcome.revision, lane.revision)
+        == (disposition.expectedOutcomeRevision + 1, disposition.expectedLaneRevision + 1)
+    )
+    if (outcome.revision, lane.revision) != (disposition.expectedOutcomeRevision, disposition.expectedLaneRevision) and not typed_review_entry:
+        raise ValueError("Review handoff revision is stale.")
+    if disposition.observedAt < outcome.observed_at or disposition.observedAt < lane.observed_at or disposition.observedAt < outcome.updated_at or disposition.observedAt < lane.updated_at:
+        raise ValueError("Review handoff evidence predates the current ledger projection.")
     if lane.evidence_fingerprint != verification.sourceFingerprint:
         raise ValueError("Verification source fingerprint is stale for the Developer lane.")
-    await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
-    await _require_bound_evidence(session, evidence_refs=disposition.evidenceRefs, outcome=outcome, lane=lane)
+    await _require_bound_evidence(session, evidence_refs=disposition.evidenceRefs, outcome=outcome, lane=lane, decision_at=disposition.observedAt)
     result, status = {"approve": ("completed", "completed"), "rework": ("rework", "rework"), "technical_block": ("blockedTechnical", "blocked")}[disposition.disposition]
     if not can_replace_current_result(previous=outcome.result, next_result=result) or not can_replace_current_result(previous=lane.result, next_result=result):
         raise ValueError("Review disposition cannot overwrite a terminal ledger transition.")

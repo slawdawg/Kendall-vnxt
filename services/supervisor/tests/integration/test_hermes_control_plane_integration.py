@@ -224,7 +224,11 @@ async def _record_verification(session, handoff):
 
 async def _record_then_dispose(session, handoff):
     await _record_verification(session, handoff)
-    return await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_reviewer_request(handoff)))
+    return await ingest_hermes_review_handoff(
+        session,
+        HermesReviewHandoffRequest.model_validate(_reviewer_request(handoff)),
+        authenticated_recorder_id="operator:fixture" if handoff.get("unavailableReviewerException") else None,
+    )
 
 
 async def _seed_review_lane(session, initial=None):
@@ -258,6 +262,72 @@ async def test_hermes_review_handoff_requires_passed_independent_verification_an
         invalid = review_handoff(); invalid["disposition"]["reviewerWorkspace"] = "workspace:developer"  # type: ignore[index]
         with pytest.raises(ValueError, match="Independent review"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_reviewer_request(invalid)))
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_passed_verification_enters_review_only_through_the_typed_handoff(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'typed-review-entry.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        handoff = review_handoff()
+        await _provision_two_roles(session, handoff)
+        projection = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
+        outcome = await session.get(HermesOutcome, "outcome:1")
+        lane = await session.get(HermesLaneRun, "lane:1")
+        assert projection.lifecycle == "review" and outcome is not None and lane is not None
+        assert (outcome.status, lane.status, outcome.revision, lane.revision) == ("review", "review", 2, 2)
+        assert (await session.get(HermesLedgerEvent, outcome.current_event_id)).event_name == "hermes.verification.recorded"
+        session.add(HermesDeliveryEvidence(
+            delivery_evidence_id="evidence:review", outcome_id="outcome:1", lane_run_id="lane:1",
+            schema_version="delivery_evidence.v1", evidence_type="verification", summary="Independent review evidence.",
+            source_ref="test:typed-review-entry", observed_at=datetime(2026, 9, 2, 12, 2, tzinfo=timezone.utc),
+            evidence_refs_json=["evidence:review"], idempotency_key="evidence:review", created_at=datetime(2026, 9, 2, 12, 2, tzinfo=timezone.utc),
+            metadata_only=True, raw_payload_retained=False,
+        ))
+        await session.commit()
+        handoff["disposition"]["evidenceRefs"] = ["evidence:review"]
+        completed = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_reviewer_request(handoff)))
+        assert completed.currentResult == "completed"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("verification_result", "expected_result"), (("failed", "rework"), ("inconclusive", "blockedTechnical")))
+async def test_initial_nonpassing_verification_records_its_closed_result(tmp_path, verification_result, expected_result):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'{verification_result}-first-verification.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        handoff = review_handoff()
+        request = _developer_request(handoff)
+        request["verification"]["result"] = verification_result
+        request["verification"]["verificationRecordId"] = f"verification:{verification_result}"
+        request["verification"]["idempotencyKey"] = f"verification:{verification_result}"
+        await _provision_two_roles(session, handoff)
+        projection = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))
+        assert projection.currentResult == expected_result
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_handoff_rejects_evidence_recorded_after_its_decision(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'future-review-evidence.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await _seed_review_lane(session)
+        evidence = await session.get(HermesDeliveryEvidence, "evidence:1")
+        assert evidence is not None
+        evidence.observed_at = datetime(2026, 9, 2, 12, 3, tzinfo=timezone.utc)
+        await session.commit()
+        handoff = review_handoff()
+        await _provision_two_roles(session, handoff)
+        with pytest.raises(ValueError, match="current bound"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
     await engine.dispose()
 
 
@@ -310,9 +380,9 @@ async def test_hermes_review_handoff_rework_and_replay_conflicts_are_fenced(tmp_
         await _record_verification(session, expired)
         expired_request = HermesReviewHandoffRequest.model_validate(_reviewer_request(expired))
         with pytest.raises(ValueError, match="expired"):
-            await ingest_hermes_review_handoff(session, expired_request)
+            await ingest_hermes_review_handoff(session, expired_request, authenticated_recorder_id="operator:fixture")
         with pytest.raises(ValueError, match="atomic committed"):
-            await ingest_hermes_review_handoff(session, expired_request, commit=False)
+            await ingest_hermes_review_handoff(session, expired_request, commit=False, authenticated_recorder_id="operator:fixture")
         internal_exception = _reviewer_request(expired); internal_exception["unavailableReviewerException"]["reasonCode"] = internal_exception["unavailableReviewerException"].pop("reason")  # type: ignore[index]
         with pytest.raises(ValueError, match="reason"):
             HermesReviewHandoffRequest.model_validate(internal_exception)
@@ -343,12 +413,15 @@ async def test_hermes_review_handoff_replays_legacy_unavailable_exception_digest
     async with sessions() as session:
         await _seed_review_lane(session)
         await _record_verification(session, request)
-        first = await ingest_hermes_review_handoff(session, parsed)
+        with pytest.raises(ValueError, match="authenticated recorder"):
+            await ingest_hermes_review_handoff(session, parsed)
+        first = await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
         stored = await session.get(HermesReviewDisposition, "review:technical_block")
         assert stored is not None
+        assert stored.exception_requirement_json["recordedBy"] == "operator:fixture"
         stored.request_digest_sha256 = legacy_digest
         await session.commit()
-        assert await ingest_hermes_review_handoff(session, parsed) == first
+        assert await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture") == first
     await engine.dispose()
 
 
@@ -443,6 +516,9 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         with pytest.raises(ValueError, match="replacement metadata"):
             HermesTechnicalBlockRecoveryRequest.model_validate(stale_evidence)
         request = HermesTechnicalBlockRecoveryRequest.model_validate(recovery)
+        mismatched_metadata = copy.deepcopy(recovery); mismatched_metadata["replacementLaneRun"]["reasonCode"] = "different_reason"  # type: ignore[index]
+        with pytest.raises(ValueError, match="reason and next action"):
+            HermesTechnicalBlockRecoveryRequest.model_validate(mismatched_metadata)
         outcome = await session.get(HermesOutcome, "outcome:1")
         old_lane = await session.get(HermesLaneRun, "lane:1")
         assert outcome is not None and old_lane is not None

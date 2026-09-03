@@ -49,3 +49,12 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert require_authenticated_hermes_capability_provisioner in {
         dependency.call for dependency in capability_route.dependant.dependencies
     }
+    recovery_route = route("/hermes-control-plane/technical-block-recoveries")
+    assert recovery_route.response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
+    assert require_authenticated_hermes_capability_provisioner in {
+        dependency.call for dependency in recovery_route.dependant.dependencies
+    }
+    handoff_route = route("/hermes-control-plane/review-handoffs")
+    assert require_authenticated_hermes_capability_provisioner in {
+        dependency.call for dependency in handoff_route.dependant.dependencies
+    }

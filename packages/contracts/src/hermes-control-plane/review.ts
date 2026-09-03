@@ -34,7 +34,9 @@ const occursAtOrAfter = (left: string, right: string) => {
   return Number.isFinite(leftMillis) && Number.isFinite(rightMillis) && leftMillis >= rightMillis;
 };
 const isCapabilityBindingId = (value: unknown) => isOpaqueId(value) && value.length <= 120;
-const isCapabilityProof = (value: unknown) => isSafeText(value, 512) && value.length >= 24;
+// Capability proofs are opaque authentication material, not metadata. Match
+// the authoritative API bounds without applying metadata redaction heuristics.
+const isCapabilityProof = (value: unknown) => typeof value === "string" && value.length >= 24 && value.length <= 512;
 
 /** Reject independently-valid records unless their identity, chronology, and isolation bind together. */
 export function isReviewHandoffV1(value: unknown): value is ReviewHandoffV1 {

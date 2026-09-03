@@ -99,6 +99,7 @@ from supervisor.api.schemas import (
     HermesLedgerIngestRequest,
     HermesRoleCapabilityProvisionRequest,
     HermesReviewHandoffRequest,
+    HermesTechnicalBlockRecoveryRequest,
     HermesLaneRunProjectionApiEnvelope,
     HermesOutcomeProjectionApiEnvelope,
     ManagerLaneClarityHandoffApiEnvelope,
@@ -175,6 +176,7 @@ from supervisor.application.hermes_outcomes import (
     ingest_hermes_ledger,
     ingest_hermes_review_handoff,
     provision_hermes_role_capability,
+    recover_hermes_technical_block,
     read_hermes_lane_run,
     read_hermes_outcome,
 )
@@ -1715,15 +1717,40 @@ async def provision_hermes_role_capability_route(
         ) from exc
 
 
+@app.post(
+    "/hermes-control-plane/technical-block-recoveries",
+    response_model=HermesOutcomeProjectionApiEnvelope,
+)
+async def recover_hermes_technical_block_route(
+    payload: HermesTechnicalBlockRecoveryRequest,
+    _: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Perform one authenticated, fenced replacement-lane technical-block recovery."""
+
+    try:
+        projection = await recover_hermes_technical_block(session, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "hermes_technical_block_recovery_conflict").model_dump(),
+        ) from exc
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
 @app.post("/hermes-control-plane/review-handoffs", response_model=HermesOutcomeProjectionApiEnvelope)
 async def ingest_hermes_review_handoff_route(
     payload: HermesReviewHandoffRequest,
-    _: None = Depends(require_local_operational_boundary),
+    operator: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
     session: AsyncSession = Depends(get_session),
 ):
     """Persist a typed verification/review handoff; this endpoint cannot deliver or execute work."""
     try:
-        projection = await ingest_hermes_review_handoff(session, payload)
+        projection = await ingest_hermes_review_handoff(
+            session,
+            payload,
+            authenticated_recorder_id=str(operator.id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_handoff_conflict").model_dump()) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)

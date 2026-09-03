@@ -8355,6 +8355,8 @@ class HermesTechnicalBlockRecoveryRequest(BaseModel):
             raise ValueError("Technical-block recovery must bind its replacement lane and evidence exactly.")
         if lane.laneRunId == self.blockedLaneRunId or lane.status != "review" or lane.result != "retryable":
             raise ValueError("Technical-block recovery must create a distinct review/retryable replacement lane.")
+        if (lane.reasonCode, lane.nextAction) != (self.reasonCode, self.nextAction):
+            raise ValueError("Technical-block recovery replacement reason and next action must match the authoritative request.")
         if lane.observedAt < self.observedAt or evidence.observedAt < lane.updatedAt:
             raise ValueError("Technical-block recovery replacement metadata must be current.")
         return self

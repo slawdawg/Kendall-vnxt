@@ -205,7 +205,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     const verificationEvent = { ...event, eventId: "event:verification-one", idempotencyKey: "idempotency:verification-one", eventName: "hermes.verification.recorded" };
     const unavailableReviewerException = { exceptionId: "exception:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, reason: "reviewer_unavailable", riskClass: "technical_block", compensatingReviewRef: "evidence:compensating", recordedBy: "coordinator:one", recordedAt: observedAt, reviewOrExpiryAt: later, metadataOnly: true, rawPayloadRetained: false };
     const developerCapability = { developerCapabilityBindingId: "capability:developer", developerCapabilityProof: "d".repeat(32) };
-    const reviewerCapability = { reviewerCapabilityBindingId: "capability:reviewer", reviewerCapabilityProof: "r".repeat(32) };
+    const reviewerCapability = { reviewerCapabilityBindingId: "capability:reviewer", reviewerCapabilityProof: "eyJhbGciOiJIUzI1NiJ9.payload.signature" };
     const boardEvent = {
       ...common, schemaVersion: contracts.HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION,
       issuerId: "issuer:one", keyId: "key:one", eventId: "event:board-one", idempotencyKey: "idempotency:board-one",
