@@ -8224,7 +8224,7 @@ class HermesVerificationRecordInputV1(BaseModel):
     @field_validator("verificationRecordId", "outcomeId", "laneRunId", "target", "sourceFingerprint", "developerIdentity", "developerHome", "developerWorkspace", "idempotencyKey")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
-    @field_validator("verificationRecordId", "outcomeId", "laneRunId", "idempotencyKey")
+    @field_validator("verificationRecordId", "outcomeId", "laneRunId", "developerIdentity", "idempotencyKey")
     @classmethod
     def _opaque_identity(cls, value: str) -> str:
         if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
@@ -8255,7 +8255,7 @@ class HermesReviewDispositionInputV1(BaseModel):
     @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "reviewerIdentity", "reviewerHome", "reviewerWorkspace", "reasonCode", "nextAction", "idempotencyKey")
     @classmethod
     def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 240)
-    @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "idempotencyKey")
+    @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "reviewerIdentity", "idempotencyKey")
     @classmethod
     def _opaque_identity(cls, value: str) -> str:
         if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
@@ -8423,8 +8423,10 @@ class HermesTechnicalBlockRecoveryRequest(BaseModel):
         now = datetime.now(timezone.utc)
         if any(value > now + timedelta(minutes=5) for value in (self.observedAt, lane.observedAt, lane.updatedAt, evidence.observedAt)):
             raise ValueError("Technical-block recovery metadata cannot be materially future-dated.")
-        if lane.observedAt < self.observedAt or evidence.observedAt < lane.updatedAt:
-            raise ValueError("Technical-block recovery replacement metadata must be current.")
+        if lane.observedAt > self.observedAt or lane.updatedAt > self.observedAt:
+            raise ValueError("Technical-block recovery replacement metadata cannot postdate its decision.")
+        if evidence.observedAt < lane.updatedAt:
+            raise ValueError("Technical-block recovery evidence predates its replacement lane update.")
         return self
 
 
@@ -8443,7 +8445,7 @@ class HermesReviewHandoffRequest(BaseModel):
                 raise ValueError("Unavailable-reviewer blocking requires only a typed Operator capability, block, and exception.")
             if verification.result != "passed" or (unavailable_block.outcomeId, unavailable_block.developerLaneRunId, unavailable_block.verificationRecordId) != (verification.outcomeId, verification.laneRunId, verification.verificationRecordId) or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId):
                 raise ValueError("Unavailable-reviewer block must bind a passed verification and original Developer lane exactly.")
-            if (unavailable_block.expectedOutcomeRevision, unavailable_block.expectedLaneRevision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision) or unavailable_block.observedAt < verification.observedAt or exception.recordedAt > unavailable_block.observedAt:
+            if (unavailable_block.expectedOutcomeRevision, unavailable_block.expectedLaneRevision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision) or unavailable_block.observedAt < verification.observedAt or exception.recordedAt < verification.observedAt or exception.recordedAt > unavailable_block.observedAt:
                 raise ValueError("Unavailable-reviewer block must preserve verification revisions and timestamps.")
             return self
         if verification.result != "passed":
@@ -8456,11 +8458,11 @@ class HermesReviewHandoffRequest(BaseModel):
         if (verification.outcomeId != disposition.outcomeId or verification.laneRunId != disposition.developerLaneRunId or verification.verificationRecordId != disposition.verificationRecordId): raise ValueError("Review handoff identities must bind the original Developer lane exactly.")
         if verification.result != "passed": raise ValueError("Only passed verification is eligible for review.")
         if disposition.observedAt < verification.observedAt: raise ValueError("Review cannot precede verification.")
-        developer = {verification.developerIdentity, verification.developerHome, verification.developerWorkspace}
-        reviewer = {disposition.reviewerIdentity, disposition.reviewerHome, disposition.reviewerWorkspace}
+        developer_paths = (verification.developerHome, verification.developerWorkspace)
+        reviewer_paths = (disposition.reviewerHome, disposition.reviewerWorkspace)
         def _parts(value: str) -> tuple[str, ...]:
             parts: list[str] = []
-            for part in re.split(r"[:\\\\/]", value.lower()):
+            for part in re.split(r"[:\\\\/]", value):
                 if not part or part == ".": continue
                 if part == "..":
                     if parts: parts.pop()
@@ -8470,7 +8472,7 @@ class HermesReviewHandoffRequest(BaseModel):
         def _overlap(left: str, right: str) -> bool:
             left_parts, right_parts = _parts(left), _parts(right)
             return left_parts == right_parts[:len(left_parts)] or right_parts == left_parts[:len(right_parts)]
-        if developer & reviewer or any(_overlap(a, b) for a in developer for b in reviewer): raise ValueError("Independent review cannot overlap Developer identity, home, or workspace.")
+        if verification.developerIdentity.casefold() == disposition.reviewerIdentity.casefold() or any(_overlap(a, b) for a in developer_paths for b in reviewer_paths): raise ValueError("Independent review cannot overlap Developer identity, home, or workspace.")
         if (disposition.expectedOutcomeRevision != verification.expectedOutcomeRevision or disposition.expectedLaneRevision != verification.expectedLaneRevision): raise ValueError("Review handoff revisions must bind verification and disposition exactly.")
         if exception is not None:
             if disposition.disposition != "technical_block" or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId): raise ValueError("Unavailable-reviewer exception is audit-only and must bind the blocked Developer lane.")

@@ -41,10 +41,11 @@ export type HermesPersistedLifecycleEventName =
   | "hermes.delivery.denied"
   | "hermes.external-impact.requested"
   | "hermes.review.disposition.recorded"
-  | "hermes.verification.recorded";
+  | "hermes.verification.recorded"
+  | "hermes.review.unavailable_reviewer.blocked";
 export type HermesPublicLifecycleEventName = Exclude<
   HermesPersistedLifecycleEventName,
-  "hermes.review.disposition.recorded" | "hermes.verification.recorded"
+  "hermes.review.disposition.recorded" | "hermes.verification.recorded" | "hermes.review.unavailable_reviewer.blocked"
 >;
 export type HermesLifecycleEventName = HermesPersistedLifecycleEventName;
 
@@ -235,8 +236,24 @@ export interface HermesReviewerUnavailableExceptionV1 {
   readonly recordedAt: string; readonly reviewOrExpiryAt: string; readonly metadataOnly: true; readonly rawPayloadRetained: false;
 }
 
+/** Operator-authenticated block requirement; it records no Reviewer identity or proof. */
+export interface HermesUnavailableReviewerBlockV1 {
+  readonly unavailableReviewerBlockId: string; readonly verificationRecordId: import("./ids").VerificationRecordId; readonly outcomeId: import("./ids").HermesOutcomeId; readonly developerLaneRunId: import("./ids").HermesLaneRunId;
+  readonly schemaVersion: "unavailable_reviewer_block.v1"; readonly expectedOutcomeRevision: number; readonly expectedLaneRevision: number;
+  readonly reasonCode: string; readonly nextAction: string; readonly evidenceRefs: readonly HermesEvidenceRefId[];
+  readonly observedAt: string; readonly idempotencyKey: HermesIdempotencyKey; readonly createdAt: string; readonly metadataOnly: true; readonly rawPayloadRetained: false;
+}
+
 /** Metadata-only verification handoff; only passed verification may carry a disposition. */
 export type ReviewHandoffV1 =
+  | {
+      readonly verification: VerificationRecordV1 & { readonly result: "passed" };
+      readonly disposition?: never;
+      readonly unavailableReviewerException: HermesReviewerUnavailableExceptionV1;
+      readonly unavailableReviewerBlock: HermesUnavailableReviewerBlockV1;
+      readonly operatorCapabilityBindingId: string;
+      readonly operatorCapabilityProof: string;
+    }
   | {
       readonly verification: VerificationRecordV1 & { readonly result: "passed" };
       readonly disposition: ReviewDispositionV1;

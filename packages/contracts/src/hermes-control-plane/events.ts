@@ -24,6 +24,7 @@ export const HERMES_LIFECYCLE_EVENT_NAMES = Object.freeze([
   "hermes.external-impact.requested",
   "hermes.review.disposition.recorded",
   "hermes.verification.recorded",
+  "hermes.review.unavailable_reviewer.blocked",
 ] as const);
 // Review and verification records are emitted only by the Supervisor's typed
 // handoff transaction. They remain part of the persisted vocabulary, but a

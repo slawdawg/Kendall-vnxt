@@ -471,21 +471,28 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
 
 async def revoke_hermes_role_capability(session: AsyncSession, *, capability_binding_id: str, revoked_by_operator_id: str) -> HermesRoleCapabilityBinding:
     """Revoke one Coordinator-provisioned capability without retaining its proof."""
-    binding = await session.scalar(
-        select(HermesRoleCapabilityBinding)
-        .where(HermesRoleCapabilityBinding.capability_binding_id == capability_binding_id)
-        .with_for_update()
-    )
+    binding = await session.get(HermesRoleCapabilityBinding, capability_binding_id)
     if binding is None:
         raise ValueError("Role capability binding does not exist.")
-    if binding.revoked_at is not None:
-        if binding.revoked_by_operator_id == revoked_by_operator_id:
-            return binding
-        raise ValueError("Role capability binding was already revoked by another Operator.")
-    binding.revoked_at = datetime.now(UTC)
-    binding.revoked_by_operator_id = revoked_by_operator_id
-    await session.commit()
-    return binding
+    fenced = await session.execute(
+        update(HermesRoleCapabilityBinding)
+        .where(
+            HermesRoleCapabilityBinding.capability_binding_id == capability_binding_id,
+            HermesRoleCapabilityBinding.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC), revoked_by_operator_id=revoked_by_operator_id)
+    )
+    if fenced.rowcount == 1:
+        await session.commit()
+        await session.refresh(binding)
+        return binding
+    await session.rollback()
+    settled = await session.get(HermesRoleCapabilityBinding, capability_binding_id, populate_existing=True)
+    if settled is None:
+        raise ValueError("Role capability binding does not exist.")
+    if settled.revoked_by_operator_id == revoked_by_operator_id:
+        return settled
+    raise ValueError("Role capability binding was already revoked by another Operator.")
 
 
 async def _require_role_capability(session: AsyncSession, *, binding_id: str, secret: str, role: str, outcome_id: str, lane_run_id: str, identity: str, home: str, workspace: str, lock: bool = False) -> HermesRoleCapabilityBinding:
@@ -801,6 +808,8 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Verification result revision is stale.")
         initial_verification = outcome.status == "active" and lane.status == "running"
         enter_review = verification.result == "passed" and initial_verification
+        if verification.result != "passed" and not initial_verification:
+            raise ValueError("Failed or inconclusive verification requires the initial active Developer lane.")
         if (not initial_verification and (outcome.status != "review" or lane.status != "review")) or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Verification result is stale for the current review lane.")
         if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at:

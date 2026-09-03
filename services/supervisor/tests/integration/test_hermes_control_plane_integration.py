@@ -222,8 +222,29 @@ async def test_role_capability_revocation_is_idempotent_and_prevents_handoff(tmp
         revoked = await revoke_hermes_role_capability(session, capability_binding_id="capability:developer", revoked_by_operator_id="operator:fixture")
         assert revoked.revoked_at is not None and revoked.revoked_by_operator_id == "operator:fixture"
         assert await revoke_hermes_role_capability(session, capability_binding_id="capability:developer", revoked_by_operator_id="operator:fixture") == revoked
+        with pytest.raises(ValueError, match="already revoked by another Operator"):
+            await revoke_hermes_role_capability(session, capability_binding_id="capability:developer", revoked_by_operator_id="operator:other")
         with pytest.raises(ValueError, match="revoked or expired"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_revocation_rereads_a_sqlite_race_for_exact_replay(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-revocation-race.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as seed:
+        await ingest_hermes_ledger(seed, HermesLedgerIngestRequest.model_validate(payload()))
+        await _provision_two_roles(seed, review_handoff())
+    async with sessions() as stale, sessions() as winner:
+        assert await stale.get(HermesRoleCapabilityBinding, "capability:developer") is not None
+        revoked = await revoke_hermes_role_capability(winner, capability_binding_id="capability:developer", revoked_by_operator_id="operator:fixture")
+        replay = await revoke_hermes_role_capability(stale, capability_binding_id="capability:developer", revoked_by_operator_id="operator:fixture")
+        assert replay.revoked_at == revoked.revoked_at and replay.revoked_by_operator_id == "operator:fixture"
+    async with sessions() as conflict:
+        with pytest.raises(ValueError, match="already revoked by another Operator"):
+            await revoke_hermes_role_capability(conflict, capability_binding_id="capability:developer", revoked_by_operator_id="operator:other")
     await engine.dispose()
 
 
@@ -310,7 +331,7 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as session:
-        await _seed_review_lane(session)
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
         handoff = review_handoff()
         await _record_verification(session, handoff)
         verification = handoff["verification"]
@@ -335,6 +356,9 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
         forbidden = copy.deepcopy(request); forbidden["reviewerCapabilityBindingId"] = "capability:reviewer"; forbidden["reviewerCapabilityProof"] = "r" * 32
         with pytest.raises(ValueError, match="only a typed Operator capability"):
             HermesReviewHandoffRequest.model_validate(forbidden)
+        pre_verification_exception = copy.deepcopy(request); pre_verification_exception["unavailableReviewerException"]["recordedAt"] = "2026-09-02T12:01:59Z"
+        with pytest.raises(ValueError, match="preserve verification revisions and timestamps"):
+            HermesReviewHandoffRequest.model_validate(pre_verification_exception)
         bypass = _developer_request(handoff); bypass["unavailableReviewerException"] = request["unavailableReviewerException"]
         with pytest.raises(ValueError, match="cannot carry a Reviewer capability or exception"):
             HermesReviewHandoffRequest.model_validate(bypass)
@@ -373,6 +397,23 @@ async def test_hermes_review_handoff_requires_passed_independent_verification_an
         with pytest.raises(ValueError, match="Independent review"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_reviewer_request(invalid)))
     await engine.dispose()
+
+
+def test_review_handoff_normalizes_identity_but_preserves_filesystem_path_case():
+    case_distinct = review_handoff()
+    case_distinct["verification"]["developerHome"] = "/Profiles/Developer"
+    case_distinct["verification"]["developerWorkspace"] = "/Work/Developer"
+    case_distinct["disposition"]["reviewerHome"] = "/profiles/developer"
+    case_distinct["disposition"]["reviewerWorkspace"] = "/Work/Reviewer"
+    HermesReviewHandoffRequest.model_validate(_reviewer_request(case_distinct))
+    identity_overlap = copy.deepcopy(case_distinct)
+    identity_overlap["disposition"]["reviewerIdentity"] = "DEVELOPER:ONE"
+    with pytest.raises(ValueError, match="Review disposition identity must be opaque"):
+        HermesReviewHandoffRequest.model_validate(_reviewer_request(identity_overlap))
+    path_overlap = copy.deepcopy(case_distinct)
+    path_overlap["disposition"]["reviewerHome"] = "/Profiles/Developer/nested"
+    with pytest.raises(ValueError, match="Independent review"):
+        HermesReviewHandoffRequest.model_validate(_reviewer_request(path_overlap))
 
 
 @pytest.mark.asyncio
@@ -488,12 +529,35 @@ async def test_initial_nonpassing_verification_records_its_closed_result(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_nonpassing_verification_cannot_replace_an_existing_review_projection(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'nonpassing-review-fence.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        handoff = review_handoff()
+        await _record_verification(session, handoff)
+        failed = _developer_request(handoff)
+        failed["verification"].update({
+            "result": "failed", "verificationRecordId": "verification:late-failed", "idempotencyKey": "verification:late-failed",
+            "expectedOutcomeRevision": 2, "expectedLaneRevision": 2,
+            "createdAt": "2026-09-02T12:03:00Z", "observedAt": "2026-09-02T12:03:00Z",
+        })
+        with pytest.raises(ValueError, match="initial active Developer lane"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(failed))
+        outcome = await session.get(HermesOutcome, "outcome:1")
+        lane = await session.get(HermesLaneRun, "lane:1")
+        assert outcome is not None and lane is not None and (outcome.status, lane.status) == ("review", "review")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_review_handoff_rejects_evidence_recorded_after_its_decision(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'future-review-evidence.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as session:
-        await _seed_review_lane(session)
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
         evidence = await session.get(HermesDeliveryEvidence, "evidence:1")
         assert evidence is not None
         evidence.observed_at = datetime(2026, 9, 2, 12, 3, tzinfo=timezone.utc)
@@ -687,8 +751,17 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         }
         stale_evidence = copy.deepcopy(recovery)
         stale_evidence["replacementLaneRun"]["updatedAt"] = "2026-09-02T12:04:00Z"  # type: ignore[index]
-        with pytest.raises(ValueError, match="replacement metadata"):
+        with pytest.raises(ValueError, match="cannot postdate its decision"):
             HermesTechnicalBlockRecoveryRequest.model_validate(stale_evidence)
+        ordered = copy.deepcopy(recovery)
+        ordered["observedAt"] = ordered["createdAt"] = "2026-09-02T12:05:00Z"
+        ordered["replacementLaneRun"]["heartbeatAt"] = ordered["replacementLaneRun"]["observedAt"] = ordered["replacementLaneRun"]["updatedAt"] = "2026-09-02T12:03:30Z"  # type: ignore[index]
+        ordered["deliveryEvidence"]["observedAt"] = ordered["deliveryEvidence"]["createdAt"] = "2026-09-02T12:04:00Z"  # type: ignore[index]
+        assert HermesTechnicalBlockRecoveryRequest.model_validate(ordered).observedAt.isoformat() == "2026-09-02T12:05:00+00:00"
+        pre_update_evidence = copy.deepcopy(ordered)
+        pre_update_evidence["deliveryEvidence"]["observedAt"] = pre_update_evidence["deliveryEvidence"]["createdAt"] = "2026-09-02T12:03:00Z"  # type: ignore[index]
+        with pytest.raises(ValueError, match="predates its replacement lane update"):
+            HermesTechnicalBlockRecoveryRequest.model_validate(pre_update_evidence)
         unbound_evidence = copy.deepcopy(recovery)
         unbound_evidence["replacementLaneRun"]["evidenceRefs"] = ["evidence:other"]  # type: ignore[index]
         with pytest.raises(ValueError, match="delivery evidence"):
@@ -777,7 +850,7 @@ async def test_failed_verification_persists_closed_rework_without_a_review_dispo
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as session:
-        await _seed_review_lane(session)
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
         request = review_handoff(); request["verification"]["result"] = "failed"; request["verification"]["verificationRecordId"] = "verification:failed"; request["verification"]["idempotencyKey"] = "verification:failed"; request.pop("disposition")
         request["developerCapabilityBindingId"] = "capability:developer"; request["developerCapabilityProof"] = "d" * 32
         await _provision_two_roles(session, review_handoff())
@@ -805,7 +878,7 @@ async def test_failed_verification_consumes_rework_budget_and_fences_exhaustion(
     request["developerCapabilityBindingId"] = "capability:developer"; request["developerCapabilityProof"] = "d" * 32
     async with sessions() as session:
         initial = payload(); initial["laneRun"]["reworkBudget"] = 1  # type: ignore[index]
-        await _seed_review_lane(session, initial)
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
         await _provision_two_roles(session, review_handoff())
         assert (await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(request))).currentResult == "rework"
         lane = await session.get(HermesLaneRun, "lane:1")
@@ -813,7 +886,7 @@ async def test_failed_verification_consumes_rework_budget_and_fences_exhaustion(
     exhausted = copy.deepcopy(request); exhausted["verification"]["verificationRecordId"] = "verification:exhausted"; exhausted["verification"]["idempotencyKey"] = "verification:exhausted"
     async with sessions() as session:
         initial = payload(); initial["outcome"]["outcomeId"] = "outcome:2"; initial["outcome"]["idempotencyKey"] = "outcome:2"; initial["laneRun"]["outcomeId"] = "outcome:2"; initial["deliveryEvidence"]["outcomeId"] = "outcome:2"; initial["event"]["outcomeId"] = "outcome:2"; initial["laneRun"]["reworkBudget"] = 0; initial["laneRun"]["laneRunId"] = "lane:2"; initial["laneRun"]["idempotencyKey"] = "lane:2"; initial["deliveryEvidence"]["laneRunId"] = "lane:2"; initial["event"]["laneRunId"] = "lane:2"; initial["deliveryEvidence"]["deliveryEvidenceId"] = "evidence:2"; initial["deliveryEvidence"]["idempotencyKey"] = "evidence:2"; initial["event"]["eventId"] = "event:2"; initial["event"]["idempotencyKey"] = "event:2"  # type: ignore[index]
-        await _seed_review_lane(session, initial)
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
         exhausted["verification"]["outcomeId"] = "outcome:2"; exhausted["verification"]["laneRunId"] = "lane:2"; exhausted["verification"]["sourceFingerprint"] = "sha256:ledger-proof"; exhausted["verification"]["evidenceRefs"] = ["evidence:2"]
         exhausted["developerCapabilityBindingId"] = "capability:developer-2"; exhausted["developerCapabilityProof"] = "2" * 32
         await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate({"capabilityBindingId": "capability:developer-2", "role": "developer", "outcomeId": "outcome:2", "laneRunId": "lane:2", "identity": exhausted["verification"]["developerIdentity"], "home": exhausted["verification"]["developerHome"], "workspace": exhausted["verification"]["developerWorkspace"], "capabilitySecret": "2" * 32, "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}), provisioned_by_operator_id="operator:fixture")
