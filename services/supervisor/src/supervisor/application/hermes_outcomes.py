@@ -779,6 +779,9 @@ async def ingest_hermes_review_handoff(
             observed_at=block.observedAt, created_at=block.createdAt, metadata_only=True, raw_payload_retained=False,
         ))
         try:
+            if exception.reviewBy <= datetime.now(UTC):
+                await session.rollback()
+                raise ValueError("Unavailable-reviewer exception expired before persistence.")
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()

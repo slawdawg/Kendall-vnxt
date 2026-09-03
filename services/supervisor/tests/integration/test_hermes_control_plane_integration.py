@@ -404,7 +404,32 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
         with pytest.raises(ValueError, match="stale or timed-out"):
             await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
         monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", original_can_replace)
+        lane.stale_deadline_at = datetime(2200, 1, 1, tzinfo=timezone.utc)
+        lane.timeout_at = datetime(2200, 1, 1, tzinfo=timezone.utc)
+        assert parsed.unavailableReviewerException is not None
+        real_datetime = hermes_outcomes.datetime
+        expire_exception = False
+
+        def expire_exception_during_final_validation(*, previous, next_result):
+            nonlocal expire_exception
+            expire_exception = True
+            return original_can_replace(previous=previous, next_result=next_result)
+
+        class FinalExpiryClock:
+            @staticmethod
+            def now(tz=None):
+                if expire_exception:
+                    return real_datetime(2100, 1, 1, tzinfo=tz or timezone.utc)
+                return real_datetime.now(tz)
+
+        monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", expire_exception_during_final_validation)
+        monkeypatch.setattr(hermes_outcomes, "datetime", FinalExpiryClock)
+        with pytest.raises(ValueError, match="exception expired before persistence"):
+            await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
+        monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", original_can_replace)
+        monkeypatch.setattr(hermes_outcomes, "datetime", real_datetime)
         lane.stale_deadline_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        lane.timeout_at = datetime(2099, 1, 2, tzinfo=timezone.utc)
         projection = await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
         assert projection.currentResult == "blockedTechnical"
         requirement = await session.get(HermesUnavailableReviewerRequirement, "block:operator-unavailable")
