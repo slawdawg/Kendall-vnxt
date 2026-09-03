@@ -313,8 +313,12 @@ async def recover_hermes_technical_block(
     if request.observedAt < max(outcome.updated_at, blocked_lane.updated_at):
         raise ValueError("Technical-block recovery predates the blocked projection.")
     replacement, evidence = request.replacementLaneRun, request.deliveryEvidence
-    if replacement.reworkBudget != blocked_lane.rework_budget or replacement.retryBudget > blocked_lane.retry_budget:
+    if replacement.reworkBudget != blocked_lane.rework_budget:
         raise ValueError("Technical-block recovery cannot replenish the blocked lane budget.")
+    if blocked_lane.retry_budget <= 0:
+        raise ValueError("Technical-block recovery retry budget is exhausted.")
+    if replacement.retryBudget != blocked_lane.retry_budget - 1:
+        raise ValueError("Technical-block recovery must consume exactly one retry budget.")
     if await session.get(HermesLaneRun, replacement.laneRunId) is not None or await session.get(HermesDeliveryEvidence, evidence.deliveryEvidenceId) is not None:
         raise ValueError("Technical-block recovery replacement identity already exists.")
     event_id = f"event:technical-recovery:{sha256(request.idempotencyKey.encode('utf-8')).hexdigest()}"

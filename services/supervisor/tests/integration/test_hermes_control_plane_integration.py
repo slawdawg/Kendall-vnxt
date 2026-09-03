@@ -673,7 +673,7 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
                 "laneType": "implementation", "status": "review", "result": "retryable", "reasonCode": "technical_block_remediated",
                 "evidenceRefs": ["evidence:replacement-1"], "nextAction": "Run a fresh independent review on the replacement lane.",
                 "heartbeatAt": "2026-09-02T12:03:00Z", "staleDeadlineAt": "2099-09-02T12:03:00Z", "timeoutAt": "2099-09-02T12:04:00Z",
-                "retryBudget": 1, "reworkBudget": 1, "evidenceFingerprint": "sha256:replacement-proof",
+                "retryBudget": 0, "reworkBudget": 1, "evidenceFingerprint": "sha256:replacement-proof",
                 "observedAt": "2026-09-02T12:03:00Z", "idempotencyKey": "lane:replacement-1",
                 "createdAt": "2026-09-02T12:03:00Z", "updatedAt": "2026-09-02T12:03:00Z", "metadataOnly": True, "rawPayloadRetained": False,
             },
@@ -706,10 +706,26 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
             await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         outcome.status = old_lane.status = "blocked"
         await session.commit()
+        mismatched_retry_budget = copy.deepcopy(recovery)
+        mismatched_retry_budget["replacementLaneRun"]["retryBudget"] = 1  # type: ignore[index]
+        with pytest.raises(ValueError, match="consume exactly one retry budget"):
+            await recover_hermes_technical_block(
+                session,
+                HermesTechnicalBlockRecoveryRequest.model_validate(mismatched_retry_budget),
+                recovered_by_operator_id="operator:fixture",
+            )
+        old_lane.retry_budget = 0
+        await session.commit()
+        with pytest.raises(ValueError, match="retry budget is exhausted"):
+            await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
+        old_lane.retry_budget = 1
+        await session.commit()
         projection = await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         assert projection.currentLaneRunId == "lane:replacement-1" and projection.currentResult == "retryable"
         old_lane = await session.get(HermesLaneRun, "lane:1")
         assert old_lane is not None and old_lane.result == "blockedTechnical" and old_lane.status == "blocked"
+        replacement_lane = await session.get(HermesLaneRun, "lane:replacement-1")
+        assert replacement_lane is not None and replacement_lane.retry_budget == 0
         recovery_event = await session.scalar(select(HermesLedgerEvent).where(HermesLedgerEvent.event_name == "hermes.lane.recovered"))
         assert recovery_event is not None and recovery_event.recovered_by_operator_id == "operator:fixture"
         assert await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture") == projection
