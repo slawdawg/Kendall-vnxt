@@ -24,6 +24,8 @@ HERMES_LIFECYCLE_EVENT_NAMES = frozenset({
     "hermes.delivery.denied",
     "hermes.external-impact.requested",
     "hermes.review.disposition.recorded",
+    "hermes.verification.recorded",
+    "hermes.review.unavailable_reviewer.blocked",
 })
 TERMINAL_RESULTS = frozenset({"completed", "deniedPolicy", "deniedExternalImpact", "blockedTechnical"})
 

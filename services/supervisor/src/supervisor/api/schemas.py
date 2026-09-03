@@ -8348,7 +8348,13 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
     capabilitySecret: str = Field(min_length=24, max_length=512)
     expiresAt: datetime; createdAt: datetime
     metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
-    @field_validator("capabilityBindingId", "outcomeId", "laneRunId", "identity")
+    @field_validator("outcomeId", "laneRunId")
+    @classmethod
+    def _current_ledger_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Legacy non-opaque Hermes outcome and lane IDs fail closed; provision only current opaque IDs.")
+        return value
+    @field_validator("capabilityBindingId", "identity")
     @classmethod
     def _opaque(cls, value: str, info) -> str:
         if info.field_name == "identity" and info.data.get("role") == "operator" and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):

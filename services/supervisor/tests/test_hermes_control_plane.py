@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from supervisor.api.main import app, redact_hermes_capability_validation_error, require_authenticated_hermes_capability_provisioner, require_authenticated_hermes_role_handoff
 from supervisor.api.schemas import HermesLedgerIngestRequest
+from supervisor.domain.hermes_control_plane import HERMES_LIFECYCLE_EVENT_NAMES
 
 
 def payload() -> dict[str, object]:
@@ -27,6 +28,7 @@ def payload() -> dict[str, object]:
 
 
 def test_hermes_ledger_boundary_is_strict_and_metadata_only():
+    assert {"hermes.verification.recorded", "hermes.review.unavailable_reviewer.blocked"} <= HERMES_LIFECYCLE_EVENT_NAMES
     value = HermesLedgerIngestRequest.model_validate(payload())
     assert value.event.authoritative is False
     unsafe = payload(); unsafe["deliveryEvidence"]["summary"] = "raw transcript content"  # type: ignore[index]

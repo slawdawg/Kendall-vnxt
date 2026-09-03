@@ -998,7 +998,11 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Review disposition cannot be materially future-dated.")
     if lane.evidence_fingerprint != verification.sourceFingerprint:
         raise ValueError("Verification source fingerprint is stale for the Developer lane.")
-    carry_forward_verification_evidence = typed_review_entry and disposition.evidenceRefs == record.evidence_refs_json
+    current_event = await session.get(HermesLedgerEvent, outcome.current_event_id)
+    carry_forward_verification_evidence = (
+        (typed_review_entry or (current_event is not None and current_event.event_name == "hermes.lane.recovered"))
+        and disposition.evidenceRefs == record.evidence_refs_json == lane.evidence_refs_json
+    )
     await _require_bound_evidence(
         session,
         evidence_refs=disposition.evidenceRefs,

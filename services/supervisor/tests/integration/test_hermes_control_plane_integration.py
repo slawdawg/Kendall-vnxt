@@ -438,6 +438,12 @@ async def test_role_capability_provisioning_rejects_canonical_overlap_and_expiry
                 "identity": "Developer One", "home": str(independent_home), "workspace": str(independent_workspace), "capabilitySecret": "g" * 32,
                 "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
             })
+        with pytest.raises(ValueError, match="Legacy non-opaque Hermes outcome and lane IDs fail closed"):
+            HermesRoleCapabilityProvisionRequest.model_validate({
+                "capabilityBindingId": "capability:legacy-ledger-id", "role": "developer", "outcomeId": "Outcome One", "laneRunId": "lane:1",
+                "identity": "developer:legacy", "home": str(independent_home), "workspace": str(independent_workspace), "capabilitySecret": "h" * 32,
+                "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+            })
     await engine.dispose()
 
 
@@ -970,7 +976,7 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         oversized_correlation["idempotencyKey"] = f"recovery:{'a' * 112}"  # type: ignore[index]
         with pytest.raises(ValueError):
             HermesTechnicalBlockRecoveryRequest.model_validate(oversized_correlation)
-        request = HermesTechnicalBlockRecoveryRequest.model_validate(recovery)
+        request = HermesTechnicalBlockRecoveryRequest.model_validate(ordered)
         mismatched_metadata = copy.deepcopy(recovery); mismatched_metadata["replacementLaneRun"]["reasonCode"] = "different_reason"  # type: ignore[index]
         with pytest.raises(ValueError, match="reason and next action"):
             HermesTechnicalBlockRecoveryRequest.model_validate(mismatched_metadata)
@@ -1015,8 +1021,42 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
         replacement_lane = await session.get(HermesLaneRun, "lane:replacement-1")
         assert replacement_lane is not None and replacement_lane.retry_budget == 0
         recovery_event = await session.scalar(select(HermesLedgerEvent).where(HermesLedgerEvent.event_name == "hermes.lane.recovered"))
-        assert recovery_event is not None and recovery_event.recovered_by_operator_id == "operator:fixture"
+        assert recovery_event is not None and recovery_event.recovered_by_operator_id == "operator:fixture" and len(recovery_event.correlation_id) <= 120
         assert await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture") == projection
+        outcome = await session.get(HermesOutcome, "outcome:1")
+        replacement_lane = await session.get(HermesLaneRun, "lane:replacement-1")
+        assert outcome is not None and replacement_lane is not None
+        recovered_handoff = review_handoff()
+        verification, disposition = recovered_handoff["verification"], recovered_handoff["disposition"]
+        verification.update({
+            "verificationRecordId": "verification:recovery-carry", "laneRunId": replacement_lane.lane_run_id,
+            "sourceFingerprint": replacement_lane.evidence_fingerprint, "evidenceRefs": ["evidence:replacement-1"],
+            "observedAt": "2026-09-02T12:06:00Z", "createdAt": "2026-09-02T12:06:00Z",
+            "idempotencyKey": "verification:recovery-carry", "expectedOutcomeRevision": outcome.revision,
+            "expectedLaneRevision": replacement_lane.revision,
+        })
+        disposition.update({
+            "reviewDispositionId": "review:recovery-carry", "verificationRecordId": verification["verificationRecordId"],
+            "developerLaneRunId": replacement_lane.lane_run_id, "evidenceRefs": verification["evidenceRefs"],
+            "observedAt": "2026-09-02T12:07:00Z", "createdAt": "2026-09-02T12:07:00Z",
+            "idempotencyKey": "review:recovery-carry", "expectedOutcomeRevision": outcome.revision,
+            "expectedLaneRevision": replacement_lane.revision,
+        })
+        for role, binding_id, secret, identity, home, workspace in (
+            ("developer", "capability:recovery-developer", "x" * 32, verification["developerIdentity"], verification["developerHome"], verification["developerWorkspace"]),
+            ("reviewer", "capability:recovery-reviewer", "y" * 32, disposition["reviewerIdentity"], disposition["reviewerHome"], disposition["reviewerWorkspace"]),
+        ):
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate({
+                "capabilityBindingId": binding_id, "role": role, "outcomeId": "outcome:1", "laneRunId": replacement_lane.lane_run_id,
+                "identity": identity, "home": home, "workspace": workspace, "capabilitySecret": secret,
+                "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+            }), provisioned_by_operator_id="operator:fixture")
+        developer_request = _developer_request(recovered_handoff)
+        developer_request.update({"developerCapabilityBindingId": "capability:recovery-developer", "developerCapabilityProof": "x" * 32})
+        assert (await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(developer_request))).currentLaneRunId == replacement_lane.lane_run_id
+        reviewer_request = _reviewer_request(recovered_handoff)
+        reviewer_request.update({"reviewerCapabilityBindingId": "capability:recovery-reviewer", "reviewerCapabilityProof": "y" * 32})
+        assert (await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(reviewer_request))).currentResult == "completed"
         with pytest.raises(ValueError, match="authenticated Operator"):
             await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:other")
         with pytest.raises(ValueError, match="authenticated Operator"):
