@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
-from supervisor.api.main import app, require_authenticated_hermes_capability_provisioner, require_authenticated_hermes_role_handoff
+from supervisor.api.main import app, redact_hermes_capability_validation_error, require_authenticated_hermes_capability_provisioner, require_authenticated_hermes_role_handoff
 from supervisor.api.schemas import HermesLedgerIngestRequest
 
 
@@ -63,3 +65,16 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert require_authenticated_hermes_capability_provisioner in {
         dependency.call for dependency in revocation_route.dependant.dependencies
     }
+
+
+@pytest.mark.asyncio
+async def test_hermes_validation_errors_redact_capability_and_proof_input():
+    secret = "capability-secret-must-never-appear"
+    request = Request({"type": "http", "method": "POST", "path": "/hermes-control-plane/review-handoffs", "headers": []})
+    response = await redact_hermes_capability_validation_error(
+        request,
+        RequestValidationError([{"type": "string_too_short", "loc": ("body", "operatorCapabilityProof"), "msg": "String should have at least 24 characters", "input": secret}]),
+    )
+    body = response.body.decode("utf-8")
+    assert response.status_code == 422
+    assert secret not in body and '"input"' not in body and '"ctx"' not in body

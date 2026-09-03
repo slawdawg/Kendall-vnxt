@@ -21,6 +21,7 @@ from supervisor.infrastructure.db.models import (
     HermesOutcome,
     HermesReviewDisposition,
     HermesRoleCapabilityBinding,
+    HermesUnavailableReviewerRequirement,
     HermesVerificationRecord,
 )
 
@@ -357,6 +358,14 @@ async def recover_hermes_technical_block(
             await session.flush()
     except IntegrityError as exc:
         await session.rollback()
+        replay = await _replay_technical_block_recovery(
+            session,
+            request,
+            digest,
+            recovered_by_operator_id=recovered_by_operator_id,
+        )
+        if replay is not None:
+            return replay
         raise ValueError("Technical-block recovery persistence conflict.") from exc
     outcome = await session.get(HermesOutcome, request.outcomeId)
     lane = await session.get(HermesLaneRun, replacement.laneRunId)
@@ -508,6 +517,68 @@ async def _fence_unrevoked_role_capability(session: AsyncSession, binding: Herme
         raise ValueError("Role capability is revoked or expired.")
 
 
+async def _require_operator_role_capability(
+    session: AsyncSession,
+    *,
+    binding_id: str,
+    secret: str,
+    outcome_id: str,
+    lane_run_id: str,
+    authenticated_operator_id: str,
+    lock: bool = False,
+) -> HermesRoleCapabilityBinding:
+    """Require the task-scoped Operator capability without accepting caller profile claims."""
+    statement = select(HermesRoleCapabilityBinding).where(
+        HermesRoleCapabilityBinding.capability_binding_id == binding_id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    binding = await session.scalar(statement)
+    if (
+        binding is None
+        or binding.role != "operator"
+        or binding.outcome_id != outcome_id
+        or binding.lane_run_id != lane_run_id
+        or binding.identity != authenticated_operator_id
+    ):
+        raise ValueError("Operator capability is not bound to this authenticated outcome and Developer lane.")
+    if binding.revoked_at is not None or binding.expires_at <= datetime.now(UTC):
+        raise ValueError("Role capability is revoked or expired.")
+    digest = sha256(secret.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(binding.capability_digest_sha256, digest):
+        raise ValueError("Role capability proof is invalid.")
+    return binding
+
+
+async def _replay_unavailable_reviewer_block(
+    session: AsyncSession,
+    block,
+    *,
+    digest: str,
+    recorded_by_operator_id: str,
+) -> HermesOutcomeProjectionV1 | None:
+    prior = await session.scalar(
+        select(HermesUnavailableReviewerRequirement)
+        .where(HermesUnavailableReviewerRequirement.idempotency_key == block.idempotencyKey)
+        .with_for_update()
+    )
+    if prior is None:
+        return None
+    if (
+        prior.unavailable_reviewer_block_id != block.unavailableReviewerBlockId
+        or prior.request_digest_sha256 != digest
+        or prior.recorded_by_operator_id != recorded_by_operator_id
+    ):
+        raise ValueError("Unavailable-reviewer block idempotency key conflicts with persisted metadata.")
+    outcome = await session.get(HermesOutcome, prior.outcome_id)
+    if outcome is None:
+        raise ValueError("Persisted unavailable-reviewer block lacks its ledger projection.")
+    lane = await _current_lane(session, outcome)
+    if lane is None:
+        raise ValueError("Persisted unavailable-reviewer block lacks its current ledger lane.")
+    return _projection(outcome, lane, await _latest_evidence(session, lane))
+
+
 async def _current_lane(session: AsyncSession, outcome: HermesOutcome) -> HermesLaneRun | None:
     return await session.scalar(select(HermesLaneRun).where(HermesLaneRun.current_event_id == outcome.current_event_id))
 
@@ -577,6 +648,126 @@ async def ingest_hermes_review_handoff(
     verification, disposition = request.verification, request.disposition
     if not commit and request.unavailableReviewerException is not None:
         raise ValueError("Unavailable-reviewer exceptions require an atomic committed handoff.")
+    if request.unavailableReviewerBlock is not None:
+        block, exception = request.unavailableReviewerBlock, request.unavailableReviewerException
+        assert exception is not None and authenticated_recorder_id is not None
+        assert request.operatorCapabilityBindingId is not None and request.operatorCapabilityProof is not None
+        operator_capability = await _require_operator_role_capability(
+            session,
+            binding_id=request.operatorCapabilityBindingId,
+            secret=request.operatorCapabilityProof,
+            outcome_id=verification.outcomeId,
+            lane_run_id=verification.laneRunId,
+            authenticated_operator_id=authenticated_recorder_id,
+            lock=True,
+        )
+        digest = _handoff_digest(request)
+        replay = await _replay_unavailable_reviewer_block(
+            session,
+            block,
+            digest=digest,
+            recorded_by_operator_id=authenticated_recorder_id,
+        )
+        if replay is not None:
+            return replay
+        outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
+        lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
+        operator_capability = await _require_operator_role_capability(
+            session,
+            binding_id=request.operatorCapabilityBindingId,
+            secret=request.operatorCapabilityProof,
+            outcome_id=verification.outcomeId,
+            lane_run_id=verification.laneRunId,
+            authenticated_operator_id=authenticated_recorder_id,
+        )
+        await _fence_unrevoked_role_capability(session, operator_capability)
+        replay = await _replay_unavailable_reviewer_block(
+            session,
+            block,
+            digest=digest,
+            recorded_by_operator_id=authenticated_recorder_id,
+        )
+        if replay is not None:
+            return replay
+        if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
+            raise ValueError("Unavailable-reviewer block requires the current bound outcome and Developer lane.")
+        if exception.reviewBy <= datetime.now(UTC):
+            raise ValueError("Unavailable-reviewer exception expired before persistence.")
+        record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
+        if record is None or record.verification_record_id != verification.verificationRecordId or not _same_verification(record, verification) or record.result != "passed":
+            raise ValueError("Unavailable-reviewer block requires a previously recorded passed Developer verification.")
+        verification_event_id = f"event:verification:{sha256(verification.verificationRecordId.encode('utf-8')).hexdigest()}"
+        typed_review_entry = (
+            outcome.current_event_id == lane.current_event_id == verification_event_id
+            and (outcome.revision, lane.revision) == (block.expectedOutcomeRevision + 1, block.expectedLaneRevision + 1)
+        )
+        if (outcome.revision, lane.revision) != (block.expectedOutcomeRevision, block.expectedLaneRevision) and not typed_review_entry:
+            raise ValueError("Unavailable-reviewer block revision is stale.")
+        if block.observedAt < outcome.observed_at or block.observedAt < lane.observed_at or block.observedAt < outcome.updated_at or block.observedAt < lane.updated_at:
+            raise ValueError("Unavailable-reviewer block evidence predates the current ledger projection.")
+        if block.observedAt > datetime.now(UTC) + timedelta(minutes=5):
+            raise ValueError("Unavailable-reviewer block cannot be materially future-dated.")
+        if lane.evidence_fingerprint != verification.sourceFingerprint:
+            raise ValueError("Verification source fingerprint is stale for the Developer lane.")
+        await _require_bound_evidence(
+            session,
+            evidence_refs=block.evidenceRefs,
+            outcome=outcome,
+            lane=lane,
+            decision_at=block.observedAt,
+            require_current_projection=not (typed_review_entry and block.evidenceRefs == record.evidence_refs_json),
+        )
+        if not can_replace_current_result(previous=outcome.result, next_result="blockedTechnical") or not can_replace_current_result(previous=lane.result, next_result="blockedTechnical"):
+            raise ValueError("Unavailable-reviewer block cannot overwrite a terminal ledger transition.")
+        event_id = f"event:unavailable-reviewer:{sha256(block.unavailableReviewerBlockId.encode('utf-8')).hexdigest()}"
+        session.add(HermesLedgerEvent(
+            event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id,
+            schema_version="hermes_lifecycle_event.v1", event_name="hermes.review.unavailable_reviewer.blocked",
+            outcome_status="blocked", lane_status="blocked", lane_type=lane.lane_type, result="blockedTechnical",
+            reason_code=block.reasonCode, evidence_refs_json=block.evidenceRefs, next_action=block.nextAction,
+            correlation_id=block.unavailableReviewerBlockId, causation_id=verification.verificationRecordId,
+            observed_at=block.observedAt, emitted_at=_emitted_at(block.observedAt), heartbeat_at=lane.heartbeat_at,
+            stale_deadline_at=lane.stale_deadline_at, timeout_at=lane.timeout_at, retry_budget=lane.retry_budget,
+            rework_budget=lane.rework_budget, evidence_fingerprint=lane.evidence_fingerprint,
+            idempotency_key=f"event:unavailable-reviewer:{sha256(block.idempotencyKey.encode('utf-8')).hexdigest()}",
+            request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False,
+        ))
+        await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {
+            "status": "blocked", "result": "blockedTechnical", "reason_code": block.reasonCode,
+            "evidence_refs_json": block.evidenceRefs, "next_action": block.nextAction,
+            "observed_at": block.observedAt, "updated_at": block.observedAt, "current_event_id": event_id,
+        })
+        await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {
+            "status": "blocked", "result": "blockedTechnical", "reason_code": block.reasonCode,
+            "evidence_refs_json": block.evidenceRefs, "next_action": block.nextAction,
+            "observed_at": block.observedAt, "updated_at": block.observedAt, "current_event_id": event_id,
+        })
+        session.add(HermesUnavailableReviewerRequirement(
+            unavailable_reviewer_block_id=block.unavailableReviewerBlockId, exception_id=exception.exceptionId,
+            verification_record_id=verification.verificationRecordId, outcome_id=block.outcomeId,
+            developer_lane_run_id=block.developerLaneRunId, schema_version=block.schemaVersion,
+            expected_outcome_revision=block.expectedOutcomeRevision, expected_lane_revision=block.expectedLaneRevision,
+            reason_code=block.reasonCode, next_action=block.nextAction, evidence_refs_json=block.evidenceRefs,
+            idempotency_key=block.idempotencyKey, request_digest_sha256=digest,
+            recorded_by_operator_id=authenticated_recorder_id,
+            exception_requirement_json=exception.model_dump(mode="json", by_alias=True),
+            observed_at=block.observedAt, created_at=block.createdAt, metadata_only=True, raw_payload_retained=False,
+        ))
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            replay = await _replay_unavailable_reviewer_block(
+                session,
+                block,
+                digest=digest,
+                recorded_by_operator_id=authenticated_recorder_id,
+            )
+            if replay is not None:
+                return replay
+            raise ValueError("Unavailable-reviewer block persistence conflict.") from exc
+        await session.refresh(outcome); await session.refresh(lane)
+        return _projection(outcome, lane, await _latest_evidence(session, lane))
     if disposition is None:
         assert request.developerCapabilityBindingId is not None and request.developerCapabilityProof is not None
         developer_capability = await _require_role_capability(session, binding_id=request.developerCapabilityBindingId, secret=request.developerCapabilityProof, role="developer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=verification.developerIdentity, home=verification.developerHome, workspace=verification.developerWorkspace, lock=True)
@@ -715,6 +906,8 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Review handoff revision is stale.")
     if disposition.observedAt < outcome.observed_at or disposition.observedAt < lane.observed_at or disposition.observedAt < outcome.updated_at or disposition.observedAt < lane.updated_at:
         raise ValueError("Review handoff evidence predates the current ledger projection.")
+    if disposition.observedAt > datetime.now(UTC) + timedelta(minutes=5):
+        raise ValueError("Review disposition cannot be materially future-dated.")
     if lane.evidence_fingerprint != verification.sourceFingerprint:
         raise ValueError("Verification source fingerprint is stale for the Developer lane.")
     carry_forward_verification_evidence = typed_review_entry and disposition.evidenceRefs == record.evidence_refs_json

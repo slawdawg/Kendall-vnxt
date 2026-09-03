@@ -23,13 +23,13 @@ from supervisor.application.hermes_outcomes import (
 from supervisor.api.schemas import HermesBoardLifecycleEventInputV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequest, HermesTechnicalBlockRecoveryRequest
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesReviewDisposition, HermesRoleCapabilityBinding, HermesVerificationRecord
+from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesLedgerEvent, HermesOutcome, HermesReviewDisposition, HermesRoleCapabilityBinding, HermesUnavailableReviewerRequirement, HermesVerificationRecord
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from test_hermes_control_plane import payload
 
 
 ROLE_PROFILE_ROOT = Path(mkdtemp(prefix="hermes-role-profile-"))
-for _profile_name in ("developer-home", "developer-workspace", "reviewer-home", "reviewer-workspace"):
+for _profile_name in ("developer-home", "developer-workspace", "reviewer-home", "reviewer-workspace", "operator-home", "operator-workspace"):
     (ROLE_PROFILE_ROOT / _profile_name).mkdir()
 
 
@@ -302,6 +302,43 @@ async def _record_then_dispose(session, handoff):
         HermesReviewHandoffRequest.model_validate(_reviewer_request(handoff)),
         authenticated_recorder_id="operator:fixture" if handoff.get("unavailableReviewerException") else None,
     )
+
+
+@pytest.mark.asyncio
+async def test_operator_capability_records_unavailable_reviewer_block_without_reviewer_proof(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'operator-unavailable-reviewer.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await _seed_review_lane(session)
+        handoff = review_handoff()
+        await _record_verification(session, handoff)
+        verification = handoff["verification"]
+        await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:operator", "role": "operator", "outcomeId": verification["outcomeId"], "laneRunId": verification["laneRunId"],
+            "identity": "operator:fixture", "home": str(ROLE_PROFILE_ROOT / "operator-home"), "workspace": str(ROLE_PROFILE_ROOT / "operator-workspace"), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        }), provisioned_by_operator_id="operator:fixture")
+        request = {
+            "verification": verification,
+            "unavailableReviewerException": {"exceptionId": "exception:operator-block", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reason": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "evidence:compensating", "recordedBy": "untrusted:caller", "recordedAt": "2026-09-02T12:02:00Z", "reviewOrExpiryAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False},
+            "unavailableReviewerBlock": {"unavailableReviewerBlockId": "block:operator-unavailable", "verificationRecordId": "verification:1", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "unavailable_reviewer_block.v1", "expectedOutcomeRevision": 1, "expectedLaneRevision": 1, "reasonCode": "reviewer_unavailable", "nextAction": "Await a replacement independent review.", "evidenceRefs": ["evidence:1"], "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "block:operator-unavailable", "createdAt": "2026-09-02T12:02:00Z", "metadataOnly": True, "rawPayloadRetained": False},
+            "operatorCapabilityBindingId": "capability:operator", "operatorCapabilityProof": "o" * 32,
+        }
+        parsed = HermesReviewHandoffRequest.model_validate(request)
+        projection = await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
+        assert projection.currentResult == "blockedTechnical"
+        requirement = await session.get(HermesUnavailableReviewerRequirement, "block:operator-unavailable")
+        assert requirement is not None and requirement.recorded_by_operator_id == "operator:fixture"
+        assert requirement.exception_requirement_json["recordedBy"] == "operator:fixture"
+        assert await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture") == projection
+        forbidden = copy.deepcopy(request); forbidden["reviewerCapabilityBindingId"] = "capability:reviewer"; forbidden["reviewerCapabilityProof"] = "r" * 32
+        with pytest.raises(ValueError, match="only a typed Operator capability"):
+            HermesReviewHandoffRequest.model_validate(forbidden)
+        bypass = _developer_request(handoff); bypass["unavailableReviewerException"] = request["unavailableReviewerException"]
+        with pytest.raises(ValueError, match="cannot carry a Reviewer capability or exception"):
+            HermesReviewHandoffRequest.model_validate(bypass)
+    await engine.dispose()
 
 
 async def _seed_review_lane(session, initial=None):

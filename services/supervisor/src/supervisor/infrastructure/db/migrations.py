@@ -204,6 +204,17 @@ async def _apply_hermes_technical_recovery_actor_provenance(connection: AsyncCon
     if "recovered_by_operator_id" not in columns:
         await connection.execute(text("ALTER TABLE hermes_ledger_events ADD COLUMN recovered_by_operator_id VARCHAR(120)"))
 
+
+async def _apply_hermes_unavailable_reviewer_requirements(connection: AsyncConnection) -> None:
+    """Create the additive Operator-audited unavailable-reviewer requirement ledger."""
+    from supervisor.infrastructure.db.models import HermesUnavailableReviewerRequirement
+    await connection.run_sync(
+        lambda sync_connection: HermesUnavailableReviewerRequirement.metadata.create_all(
+            sync_connection,
+            tables=[HermesUnavailableReviewerRequirement.__table__],
+        )
+    )
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -282,6 +293,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0016_hermes_technical_recovery_actor_provenance",
         _apply_hermes_technical_recovery_actor_provenance,
         clean_install=_apply_hermes_technical_recovery_actor_provenance,
+    ),
+    SchemaMigration(
+        "0017_hermes_unavailable_reviewer_requirements",
+        _apply_hermes_unavailable_reviewer_requirements,
+        clean_install=_apply_hermes_unavailable_reviewer_requirements,
     ),
 )
 

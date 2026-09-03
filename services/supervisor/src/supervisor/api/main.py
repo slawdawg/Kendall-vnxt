@@ -8,6 +8,8 @@ from ipaddress import ip_address
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
@@ -306,6 +308,26 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def redact_hermes_capability_validation_error(request: Request, exc: RequestValidationError):
+    """Never echo local capability/proof input when a Hermes request is malformed."""
+    if request.url.path not in {
+        "/hermes-control-plane/role-capabilities",
+        "/hermes-control-plane/review-handoffs",
+        "/hermes-control-plane/technical-block-recoveries",
+    }:
+        return await request_validation_exception_handler(request, exc)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": [
+                {key: error[key] for key in ("loc", "msg", "type") if key in error}
+                for error in exc.errors()
+            ]
+        },
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,

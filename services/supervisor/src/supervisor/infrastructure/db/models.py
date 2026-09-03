@@ -1016,6 +1016,37 @@ class HermesReviewDisposition(Base):
     raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class HermesUnavailableReviewerRequirement(Base):
+    """Operator-audited review requirement that can block but never approve."""
+
+    __tablename__ = "hermes_unavailable_reviewer_requirements"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_unavailable_reviewer_requirement_idempotency"),
+        UniqueConstraint("verification_record_id", name="uq_hermes_unavailable_reviewer_requirement_verification"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_unavailable_reviewer_requirement_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_unavailable_reviewer_requirement_no_raw_payload"),
+    )
+    unavailable_reviewer_block_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    exception_id: Mapped[str] = mapped_column(String(120), unique=True)
+    verification_record_id: Mapped[str] = mapped_column(ForeignKey("hermes_verification_records.verification_record_id"), index=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    developer_lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64), default="unavailable_reviewer_block.v1")
+    expected_outcome_revision: Mapped[int] = mapped_column(Integer)
+    expected_lane_revision: Mapped[int] = mapped_column(Integer)
+    reason_code: Mapped[str] = mapped_column(String(120))
+    next_action: Mapped[str] = mapped_column(String(360))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    recorded_by_operator_id: Mapped[str] = mapped_column(String(120))
+    exception_requirement_json: Mapped[dict] = mapped_column(JSON)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HermesRoleCapabilityBinding(Base):
     """Coordinator-provisioned, task-scoped role credential digest only."""
 
