@@ -1752,13 +1752,17 @@ async def revoke_hermes_role_capability_route(
 )
 async def recover_hermes_technical_block_route(
     payload: HermesTechnicalBlockRecoveryRequest,
-    _: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
+    operator: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
     session: AsyncSession = Depends(get_session),
 ):
     """Perform one authenticated, fenced replacement-lane technical-block recovery."""
 
     try:
-        projection = await recover_hermes_technical_block(session, payload)
+        projection = await recover_hermes_technical_block(
+            session,
+            payload,
+            recovered_by_operator_id=str(operator.id),
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=409,

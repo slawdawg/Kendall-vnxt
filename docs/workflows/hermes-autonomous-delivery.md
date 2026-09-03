@@ -123,6 +123,22 @@ submit a disposition against that exact record. An expired, revoked, stale,
 unbound, or replay-conflicting admission fails closed; exact persisted replays
 remain available only when their bound metadata can be proven.
 
+The local authenticated control-plane endpoints are deliberately narrow:
+`/hermes-control-plane/role-capabilities` provisions one task-scoped binding;
+`/hermes-control-plane/role-capability-revocations` revokes that binding; and
+`/hermes-control-plane/review-handoffs` accepts only the matching Developer or
+Reviewer proof (the unavailable-reviewer exception instead requires the
+authenticated Operator session). `/hermes-control-plane/technical-block-recoveries`
+also requires the authenticated Operator session, a current blocked projection,
+current revisions, and fresh cited evidence; its append-only recovery event
+records the authenticated actor identity. The capability, revocation, and
+technical-recovery routes require the authenticated Operator session, HTTPS
+origin, and CSRF check. Review handoffs require the local trusted transport and
+matching role proof; only an unavailable-reviewer exception additionally uses
+the Operator session checks. Capability values are never returned or logged. A
+conflict fails closed: reprovision a distinct binding for an expired, revoked,
+or historical noncanonical path rather than reusing it.
+
 A disposition is exactly `approve`, `rework`, or `technical_block`. It is
 atomically bound to that verification record, the original Developer lane, and
 distinct Reviewer identity, home, and workspace metadata. Self-review or any

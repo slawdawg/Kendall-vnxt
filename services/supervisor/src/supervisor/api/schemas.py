@@ -8322,6 +8322,8 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
     def _valid(self):
         if self.expiresAt <= self.createdAt or len({self.identity, self.home, self.workspace}) != 3:
             raise ValueError("Role capability has invalid binding or expiry.")
+        if self.expiresAt <= datetime.now(timezone.utc):
+            raise ValueError("Role capability expiry must be in the future.")
         return self
 
 
@@ -8373,6 +8375,8 @@ class HermesTechnicalBlockRecoveryRequest(BaseModel):
             raise ValueError("Technical-block recovery must create a distinct review/retryable replacement lane.")
         if (lane.reasonCode, lane.nextAction) != (self.reasonCode, self.nextAction):
             raise ValueError("Technical-block recovery replacement reason and next action must match the authoritative request.")
+        if evidence.deliveryEvidenceId not in lane.evidenceRefs:
+            raise ValueError("Technical-block recovery replacement lane must cite its delivery evidence.")
         if lane.observedAt < self.observedAt or evidence.observedAt < lane.updatedAt:
             raise ValueError("Technical-block recovery replacement metadata must be current.")
         return self

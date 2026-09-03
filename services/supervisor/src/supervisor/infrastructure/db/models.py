@@ -943,6 +943,7 @@ class HermesLedgerEvent(Base):
     evidence_fingerprint: Mapped[str] = mapped_column(String(240))
     idempotency_key: Mapped[str] = mapped_column(String(180))
     request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    recovered_by_operator_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
     raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
     authoritative: Mapped[bool] = mapped_column(Boolean, default=False)

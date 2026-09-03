@@ -194,6 +194,16 @@ async def _apply_hermes_role_capability_revocation_provenance(connection: AsyncC
     if "revoked_by_operator_id" not in columns:
         await connection.execute(text("ALTER TABLE hermes_role_capability_bindings ADD COLUMN revoked_by_operator_id VARCHAR(120)"))
 
+
+async def _apply_hermes_technical_recovery_actor_provenance(connection: AsyncConnection) -> None:
+    """Add authenticated Operator provenance to typed recovery ledger events."""
+    exists = await connection.run_sync(lambda sync_connection: inspect(sync_connection).has_table("hermes_ledger_events"))
+    if not exists:
+        return
+    columns = await connection.run_sync(lambda sync_connection: {item["name"] for item in inspect(sync_connection).get_columns("hermes_ledger_events")})
+    if "recovered_by_operator_id" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_ledger_events ADD COLUMN recovered_by_operator_id VARCHAR(120)"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -267,6 +277,11 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         "0015_hermes_role_capability_revocation_provenance",
         _apply_hermes_role_capability_revocation_provenance,
         clean_install=_apply_hermes_role_capability_revocation_provenance,
+    ),
+    SchemaMigration(
+        "0016_hermes_technical_recovery_actor_provenance",
+        _apply_hermes_technical_recovery_actor_provenance,
+        clean_install=_apply_hermes_technical_recovery_actor_provenance,
     ),
 )
 

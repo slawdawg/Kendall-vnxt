@@ -1,7 +1,7 @@
 """Transactional, metadata-only Hermes outcome ledger application service."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import hmac
 import json
@@ -256,12 +256,20 @@ def _technical_block_recovery_digest(request: HermesTechnicalBlockRecoveryReques
     return sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-async def _replay_technical_block_recovery(session: AsyncSession, request: HermesTechnicalBlockRecoveryRequest, digest: str) -> HermesOutcomeProjectionV1 | None:
+async def _replay_technical_block_recovery(
+    session: AsyncSession,
+    request: HermesTechnicalBlockRecoveryRequest,
+    digest: str,
+    *,
+    recovered_by_operator_id: str,
+) -> HermesOutcomeProjectionV1 | None:
     existing = await session.scalar(select(HermesLedgerEvent).where(HermesLedgerEvent.idempotency_key == request.idempotencyKey))
     if existing is None:
         return None
     if existing.request_digest_sha256 != digest or existing.event_name != "hermes.lane.recovered":
         raise ValueError("Technical-block recovery idempotency key conflicts with persisted metadata.")
+    if existing.recovered_by_operator_id != recovered_by_operator_id:
+        raise ValueError("Technical-block recovery replay conflicts with the authenticated Operator.")
     outcome = await session.get(HermesOutcome, request.outcomeId)
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.current_event_id == outcome.current_event_id)) if outcome else None
     if outcome is None or lane is None:
@@ -270,17 +278,29 @@ async def _replay_technical_block_recovery(session: AsyncSession, request: Herme
 
 
 async def recover_hermes_technical_block(
-    session: AsyncSession, payload: HermesTechnicalBlockRecoveryRequest, *, commit: bool = True,
+    session: AsyncSession, payload: HermesTechnicalBlockRecoveryRequest, *, recovered_by_operator_id: str, commit: bool = True,
 ) -> HermesOutcomeProjectionV1:
     """Replace one current technical block with a separately fenced review lane."""
+    if not recovered_by_operator_id.strip():
+        raise ValueError("Technical-block recovery requires an authenticated Operator.")
     request = HermesTechnicalBlockRecoveryRequest.model_validate(payload.model_dump())
     digest = _technical_block_recovery_digest(request)
-    replay = await _replay_technical_block_recovery(session, request, digest)
+    replay = await _replay_technical_block_recovery(
+        session,
+        request,
+        digest,
+        recovered_by_operator_id=recovered_by_operator_id,
+    )
     if replay is not None:
         return replay
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcomeId).with_for_update())
     blocked_lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.blockedLaneRunId).with_for_update())
-    replay = await _replay_technical_block_recovery(session, request, digest)
+    replay = await _replay_technical_block_recovery(
+        session,
+        request,
+        digest,
+        recovered_by_operator_id=recovered_by_operator_id,
+    )
     if replay is not None:
         return replay
     if outcome is None or blocked_lane is None or blocked_lane.outcome_id != outcome.outcome_id:
@@ -322,7 +342,8 @@ async def recover_hermes_technical_block(
         causation_id=blocked_lane.current_event_id, observed_at=request.observedAt, emitted_at=_emitted_at(request.observedAt),
         heartbeat_at=replacement.heartbeatAt, stale_deadline_at=replacement.staleDeadlineAt, timeout_at=replacement.timeoutAt,
         retry_budget=replacement.retryBudget, rework_budget=replacement.reworkBudget, evidence_fingerprint=replacement.evidenceFingerprint,
-        idempotency_key=request.idempotencyKey, request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False,
+        idempotency_key=request.idempotencyKey, request_digest_sha256=digest, recovered_by_operator_id=recovered_by_operator_id,
+        metadata_only=True, raw_payload_retained=False, authoritative=False,
     ))
     await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {
         "status": "review", "result": "retryable", "reason_code": request.reasonCode,
@@ -406,6 +427,10 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
     if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
         raise ValueError("Role capability must bind an existing current outcome and lane.")
     home, workspace = _canonical_role_profile(request.home, request.workspace)
+    if _profiles_overlap(home, workspace):
+        raise ValueError("Role capability home and workspace must be disjoint canonical roots.")
+    if request.expiresAt <= datetime.now(UTC):
+        raise ValueError("Role capability expiry must be in the future.")
     existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
     if existing is not None:
         if existing.revoked_at is not None:
@@ -585,8 +610,12 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Verification result is stale for the current review lane.")
         if verification.observedAt < outcome.observed_at or verification.observedAt < lane.observed_at or verification.observedAt < outcome.updated_at or verification.observedAt < lane.updated_at:
             raise ValueError("Verification evidence predates the current ledger projection.")
+        if verification.observedAt > datetime.now(UTC) + timedelta(minutes=5):
+            raise ValueError("Verification evidence cannot be materially future-dated.")
         await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane, decision_at=verification.observedAt)
         if verification.result == "passed":
+            if not can_replace_current_result(previous=outcome.result, next_result="retryable") or not can_replace_current_result(previous=lane.result, next_result="retryable"):
+                raise ValueError("Verification result cannot overwrite a terminal ledger transition.")
             session.add(HermesVerificationRecord(verification_record_id=verification.verificationRecordId, outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, schema_version=verification.schemaVersion, developer_identity=verification.developerIdentity, developer_home=verification.developerHome, developer_workspace=verification.developerWorkspace, developer_capability_binding_id=developer_capability.capability_binding_id, result=verification.result, target=verification.target, source_fingerprint=verification.sourceFingerprint, evidence_refs_json=verification.evidenceRefs, idempotency_key=verification.idempotencyKey, expected_outcome_revision=verification.expectedOutcomeRevision, expected_lane_revision=verification.expectedLaneRevision, revision_binding_known=True, observed_at=verification.observedAt, created_at=verification.createdAt, metadata_only=True, raw_payload_retained=False))
             if enter_review:
                 event_id = f"event:verification:{sha256(verification.verificationRecordId.encode('utf-8')).hexdigest()}"
