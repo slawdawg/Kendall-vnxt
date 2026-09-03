@@ -424,7 +424,7 @@ def _canonical_role_profile(home: str, workspace: str) -> tuple[str, str]:
 
 
 def _same_role_capability(existing: HermesRoleCapabilityBinding, request, digest: str, provisioned_by_operator_id: str, *, home: str, workspace: str) -> bool:
-    return (existing.role, existing.outcome_id, existing.lane_run_id, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.expires_at, existing.provisioned_by_operator_id) == (request.role, request.outcomeId, request.laneRunId, request.identity, home, workspace, digest, request.expiresAt, provisioned_by_operator_id)
+    return (existing.role, existing.outcome_id, existing.lane_run_id, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.expires_at, existing.created_at, existing.provisioned_by_operator_id) == (request.role, request.outcomeId, request.laneRunId, request.identity, home, workspace, digest, request.expiresAt, request.createdAt, provisioned_by_operator_id)
 
 
 def _profiles_overlap(left: str, right: str) -> bool:
@@ -454,7 +454,7 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
     binding = HermesRoleCapabilityBinding(
         capability_binding_id=request.capabilityBindingId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
         role=request.role, identity=request.identity, home=home, workspace=workspace,
-        capability_digest_sha256=digest, expires_at=request.expiresAt, revoked_at=None,
+        capability_digest_sha256=digest, expires_at=request.expiresAt, created_at=request.createdAt, revoked_at=None,
         provisioned_by_operator_id=provisioned_by_operator_id, metadata_only=True, raw_payload_retained=False,
     )
     session.add(binding)

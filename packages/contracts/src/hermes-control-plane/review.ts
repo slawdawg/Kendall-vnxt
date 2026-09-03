@@ -74,7 +74,7 @@ export function isReviewHandoffV1(value: unknown): value is ReviewHandoffV1 {
     const disposition = value.disposition as ReviewDispositionV1;
     const exception = value.unavailableReviewerException;
     return isCapabilityBindingId(value.reviewerCapabilityBindingId) && isCapabilityProof(value.reviewerCapabilityProof) &&
-      (exception === undefined || (isHermesReviewerUnavailableExceptionV1(exception) && disposition.disposition === "technical_block" && exception.outcomeId === verification.outcomeId && exception.laneRunId === verification.laneRunId)) &&
+      (exception === undefined || (isHermesReviewerUnavailableExceptionV1(exception) && disposition.disposition === "technical_block" && exception.outcomeId === verification.outcomeId && exception.laneRunId === verification.laneRunId && occursAtOrAfter(disposition.observedAt, exception.recordedAt))) &&
       verification.verificationRecordId === disposition.verificationRecordId &&
       verification.outcomeId === disposition.outcomeId &&
       verification.laneRunId === disposition.developerLaneRunId &&

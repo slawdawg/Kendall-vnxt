@@ -269,6 +269,28 @@ async def test_role_capability_provisioning_canonicalizes_existing_profile_paths
 
 
 @pytest.mark.asyncio
+async def test_role_capability_provisioning_persists_created_at_and_fences_changed_replay(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-created-at.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request_data = {
+            "capabilityBindingId": "capability:created-at", "role": "developer", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "developer:one", "home": str(ROLE_PROFILE_ROOT / "developer-home"), "workspace": str(ROLE_PROFILE_ROOT / "developer-workspace"), "capabilitySecret": "d" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        }
+        request = HermesRoleCapabilityProvisionRequest.model_validate(request_data)
+        binding = await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
+        assert binding.created_at.replace(tzinfo=timezone.utc) == request.createdAt
+        assert await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture") == binding
+        changed = HermesRoleCapabilityProvisionRequest.model_validate({**request_data, "createdAt": "2026-09-02T12:01:00Z"})
+        with pytest.raises(ValueError, match="conflicts with persisted metadata"):
+            await provision_hermes_role_capability(session, changed, provisioned_by_operator_id="operator:fixture")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_role_capability_provisioning_rejects_canonical_overlap_and_expiry(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-profile-fences.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)

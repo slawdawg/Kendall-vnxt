@@ -78,5 +78,5 @@ export function isHermesIdempotencyKey(value: unknown): value is HermesIdempoten
 export function isHermesEvidenceRefId(value: unknown): value is HermesEvidenceRefId {
   return isOpaqueId(value);
 }
-export function isVerificationRecordId(value: unknown): value is VerificationRecordId { return isOpaqueId(value); }
-export function isReviewDispositionId(value: unknown): value is ReviewDispositionId { return isOpaqueId(value); }
+export function isVerificationRecordId(value: unknown): value is VerificationRecordId { return isOpaqueId(value) && value.length <= 120; }
+export function isReviewDispositionId(value: unknown): value is ReviewDispositionId { return isOpaqueId(value) && value.length <= 120; }

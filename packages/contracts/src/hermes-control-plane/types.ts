@@ -256,7 +256,14 @@ export type ReviewHandoffV1 =
     }
   | {
       readonly verification: VerificationRecordV1 & { readonly result: "passed" };
-      readonly disposition: ReviewDispositionV1;
+      readonly disposition: ReviewDispositionV1 & { readonly disposition: "approve" | "rework" };
+      readonly unavailableReviewerException?: never;
+      readonly reviewerCapabilityBindingId: string;
+      readonly reviewerCapabilityProof: string;
+    }
+  | {
+      readonly verification: VerificationRecordV1 & { readonly result: "passed" };
+      readonly disposition: ReviewDispositionV1 & { readonly disposition: "technical_block" };
       readonly unavailableReviewerException?: HermesReviewerUnavailableExceptionV1;
       readonly reviewerCapabilityBindingId: string;
       readonly reviewerCapabilityProof: string;
