@@ -470,9 +470,25 @@ durable, milestone-driven workflow rather than a single unbounded task.
   change, or paired with failing/ambiguous checks or a high-risk lane. Any
   thread discovered by the post-resolution re-audit blocks merge and requires
   a fresh full evaluation before it can be resolved. An outdated-only thread is
-  a hold for this automatic authority and must be separately adjudicated; it
-  cannot be closed by this grant. This authority never weakens the separate
-  exact-head merge criteria.
+  a hold for this **current-thread** automatic authority and must be separately
+  adjudicated; it cannot be closed by this grant. The following distinct
+  outdated-thread authority is the only exception. This authority never
+  weakens the separate exact-head merge criteria.
+- The operator durably authorizes a delegated delivery worker to adjudicate and
+  resolve a fully source-satisfied **outdated** review thread for any
+  Kendall_Nxt PR without another per-thread prompt. This is not bulk-close
+  authority: before each resolution, record the thread ID and request
+  fingerprint; prove the PR's exact current head/base and terminal successful
+  or policy-documented skipped checks; map the request to current source paths;
+  retain focused verification command and successful exit evidence plus
+  independent review/reviewer evidence for that exact head and fingerprinted
+  request; and confirm the thread is still outdated and unresolved with no
+  requested changes or pending review. Re-audit thread-aware review state after
+  every bounded batch. Stop on
+  head/check/review drift, ambiguity, a disputed or unfixed request, a
+  cross-repository/base mismatch, or a high-risk surface needing specific
+  authority. This never authorizes source changes, force-pushes, merge,
+  deployment, spending, credentials, migrations, or cleanup.
 - The operator has granted permanent bounded merge authority for **all
   Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
   reviewed head when the PR is in this repository and its expected base branch,
