@@ -4,7 +4,7 @@ import pytest
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
-from supervisor.api.main import app, require_authenticated_hermes_capability_provisioner
+from supervisor.api.main import app, require_authenticated_hermes_capability_provisioner, require_authenticated_hermes_role_handoff
 from supervisor.api.schemas import HermesLedgerIngestRequest
 
 
@@ -55,6 +55,11 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
         dependency.call for dependency in recovery_route.dependant.dependencies
     }
     handoff_route = route("/hermes-control-plane/review-handoffs")
-    assert require_authenticated_hermes_capability_provisioner in {
+    assert require_authenticated_hermes_role_handoff in {
         dependency.call for dependency in handoff_route.dependant.dependencies
+    }
+    revocation_route = route("/hermes-control-plane/role-capability-revocations")
+    assert revocation_route.status_code == 204
+    assert require_authenticated_hermes_capability_provisioner in {
+        dependency.call for dependency in revocation_route.dependant.dependencies
     }

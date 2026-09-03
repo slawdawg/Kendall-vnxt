@@ -14,7 +14,7 @@ export function isReviewDispositionV1(value: unknown): value is ReviewDispositio
 }
 
 export function isHermesReviewerUnavailableExceptionV1(value: unknown): value is HermesReviewerUnavailableExceptionV1 {
-  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isSafeText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isSafeText(value.compensatingReviewRef, 240) && isSafeText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]));
+  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isSafeText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isSafeText(value.compensatingReviewRef, 240) && isSafeText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]) && Date.parse(value.recordedAt as string) < Date.parse(value.reviewOrExpiryAt as string));
 }
 
 const REVIEW_HANDOFF_FIELDS = ["verification", "disposition", "reviewerCapabilityBindingId", "reviewerCapabilityProof"] as const;

@@ -98,6 +98,7 @@ from supervisor.api.schemas import (
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
     HermesRoleCapabilityProvisionRequest,
+    HermesRoleCapabilityRevocationRequest,
     HermesReviewHandoffRequest,
     HermesTechnicalBlockRecoveryRequest,
     HermesLaneRunProjectionApiEnvelope,
@@ -176,6 +177,7 @@ from supervisor.application.hermes_outcomes import (
     ingest_hermes_ledger,
     ingest_hermes_review_handoff,
     provision_hermes_role_capability,
+    revoke_hermes_role_capability,
     recover_hermes_technical_block,
     read_hermes_lane_run,
     read_hermes_outcome,
@@ -374,6 +376,12 @@ async def require_authenticated_hermes_capability_provisioner(
     if not csrf or not hmac.compare_digest(stored.csrf_token_hash, digest_secret(csrf)):
         raise HTTPException(status_code=403, detail="CSRF validation failed.")
     return operator
+
+
+async def require_authenticated_hermes_role_handoff(request: Request) -> None:
+    """Keep agent handoffs local; their role proof is verified by the typed service."""
+
+    require_local_operational_boundary(request)
 
 
 async def require_memory_inbox_shell_operator(request: Request, session: AsyncSession) -> None:
@@ -1717,6 +1725,27 @@ async def provision_hermes_role_capability_route(
         ) from exc
 
 
+@app.post("/hermes-control-plane/role-capability-revocations", status_code=204)
+async def revoke_hermes_role_capability_route(
+    payload: HermesRoleCapabilityRevocationRequest,
+    operator: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
+    session: AsyncSession = Depends(get_session),
+):
+    """Revoke one local role capability; only revocation metadata is retained."""
+
+    try:
+        await revoke_hermes_role_capability(
+            session,
+            capability_binding_id=payload.capabilityBindingId,
+            revoked_by_operator_id=str(operator.id),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "hermes_role_capability_revocation_conflict").model_dump(),
+        ) from exc
+
+
 @app.post(
     "/hermes-control-plane/technical-block-recoveries",
     response_model=HermesOutcomeProjectionApiEnvelope,
@@ -1740,16 +1769,21 @@ async def recover_hermes_technical_block_route(
 
 @app.post("/hermes-control-plane/review-handoffs", response_model=HermesOutcomeProjectionApiEnvelope)
 async def ingest_hermes_review_handoff_route(
+    request: Request,
     payload: HermesReviewHandoffRequest,
-    operator: DashboardOperator = Depends(require_authenticated_hermes_capability_provisioner),
+    _: None = Depends(require_authenticated_hermes_role_handoff),
     session: AsyncSession = Depends(get_session),
 ):
     """Persist a typed verification/review handoff; this endpoint cannot deliver or execute work."""
     try:
+        authenticated_recorder_id = None
+        if payload.unavailableReviewerException is not None:
+            operator = await require_authenticated_hermes_capability_provisioner(request, session)
+            authenticated_recorder_id = str(operator.id)
         projection = await ingest_hermes_review_handoff(
             session,
             payload,
-            authenticated_recorder_id=str(operator.id),
+            authenticated_recorder_id=authenticated_recorder_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_handoff_conflict").model_dump()) from exc

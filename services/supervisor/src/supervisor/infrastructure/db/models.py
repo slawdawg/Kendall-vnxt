@@ -1033,6 +1033,7 @@ class HermesRoleCapabilityBinding(Base):
     capability_digest_sha256: Mapped[str] = mapped_column(String(64), unique=True)
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
     revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    revoked_by_operator_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     provisioned_by_operator_id: Mapped[str] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
     metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)

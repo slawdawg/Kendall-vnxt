@@ -1,4 +1,5 @@
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 const ROLES = Object.freeze(["Coordinator", "Developer", "Reviewer", "Delivery", "Memory"]);
 const FORBIDDEN_PATHS = Object.freeze([".env", "auth.json", "credentials", "host-credential-store", "browser-profile", "provider-state"]);
@@ -31,6 +32,12 @@ function safeMetadataText(value) {
 
 function overlaps(left, right) {
   return inside(left, right) || inside(right, left);
+}
+
+function canonicalPath(value) {
+  const canonical = realpathSync.native(value);
+  if (!statSync(canonical).isDirectory()) throw new Error("profile root must be an existing directory");
+  return canonical;
 }
 
 function role(name, runtimeRoot, input) {
@@ -102,10 +109,15 @@ export function validateMemoryContextProposal(proposal, now = new Date().toISOSt
 
 export function buildHermesProfileManifest(input) {
   if (!validInput(input) || !isAbsolute(input.runtimeRoot) || !isAbsolute(input.developerWorkspace) || !isAbsolute(input.reviewerWorkspace) || !isAbsolute(input.artifactRoot)) return denied("profile_input_invalid");
-  const runtimeRoot = resolve(input.runtimeRoot);
-  const developerWorkspace = resolve(input.developerWorkspace);
-  const reviewerWorkspace = resolve(input.reviewerWorkspace);
-  const artifactRoot = resolve(input.artifactRoot);
+  let runtimeRoot, developerWorkspace, reviewerWorkspace, artifactRoot;
+  try {
+    runtimeRoot = canonicalPath(input.runtimeRoot);
+    developerWorkspace = canonicalPath(input.developerWorkspace);
+    reviewerWorkspace = canonicalPath(input.reviewerWorkspace);
+    artifactRoot = canonicalPath(input.artifactRoot);
+  } catch {
+    return denied("profile_path_canonicalization_failed");
+  }
   if ([runtimeRoot, developerWorkspace, reviewerWorkspace, artifactRoot].includes("/")) return denied("profile_root_unbounded");
   if (!validPolicyDecision(input.policyDecision, input)) return denied("profile_policy_decision_invalid");
   if (input.policyDecision.decision === "deniedExternalImpact") return { status: "deniedExternalImpact", reasonCode: "external_impact_denied", nextAction: "Use the existing scoped, expiring External-Impact Decision path before any side effect." };

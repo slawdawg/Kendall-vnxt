@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   buildHermesProfileManifest,
@@ -9,13 +12,17 @@ import {
   validateMemoryContextProposal,
 } from "../scripts/hermes-profile-bootstrap.mjs";
 
+const profileRoot = mkdtempSync(join(tmpdir(), "hermes-profile-fixture-"));
+for (const path of ["runtime", "developer", "reviewer", "artifacts"]) mkdirSync(join(profileRoot, path));
+test.after(() => rmSync(profileRoot, { recursive: true, force: true }));
+
 const input = Object.freeze({
-  runtimeRoot: "/var/lib/kendall-hermes",
+  runtimeRoot: join(profileRoot, "runtime"),
   outcomeId: "outcome:3-2-profile-fixture",
   laneRunId: "lane-run:3-2-profile-fixture",
-  developerWorkspace: "/work/developer",
-  reviewerWorkspace: "/work/reviewer",
-  artifactRoot: "/work/artifacts",
+  developerWorkspace: join(profileRoot, "developer"),
+  reviewerWorkspace: join(profileRoot, "reviewer"),
+  artifactRoot: join(profileRoot, "artifacts"),
   policyDecision: Object.freeze({
     policyDecisionId: "policy-decision:3-2-profile-fixture",
     decision: "allowed",
@@ -80,6 +87,23 @@ test("fails closed on shared review/developer roots and renders only an auditabl
   assert.equal(expired.status, "deniedPolicy");
 });
 
+test("canonicalizes existing profile roots before reviewer isolation", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "hermes-profile-canonical-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const runtimeRoot = join(root, "runtime");
+  const developerWorkspace = join(root, "developer");
+  const reviewerWorkspace = join(root, "reviewer");
+  const artifactRoot = join(root, "artifacts");
+  for (const path of [runtimeRoot, developerWorkspace, reviewerWorkspace, artifactRoot]) mkdirSync(path);
+  const reviewerAlias = join(root, "reviewer-alias");
+  symlinkSync(developerWorkspace, reviewerAlias);
+  const canonicalInput = { ...input, runtimeRoot, developerWorkspace, reviewerWorkspace, artifactRoot };
+  assert.equal(buildHermesProfileManifest({ ...canonicalInput, reviewerWorkspace: reviewerAlias }).status, "deniedPolicy");
+  const result = buildHermesProfileManifest(canonicalInput);
+  assert.equal(result.status, "allowed");
+  assert.deepEqual(result.manifest.roles.find((role) => role.name === "Developer").writeRoots, [developerWorkspace]);
+});
+
 test("denies profile requests with cost or real-user impact before side effect", () => {
   for (const classifierReason of ["spend_denied", "real_user_deployment_denied", "uncertain_external_impact_denied"]) {
     const result = buildHermesProfileManifest({ ...input, policyDecision: { ...input.policyDecision, decision: "deniedExternalImpact", reasonCode: classifierReason } });
@@ -117,9 +141,10 @@ test("returns bounded rework when Delivery attempts a source-changing capability
   }
 });
 
-test("bootstrap stays a source-only plan with no process, network, or filesystem mutation imports", async () => {
+test("bootstrap stays a source-only plan with only the explicit read-only filesystem import", async () => {
   const source = await readFile(fileURLToPath(new URL("../scripts/hermes-profile-bootstrap.mjs", import.meta.url)), "utf8");
-  for (const forbidden of ["node:child_process", "node:net", "node:fs", "fetch(", "writeFile", "mkdir", "spawn("]) {
+  assert.match(source, /^import \{ realpathSync, statSync \} from "node:fs";/m);
+  for (const forbidden of ["node:child_process", "node:net", "node:fs/promises", "fetch(", "writeFile", "mkdir", "rmSync", "unlink", "spawn("]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
 });

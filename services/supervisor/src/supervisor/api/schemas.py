@@ -8325,6 +8325,22 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
         return self
 
 
+class HermesRoleCapabilityRevocationRequest(BaseModel):
+    """Authenticated Coordinator request to revoke one digest-only role capability."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    capabilityBindingId: str = Field(max_length=120)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("capabilityBindingId")
+    @classmethod
+    def _opaque(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Role capability identity must be opaque.")
+        return value
+
+
 class HermesTechnicalBlockRecoveryRequest(BaseModel):
     """Typed Coordinator recovery that replaces, never reopens, a blocked lane."""
     model_config = ConfigDict(extra="forbid", strict=True)

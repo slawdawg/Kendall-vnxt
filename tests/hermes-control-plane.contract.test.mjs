@@ -294,6 +294,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["short capability proof", { verification, ...developerCapability, developerCapabilityProof: "d".repeat(23) }, contracts.isReviewHandoffV1],
       ["oversized capability binding", { verification, ...developerCapability, developerCapabilityBindingId: `capability:${"a".repeat(121)}` }, contracts.isReviewHandoffV1],
       ["passed verification-only handoff with an exception", { verification, unavailableReviewerException, ...developerCapability }, contracts.isReviewHandoffV1],
+      ["unavailable reviewer exception without a future review point", { verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, reviewOrExpiryAt: unavailableReviewerException.recordedAt }, ...reviewerCapability }, contracts.isReviewHandoffV1],
       ["review instant before verification", { verification: { ...verification, observedAt: "2026-08-28T00:00:00.100Z", createdAt: "2026-08-28T00:00:00.100Z" }, disposition: { ...disposition, observedAt, createdAt: observedAt } }, contracts.isReviewHandoffV1],
       ["policy decision", { ...decision, decision: "unknown" }, contracts.isPolicyDecisionV1],
     ];
