@@ -26,13 +26,13 @@ export function isHermesReviewerUnavailableExceptionV1(value: unknown): value is
 
 export function isHermesUnavailableReviewerBlockV1(value: unknown): value is HermesUnavailableReviewerBlockV1 {
   return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_BLOCK_FIELDS) &&
-    isOpaqueId(value.unavailableReviewerBlockId) && isVerificationRecordId(value.verificationRecordId) &&
+    isOpaqueId(value.unavailableReviewerBlockId) && value.unavailableReviewerBlockId.length <= 120 && isVerificationRecordId(value.verificationRecordId) &&
     isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.developerLaneRunId) &&
     isMetadataOnlyRecord(value, "unavailable_reviewer_block.v1", ["observedAt", "createdAt"]) &&
     isTimestampOrder(value, ["createdAt", "observedAt"]) && Number.isInteger(value.expectedOutcomeRevision) &&
     (value.expectedOutcomeRevision as number) > 0 && Number.isInteger(value.expectedLaneRevision) &&
     (value.expectedLaneRevision as number) > 0 && isReviewText(value.reasonCode, 120) &&
-    isReviewText(value.nextAction, 360) && isEvidenceRefs(value.evidenceRefs) && value.evidenceRefs.length <= 25);
+    isReviewText(value.nextAction, 360) && isOpaqueId(value.idempotencyKey) && value.idempotencyKey.length <= 180 && isEvidenceRefs(value.evidenceRefs) && value.evidenceRefs.length <= 25);
 }
 
 const REVIEW_HANDOFF_FIELDS = ["verification", "disposition", "reviewerCapabilityBindingId", "reviewerCapabilityProof"] as const;

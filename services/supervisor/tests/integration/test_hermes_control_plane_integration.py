@@ -1,4 +1,6 @@
 import copy
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
@@ -329,6 +331,91 @@ async def test_role_capability_provisioning_removes_bootstrapped_roots_after_com
             await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture", runtime_root=str(runtime_root))
         assert not home.exists() and workspace.exists()
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_provisioning_removes_bootstrapped_roots_after_non_integrity_commit_failure(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-bootstrap-commit-error.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    runtime_root = tmp_path / "runtime"; profiles_root = runtime_root / "profiles"; workspace_root = tmp_path / "workspace"
+    runtime_root.mkdir(mode=0o700); profiles_root.mkdir(mode=0o700); workspace_root.mkdir(mode=0o700)
+    home, workspace = profiles_root / "operator-home", workspace_root / "operator-workspace"; workspace.mkdir(mode=0o700)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request = HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:commit-error", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "operator:one", "home": str(home), "workspace": str(workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        async def failed_commit():
+            raise RuntimeError("forced database failure")
+        cleanup_lock_held = False
+
+        @asynccontextmanager
+        async def profile_parent_lock(*roots):
+            nonlocal cleanup_lock_held
+            cleanup_lock_held = True
+            try:
+                yield
+            finally:
+                cleanup_lock_held = False
+
+        original_cleanup = hermes_outcomes._remove_unbound_bootstrapped_role_profile_roots
+
+        async def cleanup_while_profile_parent_lock_is_held(*args):
+            assert cleanup_lock_held
+            await original_cleanup(*args)
+
+        monkeypatch.setattr(hermes_outcomes, "_lock_role_profile_parents", profile_parent_lock)
+        monkeypatch.setattr(hermes_outcomes, "_remove_unbound_bootstrapped_role_profile_roots", cleanup_while_profile_parent_lock_is_held)
+        monkeypatch.setattr(session, "commit", failed_commit)
+        with pytest.raises(RuntimeError, match="forced database failure"):
+            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture", runtime_root=str(runtime_root))
+        assert not home.exists() and workspace.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_cleanup_preserves_a_root_adopted_by_a_concurrent_binding(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-bootstrap-adopted-root.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    home, workspace = tmp_path / "adopted-home", tmp_path / "adopted-workspace"
+    home.mkdir(); workspace.mkdir()
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        session.add(HermesRoleCapabilityBinding(
+            capability_binding_id="capability:adopted-root", outcome_id="outcome:1", lane_run_id="lane:1", role="operator",
+            identity="operator:one", home=str(home), workspace=str(workspace), capability_digest_sha256="a" * 64,
+            expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc), revoked_at=None, revoked_by_operator_id=None,
+            provisioned_by_operator_id="operator:fixture", created_at=datetime(2026, 9, 2, 12, tzinfo=timezone.utc), metadata_only=True, raw_payload_retained=False,
+        ))
+        await session.commit()
+    async with sessions() as session:
+        await hermes_outcomes._remove_unbound_bootstrapped_role_profile_roots(session, [home])
+    assert home.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_profile_parent_lock_releases_prior_lock_when_cancelled(monkeypatch):
+    first, second = asyncio.Lock(), asyncio.Lock()
+    monkeypatch.setattr(hermes_outcomes, "_ROLE_PROFILE_PARENT_LOCKS", {"first": first, "second": second})
+    await second.acquire()
+
+    async def wait_for_profile_locks():
+        async with hermes_outcomes._lock_role_profile_parents(Path("first/home"), Path("second/workspace")):
+            pass
+
+    task = asyncio.create_task(wait_for_profile_locks())
+    await asyncio.sleep(0)
+    assert first.locked()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not first.locked()
+    second.release()
 
 
 @pytest.mark.asyncio
@@ -710,6 +797,31 @@ async def test_passed_verification_enters_review_only_through_the_typed_handoff(
         handoff["disposition"]["evidenceRefs"] = ["evidence:review"]
         completed = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_reviewer_request(handoff)))
         assert completed.currentResult == "completed"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_passed_verification_rejects_a_second_ordinary_review_lane_record(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'typed-review-reverification.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        handoff = review_handoff()
+        await _provision_two_roles(session, handoff)
+        await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
+        session.add(HermesDeliveryEvidence(
+            delivery_evidence_id="evidence:second-verification", outcome_id="outcome:1", lane_run_id="lane:1",
+            schema_version="delivery_evidence.v1", evidence_type="verification", summary="Fresh duplicate verification evidence.",
+            source_ref="test:typed-review-reverification", observed_at=datetime(2026, 9, 2, 12, 3, tzinfo=timezone.utc),
+            evidence_refs_json=["evidence:second-verification"], idempotency_key="evidence:second-verification", created_at=datetime(2026, 9, 2, 12, 3, tzinfo=timezone.utc),
+            metadata_only=True, raw_payload_retained=False,
+        ))
+        await session.commit()
+        second = review_handoff()
+        second["verification"].update({"verificationRecordId": "verification:second", "evidenceRefs": ["evidence:second-verification"], "observedAt": "2026-09-02T12:03:00Z", "createdAt": "2026-09-02T12:03:00Z", "idempotencyKey": "verification:second", "expectedOutcomeRevision": 2, "expectedLaneRevision": 2})
+        with pytest.raises(ValueError, match="Passed verification cannot replace"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(second)))
     await engine.dispose()
 
 

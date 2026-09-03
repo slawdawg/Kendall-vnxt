@@ -1,10 +1,14 @@
 """Transactional, metadata-only Hermes outcome ledger application service."""
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+import fcntl
 from hashlib import sha256
 import hmac
 import json
+import os
 from os import geteuid
 from os.path import commonpath
 from pathlib import Path
@@ -508,6 +512,47 @@ def _remove_bootstrapped_role_profile_roots(roots: list[Path]) -> None:
             pass
 
 
+async def _remove_unbound_bootstrapped_role_profile_roots(session: AsyncSession, roots: list[Path]) -> None:
+    """Remove attempt-owned roots only when no concurrent binding adopted them."""
+    for root in roots:
+        root_text = str(root)
+        adopted = await session.scalar(
+            select(HermesRoleCapabilityBinding.capability_binding_id).where(
+                (HermesRoleCapabilityBinding.home == root_text)
+                | (HermesRoleCapabilityBinding.workspace == root_text)
+            )
+        )
+        if adopted is None:
+            _remove_bootstrapped_role_profile_roots([root])
+
+
+_ROLE_PROFILE_PARENT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+@asynccontextmanager
+async def _lock_role_profile_parents(*roots: Path):
+    """Serialize profile root adoption and rollback across local workers."""
+    parent_paths = sorted({str(root.parent) for root in roots})
+    locks = [_ROLE_PROFILE_PARENT_LOCKS.setdefault(parent, asyncio.Lock()) for parent in parent_paths]
+    acquired_locks: list[asyncio.Lock] = []
+    descriptors: list[int] = []
+    try:
+        for lock in locks:
+            await lock.acquire()
+            acquired_locks.append(lock)
+        for parent in parent_paths:
+            descriptor = os.open(parent, os.O_RDONLY)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            descriptors.append(descriptor)
+        yield
+    finally:
+        for descriptor in reversed(descriptors):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+        for lock in reversed(acquired_locks):
+            lock.release()
+
+
 def _bootstrap_role_profile(home: str, workspace: str, *, runtime_root: str | None = None) -> tuple[str, str, list[Path]]:
     """Create only already-validated explicit leaf roots, then retain canonical bindings."""
     requested_home, requested_workspace = _planned_role_profile(home, workspace, runtime_root=runtime_root)
@@ -553,34 +598,38 @@ async def provision_hermes_role_capability(
     if request.expiresAt <= datetime.now(UTC):
         raise ValueError("Role capability expiry must be in the future.")
     planned_home, planned_workspace = _planned_role_profile(request.home, request.workspace, runtime_root=runtime_root)
-    existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
-    if existing is not None:
-        if existing.revoked_at is not None:
-            raise ValueError("Role capability binding is revoked; provision a distinct binding.")
-        if not _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=str(planned_home), workspace=str(planned_workspace)):
-            raise ValueError("Role capability binding conflicts with persisted metadata.")
-        canonical_home, canonical_workspace = _canonical_role_profile(str(planned_home), str(planned_workspace))
-        _owner_private_directory(Path(canonical_home), label="home")
-        _owner_private_directory(Path(canonical_workspace), label="workspace")
-        return existing
-    home, workspace, created_roots = _bootstrap_role_profile(str(planned_home), str(planned_workspace), runtime_root=runtime_root)
-    binding = HermesRoleCapabilityBinding(
-        capability_binding_id=request.capabilityBindingId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
-        role=request.role, identity=request.identity, home=home, workspace=workspace,
-        capability_digest_sha256=digest, expires_at=request.expiresAt, created_at=request.createdAt, revoked_at=None,
-        provisioned_by_operator_id=provisioned_by_operator_id, metadata_only=True, raw_payload_retained=False,
-    )
-    session.add(binding)
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
+    async with _lock_role_profile_parents(planned_home, planned_workspace):
         existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
-        if existing is not None and existing.revoked_at is None and _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=home, workspace=workspace):
+        if existing is not None:
+            if existing.revoked_at is not None:
+                raise ValueError("Role capability binding is revoked; provision a distinct binding.")
+            if not _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=str(planned_home), workspace=str(planned_workspace)):
+                raise ValueError("Role capability binding conflicts with persisted metadata.")
+            canonical_home, canonical_workspace = _canonical_role_profile(str(planned_home), str(planned_workspace))
+            _owner_private_directory(Path(canonical_home), label="home")
+            _owner_private_directory(Path(canonical_workspace), label="workspace")
             return existing
-        _remove_bootstrapped_role_profile_roots(created_roots)
-        raise ValueError("Role capability binding persistence conflict.") from exc
-    return binding
+        home, workspace, created_roots = _bootstrap_role_profile(str(planned_home), str(planned_workspace), runtime_root=runtime_root)
+        binding = HermesRoleCapabilityBinding(
+            capability_binding_id=request.capabilityBindingId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
+            role=request.role, identity=request.identity, home=home, workspace=workspace,
+            capability_digest_sha256=digest, expires_at=request.expiresAt, created_at=request.createdAt, revoked_at=None,
+            provisioned_by_operator_id=provisioned_by_operator_id, metadata_only=True, raw_payload_retained=False,
+        )
+        session.add(binding)
+        try:
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            if isinstance(exc, IntegrityError):
+                existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
+                if existing is not None and existing.revoked_at is None and _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=home, workspace=workspace):
+                    return existing
+            await _remove_unbound_bootstrapped_role_profile_roots(session, created_roots)
+            if isinstance(exc, IntegrityError):
+                raise ValueError("Role capability binding persistence conflict.") from exc
+            raise
+        return binding
 
 
 async def revoke_hermes_role_capability(session: AsyncSession, *, capability_binding_id: str, revoked_by_operator_id: str) -> HermesRoleCapabilityBinding:
@@ -972,6 +1021,16 @@ async def ingest_hermes_review_handoff(
         recovered_review_lane = current_event is not None and current_event.event_name == "hermes.lane.recovered" and outcome.status == lane.status == "review"
         eligible_verification = initial_verification or recovered_review_lane
         enter_review = verification.result == "passed" and initial_verification
+        if verification.result == "passed" and not eligible_verification:
+            prior_passed = await session.scalar(
+                select(HermesVerificationRecord.verification_record_id).where(
+                    HermesVerificationRecord.outcome_id == verification.outcomeId,
+                    HermesVerificationRecord.lane_run_id == verification.laneRunId,
+                    HermesVerificationRecord.result == "passed",
+                )
+            )
+            if prior_passed is not None:
+                raise ValueError("Passed verification cannot replace the existing ordinary review-lane verification.")
         if verification.result != "passed" and not eligible_verification:
             raise ValueError("Failed or inconclusive verification requires the initial active Developer lane.")
         if (not eligible_verification and (outcome.status != "review" or lane.status != "review")) or lane.evidence_fingerprint != verification.sourceFingerprint:
