@@ -3514,7 +3514,7 @@ function finishPr(argv) {
     manifest.updated_at = new Date().toISOString();
     appendTaskEvent(manifest, "pr_open", manifest.pr_url || manifest.branch);
     writeManifest(manifestPath, manifest);
-  });
+  }, { owner: currentLaneOwner(options) });
   console.log(`Finished task ${manifest.task_id}`);
   if (manifest.anti_churn_finalization) {
     for (const line of renderAntiChurnFinalization(manifest.anti_churn_finalization)) {

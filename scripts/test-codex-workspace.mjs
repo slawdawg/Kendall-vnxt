@@ -8612,6 +8612,24 @@ try {
     }
   });
 
+  test("finish-pr binds its lease to the explicit delivery owner", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: { ...fixture.env, CODEX_WORKSPACE_OWNER: "ambient-runner" } },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", "resumed-task", "generations");
+      const generations = leaseJsonRecordsForFixture(leaseRoot);
+      assert(generations.length === 1 && generations[0].owner === "runner-a", JSON.stringify(generations));
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("finish-pr records existing PR updates as gated delivery evidence", () => {
     const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
     try {
