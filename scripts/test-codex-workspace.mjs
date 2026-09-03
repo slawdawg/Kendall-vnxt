@@ -8528,7 +8528,7 @@ try {
     assert(result.stderr.includes("--take-ownership"), result.stderr || result.stdout);
   });
 
-  test("take-ownership requires an explicit reason before mutation", () => {
+  test("finish-pr rejects a foreign-owner takeover before missing-reason validation", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
     writeFileSync(
@@ -8553,8 +8553,11 @@ try {
       "--state-root",
       stateRoot,
     ]);
-    assert(result.code !== 0, "takeover without reason unexpectedly passed");
-    assert(result.stderr.includes("--takeover-reason must explain"), result.stderr || result.stdout);
+    assert(result.code !== 0, "foreign-owner finish-pr takeover unexpectedly passed");
+    assert(
+      result.stderr.includes("finish-pr cannot transfer a foreign lane owner"),
+      result.stderr || result.stdout,
+    );
   });
 
   test("finish-pr reconciles a clean resumed branch with existing commits", () => {
