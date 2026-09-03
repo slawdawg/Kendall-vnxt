@@ -269,6 +269,117 @@ async def test_role_capability_provisioning_canonicalizes_existing_profile_paths
 
 
 @pytest.mark.asyncio
+async def test_role_capability_provisioning_bootstraps_explicit_operator_profile_roots(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'bootstrapped-capability-paths.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    operator_home, operator_workspace = tmp_path / "operator-home", tmp_path / "operator-workspace"
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request = HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:operator-bootstrap", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "018f7f40-5f4d-7b8c-9d5e-6f7a8b9c0d1e", "home": str(operator_home), "workspace": str(operator_workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        assert not operator_home.exists() and not operator_workspace.exists()
+        binding = await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
+        assert operator_home.is_dir() and operator_workspace.is_dir()
+        assert (binding.identity, binding.home, binding.workspace) == (request.identity, str(operator_home.resolve()), str(operator_workspace.resolve()))
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_provisioning_rejects_symlinked_home_overlap_before_bootstrap(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'bootstrapped-capability-overlap.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    canonical_home, home_alias = tmp_path / "canonical-home", tmp_path / "home-alias"
+    canonical_home.mkdir(); home_alias.symlink_to(canonical_home, target_is_directory=True)
+    nested_workspace = canonical_home / "workspace"
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request = HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:operator-symlink-overlap", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "operator:one", "home": str(home_alias), "workspace": str(nested_workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        with pytest.raises(ValueError, match="disjoint"):
+            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
+        assert not nested_workspace.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_provisioning_rejects_root_resolving_profile_symlink(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'bootstrapped-capability-root-symlink.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    root_alias, operator_workspace = tmp_path / "root-alias", tmp_path / "operator-workspace"
+    root_alias.symlink_to("/", target_is_directory=True)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request = HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:operator-root-symlink", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "operator:one", "home": str(root_alias), "workspace": str(operator_workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        with pytest.raises(ValueError, match="cannot resolve to filesystem root"):
+            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
+        assert not operator_workspace.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_provisioning_does_not_bootstrap_conflicting_replay_roots(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-conflict-no-bootstrap.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    existing_home, existing_workspace = tmp_path / "existing-home", tmp_path / "existing-workspace"
+    rejected_home, rejected_workspace = tmp_path / "rejected-home", tmp_path / "rejected-workspace"
+    existing_home.mkdir(); existing_workspace.mkdir()
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        initial_data = {
+            "capabilityBindingId": "capability:conflicting-replay", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "operator:one", "home": str(existing_home), "workspace": str(existing_workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        }
+        await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(initial_data), provisioned_by_operator_id="operator:fixture")
+        conflict = HermesRoleCapabilityProvisionRequest.model_validate({**initial_data, "home": str(rejected_home), "workspace": str(rejected_workspace)})
+        with pytest.raises(ValueError, match="conflicts with persisted metadata"):
+            await provision_hermes_role_capability(session, conflict, provisioned_by_operator_id="operator:fixture")
+        assert not rejected_home.exists() and not rejected_workspace.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_provisioning_rolls_back_partial_bootstrap_failure(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-bootstrap-rollback.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    operator_home, operator_workspace = tmp_path / "operator-home", tmp_path / "operator-workspace"
+    original_mkdir = Path.mkdir
+
+    def fail_workspace_mkdir(path, *args, **kwargs):
+        if path == operator_workspace:
+            raise OSError("forced workspace bootstrap failure")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_workspace_mkdir)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request = HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:operator-bootstrap-rollback", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "operator:one", "home": str(operator_home), "workspace": str(operator_workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        with pytest.raises(OSError, match="forced workspace bootstrap failure"):
+            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
+        assert not operator_home.exists() and not operator_workspace.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_role_capability_provisioning_persists_created_at_and_fences_changed_replay(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-created-at.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
@@ -886,6 +997,12 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
             await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         old_lane.retry_budget = 1
         await session.commit()
+        expired_replacement = copy.deepcopy(recovery)
+        expired_at = datetime.now(timezone.utc).replace(microsecond=0)
+        expired_replacement["replacementLaneRun"]["staleDeadlineAt"] = expired_at.isoformat().replace("+00:00", "Z")  # type: ignore[index]
+        expired_replacement["replacementLaneRun"]["timeoutAt"] = (expired_at + timedelta(days=1)).isoformat().replace("+00:00", "Z")  # type: ignore[index]
+        with pytest.raises(ValueError, match="replacement lane is stale or timed out"):
+            await recover_hermes_technical_block(session, HermesTechnicalBlockRecoveryRequest.model_validate(expired_replacement), recovered_by_operator_id="operator:fixture")
         blocked_stale_evidence = copy.deepcopy(recovery)
         blocked_stale_evidence["replacementLaneRun"].update({"heartbeatAt": "2026-09-02T12:01:00Z", "observedAt": "2026-09-02T12:01:00Z", "createdAt": "2026-09-02T12:01:00Z", "updatedAt": "2026-09-02T12:01:00Z"})  # type: ignore[index]
         blocked_stale_evidence["deliveryEvidence"].update({"observedAt": "2026-09-02T12:01:00Z", "createdAt": "2026-09-02T12:01:00Z"})  # type: ignore[index]

@@ -332,6 +332,8 @@ async def recover_hermes_technical_block(
     event_id = f"event:technical-recovery:{sha256(request.idempotencyKey.encode('utf-8')).hexdigest()}"
     if await session.get(HermesLedgerEvent, event_id) is not None:
         raise ValueError("Technical-block recovery event identity already exists.")
+    if replacement.staleDeadlineAt <= datetime.now(UTC) or replacement.timeoutAt <= datetime.now(UTC):
+        raise ValueError("Technical-block recovery replacement lane is stale or timed out.")
     session.add(HermesLaneRun(
         lane_run_id=replacement.laneRunId, outcome_id=outcome.outcome_id, schema_version=replacement.schemaVersion,
         lane_type=replacement.laneType, status=replacement.status, result=replacement.result, reason_code=request.reasonCode,
@@ -431,6 +433,59 @@ def _canonical_role_profile(home: str, workspace: str) -> tuple[str, str]:
         raise ValueError("Role capability home and workspace must be existing canonical filesystem paths.") from exc
 
 
+def _planned_role_profile(home: str, workspace: str) -> tuple[Path, Path]:
+    """Validate the two explicit profile roots without creating either one."""
+    def requested_leaf(value: str) -> Path:
+        candidate = Path(value)
+        if not candidate.is_absolute() or candidate == Path("/"):
+            raise ValueError("Role capability home and workspace must be bounded absolute profile roots.")
+        if candidate.exists() or candidate.is_symlink():
+            try:
+                resolved = candidate.resolve(strict=True)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ValueError("Role capability profile roots must be existing canonical directories.") from exc
+            if not resolved.is_dir():
+                raise ValueError("Role capability profile roots must be existing canonical directories.")
+            if resolved == Path("/"):
+                raise ValueError("Role capability roots cannot resolve to filesystem root.")
+            return resolved
+        try:
+            parent = candidate.parent.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError("Role capability profile parent must already exist and be canonical.") from exc
+        if not parent.is_dir():
+            raise ValueError("Role capability profile parent must be a directory.")
+        return parent / candidate.name
+
+    requested_home, requested_workspace = requested_leaf(home), requested_leaf(workspace)
+    if _profiles_overlap(str(requested_home), str(requested_workspace)):
+        raise ValueError("Role capability home and workspace must be disjoint canonical roots.")
+    return requested_home, requested_workspace
+
+
+def _bootstrap_role_profile(home: str, workspace: str) -> tuple[str, str]:
+    """Create only already-validated explicit leaf roots, then retain canonical bindings."""
+    requested_home, requested_workspace = _planned_role_profile(home, workspace)
+    created_roots: list[Path] = []
+    try:
+        for root in (requested_home, requested_workspace):
+            if not root.exists():
+                try:
+                    root.mkdir(mode=0o700)
+                except FileExistsError:
+                    pass
+                else:
+                    created_roots.append(root)
+        return _canonical_role_profile(str(requested_home), str(requested_workspace))
+    except Exception:
+        for root in reversed(created_roots):
+            try:
+                root.rmdir()
+            except OSError:
+                pass
+        raise
+
+
 def _same_role_capability(existing: HermesRoleCapabilityBinding, request, digest: str, provisioned_by_operator_id: str, *, home: str, workspace: str) -> bool:
     return (existing.role, existing.outcome_id, existing.lane_run_id, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.expires_at, existing.created_at, existing.provisioned_by_operator_id) == (request.role, request.outcomeId, request.laneRunId, request.identity, home, workspace, digest, request.expiresAt, request.createdAt, provisioned_by_operator_id)
 
@@ -447,18 +502,17 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.laneRunId).with_for_update())
     if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
         raise ValueError("Role capability must bind an existing current outcome and lane.")
-    home, workspace = _canonical_role_profile(request.home, request.workspace)
-    if _profiles_overlap(home, workspace):
-        raise ValueError("Role capability home and workspace must be disjoint canonical roots.")
     if request.expiresAt <= datetime.now(UTC):
         raise ValueError("Role capability expiry must be in the future.")
+    planned_home, planned_workspace = _planned_role_profile(request.home, request.workspace)
     existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
     if existing is not None:
         if existing.revoked_at is not None:
             raise ValueError("Role capability binding is revoked; provision a distinct binding.")
-        if not _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=home, workspace=workspace):
+        if not _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=str(planned_home), workspace=str(planned_workspace)):
             raise ValueError("Role capability binding conflicts with persisted metadata.")
         return existing
+    home, workspace = _bootstrap_role_profile(str(planned_home), str(planned_workspace))
     binding = HermesRoleCapabilityBinding(
         capability_binding_id=request.capabilityBindingId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
         role=request.role, identity=request.identity, home=home, workspace=workspace,

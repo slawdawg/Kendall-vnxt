@@ -8350,7 +8350,9 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
     metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
     @field_validator("capabilityBindingId", "outcomeId", "laneRunId", "identity")
     @classmethod
-    def _opaque(cls, value: str) -> str:
+    def _opaque(cls, value: str, info) -> str:
+        if info.field_name == "identity" and info.data.get("role") == "operator" and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+            return value
         if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None: raise ValueError("Role capability identity must be opaque.")
         return value
     @field_validator("identity", "home", "workspace")
