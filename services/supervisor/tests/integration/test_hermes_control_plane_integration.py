@@ -1,5 +1,5 @@
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -314,6 +314,19 @@ async def test_role_capability_provisioning_rejects_canonical_overlap_and_expiry
                 "identity": "developer:expired", "home": str(independent_home), "workspace": str(independent_workspace), "capabilitySecret": "e" * 32,
                 "expiresAt": "2020-01-01T00:00:00Z", "createdAt": "2019-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
             })
+        future_created = (datetime.now(timezone.utc) + timedelta(minutes=6)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with pytest.raises(ValueError, match="creation cannot be materially future-dated"):
+            HermesRoleCapabilityProvisionRequest.model_validate({
+                "capabilityBindingId": "capability:future-created", "role": "developer", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+                "identity": "developer:future", "home": str(independent_home), "workspace": str(independent_workspace), "capabilitySecret": "f" * 32,
+                "expiresAt": "2099-01-01T00:00:00Z", "createdAt": future_created, "metadataOnly": True, "rawPayloadRetained": False,
+            })
+        with pytest.raises(ValueError, match="identity must be opaque"):
+            HermesRoleCapabilityProvisionRequest.model_validate({
+                "capabilityBindingId": "capability:opaque-identity", "role": "developer", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+                "identity": "Developer One", "home": str(independent_home), "workspace": str(independent_workspace), "capabilitySecret": "g" * 32,
+                "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+            })
     await engine.dispose()
 
 
@@ -348,7 +361,7 @@ async def _record_then_dispose(session, handoff):
 
 
 @pytest.mark.asyncio
-async def test_operator_capability_records_unavailable_reviewer_block_without_reviewer_proof(tmp_path):
+async def test_operator_capability_records_unavailable_reviewer_block_without_reviewer_proof(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'operator-unavailable-reviewer.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -369,6 +382,29 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
             "operatorCapabilityBindingId": "capability:operator", "operatorCapabilityProof": "o" * 32,
         }
         parsed = HermesReviewHandoffRequest.model_validate(request)
+        lane = await session.get(HermesLaneRun, "lane:1")
+        assert lane is not None
+        lane.stale_deadline_at = datetime.now(timezone.utc)
+        await session.commit()
+        with pytest.raises(ValueError, match="stale or timed-out"):
+            await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
+        lane.stale_deadline_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        await session.commit()
+        original_can_replace = hermes_outcomes.can_replace_current_result
+        replacement_checks = 0
+
+        def expire_lane_during_final_validation(*, previous, next_result):
+            nonlocal replacement_checks
+            replacement_checks += 1
+            if replacement_checks == 1:
+                lane.stale_deadline_at = datetime.now(timezone.utc)
+            return original_can_replace(previous=previous, next_result=next_result)
+
+        monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", expire_lane_during_final_validation)
+        with pytest.raises(ValueError, match="stale or timed-out"):
+            await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
+        monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", original_can_replace)
+        lane.stale_deadline_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
         projection = await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
         assert projection.currentResult == "blockedTechnical"
         requirement = await session.get(HermesUnavailableReviewerRequirement, "block:operator-unavailable")
@@ -682,6 +718,8 @@ async def test_hermes_review_handoff_replays_legacy_unavailable_exception_digest
         stored.request_digest_sha256 = legacy_digest
         await session.commit()
         assert await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture") == first
+        with pytest.raises(ValueError, match="exception recorder conflicts"):
+            await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:other")
     await engine.dispose()
 
 
@@ -786,8 +824,16 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
             HermesTechnicalBlockRecoveryRequest.model_validate(pre_update_evidence)
         unbound_evidence = copy.deepcopy(recovery)
         unbound_evidence["replacementLaneRun"]["evidenceRefs"] = ["evidence:other"]  # type: ignore[index]
-        with pytest.raises(ValueError, match="delivery evidence"):
+        with pytest.raises(ValueError, match="exactly its delivery evidence"):
             HermesTechnicalBlockRecoveryRequest.model_validate(unbound_evidence)
+        unresolved_evidence = copy.deepcopy(recovery)
+        unresolved_evidence["replacementLaneRun"]["evidenceRefs"] = ["evidence:replacement-1", "evidence:unresolved"]  # type: ignore[index]
+        with pytest.raises(ValueError, match="exactly its delivery evidence"):
+            HermesTechnicalBlockRecoveryRequest.model_validate(unresolved_evidence)
+        oversized_correlation = copy.deepcopy(recovery)
+        oversized_correlation["idempotencyKey"] = f"recovery:{'a' * 112}"  # type: ignore[index]
+        with pytest.raises(ValueError):
+            HermesTechnicalBlockRecoveryRequest.model_validate(oversized_correlation)
         request = HermesTechnicalBlockRecoveryRequest.model_validate(recovery)
         mismatched_metadata = copy.deepcopy(recovery); mismatched_metadata["replacementLaneRun"]["reasonCode"] = "different_reason"  # type: ignore[index]
         with pytest.raises(ValueError, match="reason and next action"):
@@ -815,6 +861,11 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
             await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         old_lane.retry_budget = 1
         await session.commit()
+        blocked_stale_evidence = copy.deepcopy(recovery)
+        blocked_stale_evidence["replacementLaneRun"].update({"heartbeatAt": "2026-09-02T12:01:00Z", "observedAt": "2026-09-02T12:01:00Z", "createdAt": "2026-09-02T12:01:00Z", "updatedAt": "2026-09-02T12:01:00Z"})  # type: ignore[index]
+        blocked_stale_evidence["deliveryEvidence"].update({"observedAt": "2026-09-02T12:01:00Z", "createdAt": "2026-09-02T12:01:00Z"})  # type: ignore[index]
+        with pytest.raises(ValueError, match="predates the blocked projection"):
+            await recover_hermes_technical_block(session, HermesTechnicalBlockRecoveryRequest.model_validate(blocked_stale_evidence), recovered_by_operator_id="operator:fixture")
         projection = await recover_hermes_technical_block(session, request, recovered_by_operator_id="operator:fixture")
         assert projection.currentLaneRunId == "lane:replacement-1" and projection.currentResult == "retryable"
         old_lane = await session.get(HermesLaneRun, "lane:1")
@@ -835,7 +886,7 @@ async def test_hermes_technical_block_recovery_replaces_not_reopens_the_blocked_
 
 
 @pytest.mark.asyncio
-async def test_passed_verification_cannot_replace_terminal_result_or_future_date(tmp_path):
+async def test_passed_verification_cannot_replace_terminal_result_or_future_date(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'verification-terminal-time.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -849,6 +900,39 @@ async def test_passed_verification_cannot_replace_terminal_result_or_future_date
         await session.commit()
         with pytest.raises(ValueError, match="terminal ledger transition"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
+    await engine.dispose()
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'verification-expired-deadline.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await _seed_review_lane(session)
+        handoff = review_handoff()
+        await _provision_two_roles(session, handoff)
+        request = HermesReviewHandoffRequest.model_validate(_developer_request(handoff))
+        first = await ingest_hermes_review_handoff(session, request)
+        lane = await session.get(HermesLaneRun, "lane:1")
+        assert lane is not None
+        lane.stale_deadline_at = datetime.now(timezone.utc)
+        await session.commit()
+        original_replay = hermes_outcomes._replay_verification
+        replay_calls = 0
+
+        async def replay_after_lock(*args, **kwargs):
+            nonlocal replay_calls
+            replay_calls += 1
+            if replay_calls == 1:
+                return None
+            return await original_replay(*args, **kwargs)
+
+        monkeypatch.setattr(hermes_outcomes, "_replay_verification", replay_after_lock)
+        replayed = await ingest_hermes_review_handoff(session, request)
+        assert (replayed.currentLaneRunId, replayed.currentResult, replayed.lifecycle) == (first.currentLaneRunId, first.currentResult, first.lifecycle)
+        stale_new = _developer_request(handoff)
+        stale_new["verification"]["verificationRecordId"] = "verification:stale-new"  # type: ignore[index]
+        stale_new["verification"]["idempotencyKey"] = "verification:stale-new"  # type: ignore[index]
+        with pytest.raises(ValueError, match="stale or timed-out"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(stale_new))
     await engine.dispose()
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'verification-future-time.db'}")

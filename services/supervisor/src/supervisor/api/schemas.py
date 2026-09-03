@@ -8348,7 +8348,7 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
     capabilitySecret: str = Field(min_length=24, max_length=512)
     expiresAt: datetime; createdAt: datetime
     metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
-    @field_validator("capabilityBindingId", "outcomeId", "laneRunId")
+    @field_validator("capabilityBindingId", "outcomeId", "laneRunId", "identity")
     @classmethod
     def _opaque(cls, value: str) -> str:
         if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None: raise ValueError("Role capability identity must be opaque.")
@@ -8363,8 +8363,11 @@ class HermesRoleCapabilityProvisionRequest(BaseModel):
     def _valid(self):
         if self.expiresAt <= self.createdAt or len({self.identity, self.home, self.workspace}) != 3:
             raise ValueError("Role capability has invalid binding or expiry.")
-        if self.expiresAt <= datetime.now(timezone.utc):
+        now = datetime.now(timezone.utc)
+        if self.expiresAt <= now:
             raise ValueError("Role capability expiry must be in the future.")
+        if self.createdAt > now + timedelta(minutes=5):
+            raise ValueError("Role capability creation cannot be materially future-dated.")
         return self
 
 
@@ -8391,7 +8394,7 @@ class HermesTechnicalBlockRecoveryRequest(BaseModel):
     replacementLaneRun: HermesLaneRunInputV1; deliveryEvidence: HermesDeliveryEvidenceInputV1
     expectedOutcomeRevision: int = Field(ge=1); expectedBlockedLaneRevision: int = Field(ge=1)
     reasonCode: str = Field(max_length=120); nextAction: str = Field(max_length=360)
-    observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime
+    observedAt: datetime; idempotencyKey: str = Field(max_length=120); createdAt: datetime
     metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
     @field_validator("outcomeId", "blockedLaneRunId", "reasonCode", "nextAction", "idempotencyKey")
     @classmethod
@@ -8416,8 +8419,8 @@ class HermesTechnicalBlockRecoveryRequest(BaseModel):
             raise ValueError("Technical-block recovery must create a distinct review/retryable replacement lane.")
         if (lane.reasonCode, lane.nextAction) != (self.reasonCode, self.nextAction):
             raise ValueError("Technical-block recovery replacement reason and next action must match the authoritative request.")
-        if evidence.deliveryEvidenceId not in lane.evidenceRefs:
-            raise ValueError("Technical-block recovery replacement lane must cite its delivery evidence.")
+        if lane.evidenceRefs != [evidence.deliveryEvidenceId]:
+            raise ValueError("Technical-block recovery replacement lane must cite exactly its delivery evidence.")
         if evidence.observedAt > self.observedAt:
             raise ValueError("Technical-block recovery evidence cannot postdate its decision.")
         now = datetime.now(timezone.utc)

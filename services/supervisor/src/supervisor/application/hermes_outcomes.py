@@ -131,6 +131,12 @@ async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[
         raise ValueError("Review evidence must resolve to the current bound outcome and Developer lane revision.")
 
 
+def _require_live_handoff_lane(lane: HermesLaneRun) -> None:
+    now = datetime.now(UTC)
+    if lane.stale_deadline_at <= now or lane.timeout_at <= now:
+        raise ValueError("Review handoff cannot mutate a stale or timed-out Developer lane.")
+
+
 def _outcome_values(request: HermesLedgerIngestRequest) -> dict[str, object]:
     value = request.outcome
     return {"status": value.status, "result": value.result, "reason_code": value.reasonCode, "evidence_refs_json": value.evidenceRefs, "next_action": value.nextAction, "observed_at": value.observedAt, "current_event_id": request.event.eventId, "updated_at": value.updatedAt}
@@ -313,6 +319,8 @@ async def recover_hermes_technical_block(
     if request.observedAt < max(outcome.updated_at, blocked_lane.updated_at):
         raise ValueError("Technical-block recovery predates the blocked projection.")
     replacement, evidence = request.replacementLaneRun, request.deliveryEvidence
+    if evidence.observedAt < max(outcome.updated_at, blocked_lane.updated_at):
+        raise ValueError("Technical-block recovery evidence predates the blocked projection.")
     if replacement.reworkBudget != blocked_lane.rework_budget:
         raise ValueError("Technical-block recovery cannot replenish the blocked lane budget.")
     if blocked_lane.retry_budget <= 0:
@@ -621,7 +629,7 @@ async def _replay_verification(
 
 
 async def _replay_disposition(
-    session: AsyncSession, disposition, digests: set[str],
+    session: AsyncSession, disposition, digests: set[str], *, authenticated_recorder_id: str | None = None,
 ) -> HermesOutcomeProjectionV1 | None:
     prior = await session.scalar(
         select(HermesReviewDisposition)
@@ -632,6 +640,8 @@ async def _replay_disposition(
         return None
     if prior.review_disposition_id != disposition.reviewDispositionId or prior.request_digest_sha256 not in digests:
         raise ValueError("Review disposition idempotency key conflicts with persisted metadata.")
+    if authenticated_recorder_id is not None and prior.exception_requirement_json is not None and prior.exception_requirement_json.get("recordedBy") != authenticated_recorder_id:
+        raise ValueError("Review disposition exception recorder conflicts with persisted metadata.")
     outcome = await session.get(HermesOutcome, prior.outcome_id)
     if outcome is None:
         raise ValueError("Persisted review disposition lacks its ledger projection.")
@@ -702,6 +712,7 @@ async def ingest_hermes_review_handoff(
             return replay
         if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
             raise ValueError("Unavailable-reviewer block requires the current bound outcome and Developer lane.")
+        _require_live_handoff_lane(lane)
         if exception.reviewBy <= datetime.now(UTC):
             raise ValueError("Unavailable-reviewer exception expired before persistence.")
         record = await session.scalar(select(HermesVerificationRecord).where(HermesVerificationRecord.idempotency_key == verification.idempotencyKey).with_for_update())
@@ -730,6 +741,9 @@ async def ingest_hermes_review_handoff(
         )
         if not can_replace_current_result(previous=outcome.result, next_result="blockedTechnical") or not can_replace_current_result(previous=lane.result, next_result="blockedTechnical"):
             raise ValueError("Unavailable-reviewer block cannot overwrite a terminal ledger transition.")
+        # The validation above can span awaits; fence the live deadline again
+        # directly before admitting the new blocked transition.
+        _require_live_handoff_lane(lane)
         event_id = f"event:unavailable-reviewer:{sha256(block.unavailableReviewerBlockId.encode('utf-8')).hexdigest()}"
         session.add(HermesLedgerEvent(
             event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id,
@@ -804,6 +818,7 @@ async def ingest_hermes_review_handoff(
         )
         if replay is not None:
             return replay
+        _require_live_handoff_lane(lane)
         if (outcome.revision, lane.revision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision):
             raise ValueError("Verification result revision is stale.")
         initial_verification = outcome.status == "active" and lane.status == "running"
@@ -816,7 +831,9 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Verification evidence predates the current ledger projection.")
         if verification.observedAt > datetime.now(UTC) + timedelta(minutes=5):
             raise ValueError("Verification evidence cannot be materially future-dated.")
-        await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane, decision_at=verification.observedAt)
+        current_event = await session.get(HermesLedgerEvent, outcome.current_event_id)
+        carry_forward_recovery_evidence = current_event is not None and current_event.event_name == "hermes.lane.recovered" and verification.evidenceRefs == lane.evidence_refs_json
+        await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane, decision_at=verification.observedAt, require_current_projection=not carry_forward_recovery_evidence)
         if verification.result == "passed":
             if not can_replace_current_result(previous=outcome.result, next_result="retryable") or not can_replace_current_result(previous=lane.result, next_result="retryable"):
                 raise ValueError("Verification result cannot overwrite a terminal ledger transition.")
@@ -869,7 +886,7 @@ async def ingest_hermes_review_handoff(
     reviewer_capability = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, secret=request.reviewerCapabilityProof, role="reviewer", outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId, identity=disposition.reviewerIdentity, home=disposition.reviewerHome, workspace=disposition.reviewerWorkspace, lock=True)
     digest = _handoff_digest(request)
     replay_digests = _handoff_replay_digests(request) | _handoff_replay_digests(raw_request)
-    replay = await _replay_disposition(session, disposition, replay_digests)
+    replay = await _replay_disposition(session, disposition, replay_digests, authenticated_recorder_id=authenticated_recorder_id)
     if replay is not None:
         return replay
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
@@ -880,9 +897,10 @@ async def ingest_hermes_review_handoff(
         raise ValueError("Review handoff requires an existing bound outcome and Developer lane.")
     # A concurrent exact handoff can commit while this request waits for the
     # projection locks. Recheck under those locks before examining state.
-    replay = await _replay_disposition(session, disposition, replay_digests)
+    replay = await _replay_disposition(session, disposition, replay_digests, authenticated_recorder_id=authenticated_recorder_id)
     if replay is not None:
         return replay
+    _require_live_handoff_lane(lane)
     if outcome.current_event_id != lane.current_event_id:
         raise ValueError("Review handoff lane is no longer current for its outcome.")
     if outcome.status != "review" or lane.status != "review":
@@ -972,7 +990,7 @@ async def ingest_hermes_review_handoff(
         else: await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        replay = await _replay_disposition(session, disposition, replay_digests)
+        replay = await _replay_disposition(session, disposition, replay_digests, authenticated_recorder_id=authenticated_recorder_id)
         if replay is not None:
             return replay
         raise ValueError("Review handoff persistence conflict.") from exc

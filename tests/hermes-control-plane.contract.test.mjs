@@ -231,6 +231,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesLifecycleEventV1(verificationEvent), false);
     assert.equal(contracts.isHermesLifecycleEventV1(unavailableReviewerBlockEvent), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition, ...reviewerCapability }), true);
+    assert.equal(contracts.isReviewHandoffV1({ verification, disposition, unavailableReviewerException: null, unavailableReviewerBlock: null, developerCapabilityBindingId: null, developerCapabilityProof: null, operatorCapabilityBindingId: null, operatorCapabilityProof: null, ...reviewerCapability }), true);
     const overlongVerificationId = `verification:${"a".repeat(108)}`;
     const overlongDispositionId = `review:${"a".repeat(114)}`;
     assert.equal(contracts.isReviewHandoffV1({ verification: { ...verification, verificationRecordId: overlongVerificationId }, ...developerCapability }), false);
@@ -249,6 +250,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), true);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException: { ...unavailableReviewerException, recordedAt: "2026-08-27T23:59:59Z" }, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: operatorUnavailableReviewerBlock, ...operatorCapability, reviewerCapabilityProof: "r".repeat(32) }), false);
+    assert.equal(contracts.isReviewHandoffV1({ verification, unavailableReviewerException, unavailableReviewerBlock: { ...operatorUnavailableReviewerBlock, evidenceRefs: Array.from({ length: 26 }, (_, index) => `evidence:${index}`) }, ...operatorCapability }), false);
     assert.equal(contracts.isReviewHandoffV1({ verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, exceptionId: "not opaque" }, ...reviewerCapability }), false);
     assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, eventName: "hermes.review.disposition.recorded" }), false);
     assert.equal(contracts.isHermesBoardLifecycleEventV1({ ...boardEvent, issuerId: "tenant:job:attempt" }), true);
@@ -314,6 +316,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["proofless verification-only handoff", { verification }, contracts.isReviewHandoffV1],
       ["short capability proof", { verification, ...developerCapability, developerCapabilityProof: "d".repeat(23) }, contracts.isReviewHandoffV1],
       ["oversized capability binding", { verification, ...developerCapability, developerCapabilityBindingId: `capability:${"a".repeat(121)}` }, contracts.isReviewHandoffV1],
+      ["oversized verification idempotency", { verification: { ...verification, idempotencyKey: `idempotency:${"a".repeat(169)}` }, ...developerCapability }, contracts.isReviewHandoffV1],
+      ["oversized disposition idempotency", { verification, disposition: { ...disposition, idempotencyKey: `idempotency:${"a".repeat(169)}` }, ...reviewerCapability }, contracts.isReviewHandoffV1],
       ["passed verification-only handoff with an exception", { verification, unavailableReviewerException, ...developerCapability }, contracts.isReviewHandoffV1],
       ["unavailable reviewer exception without a future review point", { verification, disposition: { ...disposition, disposition: "technical_block" }, unavailableReviewerException: { ...unavailableReviewerException, reviewOrExpiryAt: unavailableReviewerException.recordedAt }, ...reviewerCapability }, contracts.isReviewHandoffV1],
       ["review instant before verification", { verification: { ...verification, observedAt: "2026-08-28T00:00:00.100Z", createdAt: "2026-08-28T00:00:00.100Z" }, disposition: { ...disposition, observedAt, createdAt: observedAt } }, contracts.isReviewHandoffV1],
