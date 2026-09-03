@@ -7087,6 +7087,95 @@ try {
     }
   });
 
+  test("takeover apply recovers a released idle dirty lane only through its exact recorded source PR", () => {
+    const fixture = createDirtyTakeoverFixture("released-source-pr", { sourcePr: true });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "reviewed delivery repair\n");
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "runner-b",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      releaseFixtureTaskLease(fixture, lease);
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
+      const evidence = manifest.takeover_decisions.at(-1).dirty_in_lane_evidence;
+      assert(manifest.owner === "runner-a", "released source-PR recovery did not transfer ownership");
+      assert(evidence.released_source_pr_recovery?.status === "eligible", JSON.stringify(evidence));
+      assert(evidence.live_source_pr_evidence?.status === "matched", JSON.stringify(evidence));
+      assert(evidence.live_no_pr_evidence === undefined, JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover apply recovers an exact released source PR through its bounded epoch successor", () => {
+    const fixture = createDirtyTakeoverFixture("released-source-pr-epoch", { sourcePr: true });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "reviewed delivery repair after lease rollover\n");
+      const leaseRoot = writeFixtureTaskLeaseChain(fixture, 64, { taskId: fixture.taskId });
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(readFixtureDirtyTakeoverManifest(fixture).owner === "runner-a", "epoch source-PR recovery did not transfer ownership");
+      assert(leaseJsonRecordsForFixture(join(leaseRoot, "epochs")).length === 1, "source-PR recovery did not retain its bounded epoch successor");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover apply rejects a released dirty lane when the recorded source PR head differs", () => {
+    const fixture = createDirtyTakeoverFixture("released-source-pr-head-mismatch", {
+      sourcePr: { headRefOid: "f".repeat(40) },
+    });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "must not cross PR heads\n");
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "runner-b",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      releaseFixtureTaskLease(fixture, lease);
+      const before = readFileSync(fixture.manifestPath, "utf8");
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "mismatched source PR head unexpectedly transferred ownership");
+      assert(result.stdout.includes("source-PR proof does not exactly match"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "mismatched source PR head mutated ownership");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover apply rejects a released dirty lane when its source PR is cross-repository", () => {
+    const fixture = createDirtyTakeoverFixture("released-source-pr-cross-repository", {
+      sourcePr: { isCrossRepository: true },
+    });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "must not adopt fork PR work\n");
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "runner-b",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      releaseFixtureTaskLease(fixture, lease);
+      const before = readFileSync(fixture.manifestPath, "utf8");
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "cross-repository source PR unexpectedly transferred ownership");
+      assert(result.stdout.includes("source-PR proof does not exactly match"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "cross-repository source PR mutated ownership");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
   test("legacy zero-byte dirty lock remains inspection-only even with approval", () => {
     const fixture = createDirtyTakeoverFixture("story-36-5-zero-byte-lock");
     try {
@@ -7670,6 +7759,38 @@ try {
     }
   });
 
+  test("takeover dirty-lane path detects an unlisted hidden assume-unchanged edit", () => {
+    const fixture = createDirtyTakeoverFixture("unlisted-hidden-index-edit");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "reviewed path\n");
+      runGit(fixture.worktree, ["update-index", "--assume-unchanged", "tracked.txt"]);
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "unlisted hidden mutation\n");
+      const before = readFileSync(fixture.manifestPath, "utf8");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "dirty takeover unexpectedly accepted an unlisted hidden index edit");
+      assert(result.stdout.includes("hidden assume-unchanged or skip-worktree edit differs from the index"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "unlisted hidden index edit mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
+  test("takeover dirty-lane path detects an unlisted combined hidden-index edit", () => {
+    const fixture = createDirtyTakeoverFixture("unlisted-combined-hidden-index-edit");
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "reviewed path\n");
+      runGit(fixture.worktree, ["update-index", "--assume-unchanged", "--skip-worktree", "tracked.txt"]);
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "unlisted combined hidden mutation\n");
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "dirty takeover unexpectedly accepted an unlisted combined hidden index edit");
+      assert(result.stdout.includes("hidden assume-unchanged or skip-worktree edit differs from the index"), result.stderr || result.stdout);
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
   test("takeover dirty-lane path detects hidden skip-worktree edits", () => {
     const fixture = createDirtyTakeoverFixture("hidden-skip-worktree-edit");
     try {
@@ -7987,6 +8108,27 @@ try {
       assert(!result.stdout.includes("pnpm run check:fast"), result.stdout);
       assert(result.stdout.includes("anti-churn hook evaluate --apply-safe --format json"), result.stdout);
       assert(result.stdout.includes("git push -u origin"), result.stdout);
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rejects a foreign-owner takeover before delivery readiness", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.owner = "runner-b";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = runFixtureScript(fixture, [
+        "finish-pr", "resumed-task", "--dry-run", "--no-verify", "--take-ownership",
+        "--takeover-reason", "attempted foreign delivery bypass", "--owner", "runner-a",
+        "--state-root", fixture.stateRoot,
+      ]);
+
+      assert(result.code !== 0, "finish-pr unexpectedly transferred a foreign owner");
+      assert(result.stderr.includes("finish-pr cannot transfer a foreign lane owner"), result.stderr || result.stdout);
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -10289,7 +10431,7 @@ try {
   test("finish-pr applies exact supervisor leaf budgets and retains fail-closed timeout delivery fences", () => {
     for (const { timeoutStage, expectedTimeoutMs } of [
       { timeoutStage: "test:supervisor:check:integration:orchestrator-fake-workers", expectedTimeoutMs: 170_000 },
-      { timeoutStage: "test:supervisor:check:integration:work-packets-01", expectedTimeoutMs: 200_000 },
+      { timeoutStage: "test:supervisor:check:integration:work-packets-01", expectedTimeoutMs: 220_000 },
     ]) {
       const fixture = createFinishPrExistingCommitFixture();
       const stages = supervisorCheckLeaves;
@@ -10323,7 +10465,7 @@ try {
   test("finish-pr validates retained supervisor markers against their exact leaf budget", () => {
     for (const { stage, timeoutMs, valid } of [
       { stage: "test:supervisor:check:integration:orchestrator-fake-workers", timeoutMs: 170_000, valid: true },
-      { stage: "test:supervisor:check:integration:work-packets-01", timeoutMs: 200_000, valid: true },
+      { stage: "test:supervisor:check:integration:work-packets-01", timeoutMs: 220_000, valid: true },
       { stage: "test:supervisor:check:integration:work-packets-01", timeoutMs: 170_000, valid: false },
     ]) {
       const fixture = createFinishPrExistingCommitFixture();
@@ -22248,7 +22390,7 @@ function seedFixtureExactFullExternalHistory(leaseRoot, metadata, options = {}) 
 
 function writeFixtureTaskLeaseChain(fixture, length, options = {}) {
   assert(Number.isInteger(length) && length >= 1, "fixture lease chain requires at least one generation");
-  const taskId = "resumed-task";
+  const taskId = options.taskId || "resumed-task";
   const leaseRoot = join(fixture.stateRoot, "tasks", ".leases", taskId);
   const generations = Array.from({ length }, (_, index) => fixtureTaskLeaseMetadata(taskId, {
     generation: fixtureLeaseUuid("1", index + 1),
@@ -24714,6 +24856,17 @@ function createDirtyTakeoverFixture(name, options = {}) {
   runGit(root, ["add", "tracked.txt", "scripts"]);
   runGit(root, ["commit", "-q", "-m", "fixture base"]);
   runGit(root, ["checkout", "-q", "-b", branch]);
+  const sourcePr = options.sourcePr
+    ? {
+        number: options.sourcePr?.number || 91,
+        url: options.sourcePr?.url || "https://github.example.test/owner/repo/pull/91",
+        state: options.sourcePr?.state || "OPEN",
+        baseRefName: options.sourcePr?.baseRefName || "main",
+        headRefName: options.sourcePr?.headRefName || branch,
+        headRefOid: options.sourcePr?.headRefOid || runGit(root, ["rev-parse", "HEAD"]).stdout.trim(),
+        isCrossRepository: options.sourcePr?.isCrossRepository === true,
+      }
+    : null;
   mkdirSync(tasksDir, { recursive: true });
   const heartbeat = options.heartbeat === undefined ? "2026-06-21T00:00:00.000Z" : options.heartbeat;
   const manifest = {
@@ -24725,6 +24878,8 @@ function createDirtyTakeoverFixture(name, options = {}) {
     owner: "runner-b",
     owner_updated_at: heartbeat,
     ...(heartbeat ? { last_heartbeat_at: heartbeat } : {}),
+    pr_url: sourcePr?.url || null,
+    pr_number: sourcePr?.number || null,
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   mkdirSync(fakeBin, { recursive: true });
@@ -24758,7 +24913,7 @@ function createDirtyTakeoverFixture(name, options = {}) {
       CODEX_WORKSPACE_TEST_MODE: "1",
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
       PATH: `${fakeBin}:${process.env.PATH || ""}`,
-      CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: options.prListJson || "[]",
+      CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: options.prListJson || JSON.stringify(sourcePr ? [sourcePr] : []),
     },
   };
 }
@@ -24788,6 +24943,18 @@ function dirtyTakeoverArgs(fixture, dirtyPaths) {
     "--state-root",
     fixture.stateRoot,
   ];
+}
+
+function releaseFixtureTaskLease(fixture, metadata) {
+  const tokenDigest = createHash("sha256").update(metadata.token).digest("hex");
+  const releasePath = join(fixture.stateRoot, "tasks", ".leases", metadata.task_id, "releases", `${metadata.generation}.json`);
+  writeFileSync(releasePath, `${JSON.stringify({
+    schema_version: 1,
+    task_id: metadata.task_id,
+    generation: metadata.generation,
+    token_digest: tokenDigest,
+    released_at: "2026-07-26T00:01:00.000Z",
+  })}\n`);
 }
 
 function readFixtureDirtyTakeoverManifest(fixture) {

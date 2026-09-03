@@ -400,6 +400,19 @@ This authority is recorded at the repository-policy level and does not require
 repeated lane-specific approval prompts after the worker has proven the normal
 scope, verification, review, and delivery gates.
 
+The operator also durably authorizes a worker to recover an ordinary delivery
+deadlock for its own released, idle lane. A worker may repair the directly
+blocking control-plane code and take over that lane without a further per-lane
+prompt only when all of the following are recorded: the lease is explicitly
+released and has no live intent or heartbeat; the task, manifest, worktree,
+branch, repository, and recorded PR agree; the dirty paths are the reviewed
+in-lane paths; and the takeover reason is bound to that evidence. The recovery
+must establish manifest ownership before delivery readiness and retain normal
+verification, review, push, and PR gates. It must fail closed for active or
+ambiguous owners, retained locks, cross-task/repository/PR cases, unreviewed
+dirty paths, force-pushes, history rewrites, cleanup, or merge. This authority
+is intended to remove routine delivery babysitting, not to bypass safety gates.
+
 The authority does not permit manager-local source or delivery mutations,
 force-pushes, bypassing failed checks or unresolved review threads, unrelated
 repositories or base branches, secret/provider/deployment changes, destructive
@@ -674,12 +687,16 @@ surface is `node ./scripts/codex-workspace.mjs`.
   runner, do not mutate that lane unless the operator confirms the other session
   is idle; only then pass `--take-ownership --takeover-reason "<reason>"` and
   record the previous owner.
-- A dirty foreign-owned lane stays blocked by default. Use the exceptional
+- A dirty foreign-owned lane stays blocked by default. The exceptional
   `takeover --allow-dirty-in-lane --dirty-paths <exact,relative,paths>` route
-  only after explicit operator approval is recorded in `--approval`, and only
-  when its stale-owner, exact manifest/worktree/branch, no-PR, no-retained-lock,
-  and stable path-fingerprint gates all pass. It transfers ownership evidence
-  only; it must not commit, reset, clean up, copy files, or perform GitHub work.
+  may use the durable released-idle delivery authority above rather than a new
+  per-lane prompt only when its release/idle, exact
+  manifest/worktree/branch/repository, stable-path-fingerprint, no-retained-lock,
+  and recorded-source-PR-match gates all pass. A recorded PR is permitted only
+  when it is the lane's own same-repository PR; a different, missing, or
+  ambiguous PR remains a stop line. The command records the authority basis,
+  prior owner, exact paths, and takeover reason, establishes ownership only,
+  and must not commit, reset, clean up, copy files, or perform GitHub work.
 - When the operator says "finish this as a PR", run the smallest relevant verification,
   then use `node ./scripts/codex-workspace.mjs finish-pr --verify scoped` from the task
   worktree or pass a task query from another worktree. Stage intended files

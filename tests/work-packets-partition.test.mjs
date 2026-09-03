@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { partitionWorkPacketNodeIds, waitForWorkPacketPartition, WORK_PACKET_COLLECTION_TIMEOUT_MS } from "../scripts/run-work-packets-partition.mjs";
@@ -30,4 +31,11 @@ test("work-packets collection and child launch are bounded and fail closed", asy
   const success = waitForWorkPacketPartition(exit);
   exit.emit("exit", 0);
   assert.equal(await success, 0);
+});
+
+test("work-packets partition guard is selected by the required fast CI profile", () => {
+  const fastWorkflow = readFileSync("scripts/run-fast-workflow-checks.mjs", "utf8");
+  const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+  assert.equal(packageScripts["test:work-packets-partition"], "node --test tests/work-packets-partition.test.mjs");
+  assert.match(fastWorkflow, /"test:work-packets-partition"/);
 });

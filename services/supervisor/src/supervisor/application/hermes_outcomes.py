@@ -567,7 +567,15 @@ def _bootstrap_role_profile(home: str, workspace: str, *, runtime_root: str | No
                 else:
                     created_roots.append(root)
         canonical_home, canonical_workspace = _canonical_role_profile(str(requested_home), str(requested_workspace))
-        return canonical_home, canonical_workspace, created_roots
+        # A same-UID process can win the absent-leaf mkdir race with a symlink.
+        # Reapply runtime containment, privacy, and disjoint-root validation to
+        # the final canonical paths before they can be persisted in a binding.
+        final_home, final_workspace = _planned_role_profile(
+            canonical_home,
+            canonical_workspace,
+            runtime_root=runtime_root,
+        )
+        return str(final_home), str(final_workspace), created_roots
     except Exception:
         _remove_bootstrapped_role_profile_roots(created_roots)
         raise

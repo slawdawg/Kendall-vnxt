@@ -207,6 +207,7 @@
     "test:clean-install-boundary": "node --test tests/clean-install-boundary.test.mjs",
     "test:knx-obsidian-memory": "node --test tests/knx-obsidian-memory.test.mjs",
     "test:work-packet-contracts": "node --test tests/work-packet-contracts.test.mjs",
+    "test:work-packets-partition": "node --test tests/work-packets-partition.test.mjs",
     "test:work-packet-stage-map": "node --test tests/work-packet-stage-map.test.mjs",
     "test:work-packet-fixtures": "node --test tests/work-packet-fixtures.test.mjs",
     "test:pipeline-state-matrix": "node --test tests/pipeline-state-fixture-matrix.test.mjs",

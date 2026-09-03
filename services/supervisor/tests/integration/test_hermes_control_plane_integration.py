@@ -459,6 +459,24 @@ async def test_role_capability_provisioning_rejects_root_resolving_profile_symli
     await engine.dispose()
 
 
+def test_role_capability_bootstrap_revalidates_a_home_replaced_by_symlink_after_mkdir_race(tmp_path, monkeypatch):
+    runtime_root, profiles_root, workspace_root = tmp_path / "runtime", tmp_path / "runtime" / "profiles", tmp_path / "workspace"
+    runtime_root.mkdir(mode=0o700); profiles_root.mkdir(mode=0o700); workspace_root.mkdir(mode=0o700)
+    home, workspace, outside_home = profiles_root / "operator-home", workspace_root / "operator-workspace", tmp_path / "outside-home"
+    workspace.mkdir(mode=0o700); outside_home.mkdir(mode=0o700)
+    original_mkdir = Path.mkdir
+
+    def replace_home_with_symlink(self, *args, **kwargs):
+        if self == home:
+            home.symlink_to(outside_home, target_is_directory=True)
+            raise FileExistsError
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", replace_home_with_symlink)
+    with pytest.raises(ValueError, match="inside the configured runtime root"):
+        hermes_outcomes._bootstrap_role_profile(str(home), str(workspace), runtime_root=str(runtime_root))
+
+
 @pytest.mark.asyncio
 async def test_role_capability_provisioning_does_not_bootstrap_conflicting_replay_roots(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-conflict-no-bootstrap.db'}")

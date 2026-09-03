@@ -10,6 +10,7 @@ const suites = {
     "test:ci-promotion-packet",
     "test:ci-evidence-command",
     "test:ci-promotion-observations",
+    "test:work-packets-partition",
   ],
   workspace: [
     "test:codex-workspace-state",
