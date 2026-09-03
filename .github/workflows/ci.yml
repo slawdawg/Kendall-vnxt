@@ -180,9 +180,6 @@ jobs:
           set -euo pipefail
           evidence_dir="${RUNNER_TEMP}/ci-command-evidence"
           command=(pnpm run ${{ matrix.shard.script }})
-          if [ "${{ matrix.shard.id }}" = "integration-work-packets" ]; then
-            command+=(-- --timeout-ms=210000)
-          fi
           node ./scripts/run-ci-evidence-command.mjs \
             --report "$evidence_dir/supervisor-${{ matrix.shard.id }}.json" \
             --route proposed \

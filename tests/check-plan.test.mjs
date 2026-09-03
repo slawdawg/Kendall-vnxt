@@ -190,15 +190,18 @@ test("CI outputs route static only when the planner requires full static", () =>
   assert.equal(supervisor.javascript, false);
   assert.equal(supervisor.supervisor, true);
   assert.deepEqual(supervisor.commands, ["pnpm run test:supervisor-runner", "pnpm run test:supervisor:preflight", "pnpm run test:supervisor:profile"]);
-  assert.equal(supervisor.selectedSupervisorShards.length, 22);
+  assert.equal(supervisor.selectedSupervisorShards.length, 25);
   assert.equal(supervisor.selectedSupervisorShards[0].id, "preflight");
   assert.equal(supervisor.selectedSupervisorShards[0].script, "test:supervisor:check:preflight");
   assert.equal(supervisor.selectedSupervisorShards[2].script, "test:supervisor:check:integration:orchestrator-fake-workers");
-  assert.equal(supervisor.selectedSupervisorShards[7].script, "test:supervisor:check-routing-preview-01");
+  assert.equal(supervisor.selectedSupervisorShards[10].script, "test:supervisor:check-routing-preview-01");
 
   const focusedSupervisor = buildCiOutputs(buildCheckPlan(["services/supervisor/tests/integration/test_work_packets.py"]));
-  assert.deepEqual(focusedSupervisor.selectedSupervisorShards.map((shard) => shard.id), ["preflight", "non-integration", "integration-work-packets"]);
+  assert.deepEqual(focusedSupervisor.selectedSupervisorShards.map((shard) => shard.id), ["preflight", "non-integration", "integration-work-packets-01", "integration-work-packets-02", "integration-work-packets-03", "integration-work-packets-04"]);
   assert.match(focusedSupervisor.selectedSupervisorShards[2].reason, /test_work_packets\.py/);
+  assert.match(focusedSupervisor.selectedSupervisorShards[3].reason, /test_work_packets\.py/);
+  assert.match(focusedSupervisor.selectedSupervisorShards[4].reason, /test_work_packets\.py/);
+  assert.match(focusedSupervisor.selectedSupervisorShards[5].reason, /test_work_packets\.py/);
 
   const workspace = buildCiOutputs(buildCheckPlan(["scripts/codex-workspace.mjs"]));
   assert.deepEqual(workspace.selectedWorkspaceProfiles.map((profile) => profile.id), [

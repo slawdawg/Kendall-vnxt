@@ -65,7 +65,10 @@ const supervisorCheckLeaves = Object.freeze([
   "test:supervisor:check:non-integration",
   "test:supervisor:check:integration:orchestrator-fake-workers",
   "test:supervisor:check:integration:operational-action-v1-pause-drain",
-  "test:supervisor:check:integration:work-packets",
+  "test:supervisor:check:integration:work-packets-01",
+  "test:supervisor:check:integration:work-packets-02",
+  "test:supervisor:check:integration:work-packets-03",
+  "test:supervisor:check:integration:work-packets-04",
   "test:supervisor:check:integration:bmad-import-parser",
   "test:supervisor:check:integration:epic25-evidence-chain",
   ...routingPreviewCheckLeafStages,
@@ -8867,10 +8870,10 @@ try {
       const packageScripts = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")).scripts;
       assert(packageScripts["test:supervisor"] === "node ./scripts/run-supervisor-tests.mjs", packageScripts["test:supervisor"]);
       assert(packageScripts["test:supervisor:review-route"] === "node ./scripts/run-supervisor-tests.mjs tests/integration/test_review_route_packet.py -q", packageScripts["test:supervisor:review-route"]);
-      const workPacketStage = "test:supervisor:check:integration:work-packets";
-      assert(packageScripts[workPacketStage]?.includes("--timeout-ms=180000"), "work-packet leaf lacks the fixed 180s child timeout");
+      const workPacketStages = ["test:supervisor:check:integration:work-packets-01", "test:supervisor:check:integration:work-packets-02", "test:supervisor:check:integration:work-packets-03", "test:supervisor:check:integration:work-packets-04"];
+      for (const workPacketStage of workPacketStages) assert(packageScripts[workPacketStage]?.includes("run-work-packets-partition.mjs"), `work-packet partition is not fixed: ${workPacketStage}`);
       for (const stage of supervisorLeaves) {
-        if (stage === workPacketStage) continue;
+        if (workPacketStages.includes(stage)) continue;
         assert(packageScripts[stage]?.includes("--timeout-ms=150000"), `ordinary supervisor leaf lacks the fixed 150s child timeout: ${stage}`);
       }
       const routingSource = readFileSync(join(rootDir, "services", "supervisor", "tests", "integration", "test_routing_preview.py"), "utf8");
@@ -10286,7 +10289,7 @@ try {
   test("finish-pr applies exact supervisor leaf budgets and retains fail-closed timeout delivery fences", () => {
     for (const { timeoutStage, expectedTimeoutMs } of [
       { timeoutStage: "test:supervisor:check:integration:orchestrator-fake-workers", expectedTimeoutMs: 170_000 },
-      { timeoutStage: "test:supervisor:check:integration:work-packets", expectedTimeoutMs: 200_000 },
+      { timeoutStage: "test:supervisor:check:integration:work-packets-01", expectedTimeoutMs: 200_000 },
     ]) {
       const fixture = createFinishPrExistingCommitFixture();
       const stages = supervisorCheckLeaves;
@@ -10320,8 +10323,8 @@ try {
   test("finish-pr validates retained supervisor markers against their exact leaf budget", () => {
     for (const { stage, timeoutMs, valid } of [
       { stage: "test:supervisor:check:integration:orchestrator-fake-workers", timeoutMs: 170_000, valid: true },
-      { stage: "test:supervisor:check:integration:work-packets", timeoutMs: 200_000, valid: true },
-      { stage: "test:supervisor:check:integration:work-packets", timeoutMs: 170_000, valid: false },
+      { stage: "test:supervisor:check:integration:work-packets-01", timeoutMs: 200_000, valid: true },
+      { stage: "test:supervisor:check:integration:work-packets-01", timeoutMs: 170_000, valid: false },
     ]) {
       const fixture = createFinishPrExistingCommitFixture();
       try {

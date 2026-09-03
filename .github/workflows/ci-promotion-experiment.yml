@@ -163,9 +163,6 @@ jobs:
         run: |
           set -euo pipefail
           command=(pnpm run ${{ matrix.shard.script }})
-          if [ "${{ matrix.shard.id }}" = "integration-work-packets" ]; then
-            command+=(-- --timeout-ms=210000)
-          fi
           injected=()
           if [ "${{ needs.prepare.outputs.cohort }}" = "controlled_failure" ]; then
             injected=(--inject-failure-id "ci-promotion-supervisor-elevated-v1")

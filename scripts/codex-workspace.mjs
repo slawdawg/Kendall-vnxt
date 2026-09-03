@@ -138,7 +138,10 @@ const resumableCheckSupervisorLeaves = Object.freeze([
   "test:supervisor:check:non-integration",
   "test:supervisor:check:integration:orchestrator-fake-workers",
   "test:supervisor:check:integration:operational-action-v1-pause-drain",
-  "test:supervisor:check:integration:work-packets",
+  "test:supervisor:check:integration:work-packets-01",
+  "test:supervisor:check:integration:work-packets-02",
+  "test:supervisor:check:integration:work-packets-03",
+  "test:supervisor:check:integration:work-packets-04",
   "test:supervisor:check:integration:bmad-import-parser",
   "test:supervisor:check:integration:epic25-evidence-chain",
   ...resumableCheckRoutingPreviewLeaves,
@@ -152,7 +155,10 @@ const resumableCheckSupervisorLeaves = Object.freeze([
 ]);
 const resumableCheckSupervisorLeafSet = new Set(resumableCheckSupervisorLeaves);
 const resumableCheckSupervisorLeafExecutionBudgetOverrides = Object.freeze({
-  "test:supervisor:check:integration:work-packets": 200_000,
+  "test:supervisor:check:integration:work-packets-01": 200_000,
+  "test:supervisor:check:integration:work-packets-02": 200_000,
+  "test:supervisor:check:integration:work-packets-03": 200_000,
+  "test:supervisor:check:integration:work-packets-04": 200_000,
 });
 
 function resumableCheckSupervisorLeafExecutionBudgetMs(stage) {
