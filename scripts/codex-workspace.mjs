@@ -20651,7 +20651,7 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   if (evidence.worktree.registration?.status !== "matched") result.errors.push(evidence.worktree.registration?.reason || "recorded worktree registration is unavailable");
   if (evidence.branch.status !== "matched") result.errors.push("manifest branch does not exactly match the worktree checkout");
   if (!validTakeoverReason(context.approval)) result.errors.push("explicit operator approval evidence is required");
-  const releasedSourcePrRecovery = releasedSourcePrRecoveryEvidence(target.record, evidence, lock);
+  const releasedSourcePrRecovery = releasedSourcePrRecoveryEvidence(target.record, evidence, lock, evidence.stale);
   result.released_source_pr_recovery = releasedSourcePrRecovery;
   result.live_source_pr_evidence = releasedSourcePrRecovery.live_source_pr_evidence || null;
   if (releasedSourcePrRecovery.status !== "eligible") {
@@ -20684,13 +20684,16 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   return result;
 }
 
-function releasedSourcePrRecoveryEvidence(manifest, evidence, lock) {
+function releasedSourcePrRecoveryEvidence(manifest, evidence, lock, staleHeartbeat) {
   const base = {
     status: "not_needed",
     reason: null,
     live_source_pr_evidence: null,
   };
   if (lock?.protocol !== "versioned_lease" || lock.status !== "released" || !lock.generation) return base;
+  if (!staleHeartbeat?.is_stale) {
+    return { ...base, status: "blocked", reason: "released source-PR recovery requires a stale manifest owner heartbeat" };
+  }
   const releasedOwner = lock.metadata?.owner || lock.owner || null;
   if (!manifest?.owner || releasedOwner !== manifest.owner) {
     return { ...base, status: "blocked", reason: "released lease owner does not exactly match the manifest owner" };

@@ -7112,6 +7112,32 @@ try {
     }
   });
 
+  test("takeover rejects a released source-PR dirty lane with a fresh manifest owner heartbeat", () => {
+    const fixture = createDirtyTakeoverFixture("released-source-pr-fresh-heartbeat", { sourcePr: true });
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "reviewed delivery repair\n");
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "runner-b",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:1",
+      }));
+      releaseFixtureTaskLease(fixture, lease);
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
+      manifest.last_heartbeat_at = new Date().toISOString();
+      manifest.owner_updated_at = manifest.last_heartbeat_at;
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const before = readFileSync(fixture.manifestPath, "utf8");
+
+      const result = runFixtureScript(fixture, dirtyTakeoverArgs(fixture, ["dirty.txt"]));
+
+      assert(result.code !== 0, "takeover unexpectedly accepted a fresh manifest owner heartbeat");
+      assert(result.stdout.includes("owner heartbeat is not stale"), result.stderr || result.stdout);
+      assert(readFileSync(fixture.manifestPath, "utf8") === before, "fresh-heartbeat rejection mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(fixture);
+    }
+  });
+
   test("takeover apply recovers an exact released source PR through its bounded epoch successor", () => {
     const fixture = createDirtyTakeoverFixture("released-source-pr-epoch", { sourcePr: true });
     try {
