@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import hmac
 import json
+from os import geteuid
 from os.path import commonpath
 from pathlib import Path
 
@@ -460,10 +461,27 @@ def _planned_role_profile(home: str, workspace: str) -> tuple[Path, Path]:
     requested_home, requested_workspace = requested_leaf(home), requested_leaf(workspace)
     if _profiles_overlap(str(requested_home), str(requested_workspace)):
         raise ValueError("Role capability home and workspace must be disjoint canonical roots.")
+    home_parent, workspace_parent = requested_home.parent, requested_workspace.parent
+    if home_parent != workspace_parent:
+        raise ValueError("Role capability home and workspace must share one runtime profile parent.")
+    try:
+        parent_stat = home_parent.stat()
+    except OSError as exc:
+        raise ValueError("Role capability profile parent must be an existing canonical directory.") from exc
+    if parent_stat.st_uid != geteuid() or parent_stat.st_mode & 0o077:
+        raise ValueError("Role capability profile parent must be owner-private.")
     return requested_home, requested_workspace
 
 
-def _bootstrap_role_profile(home: str, workspace: str) -> tuple[str, str]:
+def _remove_bootstrapped_role_profile_roots(roots: list[Path]) -> None:
+    for root in reversed(roots):
+        try:
+            root.rmdir()
+        except OSError:
+            pass
+
+
+def _bootstrap_role_profile(home: str, workspace: str) -> tuple[str, str, list[Path]]:
     """Create only already-validated explicit leaf roots, then retain canonical bindings."""
     requested_home, requested_workspace = _planned_role_profile(home, workspace)
     created_roots: list[Path] = []
@@ -476,13 +494,10 @@ def _bootstrap_role_profile(home: str, workspace: str) -> tuple[str, str]:
                     pass
                 else:
                     created_roots.append(root)
-        return _canonical_role_profile(str(requested_home), str(requested_workspace))
+        canonical_home, canonical_workspace = _canonical_role_profile(str(requested_home), str(requested_workspace))
+        return canonical_home, canonical_workspace, created_roots
     except Exception:
-        for root in reversed(created_roots):
-            try:
-                root.rmdir()
-            except OSError:
-                pass
+        _remove_bootstrapped_role_profile_roots(created_roots)
         raise
 
 
@@ -512,7 +527,7 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
         if not _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=str(planned_home), workspace=str(planned_workspace)):
             raise ValueError("Role capability binding conflicts with persisted metadata.")
         return existing
-    home, workspace = _bootstrap_role_profile(str(planned_home), str(planned_workspace))
+    home, workspace, created_roots = _bootstrap_role_profile(str(planned_home), str(planned_workspace))
     binding = HermesRoleCapabilityBinding(
         capability_binding_id=request.capabilityBindingId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
         role=request.role, identity=request.identity, home=home, workspace=workspace,
@@ -527,6 +542,7 @@ async def provision_hermes_role_capability(session: AsyncSession, request, *, pr
         existing = await session.get(HermesRoleCapabilityBinding, request.capabilityBindingId)
         if existing is not None and existing.revoked_at is None and _same_role_capability(existing, request, digest, provisioned_by_operator_id, home=home, workspace=workspace):
             return existing
+        _remove_bootstrapped_role_profile_roots(created_roots)
         raise ValueError("Role capability binding persistence conflict.") from exc
     return binding
 
@@ -588,6 +604,15 @@ async def _fence_unrevoked_role_capability(session: AsyncSession, binding: Herme
     )
     if result.rowcount != 1:
         raise ValueError("Role capability is revoked or expired.")
+
+
+async def _fence_role_capability_before_commit(session: AsyncSession, binding: HermesRoleCapabilityBinding) -> None:
+    """Fail closed without retaining staged handoff writes when a final fence loses."""
+    try:
+        await _fence_unrevoked_role_capability(session, binding)
+    except ValueError:
+        await session.rollback()
+        raise
 
 
 async def _require_operator_role_capability(
@@ -777,7 +802,13 @@ async def ingest_hermes_review_handoff(
             outcome.current_event_id == lane.current_event_id == verification_event_id
             and (outcome.revision, lane.revision) == (block.expectedOutcomeRevision + 1, block.expectedLaneRevision + 1)
         )
-        if (outcome.revision, lane.revision) != (block.expectedOutcomeRevision, block.expectedLaneRevision) and not typed_review_entry:
+        current_event = await session.get(HermesLedgerEvent, outcome.current_event_id)
+        recovered_review_entry = (
+            current_event is not None
+            and current_event.event_name == "hermes.lane.recovered"
+            and (outcome.revision, lane.revision) == (block.expectedOutcomeRevision + 1, block.expectedLaneRevision + 1)
+        )
+        if (outcome.revision, lane.revision) != (block.expectedOutcomeRevision, block.expectedLaneRevision) and not (typed_review_entry or recovered_review_entry):
             raise ValueError("Unavailable-reviewer block revision is stale.")
         if block.observedAt < outcome.observed_at or block.observedAt < lane.observed_at or block.observedAt < outcome.updated_at or block.observedAt < lane.updated_at:
             raise ValueError("Unavailable-reviewer block evidence predates the current ledger projection.")
@@ -785,13 +816,17 @@ async def ingest_hermes_review_handoff(
             raise ValueError("Unavailable-reviewer block cannot be materially future-dated.")
         if lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Verification source fingerprint is stale for the Developer lane.")
+        carry_forward_recovered_evidence = (
+            (typed_review_entry or recovered_review_entry)
+            and block.evidenceRefs == record.evidence_refs_json == lane.evidence_refs_json
+        )
         await _require_bound_evidence(
             session,
             evidence_refs=block.evidenceRefs,
             outcome=outcome,
             lane=lane,
             decision_at=block.observedAt,
-            require_current_projection=not (typed_review_entry and block.evidenceRefs == record.evidence_refs_json),
+            require_current_projection=not carry_forward_recovered_evidence,
         )
         if not can_replace_current_result(previous=outcome.result, next_result="blockedTechnical") or not can_replace_current_result(previous=lane.result, next_result="blockedTechnical"):
             raise ValueError("Unavailable-reviewer block cannot overwrite a terminal ledger transition.")
@@ -833,6 +868,7 @@ async def ingest_hermes_review_handoff(
             observed_at=block.observedAt, created_at=block.createdAt, metadata_only=True, raw_payload_retained=False,
         ))
         try:
+            await _fence_role_capability_before_commit(session, operator_capability)
             if exception.reviewBy <= datetime.now(UTC):
                 await session.rollback()
                 raise ValueError("Unavailable-reviewer exception expired before persistence.")
@@ -901,6 +937,7 @@ async def ingest_hermes_review_handoff(
                 await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": "review", "result": "retryable", "reason_code": "verification_passed", "evidence_refs_json": verification.evidenceRefs, "next_action": "Await independent Reviewer disposition.", "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
                 await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": "review", "result": "retryable", "reason_code": "verification_passed", "evidence_refs_json": verification.evidenceRefs, "next_action": "Await independent Reviewer disposition.", "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
             try:
+                await _fence_role_capability_before_commit(session, developer_capability)
                 if commit: await session.commit()
                 else: await session.flush()
             except IntegrityError as exc:
@@ -924,6 +961,7 @@ async def ingest_hermes_review_handoff(
         await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": status, "result": result, "reason_code": reason, "evidence_refs_json": verification.evidenceRefs, "next_action": action, "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id})
         await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": status, "result": result, "reason_code": reason, "evidence_refs_json": verification.evidenceRefs, "next_action": action, "observed_at": verification.observedAt, "updated_at": verification.observedAt, "current_event_id": event_id, "rework_budget": lane.rework_budget - (1 if result == "rework" else 0)})
         try:
+            await _fence_role_capability_before_commit(session, developer_capability)
             if commit: await session.commit()
             else: await session.flush()
         except IntegrityError as exc:
@@ -1044,6 +1082,7 @@ async def ingest_hermes_review_handoff(
         exception_requirement_json=request.unavailableReviewerException.model_dump(mode="json", by_alias=True) if request.unavailableReviewerException else None,
     ))
     try:
+        await _fence_role_capability_before_commit(session, reviewer_capability)
         if request.unavailableReviewerException is not None and request.unavailableReviewerException.reviewBy <= datetime.now(UTC):
             await session.rollback()
             raise ValueError("Unavailable-reviewer exception expired before persistence.")

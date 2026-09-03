@@ -7,6 +7,7 @@ from tempfile import mkdtemp
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application import hermes_outcomes
@@ -289,6 +290,53 @@ async def test_role_capability_provisioning_bootstraps_explicit_operator_profile
 
 
 @pytest.mark.asyncio
+async def test_role_capability_provisioning_requires_one_owner_private_runtime_parent(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-runtime-parent.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    runtime_root, other_root = tmp_path / "runtime", tmp_path / "other-runtime"
+    runtime_root.mkdir(mode=0o700); other_root.mkdir(mode=0o700)
+    request_data = {
+        "capabilityBindingId": "capability:runtime-parent", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+        "identity": "operator:one", "home": str(runtime_root / "operator-home"), "workspace": str(other_root / "operator-workspace"), "capabilitySecret": "o" * 32,
+        "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+    }
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        with pytest.raises(ValueError, match="share one runtime profile parent"):
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture")
+        request_data["workspace"] = str(runtime_root / "operator-workspace")
+        runtime_root.chmod(0o755)
+        with pytest.raises(ValueError, match="owner-private"):
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate(request_data), provisioned_by_operator_id="operator:fixture")
+        assert not (runtime_root / "operator-home").exists() and not (runtime_root / "operator-workspace").exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_role_capability_provisioning_removes_bootstrapped_roots_after_commit_conflict(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'capability-bootstrap-commit-conflict.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    runtime_root = tmp_path / "runtime"; runtime_root.mkdir(mode=0o700)
+    home, workspace = runtime_root / "operator-home", runtime_root / "operator-workspace"
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        request = HermesRoleCapabilityProvisionRequest.model_validate({
+            "capabilityBindingId": "capability:commit-conflict", "role": "operator", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+            "identity": "operator:one", "home": str(home), "workspace": str(workspace), "capabilitySecret": "o" * 32,
+            "expiresAt": "2099-01-01T00:00:00Z", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        async def conflict_commit():
+            raise IntegrityError("INSERT", {}, RuntimeError("forced conflict"))
+        monkeypatch.setattr(session, "commit", conflict_commit)
+        with pytest.raises(ValueError, match="persistence conflict"):
+            await provision_hermes_role_capability(session, request, provisioned_by_operator_id="operator:fixture")
+        assert not home.exists() and not workspace.exists()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_role_capability_provisioning_rejects_symlinked_home_overlap_before_bootstrap(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'bootstrapped-capability-overlap.db'}")
     async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
@@ -487,6 +535,10 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
         handoff = review_handoff()
         await _record_verification(session, handoff)
         verification = handoff["verification"]
+        recovery_event = await session.get(HermesLedgerEvent, "event:verification:" + sha256(verification["verificationRecordId"].encode("utf-8")).hexdigest())
+        assert recovery_event is not None
+        recovery_event.event_name = "hermes.lane.recovered"
+        await session.commit()
         await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequest.model_validate({
             "capabilityBindingId": "capability:operator", "role": "operator", "outcomeId": verification["outcomeId"], "laneRunId": verification["laneRunId"],
             "identity": "operator:fixture", "home": str(ROLE_PROFILE_ROOT / "operator-home"), "workspace": str(ROLE_PROFILE_ROOT / "operator-workspace"), "capabilitySecret": "o" * 32,
@@ -541,12 +593,28 @@ async def test_operator_capability_records_unavailable_reviewer_block_without_re
 
         monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", expire_exception_during_final_validation)
         monkeypatch.setattr(hermes_outcomes, "datetime", FinalExpiryClock)
-        with pytest.raises(ValueError, match="exception expired before persistence"):
+        with pytest.raises(ValueError, match="revoked or expired"):
             await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
         monkeypatch.setattr(hermes_outcomes, "can_replace_current_result", original_can_replace)
         monkeypatch.setattr(hermes_outcomes, "datetime", real_datetime)
         lane.stale_deadline_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
         lane.timeout_at = datetime(2099, 1, 2, tzinfo=timezone.utc)
+        original_fence = hermes_outcomes._fence_unrevoked_role_capability
+        fence_calls = 0
+
+        async def expire_operator_at_precommit(*args, **kwargs):
+            nonlocal fence_calls
+            fence_calls += 1
+            if fence_calls == 2:
+                raise ValueError("Role capability is revoked or expired.")
+            await original_fence(*args, **kwargs)
+
+        monkeypatch.setattr(hermes_outcomes, "_fence_unrevoked_role_capability", expire_operator_at_precommit)
+        with pytest.raises(ValueError, match="revoked or expired"):
+            await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
+        await session.rollback()
+        assert fence_calls == 2 and await session.get(HermesUnavailableReviewerRequirement, "block:operator-unavailable") is None
+        monkeypatch.setattr(hermes_outcomes, "_fence_unrevoked_role_capability", original_fence)
         projection = await ingest_hermes_review_handoff(session, parsed, authenticated_recorder_id="operator:fixture")
         assert projection.currentResult == "blockedTechnical"
         requirement = await session.get(HermesUnavailableReviewerRequirement, "block:operator-unavailable")
@@ -683,6 +751,41 @@ async def test_verification_rechecks_developer_capability_after_projection_lock(
         with pytest.raises(ValueError, match="revoked or expired"):
             await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
         assert calls == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handoff_kind", ("developer", "reviewer"))
+async def test_review_handoff_rechecks_capability_immediately_before_persistence(tmp_path, monkeypatch, handoff_kind):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'{handoff_kind}-capability-precommit.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        handoff = review_handoff()
+        await _provision_two_roles(session, handoff)
+        if handoff_kind == "reviewer":
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate(_developer_request(handoff)))
+            request = HermesReviewHandoffRequest.model_validate(_reviewer_request(handoff))
+            persisted_model, persisted_id = HermesReviewDisposition, "review:approve"
+        else:
+            request = HermesReviewHandoffRequest.model_validate(_developer_request(handoff))
+            persisted_model, persisted_id = HermesVerificationRecord, "verification:1"
+        original = hermes_outcomes._fence_unrevoked_role_capability
+        calls = 0
+
+        async def expire_at_precommit(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise ValueError("Role capability is revoked or expired.")
+            await original(*args, **kwargs)
+
+        monkeypatch.setattr(hermes_outcomes, "_fence_unrevoked_role_capability", expire_at_precommit)
+        with pytest.raises(ValueError, match="revoked or expired"):
+            await ingest_hermes_review_handoff(session, request)
+        await session.rollback()
+        assert calls == 2 and await session.get(persisted_model, persisted_id) is None
     await engine.dispose()
 
 

@@ -73,6 +73,13 @@ creates no directories, processes, credentials, network connections, provider
 calls, or delivery actions. Apply mode is intentionally a later, separately
 authorized boundary.
 
+When a local Coordinator provisions the corresponding task-scoped capability,
+the requested home and workspace must be disjoint direct children of one
+existing canonical runtime profile parent. That parent must be owned by the
+Supervisor process owner and have no group or other permissions; a conflict
+removes only roots created by the losing request unless a matching persisted
+binding proves they belong to the exact replay.
+
 The plan has exactly five separate identities and homes below that runtime root:
 `Coordinator`, `Developer`, `Reviewer`, `Delivery`, and `Memory`. Each profile
 defaults to no network and no credential access. Credential declarations may

@@ -20,7 +20,7 @@ export function isReviewDispositionV1(value: unknown): value is ReviewDispositio
 }
 
 export function isHermesReviewerUnavailableExceptionV1(value: unknown): value is HermesReviewerUnavailableExceptionV1 {
-  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isSafeText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isSafeText(value.compensatingReviewRef, 240) && isSafeText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]) && Date.parse(value.recordedAt as string) < Date.parse(value.reviewOrExpiryAt as string));
+  return guardFailsClosed(() => !!isRecord(value) && hasExactKeys(value, UNAVAILABLE_REVIEWER_EXCEPTION_FIELDS) && isOpaqueId(value.exceptionId) && value.exceptionId.length <= 120 && isHermesOutcomeId(value.outcomeId) && value.outcomeId.length <= 120 && isHermesLaneRunId(value.laneRunId) && value.laneRunId.length <= 120 && isSafeText(value.reason, 120) && ["technical_block", "medium"].includes(value.riskClass as string) && isSafeText(value.compensatingReviewRef, 240) && isSafeText(value.recordedBy, 120) && value.metadataOnly === true && value.rawPayloadRetained === false && isTimestampOrder(value, ["recordedAt", "reviewOrExpiryAt"]) && Date.parse(value.recordedAt as string) < Date.parse(value.reviewOrExpiryAt as string));
 }
 
 export function isHermesUnavailableReviewerBlockV1(value: unknown): value is HermesUnavailableReviewerBlockV1 {
