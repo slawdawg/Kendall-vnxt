@@ -400,6 +400,20 @@ This authority is recorded at the repository-policy level and does not require
 repeated lane-specific approval prompts after the worker has proven the normal
 scope, verification, review, and delivery gates.
 
+The operator also durably authorizes Hermes to repair and use a fail-closed
+takeover path for a released, idle lane when it is the same task, repository,
+branch, recorded PR, and reviewed dirty-path set. Before takeover Hermes must
+record the admission evidence: the explicitly released lease, prior owner,
+absence of live intent/heartbeat and retained locks, exact manifest/worktree/
+branch/repository/recorded-PR agreement, reviewed relative dirty paths, stable
+path fingerprints, and the takeover reason. The recovery must establish
+manifest ownership before delivery readiness and retain normal verification,
+review, push, and PR gates. It must reject active or ambiguous owners, live
+intent/heartbeat, retained locks, path drift, cross-task/repository/PR
+transfer, force-pushes, cleanup, merge, deployment, spending, credentials, and
+migrations. This authority is intended to remove routine delivery babysitting,
+not to bypass safety gates.
+
 The authority does not permit manager-local source or delivery mutations,
 force-pushes, bypassing failed checks or unresolved review threads, unrelated
 repositories or base branches, secret/provider/deployment changes, destructive
@@ -456,9 +470,25 @@ durable, milestone-driven workflow rather than a single unbounded task.
   change, or paired with failing/ambiguous checks or a high-risk lane. Any
   thread discovered by the post-resolution re-audit blocks merge and requires
   a fresh full evaluation before it can be resolved. An outdated-only thread is
-  a hold for this automatic authority and must be separately adjudicated; it
-  cannot be closed by this grant. This authority never weakens the separate
-  exact-head merge criteria.
+  a hold for this **current-thread** automatic authority and must be separately
+  adjudicated; it cannot be closed by this grant. The following distinct
+  outdated-thread authority is the only exception. This authority never
+  weakens the separate exact-head merge criteria.
+- The operator durably authorizes a delegated delivery worker to adjudicate and
+  resolve a fully source-satisfied **outdated** review thread for any
+  Kendall_Nxt PR without another per-thread prompt. This is not bulk-close
+  authority: before each resolution, record the thread ID and request
+  fingerprint; prove the PR's exact current head/base and terminal successful
+  or policy-documented skipped checks; map the request to current source paths;
+  retain focused verification command and successful exit evidence plus
+  independent review/reviewer evidence for that exact head and fingerprinted
+  request; and confirm the thread is still outdated and unresolved with no
+  requested changes or pending review. Re-audit thread-aware review state after
+  every bounded batch. Stop on
+  head/check/review drift, ambiguity, a disputed or unfixed request, a
+  cross-repository/base mismatch, or a high-risk surface needing specific
+  authority. This never authorizes source changes, force-pushes, merge,
+  deployment, spending, credentials, migrations, or cleanup.
 - The operator has granted permanent bounded merge authority for **all
   Kendall_Nxt PRs**. A delegated delivery worker may merge only at the exact
   reviewed head when the PR is in this repository and its expected base branch,
@@ -674,12 +704,16 @@ surface is `node ./scripts/codex-workspace.mjs`.
   runner, do not mutate that lane unless the operator confirms the other session
   is idle; only then pass `--take-ownership --takeover-reason "<reason>"` and
   record the previous owner.
-- A dirty foreign-owned lane stays blocked by default. Use the exceptional
+- A dirty foreign-owned lane stays blocked by default. The exceptional
   `takeover --allow-dirty-in-lane --dirty-paths <exact,relative,paths>` route
-  only after explicit operator approval is recorded in `--approval`, and only
-  when its stale-owner, exact manifest/worktree/branch, no-PR, no-retained-lock,
-  and stable path-fingerprint gates all pass. It transfers ownership evidence
-  only; it must not commit, reset, clean up, copy files, or perform GitHub work.
+  may use the durable released-idle delivery authority above rather than a new
+  per-lane prompt only when its release/idle, exact
+  manifest/worktree/branch/repository, stable-path-fingerprint, no-retained-lock,
+  and recorded-source-PR-match gates all pass. A recorded PR is permitted only
+  when it is the lane's own same-repository PR; a different, missing, or
+  ambiguous PR remains a stop line. The command records the authority basis,
+  prior owner, exact paths, and takeover reason, establishes ownership only,
+  and must not commit, reset, clean up, copy files, or perform GitHub work.
 - When the operator says "finish this as a PR", run the smallest relevant verification,
   then use `node ./scripts/codex-workspace.mjs finish-pr --verify scoped` from the task
   worktree or pass a task query from another worktree. Stage intended files

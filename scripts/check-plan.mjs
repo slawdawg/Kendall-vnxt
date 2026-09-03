@@ -68,7 +68,7 @@ const SURFACE_STATIC_BUNDLES = Object.freeze({
 
 const SUPERVISOR_SHARDS = Object.freeze([
   "preflight", "non-integration", "integration-orchestrator-fake-workers", "integration-operational-action-v1-pause-drain",
-  "integration-work-packets", "integration-bmad-import-parser", "integration-epic25-evidence-chain",
+  "integration-work-packets-01", "integration-work-packets-02", "integration-work-packets-03", "integration-work-packets-04", "integration-bmad-import-parser", "integration-epic25-evidence-chain",
   "routing-preview-01", "routing-preview-02", "routing-preview-03", "routing-preview-04", "routing-preview-05",
   "routing-preview-06", "routing-preview-07", "routing-preview-08", "integration-review-route-packet",
   "integration-manager-source-intake-adapter", "integration-operational-action-v1-retry-reassign",
@@ -194,7 +194,7 @@ function classifyFile(path) {
     surfaces.add("pipeline");
     reasons.push(`${file}: pipeline/work-packet surface`);
   }
-  if (/^(services\/supervisor\/|scripts\/run-supervisor-tests\.mjs)/.test(file)) {
+  if (/^(services\/supervisor\/|scripts\/run-(?:supervisor-tests|work-packets-partition)\.mjs)/.test(file)) {
     surfaces.add("supervisor");
     reasons.push(`${file}: supervisor surface`);
   }
@@ -322,7 +322,7 @@ const WORKSPACE_PROFILE_PATHS = Object.freeze([
 const SUPERVISOR_SHARD_PATHS = Object.freeze([
   [/^services\/supervisor\/tests\/integration\/test_orchestrator_fake_workers\.py$/, ["integration-orchestrator-fake-workers"]],
   [/^services\/supervisor\/tests\/integration\/test_operational_action_v1_pause_drain\.py$/, ["integration-operational-action-v1-pause-drain"]],
-  [/^services\/supervisor\/tests\/integration\/test_work_packets\.py$/, ["integration-work-packets"]],
+  [/^services\/supervisor\/tests\/integration\/test_work_packets\.py$/, ["integration-work-packets-01", "integration-work-packets-02", "integration-work-packets-03", "integration-work-packets-04"]],
   [/^services\/supervisor\/tests\/integration\/test_bmad_import_parser\.py$/, ["integration-bmad-import-parser"]],
   [/^services\/supervisor\/tests\/integration\/test_epic25_evidence_chain\.py$/, ["integration-epic25-evidence-chain"]],
   [/^services\/supervisor\/tests\/integration\/test_routing_preview\.py$/, SUPERVISOR_SHARDS.filter((shard) => shard.id.startsWith("routing-preview-")).map((shard) => shard.id)],

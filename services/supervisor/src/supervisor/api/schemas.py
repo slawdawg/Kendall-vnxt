@@ -8009,10 +8009,13 @@ HERMES_LANE_RUN_SCHEMA_VERSION = "hermes_lane_run.v1"
 HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION = "delivery_evidence.v1"
 HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1"
 HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_board_lifecycle_event.v1"
+HERMES_VERIFICATION_RECORD_SCHEMA_VERSION = "verification_record.v1"
+HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION = "review_disposition.v1"
 HERMES_RESULTS = frozenset({"allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"})
-HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "completed", "blocked", "rework"})
+HERMES_OUTCOME_STATUSES = frozenset({"proposed", "active", "review", "completed", "blocked", "rework"})
 HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "completed", "blocked"})
 HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested"})
+HERMES_BOARD_EVENT_NAMES = HERMES_EVENT_NAMES
 
 
 def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> str:
@@ -8022,8 +8025,10 @@ def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> st
         or len(value) > maximum
         or not _is_safe_pipeline_evidence_ref(value)
         or PEM_OR_HIGH_ENTROPY_SECRET_RE.search(value)
+        or (field_name in {"capabilityBindingId", "unavailableReviewerBlockId", "idempotencyKey"} and re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)_[A-Za-z0-9_-]+", value, re.IGNORECASE))
         or re.search(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY(?: BLOCK)?)-----", value, re.IGNORECASE)
         or LANE_CLARITY_UNSAFE_TEXT_RE.search(value)
+        or (field_name in {"verificationRecordId", "outcomeId", "laneRunId", "reviewDispositionId", "developerLaneRunId", "idempotencyKey", "exceptionId"} and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}(?:[-_:][A-Za-z0-9._/@-]+)+", value))
     ):
         raise ValueError(f"{field_name} must be bounded safe metadata text.")
     return value
@@ -8189,7 +8194,7 @@ class HermesBoardLifecycleEventInputV1(BaseModel):
 
     @model_validator(mode="after")
     def _valid(self):
-        if self.eventName not in HERMES_EVENT_NAMES or self.result not in HERMES_RESULTS:
+        if self.eventName not in HERMES_BOARD_EVENT_NAMES or self.result not in HERMES_RESULTS:
             raise ValueError("Board lifecycle event has invalid closed state.")
         if not self.observedAt <= self.emittedAt < self.expiresAt:
             raise ValueError("Board lifecycle event has invalid timestamp order.")
@@ -8206,9 +8211,295 @@ class HermesLedgerIngestRequest(BaseModel):
         return self
 
 
+class HermesVerificationRecordInputV1(BaseModel):
+    """Closed metadata-only precondition bound to the original Developer lane."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    verificationRecordId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_VERIFICATION_RECORD_SCHEMA_VERSION]
+    result: Literal["passed", "failed", "inconclusive"]
+    target: str = Field(max_length=240); sourceFingerprint: str = Field(max_length=240)
+    developerIdentity: str = Field(max_length=120); developerHome: str = Field(max_length=240); developerWorkspace: str = Field(max_length=240)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=32); observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime
+    metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    expectedOutcomeRevision: int = Field(ge=1); expectedLaneRevision: int = Field(ge=1)
+    @field_validator("verificationRecordId", "outcomeId", "laneRunId", "target", "sourceFingerprint", "developerIdentity", "developerHome", "developerWorkspace", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
+    @field_validator("verificationRecordId", "outcomeId", "laneRunId", "developerIdentity", "idempotencyKey")
+    @classmethod
+    def _opaque_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Verification identity must be opaque.")
+        return value
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
+    @field_validator("observedAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.createdAt > self.observedAt: raise ValueError("Verification timestamp order is invalid.")
+        if len({self.developerIdentity, self.developerHome, self.developerWorkspace}) != 3: raise ValueError("Developer review bindings must be distinct.")
+        return self
+
+
+class HermesReviewDispositionInputV1(BaseModel):
+    """Independent review decision only; it carries no execution or delivery authority."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    reviewDispositionId: str = Field(max_length=120); verificationRecordId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); developerLaneRunId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION]; disposition: Literal["approve", "rework", "technical_block"]
+    reviewerIdentity: str = Field(max_length=120); reviewerHome: str = Field(max_length=240); reviewerWorkspace: str = Field(max_length=240)
+    reasonCode: str = Field(max_length=120); nextAction: str = Field(max_length=360); evidenceRefs: list[str] = Field(min_length=1, max_length=32)
+    observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    expectedOutcomeRevision: int = Field(ge=1); expectedLaneRevision: int = Field(ge=1)
+    @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "reviewerIdentity", "reviewerHome", "reviewerWorkspace", "reasonCode", "nextAction", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 240)
+    @field_validator("reviewDispositionId", "verificationRecordId", "outcomeId", "developerLaneRunId", "reviewerIdentity", "idempotencyKey")
+    @classmethod
+    def _opaque_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Review disposition identity must be opaque.")
+        return value
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]: return HermesOutcomeInputV1._refs(value)
+    @field_validator("observedAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.createdAt > self.observedAt or len({self.reviewerIdentity, self.reviewerHome, self.reviewerWorkspace}) != 3: raise ValueError("Review disposition has invalid timestamp or binding.")
+        return self
+
+
+class HermesReviewerUnavailableExceptionV1(BaseModel):
+    """Strict audit requirement; never an approval or authority grant."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    exceptionId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
+    reasonCode: str = Field(max_length=120, alias="reason"); riskClass: Literal["technical_block", "medium"] = Field(alias="riskClass"); compensatingReviewRef: str = Field(max_length=240, alias="compensatingReviewRef")
+    recordedBy: str = Field(max_length=120); recordedAt: datetime; reviewBy: datetime = Field(alias="reviewOrExpiryAt"); metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("exceptionId", "outcomeId", "laneRunId", "reasonCode", "compensatingReviewRef", "recordedBy")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
+    @field_validator("exceptionId", "outcomeId", "laneRunId")
+    @classmethod
+    def _opaque_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Unavailable-reviewer exception identity must be opaque.")
+        return value
+    @field_validator("recordedAt", "reviewBy", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.reviewBy <= self.recordedAt: raise ValueError("Unavailable-reviewer exception must have a future review point.")
+        return self
+
+
+class HermesUnavailableReviewerBlockInputV1(BaseModel):
+    """Operator-audited technical block when an independent Reviewer is unavailable."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    unavailableReviewerBlockId: str = Field(max_length=120)
+    verificationRecordId: str = Field(max_length=120); outcomeId: str = Field(max_length=120); developerLaneRunId: str = Field(max_length=120)
+    schemaVersion: Literal["unavailable_reviewer_block.v1"]
+    expectedOutcomeRevision: int = Field(ge=1); expectedLaneRevision: int = Field(ge=1)
+    reasonCode: str = Field(max_length=120); nextAction: str = Field(max_length=360); evidenceRefs: list[str] = Field(min_length=1, max_length=25)
+    observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime
+    metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+
+    @field_validator("unavailableReviewerBlockId", "verificationRecordId", "outcomeId", "developerLaneRunId", "idempotencyKey")
+    @classmethod
+    def _opaque(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Unavailable-reviewer block identity must be opaque.")
+        return value
+
+    @field_validator("reasonCode", "nextAction")
+    @classmethod
+    def _safe(cls, value: str, info) -> str:
+        return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 240)
+
+    @field_validator("unavailableReviewerBlockId", "idempotencyKey")
+    @classmethod
+    def _safe_identity(cls, value: str, info) -> str:
+        return _validate_hermes_text(value, info.field_name, 240)
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]:
+        return HermesOutcomeInputV1._refs(value)
+
+    @field_validator("observedAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.createdAt > self.observedAt:
+            raise ValueError("Unavailable-reviewer block has an invalid timestamp.")
+        return self
+
+
+class HermesRoleCapabilityProvisionRequest(BaseModel):
+    """Authenticated Coordinator input; only the capability digest may persist."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    capabilityBindingId: str = Field(max_length=120)
+    role: Literal["developer", "reviewer", "operator"]
+    outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120)
+    identity: str = Field(max_length=120); home: str = Field(max_length=240); workspace: str = Field(max_length=240)
+    capabilitySecret: str = Field(min_length=24, max_length=512)
+    expiresAt: datetime; createdAt: datetime
+    metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("outcomeId", "laneRunId")
+    @classmethod
+    def _current_ledger_identity(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Legacy non-opaque Hermes outcome and lane IDs fail closed; provision only current opaque IDs.")
+        return value
+    @field_validator("capabilityBindingId", "identity")
+    @classmethod
+    def _opaque(cls, value: str, info) -> str:
+        if info.field_name == "identity" and info.data.get("role") == "operator" and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+            return value
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None: raise ValueError("Role capability identity must be opaque.")
+        return value
+    @field_validator("capabilityBindingId", "identity", "home", "workspace")
+    @classmethod
+    def _safe(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
+    @field_validator("expiresAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        if self.expiresAt <= self.createdAt or len({self.identity, self.home, self.workspace}) != 3:
+            raise ValueError("Role capability has invalid binding or expiry.")
+        now = datetime.now(timezone.utc)
+        if self.expiresAt <= now:
+            raise ValueError("Role capability expiry must be in the future.")
+        if self.createdAt > now + timedelta(minutes=5):
+            raise ValueError("Role capability creation cannot be materially future-dated.")
+        return self
+
+
+class HermesRoleCapabilityRevocationRequest(BaseModel):
+    """Authenticated Coordinator request to revoke one digest-only role capability."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    capabilityBindingId: str = Field(max_length=120)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("capabilityBindingId")
+    @classmethod
+    def _opaque(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Role capability identity must be opaque.")
+        return value
+
+
+class HermesTechnicalBlockRecoveryRequest(BaseModel):
+    """Typed Coordinator recovery that replaces, never reopens, a blocked lane."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    outcomeId: str = Field(max_length=120); blockedLaneRunId: str = Field(max_length=120)
+    replacementLaneRun: HermesLaneRunInputV1; deliveryEvidence: HermesDeliveryEvidenceInputV1
+    expectedOutcomeRevision: int = Field(ge=1); expectedBlockedLaneRevision: int = Field(ge=1)
+    reasonCode: str = Field(max_length=120); nextAction: str = Field(max_length=360)
+    observedAt: datetime; idempotencyKey: str = Field(max_length=120); createdAt: datetime
+    metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("outcomeId", "blockedLaneRunId", "reasonCode", "nextAction", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str:
+        return _validate_hermes_text(value, info.field_name, 360 if info.field_name == "nextAction" else 240)
+    @field_validator("outcomeId", "blockedLaneRunId", "idempotencyKey")
+    @classmethod
+    def _opaque(cls, value: str) -> str:
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Technical-block recovery identity must be opaque.")
+        return value
+    @field_validator("observedAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        lane, evidence = self.replacementLaneRun, self.deliveryEvidence
+        if self.createdAt > self.observedAt or lane.outcomeId != self.outcomeId or evidence.outcomeId != self.outcomeId or evidence.laneRunId != lane.laneRunId:
+            raise ValueError("Technical-block recovery must bind its replacement lane and evidence exactly.")
+        if lane.laneRunId == self.blockedLaneRunId or lane.status != "review" or lane.result != "retryable":
+            raise ValueError("Technical-block recovery must create a distinct review/retryable replacement lane.")
+        if (lane.reasonCode, lane.nextAction) != (self.reasonCode, self.nextAction):
+            raise ValueError("Technical-block recovery replacement reason and next action must match the authoritative request.")
+        if lane.evidenceRefs != [evidence.deliveryEvidenceId]:
+            raise ValueError("Technical-block recovery replacement lane must cite exactly its delivery evidence.")
+        if evidence.observedAt > self.observedAt:
+            raise ValueError("Technical-block recovery evidence cannot postdate its decision.")
+        now = datetime.now(timezone.utc)
+        if any(value > now + timedelta(minutes=5) for value in (self.observedAt, lane.heartbeatAt, lane.observedAt, lane.updatedAt, evidence.observedAt)):
+            raise ValueError("Technical-block recovery metadata cannot be materially future-dated.")
+        if lane.heartbeatAt > self.observedAt or lane.observedAt > self.observedAt or lane.updatedAt > self.observedAt:
+            raise ValueError("Technical-block recovery replacement metadata cannot postdate its decision.")
+        if evidence.observedAt < lane.updatedAt:
+            raise ValueError("Technical-block recovery evidence predates its replacement lane update.")
+        return self
+
+
+class HermesReviewHandoffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    verification: HermesVerificationRecordInputV1; disposition: HermesReviewDispositionInputV1 | None = None; unavailableReviewerException: HermesReviewerUnavailableExceptionV1 | None = None; unavailableReviewerBlock: HermesUnavailableReviewerBlockInputV1 | None = None
+    developerCapabilityBindingId: str | None = Field(default=None, max_length=120); developerCapabilityProof: str | None = Field(default=None, min_length=24, max_length=512)
+    reviewerCapabilityBindingId: str | None = Field(default=None, max_length=120); reviewerCapabilityProof: str | None = Field(default=None, min_length=24, max_length=512)
+    operatorCapabilityBindingId: str | None = Field(default=None, max_length=120); operatorCapabilityProof: str | None = Field(default=None, min_length=24, max_length=512)
+    @model_validator(mode="after")
+    def _bind(self):
+        verification, disposition = self.verification, self.disposition
+        unavailable_block, exception = self.unavailableReviewerBlock, self.unavailableReviewerException
+        if unavailable_block is not None:
+            if exception is None or disposition is not None or self.developerCapabilityBindingId is not None or self.developerCapabilityProof is not None or self.reviewerCapabilityBindingId is not None or self.reviewerCapabilityProof is not None or self.operatorCapabilityBindingId is None or self.operatorCapabilityProof is None:
+                raise ValueError("Unavailable-reviewer blocking requires only a typed Operator capability, block, and exception.")
+            if verification.result != "passed" or (unavailable_block.outcomeId, unavailable_block.developerLaneRunId, unavailable_block.verificationRecordId) != (verification.outcomeId, verification.laneRunId, verification.verificationRecordId) or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId):
+                raise ValueError("Unavailable-reviewer block must bind a passed verification and original Developer lane exactly.")
+            if (unavailable_block.expectedOutcomeRevision, unavailable_block.expectedLaneRevision) != (verification.expectedOutcomeRevision, verification.expectedLaneRevision) or unavailable_block.observedAt < verification.observedAt or exception.recordedAt < verification.observedAt or exception.recordedAt > unavailable_block.observedAt or exception.reviewBy <= unavailable_block.observedAt:
+                raise ValueError("Unavailable-reviewer block must preserve verification revisions and timestamps.")
+            return self
+        if verification.result != "passed":
+            if self.developerCapabilityBindingId is None or self.developerCapabilityProof is None or disposition is not None or exception is not None or self.reviewerCapabilityBindingId is not None or self.reviewerCapabilityProof is not None or self.operatorCapabilityBindingId is not None or self.operatorCapabilityProof is not None: raise ValueError("Failed or inconclusive verification requires a Developer capability and no review disposition.")
+            return self
+        if disposition is None:
+            if self.developerCapabilityBindingId is None or self.developerCapabilityProof is None or exception is not None or self.reviewerCapabilityBindingId is not None or self.reviewerCapabilityProof is not None or self.operatorCapabilityBindingId is not None or self.operatorCapabilityProof is not None: raise ValueError("Verification-only admission requires a Developer capability and cannot carry a Reviewer capability or exception.")
+            return self
+        if self.developerCapabilityBindingId is not None or self.developerCapabilityProof is not None or self.reviewerCapabilityBindingId is None or self.reviewerCapabilityProof is None or self.operatorCapabilityBindingId is not None or self.operatorCapabilityProof is not None: raise ValueError("Independent review requires only a distinct Reviewer capability.")
+        if (verification.outcomeId != disposition.outcomeId or verification.laneRunId != disposition.developerLaneRunId or verification.verificationRecordId != disposition.verificationRecordId): raise ValueError("Review handoff identities must bind the original Developer lane exactly.")
+        if verification.result != "passed": raise ValueError("Only passed verification is eligible for review.")
+        if disposition.observedAt < verification.observedAt: raise ValueError("Review cannot precede verification.")
+        developer_paths = (verification.developerHome, verification.developerWorkspace)
+        reviewer_paths = (disposition.reviewerHome, disposition.reviewerWorkspace)
+        def _parts(value: str) -> tuple[str, ...]:
+            parts: list[str] = []
+            for part in re.split(r"[:\\\\/]", value):
+                if not part or part == ".": continue
+                if part == "..":
+                    if parts: parts.pop()
+                    continue
+                parts.append(part)
+            return tuple(parts)
+        def _overlap(left: str, right: str) -> bool:
+            left_parts, right_parts = _parts(left), _parts(right)
+            return left_parts == right_parts[:len(left_parts)] or right_parts == left_parts[:len(right_parts)]
+        if verification.developerIdentity.casefold() == disposition.reviewerIdentity.casefold() or any(_overlap(a, b) for a in developer_paths for b in reviewer_paths): raise ValueError("Independent review cannot overlap Developer identity, home, or workspace.")
+        if (disposition.expectedOutcomeRevision != verification.expectedOutcomeRevision or disposition.expectedLaneRevision != verification.expectedLaneRevision): raise ValueError("Review handoff revisions must bind verification and disposition exactly.")
+        if exception is not None:
+            if disposition.disposition != "technical_block" or (exception.outcomeId, exception.laneRunId) != (verification.outcomeId, verification.laneRunId): raise ValueError("Unavailable-reviewer exception is audit-only and must bind the blocked Developer lane.")
+            if exception.recordedAt > disposition.observedAt or exception.reviewBy <= disposition.observedAt: raise ValueError("Unavailable-reviewer exception must outlive its disposition.")
+        return self
+
+
 class HermesOutcomeProjectionV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    outcomeId: str; title: str; lifecycle: str; currentLaneRunId: str | None; currentResult: str; reasonCode: str; evidenceRefs: list[str]; latestEvidenceAt: datetime; nextAction: str; recoveryState: str; freshness: Literal["fresh", "stale", "unknown", "unavailable"]; observedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    outcomeId: str; revision: int = Field(ge=1); title: str; lifecycle: str; currentLaneRunId: str | None; currentResult: str; reasonCode: str; evidenceRefs: list[str]; latestEvidenceAt: datetime; nextAction: str; recoveryState: str; freshness: Literal["fresh", "stale", "unknown", "unavailable"]; observedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
 
 
 class HermesOutcomeProjectionApiEnvelope(BaseModel):
@@ -8218,7 +8509,7 @@ class HermesOutcomeProjectionApiEnvelope(BaseModel):
 
 class HermesLaneRunProjectionV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    laneRunId: str; outcomeId: str; stage: str; result: str; retryBudget: int; reworkBudget: int
+    laneRunId: str; outcomeId: str; revision: int = Field(ge=1); stage: str; result: str; retryBudget: int; reworkBudget: int
     freshness: Literal["fresh", "stale", "unknown", "unavailable"]
     nextAction: str; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
 

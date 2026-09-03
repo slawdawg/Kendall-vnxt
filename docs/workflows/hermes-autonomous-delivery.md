@@ -73,6 +73,16 @@ creates no directories, processes, credentials, network connections, provider
 calls, or delivery actions. Apply mode is intentionally a later, separately
 authorized boundary.
 
+When a local Coordinator provisions the corresponding task-scoped capability,
+`SUPERVISOR_HERMES_ROLE_CAPABILITY_RUNTIME_ROOT` must name the existing,
+canonical, owner-private runtime root. A role home must be beneath that root;
+the manifest's separate Developer or Reviewer workspace remains allowed only
+when it already exists, is canonical and owner-private, and does not overlap a
+profile root. Provisioning may create only the explicit role-home leaf under
+the configured root. A conflict removes only roots created by the losing
+request unless a matching persisted binding proves they belong to the exact
+replay.
+
 The plan has exactly five separate identities and homes below that runtime root:
 `Coordinator`, `Developer`, `Reviewer`, `Delivery`, and `Memory`. Each profile
 defaults to no network and no credential access. Credential declarations may
@@ -102,3 +112,54 @@ An unavailable independent Reviewer produces a metadata-only exception
 requirement with the outcome/lane-run identifiers, reason, risk class,
 compensating-review reference, recorder/time, and review-or-expiry point. It is
 not approval and is not persisted by this workflow.
+
+## Verification and Independent Review Handoff
+
+The Supervisor ledger accepts a metadata-only verification record before an
+independent review disposition. A record binds the existing Outcome and
+Developer lane to an opaque record/idempotency identity, passed/failed/
+inconclusive result, cited evidence, and the current source fingerprint. Only
+`passed` may enter review; missing, stale, failed, inconclusive, malformed, or
+replay-conflicting evidence stops at the ledger boundary.
+
+A local authenticated Coordinator may provision a task-scoped Developer,
+Reviewer, or Operator capability at `/hermes-control-plane/role-capabilities`.
+The Operator binding is required only for the audit-only unavailable-Reviewer
+block and the same authenticated Operator identity is persisted with that
+exception; it is never a Reviewer substitute or approval. The
+Supervisor stores only its digest, role, outcome/lane binding, expiry,
+revocation state, and provisioner identity; it never returns, logs, or retains
+the supplied capability value. Caller-supplied profile fields are compared to
+that binding and are not authority. The Developer first records verification
+with its capability. Only then may a distinct, non-revoked Reviewer capability
+submit a disposition against that exact record. An expired, revoked, stale,
+unbound, or replay-conflicting admission fails closed; exact persisted replays
+remain available only when their bound metadata can be proven.
+
+The local authenticated control-plane endpoints are deliberately narrow:
+`/hermes-control-plane/role-capabilities` provisions one task-scoped binding;
+`/hermes-control-plane/role-capability-revocations` revokes that binding; and
+`/hermes-control-plane/review-handoffs` accepts only the matching Developer or
+Reviewer proof (the unavailable-reviewer exception instead requires the
+authenticated Operator session). `/hermes-control-plane/technical-block-recoveries`
+also requires the authenticated Operator session, a current blocked projection,
+current revisions, and fresh cited evidence; its append-only recovery event
+records the authenticated actor identity. The capability, revocation, and
+technical-recovery routes require the authenticated Operator session, HTTPS
+origin, and CSRF check. Review handoffs require the local trusted transport and
+matching role proof; only an unavailable-reviewer exception additionally uses
+the Operator session checks. Capability values are never returned or logged. A
+conflict fails closed: reprovision a distinct binding for an expired, revoked,
+or historical noncanonical path rather than reusing it.
+
+A disposition is exactly `approve`, `rework`, or `technical_block`. It is
+atomically bound to that verification record, the original Developer lane, and
+distinct Reviewer identity, home, and workspace metadata. Self-review or any
+overlap is denied. Approval records only post-review completion: it is not a
+GitHub, delivery, merge, provider, or runtime action. Rework returns to the
+same recorded Developer lane with cited evidence. A `technical_block` remains
+immutable; the Coordinator's typed recovery path may only create a distinct
+replacement review lane with fresh metadata-only evidence, exact current
+outcome/blocked-lane revisions, and no budget replenishment. It cannot reopen
+or overwrite the blocked lane. The unavailable-Reviewer exception remains
+audit-only and cannot waive verification or become an approval.

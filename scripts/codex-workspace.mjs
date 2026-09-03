@@ -138,7 +138,10 @@ const resumableCheckSupervisorLeaves = Object.freeze([
   "test:supervisor:check:non-integration",
   "test:supervisor:check:integration:orchestrator-fake-workers",
   "test:supervisor:check:integration:operational-action-v1-pause-drain",
-  "test:supervisor:check:integration:work-packets",
+  "test:supervisor:check:integration:work-packets-01",
+  "test:supervisor:check:integration:work-packets-02",
+  "test:supervisor:check:integration:work-packets-03",
+  "test:supervisor:check:integration:work-packets-04",
   "test:supervisor:check:integration:bmad-import-parser",
   "test:supervisor:check:integration:epic25-evidence-chain",
   ...resumableCheckRoutingPreviewLeaves,
@@ -152,7 +155,10 @@ const resumableCheckSupervisorLeaves = Object.freeze([
 ]);
 const resumableCheckSupervisorLeafSet = new Set(resumableCheckSupervisorLeaves);
 const resumableCheckSupervisorLeafExecutionBudgetOverrides = Object.freeze({
-  "test:supervisor:check:integration:work-packets": 200_000,
+  "test:supervisor:check:integration:work-packets-01": 220_000,
+  "test:supervisor:check:integration:work-packets-02": 220_000,
+  "test:supervisor:check:integration:work-packets-03": 220_000,
+  "test:supervisor:check:integration:work-packets-04": 220_000,
 });
 
 function resumableCheckSupervisorLeafExecutionBudgetMs(stage) {
@@ -3288,7 +3294,7 @@ function finishPr(argv) {
   }
   assertSettledExternalIntentDeliveryAdmission(state, manifest, options);
   assertInFlightCheckRecoveryDeliveryAdmission(state, manifest, options);
-  assertLaneOwner(manifest, options);
+  assertFinishPrOwner(manifest, options);
   assertFinishPrDeliveryReadiness(manifest, options);
   assertBaseCheckoutRecoveryClearForDelivery(state);
   requireGh("finish-pr");
@@ -3351,7 +3357,7 @@ function finishPr(argv) {
   withManifestLock(state, manifest.task_id, (lock) => {
     const lockedManifest = readManifest(manifestPath);
     validateManifest(lockedManifest, manifestPath);
-    assertLaneOwner(lockedManifest, options);
+    assertFinishPrOwner(lockedManifest, options);
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
     assertFinishPrDeliveryReadiness(manifest, options);
@@ -3508,7 +3514,7 @@ function finishPr(argv) {
     manifest.updated_at = new Date().toISOString();
     appendTaskEvent(manifest, "pr_open", manifest.pr_url || manifest.branch);
     writeManifest(manifestPath, manifest);
-  });
+  }, { owner: currentLaneOwner(options) });
   console.log(`Finished task ${manifest.task_id}`);
   if (manifest.anti_churn_finalization) {
     for (const line of renderAntiChurnFinalization(manifest.anti_churn_finalization)) {
@@ -18091,6 +18097,15 @@ function assertLaneOwner(manifest, options = {}) {
   }
 }
 
+function assertFinishPrOwner(manifest, options = {}) {
+  if (laneOwnerWarning(manifest, options) && options.takeOwnership) {
+    throw new Error(
+      "finish-pr cannot transfer a foreign lane owner; complete the governed takeover admission before delivery readiness.",
+    );
+  }
+  assertLaneOwner(manifest, options);
+}
+
 function assertExactTaskLeaseLedgerRolloverOwner(manifest, options = {}) {
   const recordedOwner = String(manifest?.owner || "").trim();
   const currentOwner = String(currentLaneOwner(options) || "").trim();
@@ -20165,6 +20180,10 @@ function takeoverPacket(target, context) {
     dirtyInLane,
   });
   const allowed = blockers.length === 0;
+  const releasedIdleRecovery = dirtyInLane?.released_source_pr_recovery?.status === "eligible";
+  const ownerGate = releasedIdleRecovery
+    ? "released idle lease with exact recorded source-PR evidence"
+    : "owner heartbeat is stale";
 
   return {
     schema_version: 1,
@@ -20190,7 +20209,7 @@ function takeoverPacket(target, context) {
       allowed,
       requiredGates: [
         "target has a previous owner",
-        "owner heartbeat is stale",
+        ownerGate,
         "worktree exists when required",
         context.allowDirtyInLane ? "explicit dirty in-lane takeover evidence is complete" : "worktree is clean",
         "takeover reason is present",
@@ -20199,7 +20218,7 @@ function takeoverPacket(target, context) {
       satisfiedGates: allowed
         ? [
             "target has a previous owner",
-            "owner heartbeat is stale",
+            ownerGate,
             "worktree exists when required",
             context.allowDirtyInLane ? "explicit dirty in-lane takeover evidence is complete" : "worktree is clean",
             "takeover reason is present",
@@ -20557,7 +20576,14 @@ function dirtyInLaneIndexEntry(rawIndex, path) {
 }
 
 function assertNoHiddenDirtyInLanePaths(worktreePath, requestedPaths) {
-  for (const path of requestedPaths) {
+  const allFlags = git(["ls-files", "-v", "-z"], { cwd: worktreePath });
+  if (allFlags.code !== 0) {
+    throw new Error("could not inspect hidden index flags for the managed worktree");
+  }
+  const hiddenPaths = String(allFlags.stdout || "").split("\0")
+    .filter((entry) => entry.length >= 3 && entry[1] === " " && (entry[0] === "h" || entry[0] === "s" || entry[0] === "S"))
+    .map((entry) => entry.slice(2));
+  for (const path of [...new Set([...requestedPaths, ...hiddenPaths])]) {
     const index = git(["ls-files", "--stage", "--", path], { cwd: worktreePath });
     if (index.code !== 0) {
       throw new Error(`could not inspect index state for dirty path: ${path}`);
@@ -20586,7 +20612,7 @@ function dirtyInLaneHiddenIndexFlags(rawFlags, path) {
     throw new Error(`index flags for dirty path are malformed: ${path}`);
   }
   const flag = entries[0][0];
-  return flag === "h" || flag === "S" ? [flag] : [];
+  return flag === "h" || flag === "s" || flag === "S" ? [flag] : [];
 }
 
 function streamingFileSha256(path) {
@@ -20624,15 +20650,20 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   if (!evidence.dirty.dirty) result.errors.push("dirty in-lane takeover requires a dirty workspace worktree");
   if (evidence.worktree.registration?.status !== "matched") result.errors.push(evidence.worktree.registration?.reason || "recorded worktree registration is unavailable");
   if (evidence.branch.status !== "matched") result.errors.push("manifest branch does not exactly match the worktree checkout");
-  if (evidence.pr.status !== "none") result.errors.push("dirty in-lane takeover is forbidden when a PR is recorded");
   if (!validTakeoverReason(context.approval)) result.errors.push("explicit operator approval evidence is required");
-  if (evidence.worktree.exists && evidence.branch.branch) {
-    result.live_no_pr_evidence = strictGithubNoPrProof({ branch: evidence.branch.branch }, evidence.worktree.path);
-    if (result.live_no_pr_evidence.status !== "matched") {
-      result.errors.push(result.live_no_pr_evidence.reason || "live GitHub no-PR proof did not match");
+  const releasedSourcePrRecovery = releasedSourcePrRecoveryEvidence(target.record, evidence, lock, evidence.stale);
+  result.released_source_pr_recovery = releasedSourcePrRecovery;
+  result.live_source_pr_evidence = releasedSourcePrRecovery.live_source_pr_evidence || null;
+  if (releasedSourcePrRecovery.status !== "eligible") {
+    if (evidence.pr.status !== "none") result.errors.push(releasedSourcePrRecovery.reason || "dirty in-lane takeover is forbidden when a PR is recorded");
+    if (evidence.worktree.exists && evidence.branch.branch) {
+      result.live_no_pr_evidence = strictGithubNoPrProof({ branch: evidence.branch.branch }, evidence.worktree.path);
+      if (result.live_no_pr_evidence.status !== "matched") {
+        result.errors.push(result.live_no_pr_evidence.reason || "live GitHub no-PR proof did not match");
+      }
+    } else {
+      result.errors.push("live GitHub no-PR proof requires an existing branch worktree");
     }
-  } else {
-    result.errors.push("live GitHub no-PR proof requires an existing branch worktree");
   }
   const malformedLockRecovery = malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, lock, result.live_no_pr_evidence);
   const interruptedTakeoverRecovery = interruptedDirtyTakeoverLeaseEvidence(context, lock);
@@ -20651,6 +20682,87 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
     }
   }
   return result;
+}
+
+function releasedSourcePrRecoveryEvidence(manifest, evidence, lock, staleHeartbeat) {
+  const base = {
+    status: "not_needed",
+    reason: null,
+    live_source_pr_evidence: null,
+  };
+  if (lock?.protocol !== "versioned_lease" || lock.status !== "released" || !lock.generation) return base;
+  if (!staleHeartbeat?.is_stale) {
+    return { ...base, status: "blocked", reason: "released source-PR recovery requires a stale manifest owner heartbeat" };
+  }
+  const releasedOwner = lock.metadata?.owner || lock.owner || null;
+  if (!manifest?.owner || releasedOwner !== manifest.owner) {
+    return { ...base, status: "blocked", reason: "released lease owner does not exactly match the manifest owner" };
+  }
+  if (!manifest.pr_number || !manifest.pr_url || !evidence.worktree.exists || !evidence.branch.branch) {
+    return { ...base, status: "blocked", reason: "released source-PR recovery requires a recorded PR and an exact branch worktree" };
+  }
+  const live = strictGithubRecordedSourcePrProof(manifest, evidence.worktree.path, evidence.branch);
+  if (live.status !== "matched") {
+    return { ...base, status: "blocked", reason: live.reason, live_source_pr_evidence: live };
+  }
+  return {
+    status: "eligible",
+    reason: "released idle lease and exact recorded open source PR permit the bounded dirty takeover recovery",
+    generation: lock.generation,
+    live_source_pr_evidence: live,
+  };
+}
+
+function strictGithubRecordedSourcePrProof(manifest, worktreePath, branchEvidence) {
+  const origins = originRepositoryIdentities(worktreePath);
+  if (!origins || origins.length !== 1) {
+    return { status: "blocked", reason: "released source-PR recovery requires one canonical GitHub origin" };
+  }
+  const repository = `${origins[0].owner}/${origins[0].name}`;
+  const result = run("gh", [
+    "pr", "list", "--head", branchEvidence.branch, "--state", "open",
+    "--json", "number,url,state,mergedAt,baseRefName,headRefName,headRefOid,isCrossRepository",
+    "--repo", repository,
+  ], { cwd: worktreePath });
+  if (result.code !== 0) {
+    return { status: "blocked", reason: "live source-PR proof is unavailable" };
+  }
+  let entries;
+  try {
+    entries = parseGhJson(result.stdout, "released source-PR proof");
+  } catch (error) {
+    return { status: "blocked", reason: `live source-PR proof is unavailable: ${error.message}` };
+  }
+  if (!Array.isArray(entries) || entries.length !== 1) {
+    return { status: "blocked", reason: "live source-PR proof must contain exactly one open PR for the manifest branch" };
+  }
+  const pr = entries[0];
+  const live = {
+    status: "blocked",
+    number: Number.isInteger(pr?.number) ? pr.number : null,
+    url: typeof pr?.url === "string" ? pr.url : null,
+    state: typeof pr?.state === "string" ? pr.state : null,
+    baseRefName: typeof pr?.baseRefName === "string" ? pr.baseRefName : null,
+    headRefName: typeof pr?.headRefName === "string" ? pr.headRefName : null,
+    headRefOid: exactGitObjectIdOrNull(pr?.headRefOid),
+    isCrossRepository: typeof pr?.isCrossRepository === "boolean" ? pr.isCrossRepository : null,
+  };
+  const matched = live.number === manifest.pr_number && live.url === manifest.pr_url && live.state === "OPEN" && !pr?.mergedAt &&
+    live.baseRefName === manifest.base_branch && live.headRefName === manifest.branch &&
+    live.headRefOid === branchEvidence.local_sha && live.headRefOid === branchEvidence.manifest_branch_sha &&
+    live.isCrossRepository === false;
+  if (!matched) {
+    return {
+      status: "blocked",
+      reason: "source-PR proof does not exactly match the recorded task, repository branch, base, and head",
+      ...live,
+    };
+  }
+  return {
+    ...live,
+    status: "matched",
+    reason: null,
+  };
 }
 
 function interruptedDirtyTakeoverLeaseEvidence(context, lock) {
@@ -20724,6 +20836,60 @@ function finalizeDirtyInLaneTakeover(packet) {
   evidence.status = "stable";
 }
 
+function finalizeReleasedSourcePrTakeover(manifest, packet) {
+  const recovery = packet.dirty_in_lane_evidence?.released_source_pr_recovery;
+  if (recovery?.status !== "eligible") return;
+  const finalBranch = takeoverBranchEvidence(manifest, packet.worktree_evidence);
+  const live = strictGithubRecordedSourcePrProof(manifest, packet.worktree_evidence.path, finalBranch);
+  if (
+    live.status !== "matched" ||
+    live.number !== recovery.live_source_pr_evidence?.number ||
+    live.url !== recovery.live_source_pr_evidence?.url ||
+    live.headRefOid !== recovery.live_source_pr_evidence?.headRefOid ||
+    live.baseRefName !== recovery.live_source_pr_evidence?.baseRefName ||
+    live.headRefName !== recovery.live_source_pr_evidence?.headRefName
+  ) {
+    throw new Error(live.reason || "released source-PR evidence changed while the manifest lock was held.");
+  }
+  recovery.final_source_pr_evidence = live;
+}
+
+function assertReleasedSourcePrRecoveryLeaseHandoff(state, taskId, packet, lock) {
+  const recovery = packet.dirty_in_lane_evidence?.released_source_pr_recovery;
+  if (recovery?.status !== "eligible") return;
+  const generation = String(recovery.generation || "");
+  const prior = leaseRecord(state, taskId, generation);
+  const priorEpoch = packet.dirty_in_lane_evidence?.lock_evidence?.epoch;
+  if (
+    !validTaskLeaseRecord(prior, taskId) || !generation || !lock?.generation || !lock?.token ||
+    !Number.isInteger(priorEpoch) || priorEpoch < 0
+  ) {
+    throw new Error("released source-PR recovery lease evidence is incomplete while the manifest lock is held.");
+  }
+  const handoffPath = taskLeasePath(state, taskId, "handoffs", generation);
+  const epochPath = taskLeasePath(state, taskId, "epochs", generation);
+  const handoff = existsSync(handoffPath) ? readRegularJson(handoffPath) : null;
+  const epoch = existsSync(epochPath) ? readRegularJson(epochPath) : null;
+  const tokenDigest = taskLeaseTokenDigest(prior.token);
+  if (
+    (handoff && epoch) ||
+    (!handoff && !epoch) ||
+    (handoff && !validTaskLeaseHandoff(handoff, taskId, generation, tokenDigest)) ||
+    (epoch && !validTaskLeaseEpoch(epoch, taskId, generation, tokenDigest, priorEpoch)) ||
+    (handoff || epoch).reason !== "released" ||
+    (handoff || epoch).to_generation !== lock.generation
+  ) {
+    throw new Error("released source-PR recovery lease handoff changed before manifest ownership publication.");
+  }
+  const current = inspectTaskLease(state, taskId);
+  if (
+    current.status !== "active" || current.generation !== lock.generation ||
+    current.metadata?.token !== lock.token || current.metadata?.owner !== packet.requesting_owner
+  ) {
+    throw new Error("manifest lock no longer proves the exact released source-PR recovery successor.");
+  }
+}
+
 function takeoverBlockers(target, context, evidence) {
   const blockers = [];
   const record = target.record;
@@ -20733,7 +20899,8 @@ function takeoverBlockers(target, context, evidence) {
   if (record.owner === context.currentOwner) {
     blockers.push("target is already owned by current runner");
   }
-  if (!evidence.stale.is_stale) {
+  const releasedSourcePrRecovery = evidence.dirtyInLane?.released_source_pr_recovery?.status === "eligible";
+  if (!evidence.stale.is_stale && !releasedSourcePrRecovery) {
     blockers.push("owner heartbeat is not stale");
   }
   if (target.kind === "workspace" && !evidence.worktree.exists) {
@@ -20798,7 +20965,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
     ? recoverInterruptedDirtyTakeover(state, target)
     : null);
   const postRecoveryLockInspection = inspectTaskLock(state, taskId);
-  return withManifestLock(state, taskId, () => {
+  return withManifestLock(state, taskId, (lock) => {
     const path = target.path;
     const manifest = readManifest(path);
     validateManifest(manifest, path);
@@ -20824,7 +20991,9 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
     if (!packet.allowed) {
       throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
     }
+    assertReleasedSourcePrRecoveryLeaseHandoff(state, manifest.task_id, packet, lock);
     finalizeDirtyInLaneTakeover(packet);
+    finalizeReleasedSourcePrTakeover(manifest, packet);
     // The first durable write is a transaction staging record: it retains the
     // prior visible owner until the final in-lane snapshot passes.  A crash at
     // this point therefore cannot publish a new owner with an unresolved
@@ -20839,6 +21008,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
         testHardCrashAfterRename: "CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_TAKEOVER_STAGE_RENAME",
       });
       finalizeDirtyInLaneTakeover(packet);
+      finalizeReleasedSourcePrTakeover(manifest, packet);
       // Keep the immutable, digest-bound transaction state on the owner write.
       // A hard crash after this rename can therefore prove exactly which prior
       // manifest to restore; clearing this state before final revalidation
@@ -20853,6 +21023,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
       // block restores the prior owner and records the compensating manifest
       // write under this same lease generation.
       finalizeDirtyInLaneTakeover(packet);
+      finalizeReleasedSourcePrTakeover(manifest, packet);
       delete manifest.pending_dirty_takeover;
       writeManifest(path, manifest);
     } catch (error) {
@@ -20868,7 +21039,10 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
       throw error;
     }
     return { path, packet };
-  }, { recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true });
+  }, {
+    owner: currentOwner,
+    recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true,
+  });
 }
 
 function canonicalManifestBytes(manifest) {

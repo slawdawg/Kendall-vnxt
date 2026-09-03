@@ -7,12 +7,9 @@ import test from "node:test";
 
 const runner = "scripts/run-supervisor-tests.mjs";
 
-test("work-packets behavior shard retains the fixed package-level timeout", () => {
+test("work-packets behavior shards retain deterministic four-way partition scripts", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-  assert.match(
-    packageJson.scripts["test:supervisor:check:integration:work-packets"],
-    /--timeout-ms=180000 tests\/integration\/test_work_packets\.py -q/,
-  );
+  for (const index of [0, 1, 2, 3]) assert.equal(packageJson.scripts[`test:supervisor:check:integration:work-packets-0${index + 1}`], `node ./scripts/run-work-packets-partition.mjs --index ${index} --count 4`);
 });
 
 test("supervisor test runner rejects conflicting phase flags", () => {
