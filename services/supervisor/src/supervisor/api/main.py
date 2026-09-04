@@ -97,6 +97,9 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
+    HermesReviewHandoffRequest,
+    HermesRoleCapabilityProvisionRequestV1,
+    HermesRoleCapabilityRevocationRequestV1,
     HermesLaneRunProjectionApiEnvelope,
     HermesOutcomeProjectionApiEnvelope,
     ManagerLaneClarityHandoffApiEnvelope,
@@ -169,7 +172,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, read_hermes_lane_run, read_hermes_outcome
+from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, revoke_hermes_role_capability
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -1657,6 +1660,41 @@ async def ingest_hermes_outcome_ledger(
             detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
         ) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post("/hermes-control-plane/role-capabilities")
+async def provision_hermes_role_capability_route(payload: HermesRoleCapabilityProvisionRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    await require_memory_proposal_recovery_operator(request, session)
+    try:
+        binding = await provision_hermes_role_capability(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_role_capability_conflict").model_dump()) from exc
+    return {"capabilityBindingId": binding.capability_binding_id, "role": binding.role, "expiresAt": binding.expires_at, "metadataOnly": True, "rawPayloadRetained": False}
+
+
+@app.post("/hermes-control-plane/review-handoffs", response_model=HermesOutcomeProjectionApiEnvelope)
+async def ingest_hermes_review_handoff_route(payload: HermesReviewHandoffRequest, request: Request, session: AsyncSession = Depends(get_session)):
+    operator = await require_memory_proposal_recovery_operator(request, session)
+    operator_identity = operator.id if operator is not None else "operator:local"
+    try:
+        projection = await ingest_hermes_review_handoff(session, payload, operator_identity=operator_identity)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_handoff_conflict").model_dump()) from exc
+    return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke")
+async def revoke_hermes_role_capability_route(capability_binding_id: str, payload: HermesRoleCapabilityRevocationRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    operator = await require_memory_proposal_recovery_operator(request, session)
+    if capability_binding_id != payload.capabilityBindingId:
+        raise HTTPException(status_code=409, detail=error_response("Role capability path and payload mismatch.", "hermes_role_capability_conflict").model_dump())
+    if operator is not None and payload.revokedBy != operator.id:
+        raise HTTPException(status_code=403, detail=error_response("Role capability revocation actor does not match the authenticated operator.", "hermes_role_capability_actor_mismatch").model_dump())
+    try:
+        binding = await revoke_hermes_role_capability(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_role_capability_conflict").model_dump()) from exc
+    return {"capabilityBindingId": binding.capability_binding_id, "revokedAt": binding.revoked_at, "metadataOnly": True, "rawPayloadRetained": False}
 
 
 @app.post(

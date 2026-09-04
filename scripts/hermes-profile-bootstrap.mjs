@@ -33,6 +33,12 @@ function overlaps(left, right) {
   return inside(left, right) || inside(right, left);
 }
 
+function canonicalProfilePath(value) {
+  if (typeof value !== "string" || !isAbsolute(value)) return null;
+  const canonical = resolve(value);
+  return canonical === sep ? null : canonical;
+}
+
 function role(name, runtimeRoot, input) {
   const blockedCapabilityIds = ["provider", "billing", "deployment", "credential_store", "github_direct", "cleanup", "arbitrary_shell", "direct_database"];
   const profile = {
@@ -101,12 +107,12 @@ export function validateMemoryContextProposal(proposal, now = new Date().toISOSt
 }
 
 export function buildHermesProfileManifest(input) {
-  if (!validInput(input) || !isAbsolute(input.runtimeRoot) || !isAbsolute(input.developerWorkspace) || !isAbsolute(input.reviewerWorkspace) || !isAbsolute(input.artifactRoot)) return denied("profile_input_invalid");
-  const runtimeRoot = resolve(input.runtimeRoot);
-  const developerWorkspace = resolve(input.developerWorkspace);
-  const reviewerWorkspace = resolve(input.reviewerWorkspace);
-  const artifactRoot = resolve(input.artifactRoot);
-  if ([runtimeRoot, developerWorkspace, reviewerWorkspace, artifactRoot].includes("/")) return denied("profile_root_unbounded");
+  if (!validInput(input)) return denied("profile_input_invalid");
+  const runtimeRoot = canonicalProfilePath(input.runtimeRoot);
+  const developerWorkspace = canonicalProfilePath(input.developerWorkspace);
+  const reviewerWorkspace = canonicalProfilePath(input.reviewerWorkspace);
+  const artifactRoot = canonicalProfilePath(input.artifactRoot);
+  if (!runtimeRoot || !developerWorkspace || !reviewerWorkspace || !artifactRoot) return denied("profile_root_unbounded");
   if (!validPolicyDecision(input.policyDecision, input)) return denied("profile_policy_decision_invalid");
   if (input.policyDecision.decision === "deniedExternalImpact") return { status: "deniedExternalImpact", reasonCode: "external_impact_denied", nextAction: "Use the existing scoped, expiring External-Impact Decision path before any side effect." };
   if (input.policyDecision.decision !== "allowed") return denied("profile_policy_decision_denied");

@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from supervisor.application.hermes_outcomes import (
     _update_if_current,
     ingest_hermes_ledger,
+    ingest_hermes_review_handoff,
+    provision_hermes_role_capability,
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesLedgerIngestRequest
+from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
 from supervisor.infrastructure.db.models import HermesOutcome
@@ -118,4 +120,120 @@ async def test_hermes_ledger_migration_is_ordered_and_clean_install_aware(tmp_pa
         tables = set((await connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))).scalars())
     assert revisions == tuple(migration.revision for migration in MIGRATIONS)
     assert {"hermes_outcomes", "hermes_lane_runs", "hermes_delivery_evidence", "hermes_ledger_events"} <= tables
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_handoff_persists_verified_independent_disposition_and_exact_replay(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-handoff.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    initial = payload()
+    initial["laneRun"]["status"] = "review"  # type: ignore[index]
+    verification = {
+        "verificationRecordId": "verification:one", "outcomeId": "outcome:1", "laneRunId": "lane:1",
+        "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes",
+        "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:one",
+        "developerHome": "home:developer", "developerWorkspace": "workspace:developer",
+        "evidenceRefs": ["evidence:1"], "observedAt": "2026-09-02T12:01:00Z",
+        "idempotencyKey": "verification:one", "createdAt": "2026-09-02T12:01:00Z",
+        "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    }
+    disposition = {
+        "reviewDispositionId": "review:approve", "verificationRecordId": "verification:one", "outcomeId": "outcome:1",
+        "developerLaneRunId": "lane:1", "schemaVersion": "hermes_review_disposition.v1", "disposition": "approve",
+        "reviewerIdentity": "reviewer:one", "reviewerHome": "home:reviewer", "reviewerWorkspace": "workspace:reviewer",
+        "reasonCode": "reviewed", "nextAction": "Hold for the later delivery adapter.", "evidenceRefs": ["evidence:1"],
+        "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "review:approve", "createdAt": "2026-09-02T12:01:00Z",
+        "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    }
+    developer_home, developer_workspace = tmp_path / "developer-home", tmp_path / "developer-workspace"
+    reviewer_home, reviewer_workspace = tmp_path / "reviewer-home", tmp_path / "reviewer-workspace"
+    for directory in (developer_home, developer_workspace, reviewer_home, reviewer_workspace): directory.mkdir()
+    verification["developerHome"], verification["developerWorkspace"] = str(developer_home), str(developer_workspace)
+    disposition["reviewerHome"], disposition["reviewerWorkspace"] = str(reviewer_home), str(reviewer_workspace)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        for role, binding_id, secret, identity, home, workspace in (
+            ("developer", "capability:developer", "d" * 32, verification["developerIdentity"], verification["developerHome"], verification["developerWorkspace"]),
+            ("reviewer", "capability:reviewer", "r" * 32, disposition["reviewerIdentity"], disposition["reviewerHome"], disposition["reviewerWorkspace"]),
+        ):
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({
+                "capabilityBindingId": binding_id, "outcomeId": "outcome:1", "laneRunId": "lane:1", "role": role,
+                "identity": identity, "home": home, "workspace": workspace, "capabilitySecret": secret,
+                "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+            }))
+        verification_request = HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:developer", "developerCapabilityProof": "d" * 32})
+        assert (await ingest_hermes_review_handoff(session, verification_request)).currentResult == "retryable"
+        review_request = HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:reviewer", "reviewerCapabilityProof": "r" * 32})
+        approved = await ingest_hermes_review_handoff(session, review_request)
+        assert approved.currentLaneRunId == "lane:1" and approved.currentResult == "completed"
+        assert await ingest_hermes_review_handoff(session, review_request) == approved
+        overlapping = copy.deepcopy(disposition)
+        overlapping["reviewDispositionId"] = "review:overlap"
+        overlapping["idempotencyKey"] = "review:overlap"
+        overlapping["reviewerWorkspace"] = f"{developer_workspace}/../developer-workspace"
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": overlapping, "reviewerCapabilityBindingId": "capability:reviewer", "reviewerCapabilityProof": "r" * 32})
+        alias = tmp_path / "reviewer-alias"; alias.symlink_to(developer_workspace, target_is_directory=True)
+        overlapping["reviewerWorkspace"] = str(alias)
+        with pytest.raises(ValueError, match="review state"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": overlapping, "reviewerCapabilityBindingId": "capability:reviewer", "reviewerCapabilityProof": "r" * 32}))
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_valid_self_review_is_persisted_as_denied_policy_but_unbound_input_cannot_transition(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-denied.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    initial = payload(); initial["laneRun"]["status"] = "review"  # type: ignore[index]
+    developer_home, developer_workspace, reviewer_home = tmp_path / "developer-home", tmp_path / "developer-workspace", tmp_path / "reviewer-home"
+    for directory in (developer_home, developer_workspace, reviewer_home): directory.mkdir()
+    verification = {"verificationRecordId": "verification:denied", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:denied", "developerHome": str(developer_home), "developerWorkspace": str(developer_workspace), "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:denied", "createdAt": "2026-09-02T12:01:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}
+    disposition = {"reviewDispositionId": "review:denied", "verificationRecordId": "verification:denied", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "hermes_review_disposition.v1", "disposition": "approve", "reviewerIdentity": "reviewer:denied", "reviewerHome": str(reviewer_home), "reviewerWorkspace": str(developer_workspace), "reasonCode": "reviewed", "nextAction": "Hold for delivery.", "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "review:denied", "createdAt": "2026-09-02T12:02:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        with pytest.raises(ValueError, match="Reviewer capability"):
+            HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition})
+        assert (await read_hermes_outcome(session, "outcome:1")).currentResult == "retryable"  # type: ignore[union-attr]
+        for role, binding_id, secret, identity, home, workspace in (("developer", "capability:developer-denied", "d" * 32, verification["developerIdentity"], verification["developerHome"], verification["developerWorkspace"]), ("reviewer", "capability:reviewer-denied", "r" * 32, disposition["reviewerIdentity"], disposition["reviewerHome"], disposition["reviewerWorkspace"])):
+            await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({"capabilityBindingId": binding_id, "outcomeId": "outcome:1", "laneRunId": "lane:1", "role": role, "identity": identity, "home": home, "workspace": workspace, "capabilitySecret": secret, "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}))
+        await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:developer-denied", "developerCapabilityProof": "d" * 32}))
+        denied = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:reviewer-denied", "reviewerCapabilityProof": "r" * 32}))
+        assert denied.currentResult == "deniedPolicy" and denied.reasonCode == "independent_reviewer_required"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_handoff_operator_unavailable_exception_is_audited_without_reviewer_proof(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'review-unavailable.db'}")
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    initial = payload(); initial["laneRun"]["status"] = "review"  # type: ignore[index]
+    verification = {
+        "verificationRecordId": "verification:exception", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:exception", "developerHome": "home:developer-exception", "developerWorkspace": "workspace:developer-exception", "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:exception", "createdAt": "2026-09-02T12:01:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    }
+    disposition = {
+        "reviewDispositionId": "review:exception", "verificationRecordId": "verification:exception", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "hermes_review_disposition.v1", "disposition": "technical_block", "reviewerIdentity": "reviewer:unavailable", "reviewerHome": "home:reviewer-unavailable", "reviewerWorkspace": "workspace:reviewer-unavailable", "reasonCode": "reviewer_unavailable", "nextAction": "Return the original Developer lane after an Operator-recorded technical block.", "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "review:exception", "createdAt": "2026-09-02T12:02:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    }
+    exception = {"exceptionId": "exception:reviewer-unavailable", "outcomeId": "outcome:1", "laneRunId": "lane:1", "reason": "reviewer_unavailable", "riskClass": "technical_block", "compensatingReviewRef": "review:later", "recordedBy": "operator:local", "recordedAt": "2026-09-02T12:01:30Z", "reviewOrExpiryAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}
+    developer_home, developer_workspace = tmp_path / "developer-home", tmp_path / "developer-workspace"
+    reviewer_home, reviewer_workspace = tmp_path / "reviewer-home", tmp_path / "reviewer-workspace"
+    for directory in (developer_home, developer_workspace, reviewer_home, reviewer_workspace): directory.mkdir()
+    verification["developerHome"], verification["developerWorkspace"] = str(developer_home), str(developer_workspace)
+    disposition["reviewerHome"], disposition["reviewerWorkspace"] = str(reviewer_home), str(reviewer_workspace)
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
+        await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({"capabilityBindingId": "capability:developer-exception", "outcomeId": "outcome:1", "laneRunId": "lane:1", "role": "developer", "identity": verification["developerIdentity"], "home": verification["developerHome"], "workspace": verification["developerWorkspace"], "capabilitySecret": "d" * 32, "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False}))
+        await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:developer-exception", "developerCapabilityProof": "d" * 32}))
+        overlap = copy.deepcopy(disposition); overlap["reviewDispositionId"] = "review:exception-overlap"; overlap["idempotencyKey"] = "review:exception-overlap"; overlap["reviewerWorkspace"] = verification["developerWorkspace"]
+        denied = await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": overlap, "unavailableReviewerException": exception}), operator_identity="operator:local", commit=False)
+        assert denied.currentResult == "deniedPolicy"
+        await session.rollback()
+        request = HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "unavailableReviewerException": exception})
+        blocked = await ingest_hermes_review_handoff(session, request, operator_identity="operator:local")
+        assert blocked.currentResult == "blockedTechnical"
+        with pytest.raises(ValueError, match="authenticated Operator"):
+            await ingest_hermes_review_handoff(session, request, operator_identity="operator:other")
     await engine.dispose()

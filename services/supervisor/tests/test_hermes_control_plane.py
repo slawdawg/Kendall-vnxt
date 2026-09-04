@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesLedgerIngestRequest
+from supervisor.api.schemas import HermesLedgerIngestRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -44,3 +44,23 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert route("/hermes-control-plane/board-events").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/outcomes/{outcome_id}").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/lane-runs/{lane_run_id}").response_model.__name__ == "HermesLaneRunProjectionApiEnvelope"
+    assert route("/hermes-control-plane/role-capabilities").methods == {"POST"}
+    assert route("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke").methods == {"POST"}
+    assert route("/hermes-control-plane/review-handoffs").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
+
+
+def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():
+    provision = HermesRoleCapabilityProvisionRequestV1.model_validate({
+        "capabilityBindingId": "capability:developer-one", "outcomeId": "outcome:one", "laneRunId": "lane:one",
+        "role": "developer", "identity": "developer:one", "home": "home:developer", "workspace": "workspace:developer",
+        "capabilitySecret": "d" * 32,
+        "createdAt": "2026-09-04T00:00:00Z", "expiresAt": "2099-01-01T00:00:00Z",
+        "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    assert provision.role == "developer"
+    with pytest.raises(ValidationError):
+        HermesRoleCapabilityProvisionRequestV1.model_validate({**provision.model_dump(mode="json"), "expiresAt": "2026-09-04T00:00:00Z"})
+    with pytest.raises(ValidationError):
+        HermesRoleCapabilityProvisionRequestV1.model_validate({**provision.model_dump(mode="json"), "createdAt": "2099-01-01T00:00:00Z", "expiresAt": "2099-01-02T00:00:00Z"})
+    revoked = HermesRoleCapabilityRevocationRequestV1.model_validate({"capabilityBindingId": provision.capabilityBindingId, "revokedBy": "operator:one", "revokedAt": "2026-09-04T00:30:00Z", "metadataOnly": True, "rawPayloadRetained": False})
+    assert revoked.revokedBy == "operator:one"
