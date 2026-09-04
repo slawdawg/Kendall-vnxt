@@ -458,9 +458,13 @@ async def _require_approved_review_snapshot(session: AsyncSession, *, evidence_r
     ))).all()
     current = [item for item in snapshots if item.observed_at >= max(outcome.updated_at, lane.updated_at) and item.reviewed_head_sha == expected_head_sha]
     current_ids = {item.delivery_evidence_id for item in current}
-    if not set(evidence_refs) <= current_ids:
+    snapshot_refs = [reference for reference in evidence_refs if reference in current_ids]
+    other_refs = [reference for reference in evidence_refs if reference not in current_ids]
+    if not snapshot_refs:
         raise ValueError("Delivery audit must reference the current approved-review evidence snapshot directly.")
-    return max((item for item in current if item.delivery_evidence_id in evidence_refs), key=lambda item: item.observed_at)
+    if other_refs:
+        await _require_bound_evidence(session, evidence_refs=other_refs, outcome=outcome, lane=lane)
+    return max((item for item in current if item.delivery_evidence_id in snapshot_refs), key=lambda item: item.observed_at)
 
 
 def _canonical_profile_path(value: str) -> str:

@@ -31,9 +31,9 @@ def _ledger_payload() -> dict[str, object]:
     later = now + timedelta(minutes=1)
     refs = ["evidence:hermes-ledger-1"]
     return {
-        "outcome": {"outcomeId": "outcome:1", "schemaVersion": "hermes_outcome.v1", "title": "Persist Hermes outcome", "summary": "Metadata-only ledger proof.", "status": "active", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "observedAt": _iso(later), "idempotencyKey": "outcome:1", "createdAt": _iso(now), "updatedAt": _iso(later), "metadataOnly": True, "rawPayloadRetained": False},
-        "laneRun": {"laneRunId": "lane:1", "outcomeId": "outcome:1", "schemaVersion": "hermes_lane_run.v1", "laneType": "implementation", "status": "running", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "heartbeatAt": _iso(now), "staleDeadlineAt": _iso(later), "timeoutAt": _iso(later + timedelta(minutes=1)), "retryBudget": 1, "reworkBudget": 1, "evidenceFingerprint": "sha256:ledger-proof", "observedAt": _iso(later), "idempotencyKey": "lane:1", "createdAt": _iso(now), "updatedAt": _iso(later), "metadataOnly": True, "rawPayloadRetained": False},
-        "deliveryEvidence": {"deliveryEvidenceId": "evidence:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "delivery_evidence.v1", "evidenceType": "verification", "summary": "Focused check passed.", "sourceRef": "test:hermes-ledger", "observedAt": _iso(later), "evidenceRefs": refs, "idempotencyKey": "evidence:1", "createdAt": _iso(now), "metadataOnly": True, "rawPayloadRetained": False},
+        "outcome": {"outcomeId": "outcome:1", "taskId": "task:hermes-one", "schemaVersion": "hermes_outcome.v1", "title": "Persist Hermes outcome", "summary": "Metadata-only ledger proof.", "status": "active", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "observedAt": _iso(later), "idempotencyKey": "outcome:1", "createdAt": _iso(now), "updatedAt": _iso(later), "metadataOnly": True, "rawPayloadRetained": False},
+        "laneRun": {"laneRunId": "lane:1", "outcomeId": "outcome:1", "taskId": "task:hermes-one", "schemaVersion": "hermes_lane_run.v1", "laneType": "implementation", "status": "running", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "heartbeatAt": _iso(now), "staleDeadlineAt": _iso(later), "timeoutAt": _iso(later + timedelta(minutes=1)), "retryBudget": 1, "reworkBudget": 1, "evidenceFingerprint": "sha256:ledger-proof", "observedAt": _iso(later), "idempotencyKey": "lane:1", "createdAt": _iso(now), "updatedAt": _iso(later), "metadataOnly": True, "rawPayloadRetained": False},
+        "deliveryEvidence": {"deliveryEvidenceId": "evidence:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "taskId": "task:hermes-one", "schemaVersion": "delivery_evidence.v1", "evidenceType": "verification", "summary": "Focused check passed.", "sourceRef": "test:hermes-ledger", "observedAt": _iso(later), "evidenceRefs": refs, "idempotencyKey": "evidence:1", "createdAt": _iso(now), "metadataOnly": True, "rawPayloadRetained": False},
         "event": {"eventId": "event:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_lifecycle_event.v1", "eventName": "hermes.outcome.created", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "correlationId": "correlation:1", "causationId": "causation:1", "observedAt": _iso(later), "idempotencyKey": "event:1", "emittedAt": _iso(later), "metadataOnly": True, "rawPayloadRetained": False, "authoritative": False},
     }
 
@@ -106,6 +106,10 @@ async def test_signed_bound_event_is_replay_safe_and_updates_projection_atomical
     async with engine.begin() as connection:
         assert await connection.scalar(text("SELECT COUNT(*) FROM hermes_board_event_receipts")) == 1
         assert await connection.scalar(text("SELECT COUNT(*) FROM hermes_ledger_events")) == 2
+        assert await connection.scalar(text("SELECT task_id FROM hermes_outcomes WHERE outcome_id = 'outcome:1'")) == "task:hermes-one"
+        assert await connection.scalar(text("SELECT task_id FROM hermes_lane_runs WHERE lane_run_id = 'lane:1'")) == "task:hermes-one"
+        evidence_id = _derived_id("evidence:board", "event:board-1")
+        assert await connection.scalar(text(f"SELECT task_id FROM hermes_delivery_evidence WHERE delivery_evidence_id = '{evidence_id}'")) == "task:hermes-one"
     await engine.dispose()
 
 
