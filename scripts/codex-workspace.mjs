@@ -21696,7 +21696,18 @@ function releasedPrHandoffEvidence(target, context, evidence) {
   if (typeof target.record.pr_url !== "string" || !target.record.pr_url.trim()) {
     result.errors.push("released PR handoff requires the recorded manifest PR URL");
   }
-  result.idle_lease_evidence = releasedPrHandoffIdleLeaseEvidence(context.state, target.record.task_id, context.preflightLockInspection, target.record.owner);
+  result.idle_lease_evidence = context.lockedPredecessorInspection
+    ? releasedPrHandoffLockedIdleLeaseEvidence(
+      context.preflightLockInspection,
+      context.lockedPredecessorInspection,
+      target.record.owner,
+    )
+    : releasedPrHandoffIdleLeaseEvidence(
+      context.state,
+      target.record.task_id,
+      context.preflightLockInspection,
+      target.record.owner,
+    );
   if (result.idle_lease_evidence.status !== "matched") {
     result.errors.push(result.idle_lease_evidence.reason || "released PR handoff requires an exact idle versioned lease");
   }
@@ -21740,6 +21751,37 @@ function releasedPrHandoffPredecessorBinding(preflight, lockedPredecessor) {
     generation: preflight.generation,
     owner: preflight.metadata.owner,
     releasedAt: preflight.release.released_at,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function releasedPrHandoffLockedIdleLeaseEvidence(preflight, lockedPredecessor, expectedOwner) {
+  if (!lockedPredecessor) {
+    return { status: "blocked", reason: "released PR handoff did not retain locked predecessor idle evidence", metadataOnly: true };
+  }
+  const idle = lockedPredecessor.idleLeaseEvidence;
+  const samePredecessor = preflight?.protocol === "versioned_lease" &&
+    preflight.status === "released" &&
+    preflight.reason === "owner_released_generation" &&
+    preflight.generation === lockedPredecessor.generation &&
+    preflight.metadata?.owner === expectedOwner &&
+    lockedPredecessor.owner === expectedOwner &&
+    preflight.metadata?.token && lockedPredecessor.tokenDigest &&
+    taskLeaseTokenDigest(preflight.metadata.token) === lockedPredecessor.tokenDigest &&
+    preflight.release?.released_at === lockedPredecessor.releasedAt;
+  if (!samePredecessor || !idle || idle.status !== "matched" || idle.fence !== "clear" || idle.process !== "absent") {
+    return { status: "blocked", reason: "released PR handoff actual predecessor idle evidence drifted before locked takeover admission", metadataOnly: true };
+  }
+  return {
+    status: "matched",
+    owner: lockedPredecessor.owner,
+    generation: lockedPredecessor.generation,
+    releasedAt: lockedPredecessor.releasedAt,
+    heartbeatAt: idle.heartbeatAt,
+    fence: idle.fence,
+    process: idle.process,
+    source: "locked_actual_predecessor",
     metadataOnly: true,
     rawPayloadRetained: false,
   };
@@ -22245,7 +22287,11 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
       throw error;
     }
     return { path, packet };
-  }, { recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true });
+  }, {
+    recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true,
+    owner: currentOwner,
+    requireReleasedPrHandoffIdleEvidence: options.allowReleasedPrHandoff !== undefined,
+  });
 }
 
 function canonicalManifestBytes(manifest) {
@@ -24500,8 +24546,8 @@ function redactTaskLockInspection(inspection) {
   };
 }
 
-function taskLeasePredecessorProof(inspection) {
-  return {
+function taskLeasePredecessorProof(inspection, idleLeaseEvidence = null) {
+  const proof = {
     protocol: inspection?.protocol || "unknown",
     status: inspection?.status || "ambiguous",
     reason: inspection?.reason || "lock_inspection_unavailable",
@@ -24512,6 +24558,17 @@ function taskLeasePredecessorProof(inspection) {
     metadataOnly: true,
     rawPayloadRetained: false,
   };
+  if (idleLeaseEvidence) {
+    proof.idleLeaseEvidence = {
+      status: idleLeaseEvidence.status,
+      heartbeatAt: idleLeaseEvidence.heartbeatAt || null,
+      fence: idleLeaseEvidence.fence || null,
+      process: idleLeaseEvidence.process || null,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  return proof;
 }
 
 function assertTaskLeaseAcquisitionCapacity(inspection, taskId, options = {}) {
@@ -24586,6 +24643,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
     created_at: new Date().toISOString(),
   };
   let inspection;
+  let predecessorProof = taskLeasePredecessorProof(lockInspection);
   try {
     publishTaskLeaseRoot(state, taskId, rootRecord);
   } catch (error) {
@@ -24594,6 +24652,39 @@ function withManifestLock(state, taskId, fn, options = {}) {
     // A competing immutable handoff can consume the final safe slot after our
     // first inspection.  Re-reserve capacity before linking our successor.
     assertTaskLeaseAcquisitionCapacity(inspection, taskId, options);
+    if (inspection.status === "released" && options.requireReleasedPrHandoffIdleEvidence === true) {
+      const initialIdleLeaseEvidence = releasedPrHandoffIdleLeaseEvidence(state, taskId, inspection, inspection.metadata?.owner);
+      if (initialIdleLeaseEvidence.status !== "matched") {
+        throw new Error(`${initialIdleLeaseEvidence.reason || "released predecessor idle evidence is not provable"}; mutation=none.`);
+      }
+      // Re-read the exact predecessor while the successor is still unpublished.
+      // Any heartbeat, execution intent, manifest intent, or predecessor change
+      // in this admission window fails closed before immutable handoff publication.
+      const revalidatedInspection = inspectTaskLease(state, taskId);
+      const idleLeaseEvidence = releasedPrHandoffIdleLeaseEvidence(
+        state,
+        taskId,
+        revalidatedInspection,
+        inspection.metadata?.owner,
+      );
+      const unchanged = revalidatedInspection.protocol === inspection.protocol &&
+        revalidatedInspection.status === inspection.status &&
+        revalidatedInspection.reason === inspection.reason &&
+        revalidatedInspection.generation === inspection.generation &&
+        revalidatedInspection.metadata?.owner === inspection.metadata?.owner &&
+        revalidatedInspection.metadata?.token === inspection.metadata?.token &&
+        revalidatedInspection.release?.released_at === inspection.release?.released_at &&
+        idleLeaseEvidence.status === "matched" &&
+        idleLeaseEvidence.heartbeatAt === initialIdleLeaseEvidence.heartbeatAt &&
+        idleLeaseEvidence.fence === initialIdleLeaseEvidence.fence &&
+        idleLeaseEvidence.process === initialIdleLeaseEvidence.process;
+      if (!unchanged) {
+        throw new Error(`${idleLeaseEvidence.reason || "released predecessor idle evidence changed during locked takeover admission"}; mutation=none.`);
+      }
+      predecessorProof = taskLeasePredecessorProof(revalidatedInspection, idleLeaseEvidence);
+    } else {
+      predecessorProof = taskLeasePredecessorProof(inspection);
+    }
     const handoff = {
       schema_version: taskLeaseSchemaVersion,
       task_id: taskId,
@@ -24679,7 +24770,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
   };
   try {
     activeTaskLeaseWriteContext = writeContext;
-    return fn({ token: metadata.token, generation: metadata.generation, heartbeat, release, predecessor: taskLeasePredecessorProof(inspection || lockInspection) });
+    return fn({ token: metadata.token, generation: metadata.generation, heartbeat, release, predecessor: predecessorProof });
   } finally {
     activeTaskLeaseWriteContext = priorWriteContext;
     release();

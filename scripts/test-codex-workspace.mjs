@@ -7253,6 +7253,59 @@ try {
     } finally {
       cleanupDirtyTakeoverFixture(predecessorReplacement);
     }
+
+    const assertActualPredecessorDriftIsRejected = (name, injectedLines, expectedError) => {
+      const fixture = prepare(name);
+      try {
+        const source = readFileSync(fixture.script, "utf8");
+        const seam = "      // Re-read the exact predecessor while the successor is still unpublished.";
+        assert(source.includes(seam), "fixture did not expose the locked predecessor admission seam");
+        const replacement = [
+          ...injectedLines,
+          seam,
+        ].join("\n");
+        writeFileSync(fixture.script, source.replace(seam, replacement));
+        assert(readFileSync(fixture.script, "utf8").includes(injectedLines[0].trim()), "fixture did not inject the locked predecessor drift trigger");
+        runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
+        runGit(fixture.worktree, ["commit", "-q", "-m", "fixture locked predecessor drift seam"]);
+        const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+        fixture.env = {
+          ...fixture.env,
+          CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: JSON.stringify([{
+            number: 916,
+            state: "OPEN",
+            headRefName: fixture.branch,
+            baseRefName: "main",
+            headRefOid: head,
+            url: "https://github.com/example/repo/pull/916",
+          }]),
+        };
+        const before = readFileSync(fixture.manifestPath, "utf8");
+        const result = runFixtureScript(fixture, args(fixture, 916));
+        assert(result.code !== 0, "released PR handoff accepted actual predecessor drift after preflight");
+        assert(result.stderr.includes(expectedError), result.stderr || result.stdout);
+        assert(readFileSync(fixture.manifestPath, "utf8") === before, "actual predecessor drift handoff mutated the manifest");
+      } finally {
+        cleanupDirtyTakeoverFixture(fixture);
+      }
+    };
+
+    assertActualPredecessorDriftIsRejected(
+      "released-pr-handoff-locked-predecessor-heartbeat-drift",
+      [
+        "      appendTaskLeaseHeartbeat(state, taskId, inspection.metadata);",
+      ],
+      "heartbeat after the release record",
+    );
+
+    assertActualPredecessorDriftIsRejected(
+      "released-pr-handoff-locked-predecessor-intent-drift",
+      [
+        "      mkdirSync(taskLeasePath(state, taskId, \"external-intents\"), { recursive: true });",
+        "      writeNewJson(taskLeasePath(state, taskId, \"external-intents\", \"after-preflight.json\"), { schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: inspection.generation, token_digest: taskLeaseTokenDigest(inspection.metadata.token), intent_id: \"77777777-7777-4777-8777-777777777777\", runner_pid: 999999999, runner_process_start_identity: \"linux-proc-start-ticks:999999999:1\", command_digest: \"a\".repeat(64), started_at: new Date().toISOString() });",
+      ],
+      "exact released versioned lease",
+    );
   });
 
   test("legacy zero-byte dirty lock remains inspection-only even with approval", () => {
