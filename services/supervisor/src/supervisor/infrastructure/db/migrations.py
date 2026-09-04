@@ -192,8 +192,14 @@ async def _apply_hermes_task_binding(connection: AsyncConnection) -> None:
         "hermes_delivery_evidence",
         "hermes_role_capability_bindings",
     ):
-        await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN task_id VARCHAR(160)"))
-        await connection.execute(text(f"CREATE INDEX ix_{table}_task_id ON {table} (task_id)"))
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"] for column in inspect(sync_connection).get_columns(table)
+            }
+        )
+        if "task_id" not in columns:
+            await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN task_id VARCHAR(160)"))
+        await connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_task_id ON {table} (task_id)"))
 
 
 async def _apply_hermes_review_thread_adjudication(connection: AsyncConnection) -> None:
