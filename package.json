@@ -74,6 +74,7 @@
     "test:local-verification-contracts": "node --test tests/local-verification-contracts.test.mjs",
     "test:local-verification-state-store": "node --test tests/local-verification-state-store.test.mjs",
     "test:local-verification-lifecycle": "node --test tests/local-verification-lifecycle.test.mjs",
+    "test:hermes-delivery-adapter": "node --test tests/hermes-control-plane.contract.test.mjs tests/hermes-delivery-adapter.contract.test.mjs",
     "test:static-bundles": "node --test tests/static-bundles.test.mjs",
     "test:ci-promotion-evidence": "node --test tests/ci-promotion-evidence.test.mjs",
     "test:ci-promotion-packet": "node --test tests/ci-promotion-packet.test.mjs",
