@@ -9,7 +9,7 @@ import test from "node:test";
 const contractsRoot = new URL("../packages/contracts/src/", import.meta.url);
 const hermesRoot = new URL("../packages/contracts/src/hermes-control-plane/", import.meta.url);
 
-const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "schema-json.ts"];
+const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "schema-json.ts"];
 const contractNames = [
   "HermesOutcomeV1",
   "HermesLaneRunV1",

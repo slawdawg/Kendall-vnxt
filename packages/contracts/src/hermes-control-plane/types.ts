@@ -27,6 +27,8 @@ export const HERMES_EXTERNAL_IMPACT_REQUEST_SCHEMA_VERSION = "external_impact_re
 export const HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION = "follow_up_work.v1" as const;
 export const HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1" as const;
 export const HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_board_lifecycle_event.v1" as const;
+export const HERMES_VERIFICATION_RECORD_SCHEMA_VERSION = "hermes_verification_record.v1" as const;
+export const HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION = "hermes_review_disposition.v1" as const;
 
 export type HermesOutcomeStatus = "proposed" | "active" | "completed" | "blocked" | "rework";
 export type HermesLaneRunStatus = "queued" | "running" | "review" | "rework" | "completed" | "blocked";
@@ -202,6 +204,68 @@ export interface HermesBoardLifecycleEventV1 {
   readonly rawPayloadRetained: false;
   readonly authoritative: false;
 }
+
+export interface VerificationRecordV1 {
+  readonly verificationRecordId: import("./ids").VerificationRecordId;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly schemaVersion: typeof HERMES_VERIFICATION_RECORD_SCHEMA_VERSION;
+  readonly result: "passed" | "failed" | "inconclusive";
+  readonly target: string;
+  readonly sourceFingerprint: string;
+  readonly developerIdentity: string;
+  readonly developerHome: string;
+  readonly developerWorkspace: string;
+  readonly evidenceRefs: readonly HermesEvidenceRefId[];
+  readonly observedAt: string;
+  readonly idempotencyKey: HermesIdempotencyKey;
+  readonly createdAt: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+  readonly expectedOutcomeRevision: number;
+  readonly expectedLaneRevision: number;
+}
+
+export interface ReviewDispositionV1 {
+  readonly reviewDispositionId: import("./ids").ReviewDispositionId;
+  readonly verificationRecordId: import("./ids").VerificationRecordId;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly developerLaneRunId: import("./ids").HermesLaneRunId;
+  readonly schemaVersion: typeof HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION;
+  readonly disposition: "approve" | "rework" | "technical_block";
+  readonly reviewerIdentity: string;
+  readonly reviewerHome: string;
+  readonly reviewerWorkspace: string;
+  readonly reasonCode: string;
+  readonly nextAction: string;
+  readonly evidenceRefs: readonly HermesEvidenceRefId[];
+  readonly observedAt: string;
+  readonly idempotencyKey: HermesIdempotencyKey;
+  readonly createdAt: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+  readonly expectedOutcomeRevision: number;
+  readonly expectedLaneRevision: number;
+}
+
+export interface HermesReviewerUnavailableExceptionV1 {
+  readonly exceptionId: string;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly reason: string;
+  readonly riskClass: "technical_block" | "medium";
+  readonly compensatingReviewRef: string;
+  readonly recordedBy: string;
+  readonly recordedAt: string;
+  readonly reviewOrExpiryAt: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+}
+
+export type ReviewHandoffV1 =
+  | { readonly verification: VerificationRecordV1 & { readonly result: "passed" }; readonly disposition: ReviewDispositionV1; readonly reviewerCapabilityBindingId: string; readonly reviewerCapabilityProof: string; }
+  | { readonly verification: VerificationRecordV1 & { readonly result: "passed" }; readonly disposition: ReviewDispositionV1 & { readonly disposition: "technical_block" }; readonly unavailableReviewerException: HermesReviewerUnavailableExceptionV1; }
+  | { readonly verification: VerificationRecordV1; readonly disposition?: never; readonly unavailableReviewerException?: never; readonly developerCapabilityBindingId: string; readonly developerCapabilityProof: string; };
 
 export type HermesLifecycleEventEnvelopeV1 = HermesLifecycleEventV1;
 

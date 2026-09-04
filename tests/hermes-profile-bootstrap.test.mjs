@@ -80,6 +80,27 @@ test("fails closed on shared review/developer roots and renders only an auditabl
   assert.equal(expired.status, "deniedPolicy");
 });
 
+test("canonicalizes trusted profile roots before checking independent workspace overlap", () => {
+  const canonical = buildHermesProfileManifest({
+    ...input,
+    runtimeRoot: "/var/lib/kendall-hermes/./",
+    developerWorkspace: "/work/teams/../developer",
+    reviewerWorkspace: "/work/reviewer/./",
+    artifactRoot: "/work/artifacts/./",
+  });
+  assert.equal(canonical.status, "allowed");
+  const developer = canonical.manifest.roles.find((role) => role.name === "Developer");
+  assert.equal(developer.home, "/var/lib/kendall-hermes/profiles/developer");
+  assert.deepEqual(developer.writeRoots, ["/work/developer"]);
+
+  const aliasOverlap = buildHermesProfileManifest({
+    ...input,
+    reviewerWorkspace: "/work/developer/../developer",
+  });
+  assert.equal(aliasOverlap.status, "deniedPolicy");
+  assert.equal(aliasOverlap.reasonCode, "independent_reviewer_required");
+});
+
 test("denies profile requests with cost or real-user impact before side effect", () => {
   for (const classifierReason of ["spend_denied", "real_user_deployment_denied", "uncertain_external_impact_denied"]) {
     const result = buildHermesProfileManifest({ ...input, policyDecision: { ...input.policyDecision, decision: "deniedExternalImpact", reasonCode: classifierReason } });

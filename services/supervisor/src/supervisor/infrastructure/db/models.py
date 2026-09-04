@@ -971,6 +971,100 @@ class HermesBoardBinding(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
 
 
+class HermesRoleCapabilityBinding(Base):
+    """Digest-only, task-scoped role capability binding for review handoffs."""
+
+    __tablename__ = "hermes_role_capability_bindings"
+    __table_args__ = (
+        CheckConstraint("role IN ('developer', 'reviewer')", name="ck_hermes_role_capability_role"),
+        CheckConstraint("expires_at > created_at", name="ck_hermes_role_capability_expiry"),
+        CheckConstraint("(revoked_at IS NULL) = (revoked_by IS NULL)", name="ck_hermes_role_capability_revocation_pair"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_role_capability_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_role_capability_no_raw_payload"),
+    )
+
+    capability_binding_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    identity: Mapped[str] = mapped_column(String(120))
+    home: Mapped[str] = mapped_column(String(240))
+    workspace: Mapped[str] = mapped_column(String(240))
+    capability_digest_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesVerificationRecord(Base):
+    """Immutable metadata-only verification bound to the original Developer lane."""
+
+    __tablename__ = "hermes_verification_records"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_verification_idempotency"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_verification_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_verification_no_raw_payload"),
+    )
+
+    verification_record_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    developer_identity: Mapped[str] = mapped_column(String(120))
+    developer_home: Mapped[str] = mapped_column(String(240))
+    developer_workspace: Mapped[str] = mapped_column(String(240))
+    developer_capability_binding_id: Mapped[str] = mapped_column(String(120), index=True)
+    result: Mapped[str] = mapped_column(String(32))
+    target: Mapped[str] = mapped_column(String(240))
+    source_fingerprint: Mapped[str] = mapped_column(String(240))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    expected_outcome_revision: Mapped[int] = mapped_column(Integer)
+    expected_lane_revision: Mapped[int] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesReviewDisposition(Base):
+    """Atomic independent Reviewer decision; never a delivery authority."""
+
+    __tablename__ = "hermes_review_dispositions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_review_disposition_idempotency"),
+        UniqueConstraint("verification_record_id", name="uq_hermes_review_disposition_verification"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_review_disposition_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_review_disposition_no_raw_payload"),
+    )
+
+    review_disposition_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    verification_record_id: Mapped[str] = mapped_column(ForeignKey("hermes_verification_records.verification_record_id"), index=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    developer_lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    disposition: Mapped[str] = mapped_column(String(32))
+    reviewer_identity: Mapped[str] = mapped_column(String(120))
+    reviewer_home: Mapped[str] = mapped_column(String(240))
+    reviewer_workspace: Mapped[str] = mapped_column(String(240))
+    reviewer_capability_binding_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(120))
+    next_action: Mapped[str] = mapped_column(String(360))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    expected_outcome_revision: Mapped[int] = mapped_column(Integer)
+    expected_lane_revision: Mapped[int] = mapped_column(Integer)
+    request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    exception_requirement_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HermesBoardEventReceipt(Base):
     """Append-only metadata-only accepted bridge event/replay fence."""
 
