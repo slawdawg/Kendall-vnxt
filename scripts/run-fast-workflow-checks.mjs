@@ -38,6 +38,7 @@ const suites = {
     "test:dashboard-pipeline-fixtures",
   ],
   localVerification: [
+    "test:hermes-delivery-adapter",
     "test:local-verification-contracts",
     "test:local-verification-state-store",
     "test:local-verification-lifecycle",
