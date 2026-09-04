@@ -1,5 +1,5 @@
 import { isHermesEvidenceRefId, isHermesIdempotencyKey, isHermesLaneRunId, isHermesOutcomeId, isOpaqueId } from "./ids";
-import { guardFailsClosed, hasExactKeys, isEvidenceRefs, isMetadataOnlyRecord, isRecord, isSafeText, isTimestampOrder, isUtcIsoTimestamp, type HermesResult } from "./types";
+import { HERMES_RESULT_VALUES, guardFailsClosed, hasExactKeys, isEvidenceRefs, isMetadataOnlyRecord, isRecord, isSafeText, isTimestampOrder, isUtcIsoTimestamp, type HermesResult } from "./types";
 
 export const HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION = "hermes_delivery_audit_action.v1" as const;
 export const HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION = "hermes_delivery_action_result.v1" as const;
@@ -78,7 +78,7 @@ const isPullRequestNumber = (value: unknown): value is number | null => value ==
 const isRevision = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const isAction = (value: unknown): value is HermesOrdinaryDeliveryAction => typeof value === "string" && HERMES_ORDINARY_DELIVERY_ACTIONS.includes(value as HermesOrdinaryDeliveryAction);
 const isStewardIdentity = (value: unknown): value is string => isOpaqueId(value) && value.length <= 120;
-const isResult = (value: unknown): value is HermesResult => ["allowed", "deniedPolicy", "staleFacts", "retryable", "blockedTechnical", "completed"].includes(value as string);
+const isResult = (value: unknown): value is HermesResult => HERMES_RESULT_VALUES.includes(value as HermesResult);
 const timestampMillis = (value: unknown): number => typeof value === "string" ? Date.parse(value) : Number.NaN;
 const isPrBoundAction = (value: HermesOrdinaryDeliveryAction): boolean => ["request_review", "resolve_current_thread", "merge"].includes(value);
 const isReviewThreadId = (value: unknown): value is string => typeof value === "string" && value.length <= 160 && /^PRRT_[A-Za-z0-9_-]+$/.test(value);
@@ -89,6 +89,7 @@ const includesRequiredEvidence = (value: Record<string, unknown>): boolean => {
   const evidenceRefs = value.evidenceRefs;
   return Array.isArray(evidenceRefs) && [value.policyEvidenceRef, value.localVerificationRef, value.rollbackRef].every((reference) => evidenceRefs.includes(reference));
 };
+const includesRollbackEvidence = (value: Record<string, unknown>): boolean => Array.isArray(value.evidenceRefs) && value.evidenceRefs.includes(value.rollbackRef);
 
 export function isHermesDeliveryAuditRequestV1(value: unknown): value is HermesDeliveryAuditRequestV1 {
   return guardFailsClosed(() => {
@@ -110,7 +111,7 @@ export function isHermesDeliveryActionResultV1(value: unknown): value is HermesD
     return isOpaqueId(value.deliveryActionResultId) && isSafeText(value.taskId, 160) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) &&
       value.schemaVersion === HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION && isAction(value.requestedAction) && isResult(value.decision) &&
       isSafeText(value.reasonCode, 160) && value.repository === HERMES_CANONICAL_DELIVERY_REPOSITORY && value.baseBranch === HERMES_CANONICAL_DELIVERY_BASE &&
-      isExactHead(value.exactHeadSha) && isPullRequestNumber(value.pullRequestNumber) && isAction(value.requestedAction) && (!isPrBoundAction(value.requestedAction) || value.pullRequestNumber !== null) && hasExactAdjudication(value) && isEvidenceRefs(value.evidenceRefs) && isSafeText(value.nextAction, 240) &&
+      isExactHead(value.exactHeadSha) && isPullRequestNumber(value.pullRequestNumber) && isAction(value.requestedAction) && (!isPrBoundAction(value.requestedAction) || value.pullRequestNumber !== null) && hasExactAdjudication(value) && isEvidenceRefs(value.evidenceRefs) && includesRollbackEvidence(value) && isSafeText(value.nextAction, 240) &&
       isHermesEvidenceRefId(value.rollbackRef) && isUtcIsoTimestamp(value.observedAt) && isTimestampOrder(value, ["createdAt", "observedAt"]) && timestampMillis(value.observedAt) <= Date.now() && isHermesIdempotencyKey(value.idempotencyKey) &&
       isMetadataOnlyRecord(value, HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION, ["observedAt", "createdAt"]);
   });

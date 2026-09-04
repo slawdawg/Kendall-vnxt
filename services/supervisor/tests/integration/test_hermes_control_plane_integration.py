@@ -263,6 +263,30 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
             "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "delivery-audit:one", "createdAt": "2026-09-02T12:02:00Z",
             "expectedOutcomeRevision": outcome.revision, "expectedLaneRevision": lane.revision, "metadataOnly": True, "rawPayloadRetained": False,
         }
+        bound_refs = ("evidence:policy-current", "evidence:verification-current", "evidence:rollback-current")
+        for reference in bound_refs:
+            session.add(HermesDeliveryEvidence(
+                delivery_evidence_id=reference, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id,
+                task_id=outcome.task_id, schema_version="delivery_evidence.v1", evidence_type="verification",
+                summary="Current bounded delivery evidence.", source_ref=f"test:{reference}", observed_at=snapshot.observed_at,
+                evidence_refs_json=[reference], idempotency_key=reference, created_at=snapshot.created_at,
+                metadata_only=True, raw_payload_retained=False,
+            ))
+        await session.commit()
+        distinct_bound = copy.deepcopy(audit)
+        distinct_bound.update({
+            "policyEvidenceRef": bound_refs[0], "localVerificationRef": bound_refs[1], "rollbackRef": bound_refs[2],
+            "evidenceRefs": [snapshot.delivery_evidence_id, *bound_refs], "idempotencyKey": "delivery-audit:distinct-bound",
+        })
+        assert (await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(distinct_bound))).decision == "allowed"
+        without_snapshot = copy.deepcopy(distinct_bound)
+        without_snapshot.update({"evidenceRefs": list(bound_refs), "idempotencyKey": "delivery-audit:without-snapshot"})
+        with pytest.raises(ValueError, match="approved-review evidence"):
+            await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(without_snapshot))
+        unresolved_bound = copy.deepcopy(distinct_bound)
+        unresolved_bound.update({"evidenceRefs": [snapshot.delivery_evidence_id, *bound_refs, "evidence:unresolved"], "idempotencyKey": "delivery-audit:unresolved-bound"})
+        with pytest.raises(ValueError, match="Review evidence"):
+            await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(unresolved_bound))
         stale = copy.deepcopy(audit); stale["idempotencyKey"] = "delivery-audit:stale"; stale["policyEvidenceRef"] = stale["localVerificationRef"] = stale["rollbackRef"] = "evidence:1"; stale["evidenceRefs"] = ["evidence:1"]
         with pytest.raises(ValueError, match="approved-review evidence"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(stale))
@@ -300,6 +324,14 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
             "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "adjudication:one", "createdAt": "2026-09-02T12:02:00Z",
             "expectedOutcomeRevision": outcome.revision, "expectedLaneRevision": lane.revision, "metadataOnly": True, "rawPayloadRetained": False,
         }
+        malformed_adjudication = copy.deepcopy(adjudication_payload)
+        malformed_adjudication["reviewThreadAdjudicationId"] = "Adjudication_1"
+        with pytest.raises(ValueError, match="opaque"):
+            HermesReviewThreadAdjudicationRequestV1.model_validate(malformed_adjudication)
+        malformed_delivery = copy.deepcopy(audit)
+        malformed_delivery.update({"requestedAction": "resolve_current_thread", "reviewThreadId": "PRRT_hermes_one", "reviewThreadAdjudicationId": "Adjudication_1", "idempotencyKey": "delivery-audit:malformed-adjudication"})
+        with pytest.raises(ValueError, match="opaque"):
+            HermesDeliveryAuditRequestV1.model_validate(malformed_delivery)
         adjudication = await record_hermes_review_thread_adjudication(session, HermesReviewThreadAdjudicationRequestV1.model_validate(adjudication_payload))
         assert (await record_hermes_review_thread_adjudication(session, HermesReviewThreadAdjudicationRequestV1.model_validate(adjudication_payload))) == adjudication
         equal_time_refresh = copy.deepcopy(adjudication_payload)

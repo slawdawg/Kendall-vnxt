@@ -7084,6 +7084,177 @@ try {
     }
   });
 
+  test("takeover released PR handoff requires the exact idle lease and current recorded PR", () => {
+    const prepare = (name, { released = true, freshHeartbeatAfterRelease = false, retainedExternalIntent = false } = {}) => {
+      const fixture = createDirtyTakeoverFixture(name);
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "preserve reviewed PR delivery work\n");
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
+      manifest.pr_number = 916;
+      manifest.pr_url = "https://github.com/example/repo/pull/916";
+      manifest.owner_updated_at = new Date().toISOString();
+      manifest.last_heartbeat_at = new Date().toISOString();
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "runner-b",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:999999999:1",
+      }));
+      if (released) {
+        const releasePath = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "releases", `${lease.generation}.json`);
+        writeFileSync(releasePath, `${JSON.stringify({
+          schema_version: 1,
+          task_id: fixture.taskId,
+          generation: lease.generation,
+          token_digest: createHash("sha256").update(lease.token).digest("hex"),
+          released_at: new Date().toISOString(),
+        })}\n`);
+        if (freshHeartbeatAfterRelease) {
+          const heartbeatPath = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "heartbeats", lease.generation, "after-release.json");
+          writeFileSync(heartbeatPath, `${JSON.stringify({
+            schema_version: 1,
+            task_id: fixture.taskId,
+            generation: lease.generation,
+            token_digest: createHash("sha256").update(lease.token).digest("hex"),
+            heartbeat_at: new Date(Date.now() + 60_000).toISOString(),
+          })}\n`);
+        }
+        if (retainedExternalIntent) {
+          const intentDirectory = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "external-intents");
+          mkdirSync(intentDirectory, { recursive: true });
+          writeFileSync(join(intentDirectory, "retained.json"), `${JSON.stringify({
+            schema_version: 1,
+            task_id: fixture.taskId,
+            generation: lease.generation,
+            token_digest: createHash("sha256").update(lease.token).digest("hex"),
+            intent_id: "88888888-8888-4888-8888-888888888888",
+            runner_pid: 999_999_999,
+            runner_process_start_identity: "linux-proc-start-ticks:999999999:1",
+            command_digest: "a".repeat(64),
+            started_at: new Date().toISOString(),
+          })}\n`);
+        }
+      }
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      fixture.env = {
+        ...fixture.env,
+        CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: JSON.stringify([{
+          number: 916,
+          state: "OPEN",
+          headRefName: fixture.branch,
+          baseRefName: "main",
+          headRefOid: head,
+          url: "https://github.com/example/repo/pull/916",
+        }]),
+      };
+      return fixture;
+    };
+    const args = (fixture, prNumber) => {
+      const result = dirtyTakeoverArgs(fixture, ["dirty.txt"]);
+      const staleIndex = result.indexOf("--stale-after-seconds");
+      assert(staleIndex >= 0, "dirty takeover fixture is missing its stale-owner threshold");
+      result.splice(staleIndex, 2);
+      return [
+        ...result,
+        "--allow-released-pr-handoff", String(prNumber),
+        "--stale-after-seconds", "999999999",
+      ];
+    };
+
+    const accepted = prepare("released-pr-handoff-accepted");
+    try {
+      const result = runFixtureScript(accepted, args(accepted, 916));
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readFixtureDirtyTakeoverManifest(accepted).takeover_decisions.at(-1).released_pr_handoff_evidence;
+      assert(evidence.status === "matched" && evidence.live_pr_evidence?.pr?.number === 916, JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(accepted);
+    }
+
+    const mismatched = prepare("released-pr-handoff-mismatched-pr");
+    try {
+      const before = readFileSync(mismatched.manifestPath, "utf8");
+      const result = runFixtureScript(mismatched, args(mismatched, 917));
+      assert(result.code !== 0, "released PR handoff accepted a different PR number");
+      assert(result.stderr.includes("exact recorded manifest PR number"), result.stderr || result.stdout);
+      assert(readFileSync(mismatched.manifestPath, "utf8") === before, "mismatched PR handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(mismatched);
+    }
+
+    const active = prepare("released-pr-handoff-active-lease", { released: false });
+    try {
+      const before = readFileSync(active.manifestPath, "utf8");
+      const result = runFixtureScript(active, args(active, 916));
+      assert(result.code !== 0, "released PR handoff accepted an active lease");
+      assert(result.stderr.includes("exact released versioned lease"), result.stderr || result.stdout);
+      assert(readFileSync(active.manifestPath, "utf8") === before, "active lease handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(active);
+    }
+
+    const heartbeatAfterRelease = prepare("released-pr-handoff-fresh-heartbeat", { freshHeartbeatAfterRelease: true });
+    try {
+      const before = readFileSync(heartbeatAfterRelease.manifestPath, "utf8");
+      const result = runFixtureScript(heartbeatAfterRelease, args(heartbeatAfterRelease, 916));
+      assert(result.code !== 0, "released PR handoff accepted a heartbeat after release");
+      assert(result.stderr.includes("heartbeat after the release record"), result.stderr || result.stdout);
+      assert(readFileSync(heartbeatAfterRelease.manifestPath, "utf8") === before, "post-release heartbeat handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(heartbeatAfterRelease);
+    }
+
+    const retainedIntent = prepare("released-pr-handoff-retained-intent", { retainedExternalIntent: true });
+    try {
+      const before = readFileSync(retainedIntent.manifestPath, "utf8");
+      const result = runFixtureScript(retainedIntent, args(retainedIntent, 916));
+      assert(result.code !== 0, "released PR handoff accepted a retained execution intent");
+      assert(result.stderr.includes("exact released versioned lease"), result.stderr || result.stdout);
+      assert(readFileSync(retainedIntent.manifestPath, "utf8") === before, "retained intent handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(retainedIntent);
+    }
+
+    const predecessorReplacement = prepare("released-pr-handoff-predecessor-replacement");
+    try {
+      const source = readFileSync(predecessorReplacement.script, "utf8");
+      const seam = "  const postRecoveryLockInspection = inspectTaskLock(state, taskId);";
+      assert(source.includes(seam), "fixture did not expose the released predecessor inspection seam");
+      const replacement = [
+        seam,
+        '  if (process.env.CODEX_WORKSPACE_TEST_REPLACE_RELEASED_TAKEOVER_PREDECESSOR === "1") {',
+        "    const successor = { ...postRecoveryLockInspection.metadata, generation: \"99999999-9999-4999-8999-999999999999\", token: \"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\" };",
+        "    writeNewJson(taskLeasePath(state, taskId, \"generations\", successor.generation), successor);",
+        "    appendTaskLeaseHeartbeat(state, taskId, successor);",
+        "    writeNewJson(taskLeasePath(state, taskId, \"releases\", successor.generation), { schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: successor.generation, token_digest: taskLeaseTokenDigest(successor.token), released_at: new Date().toISOString() });",
+        "    writeNewJson(taskLeasePath(state, taskId, \"handoffs\", postRecoveryLockInspection.generation), { schema_version: taskLeaseSchemaVersion, task_id: taskId, from_generation: postRecoveryLockInspection.generation, to_generation: successor.generation, from_token_digest: taskLeaseTokenDigest(postRecoveryLockInspection.metadata.token), reason: \"released\", handed_off_at: new Date().toISOString() });",
+        "  }",
+      ].join("\n");
+      writeFileSync(predecessorReplacement.script, source.replace(seam, replacement));
+      runGit(predecessorReplacement.worktree, ["add", "scripts/codex-workspace.mjs"]);
+      runGit(predecessorReplacement.worktree, ["commit", "-q", "-m", "fixture released predecessor replacement seam"]);
+      const head = runGit(predecessorReplacement.worktree, ["rev-parse", "HEAD"]).stdout;
+      predecessorReplacement.env = {
+        ...predecessorReplacement.env,
+        CODEX_WORKSPACE_TEST_REPLACE_RELEASED_TAKEOVER_PREDECESSOR: "1",
+        CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: JSON.stringify([{
+          number: 916,
+          state: "OPEN",
+          headRefName: predecessorReplacement.branch,
+          baseRefName: "main",
+          headRefOid: head,
+          url: "https://github.com/example/repo/pull/916",
+        }]),
+      };
+      const before = readFileSync(predecessorReplacement.manifestPath, "utf8");
+      const result = runFixtureScript(predecessorReplacement, args(predecessorReplacement, 916));
+      assert(result.code !== 0, "released PR handoff accepted a replaced predecessor lease");
+      assert(result.stderr.includes("predecessor changed before locked takeover admission"), result.stderr || result.stdout);
+      assert(readFileSync(predecessorReplacement.manifestPath, "utf8") === before, "replaced predecessor handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(predecessorReplacement);
+    }
+  });
+
   test("legacy zero-byte dirty lock remains inspection-only even with approval", () => {
     const fixture = createDirtyTakeoverFixture("story-36-5-zero-byte-lock");
     try {

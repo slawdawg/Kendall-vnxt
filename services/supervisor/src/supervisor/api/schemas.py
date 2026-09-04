@@ -8495,10 +8495,18 @@ class HermesReviewThreadAdjudicationRequestV1(BaseModel):
     metadataOnly: Literal[True]
     rawPayloadRetained: Literal[False]
 
-    @field_validator("reviewThreadAdjudicationId", "taskId", "outcomeId", "laneRunId", "reviewerIdentity", "reviewerCapabilityBindingId", "approvedReviewEvidenceId", "idempotencyKey")
+    @field_validator("taskId", "outcomeId", "laneRunId", "reviewerIdentity", "reviewerCapabilityBindingId", "approvedReviewEvidenceId", "idempotencyKey")
     @classmethod
     def _opaque(cls, value: str, info) -> str:
         return _validate_hermes_text(value, info.field_name, 180)
+
+    @field_validator("reviewThreadAdjudicationId")
+    @classmethod
+    def _adjudication_id(cls, value: str) -> str:
+        value = _validate_hermes_text(value, "reviewThreadAdjudicationId", 120)
+        if not re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value):
+            raise ValueError("Review-thread adjudication id must be opaque.")
+        return value
 
     @field_validator("reviewerHome", "reviewerWorkspace")
     @classmethod
@@ -8548,10 +8556,14 @@ class HermesDeliveryAuditRequestV1(BaseModel):
     requestedAction: Literal["finish_pr", "request_review", "resolve_current_thread", "merge"]
     policyEvidenceRef: str = Field(max_length=255); localVerificationRef: str = Field(max_length=255); rollbackRef: str = Field(max_length=255); evidenceRefs: list[str] = Field(min_length=1, max_length=32)
     observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime; expectedOutcomeRevision: int = Field(gt=0); expectedLaneRevision: int = Field(gt=0); metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
-    @field_validator("taskId", "outcomeId", "laneRunId", "deliveryStewardIdentity", "deliveryCapabilityBindingId", "policyEvidenceRef", "localVerificationRef", "rollbackRef", "idempotencyKey", "reviewThreadAdjudicationId")
+    @field_validator("taskId", "outcomeId", "laneRunId", "deliveryStewardIdentity", "deliveryCapabilityBindingId", "policyEvidenceRef", "localVerificationRef", "rollbackRef", "idempotencyKey")
     @classmethod
     def _opaque(cls, value: str | None, info) -> str | None:
         return None if value is None else _validate_hermes_text(value, info.field_name, 255)
+    @field_validator("reviewThreadAdjudicationId")
+    @classmethod
+    def _adjudication_id(cls, value: str | None) -> str | None:
+        return None if value is None else HermesReviewThreadAdjudicationRequestV1._adjudication_id(value)
     @field_validator("deliveryHome", "deliveryWorkspace")
     @classmethod
     def _profile(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
@@ -8591,7 +8603,7 @@ class HermesDeliveryActionResultV1(BaseModel):
     @field_validator("reviewThreadAdjudicationId")
     @classmethod
     def _adjudication(cls, value: str | None) -> str | None:
-        return None if value is None else _validate_hermes_text(value, "reviewThreadAdjudicationId", 120)
+        return None if value is None else HermesReviewThreadAdjudicationRequestV1._adjudication_id(value)
     @field_validator("observedAt", "createdAt", mode="before")
     @classmethod
     def _time(cls, value: object, info) -> datetime:

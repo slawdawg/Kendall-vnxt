@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -97,3 +97,14 @@ def test_delivery_audit_request_is_exact_head_bound_and_has_a_closed_action_matr
         HermesDeliveryAuditRequestV1.model_validate({**request.model_dump(mode="json"), "baseBranch": "main"})
     with pytest.raises(ValidationError):
         HermesDeliveryAuditRequestV1.model_validate({**request.model_dump(mode="json"), "requestedAction": "force_push"})
+    result = HermesDeliveryActionResultV1.model_validate({
+        "deliveryActionResultId": "delivery-result:one", "taskId": request.taskId, "outcomeId": request.outcomeId, "laneRunId": request.laneRunId,
+        "schemaVersion": "hermes_delivery_action_result.v1", "requestedAction": "resolve_current_thread", "decision": "allowed", "reasonCode": "governed_workspace_required",
+        "repository": "slawdawg/Kendall-vnxt", "baseBranch": "dev", "exactHeadSha": "a" * 40, "pullRequestNumber": 915,
+        "reviewThreadId": "PRRT_hermes_one", "reviewThreadAdjudicationId": "adjudication:one", "evidenceRefs": request.evidenceRefs,
+        "nextAction": "Run governed resolution.", "rollbackRef": request.rollbackRef, "observedAt": "2026-09-04T00:00:01Z",
+        "idempotencyKey": "delivery-result:one", "createdAt": "2026-09-04T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    assert result.reviewThreadAdjudicationId == "adjudication:one"
+    with pytest.raises(ValidationError, match="opaque"):
+        HermesDeliveryActionResultV1.model_validate({**result.model_dump(mode="json"), "reviewThreadAdjudicationId": "Adjudication_1"})

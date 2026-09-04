@@ -233,6 +233,9 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(contracts.isHermesDeliveryAuditRequestV1(deliveryAudit), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1(deliveryResult), true);
+    assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, decision: "deniedExternalImpact" }), true);
+    assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, decision: "rework" }), true);
+    assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, evidenceRefs: ["evidence:other"] }), false);
     assert.equal(contracts.isReviewDispositionV1(reviewDisposition), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
