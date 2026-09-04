@@ -832,6 +832,7 @@ class HermesOutcome(Base):
     )
 
     outcome_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    task_id: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True)
     schema_version: Mapped[str] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(240))
     summary: Mapped[str] = mapped_column(Text)
@@ -861,6 +862,7 @@ class HermesLaneRun(Base):
 
     lane_run_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True)
     schema_version: Mapped[str] = mapped_column(String(64))
     lane_type: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(32))
@@ -897,6 +899,7 @@ class HermesDeliveryEvidence(Base):
     delivery_evidence_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
     lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True)
     schema_version: Mapped[str] = mapped_column(String(64))
     evidence_type: Mapped[str] = mapped_column(String(120))
     summary: Mapped[str] = mapped_column(Text)
@@ -976,7 +979,7 @@ class HermesRoleCapabilityBinding(Base):
 
     __tablename__ = "hermes_role_capability_bindings"
     __table_args__ = (
-        CheckConstraint("role IN ('developer', 'reviewer')", name="ck_hermes_role_capability_role"),
+        CheckConstraint("role IN ('developer', 'reviewer', 'delivery')", name="ck_hermes_role_capability_role"),
         CheckConstraint("expires_at > created_at", name="ck_hermes_role_capability_expiry"),
         CheckConstraint("(revoked_at IS NULL) = (revoked_by IS NULL)", name="ck_hermes_role_capability_revocation_pair"),
         CheckConstraint("metadata_only IS TRUE", name="ck_hermes_role_capability_metadata_only"),
@@ -986,6 +989,7 @@ class HermesRoleCapabilityBinding(Base):
     capability_binding_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
     lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True)
     role: Mapped[str] = mapped_column(String(16))
     identity: Mapped[str] = mapped_column(String(120))
     home: Mapped[str] = mapped_column(String(240))
@@ -1059,6 +1063,34 @@ class HermesReviewDisposition(Base):
     expected_lane_revision: Mapped[int] = mapped_column(Integer)
     request_digest_sha256: Mapped[str] = mapped_column(String(64))
     exception_requirement_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesReviewThreadAdjudication(Base):
+    """Reviewer-authenticated, metadata-only proof for one current thread."""
+
+    __tablename__ = "hermes_review_thread_adjudications"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_review_thread_adjudication_idempotency"),
+        UniqueConstraint("task_id", "lane_run_id", "review_thread_id", "exact_head_sha", "review_audit_fingerprint", name="uq_hermes_review_thread_adjudication_exact_thread"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_review_thread_adjudication_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_review_thread_adjudication_no_raw_payload"),
+    )
+
+    review_thread_adjudication_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(160), index=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    reviewer_capability_binding_id: Mapped[str] = mapped_column(String(120), index=True)
+    reviewer_identity: Mapped[str] = mapped_column(String(120))
+    review_thread_id: Mapped[str] = mapped_column(String(160))
+    exact_head_sha: Mapped[str] = mapped_column(String(40))
+    review_audit_fingerprint: Mapped[str] = mapped_column(String(64))
+    approved_review_evidence_id: Mapped[str] = mapped_column(String(120))
+    idempotency_key: Mapped[str] = mapped_column(String(180))
     observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
     created_at: Mapped[datetime] = mapped_column(UtcDateTime())
     metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)

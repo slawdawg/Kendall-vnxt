@@ -43,6 +43,7 @@ export type HermesLifecycleEventName =
 
 export interface HermesOutcomeV1 {
   readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly taskId: string;
   readonly schemaVersion: typeof HERMES_OUTCOME_SCHEMA_VERSION;
   readonly title: string;
   readonly summary: string;
@@ -62,6 +63,7 @@ export interface HermesOutcomeV1 {
 export interface HermesLaneRunV1 {
   readonly laneRunId: import("./ids").HermesLaneRunId;
   readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly taskId: string;
   readonly schemaVersion: typeof HERMES_LANE_RUN_SCHEMA_VERSION;
   readonly laneType: string;
   readonly status: HermesLaneRunStatus;
@@ -87,6 +89,7 @@ export interface DeliveryEvidenceV1 {
   readonly deliveryEvidenceId: import("./ids").DeliveryEvidenceId;
   readonly outcomeId: import("./ids").HermesOutcomeId;
   readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly taskId: string;
   readonly schemaVersion: typeof HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION;
   readonly evidenceType: string;
   readonly summary: string;

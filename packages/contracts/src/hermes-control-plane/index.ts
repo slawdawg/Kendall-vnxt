@@ -5,4 +5,5 @@ export * from "./evidence";
 export * from "./policy";
 export * from "./events";
 export * from "./review";
+export * from "./delivery";
 export * from "./schema-json";

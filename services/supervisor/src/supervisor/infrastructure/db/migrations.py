@@ -123,6 +123,88 @@ async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_delivery_capability_role(connection: AsyncConnection) -> None:
+    """Add the already-approved Delivery role without altering capability data."""
+
+    if connection.dialect.name == "postgresql":
+        await connection.execute(text("ALTER TABLE hermes_role_capability_bindings DROP CONSTRAINT ck_hermes_role_capability_role"))
+        await connection.execute(
+            text(
+                "ALTER TABLE hermes_role_capability_bindings "
+                "ADD CONSTRAINT ck_hermes_role_capability_role "
+                "CHECK (role IN ('developer', 'reviewer', 'delivery'))"
+            )
+        )
+        return
+    if connection.dialect.name != "sqlite":
+        raise RuntimeError("Hermes Delivery capability migration supports PostgreSQL and SQLite only.")
+
+    await connection.execute(
+        text(
+            "CREATE TABLE hermes_role_capability_bindings_delivery_role ("
+            "capability_binding_id VARCHAR(120) NOT NULL, "
+            "outcome_id VARCHAR(120) NOT NULL, "
+            "lane_run_id VARCHAR(120) NOT NULL, "
+            "role VARCHAR(16) NOT NULL, "
+            "identity VARCHAR(120) NOT NULL, "
+            "home VARCHAR(240) NOT NULL, "
+            "workspace VARCHAR(240) NOT NULL, "
+            "capability_digest_sha256 VARCHAR(64) NOT NULL, "
+            "created_at DATETIME NOT NULL, "
+            "expires_at DATETIME NOT NULL, "
+            "revoked_at DATETIME, "
+            "revoked_by VARCHAR(120), "
+            "metadata_only BOOLEAN NOT NULL, "
+            "raw_payload_retained BOOLEAN NOT NULL, "
+            "PRIMARY KEY (capability_binding_id), "
+            "FOREIGN KEY(outcome_id) REFERENCES hermes_outcomes (outcome_id), "
+            "FOREIGN KEY(lane_run_id) REFERENCES hermes_lane_runs (lane_run_id), "
+            "CONSTRAINT ck_hermes_role_capability_role CHECK (role IN ('developer', 'reviewer', 'delivery')), "
+            "CONSTRAINT ck_hermes_role_capability_expiry CHECK (expires_at > created_at), "
+            "CONSTRAINT ck_hermes_role_capability_revocation_pair CHECK ((revoked_at IS NULL) = (revoked_by IS NULL)), "
+            "CONSTRAINT ck_hermes_role_capability_metadata_only CHECK (metadata_only IS TRUE), "
+            "CONSTRAINT ck_hermes_role_capability_no_raw_payload CHECK (raw_payload_retained IS FALSE)"
+            ")"
+        )
+    )
+    columns = (
+        "capability_binding_id, outcome_id, lane_run_id, role, identity, home, workspace, "
+        "capability_digest_sha256, created_at, expires_at, revoked_at, revoked_by, metadata_only, raw_payload_retained"
+    )
+    await connection.execute(text(
+        "INSERT INTO hermes_role_capability_bindings_delivery_role (" + columns + ") "
+        "SELECT " + columns + " FROM hermes_role_capability_bindings"
+    ))
+    await connection.execute(text("DROP TABLE hermes_role_capability_bindings"))
+    await connection.execute(text("ALTER TABLE hermes_role_capability_bindings_delivery_role RENAME TO hermes_role_capability_bindings"))
+    await connection.execute(text("CREATE INDEX ix_hermes_role_capability_bindings_outcome_id ON hermes_role_capability_bindings (outcome_id)"))
+    await connection.execute(text("CREATE INDEX ix_hermes_role_capability_bindings_lane_run_id ON hermes_role_capability_bindings (lane_run_id)"))
+
+
+async def _apply_hermes_task_binding(connection: AsyncConnection) -> None:
+    """Add nullable task scope without inventing identity for pre-existing Hermes rows."""
+    if connection.dialect.name not in {"postgresql", "sqlite"}:
+        raise RuntimeError("Hermes task-binding migration supports PostgreSQL and SQLite only.")
+    for table in (
+        "hermes_outcomes",
+        "hermes_lane_runs",
+        "hermes_delivery_evidence",
+        "hermes_role_capability_bindings",
+    ):
+        await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN task_id VARCHAR(160)"))
+        await connection.execute(text(f"CREATE INDEX ix_{table}_task_id ON {table} (task_id)"))
+
+
+async def _apply_hermes_review_thread_adjudication(connection: AsyncConnection) -> None:
+    """Create the additive Reviewer-authenticated current-thread proof table."""
+    from supervisor.infrastructure.db.models import HermesReviewThreadAdjudication
+    await connection.run_sync(
+        lambda sync_connection: HermesReviewThreadAdjudication.metadata.create_all(
+            sync_connection, tables=[HermesReviewThreadAdjudication.__table__]
+        )
+    )
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -158,6 +240,9 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         clean_install=_apply_hermes_board_bridge,
     ),
     SchemaMigration("0008_hermes_review_handoff", _apply_hermes_review_handoff, clean_install=_apply_hermes_review_handoff),
+    SchemaMigration("0009_hermes_delivery_capability_role", _apply_hermes_delivery_capability_role),
+    SchemaMigration("0010_hermes_task_binding", _apply_hermes_task_binding),
+    SchemaMigration("0011_hermes_review_thread_adjudication", _apply_hermes_review_thread_adjudication, clean_install=_apply_hermes_review_thread_adjudication),
 )
 
 

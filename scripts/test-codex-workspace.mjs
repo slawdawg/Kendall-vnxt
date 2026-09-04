@@ -1834,7 +1834,7 @@ try {
 
   test("verify-pr-gates records exact-head check and review-thread evidence without merge mutation", () => {
     const source = readFileSync(scriptPath, "utf8");
-    const gateCommand = source.match(/function verifyPrGates[\s\S]*?function buildPrGateEvidence/);
+    const gateCommand = source.match(/function verifyPrGates[\s\S]*?function exactHeadDeliveryActionState/);
     assert(gateCommand, "verifyPrGates source not found");
     assert(gateCommand[0].includes("manifest.pr_gate_evidence = lockedPacket"), "verify-pr-gates must persist the gate packet");
     assert(gateCommand[0].includes("manifest.pr_review_state_checked_at = lockedPacket.checkedAt"), "review-thread freshness must be recorded");
@@ -13872,6 +13872,76 @@ try {
     }
   });
 
+  test("request-pr-review permits only a freshly proven exact managed head", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = "dev";
+      manifest.pr_delivery_evidence.baseBranch = "dev";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.baseRefName = "dev";
+      writeFileSync(prStatePath, `${JSON.stringify(pr)}\n`);
+      const denied = runFixtureScript(
+        fixture,
+        ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", "b".repeat(40), "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(denied.code !== 0, "request-pr-review accepted a mismatched exact head");
+      assert(!existsSync(join(fixture.root, "gh-pr-review-called.txt")), "mismatched head reached the review mutation");
+      const allowed = runFixtureScript(
+        fixture,
+        ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(allowed.code === 0, allowed.stderr || allowed.stdout);
+      assert(existsSync(join(fixture.root, "gh-pr-review-called.txt")), "exact-head review request did not invoke the governed GitHub command");
+      const recorded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.action === "request_review", "request-review evidence was not retained");
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.expectedHeadSha === manifest.pr_delivery_head_sha, "request-review evidence lost the exact head binding");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("merge-exact-head re-proves the retained exact head before the governed merge", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = "dev";
+      manifest.pr_delivery_evidence.baseBranch = "dev";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.baseRefName = "dev";
+      writeFileSync(prStatePath, `${JSON.stringify(pr)}\n`);
+      const gate = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+        "--delivery-audit-agent", "hermes-delivery-adapter", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery adapter review passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${manifest.pr_delivery_head_sha}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456.",
+        "--diff-risk-summary", "Bounded exact-head delivery adapter action.", "--diff-risk-files", "feature.txt,scripts/codex-workspace.mjs",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs", "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(gate.code === 0, gate.stderr || gate.stdout);
+      const denied = runFixtureScript(fixture, ["merge-exact-head", "resumed-task", "--owner", "runner-a", "--expected-head", "b".repeat(40), "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(denied.code !== 0, "merge-exact-head accepted a mismatched retained head");
+      assert(!existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "mismatched head reached the merge mutation");
+      const allowed = runFixtureScript(fixture, ["merge-exact-head", "resumed-task", "--owner", "runner-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(allowed.code === 0, allowed.stderr || allowed.stdout);
+      assert(existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "exact-head merge did not invoke the governed GitHub command");
+      const recorded = readJson(manifestPath);
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.action === "merge", "merge evidence was not retained");
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.expectedHeadSha === manifest.pr_delivery_head_sha, "merge evidence lost the exact head binding");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates records clean exact-head checks and review-thread evidence", () => {
     const fixture = createCanonicalManagedPrFixture({ existingPr: true });
     try {
@@ -23543,6 +23613,8 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
+      `if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--add-reviewer')) { fs.writeFileSync(${JSON.stringify(join(fixtureRoot, "gh-pr-review-called.txt"))}, args.join(' ')); process.exit(0); }`,
+      `if (args[0] === 'pr' && args[1] === 'merge' && args.includes('--merge') && args.includes('--match-head-commit')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.state = 'MERGED'; pr.mergedAt = '2026-09-04T00:00:00.000Z'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); fs.writeFileSync(${JSON.stringify(join(fixtureRoot, "gh-pr-merge-called.txt"))}, args.join(' ')); process.exit(0); }`,
       `if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: ${JSON.stringify(repository.owner)} }, name: ${JSON.stringify(repository.name)} })); process.exit(0); }`,
       `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`,
       "if (args[0] === 'api' && args[1] === 'graphql') {",

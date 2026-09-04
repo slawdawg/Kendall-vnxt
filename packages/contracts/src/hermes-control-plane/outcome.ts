@@ -14,11 +14,11 @@ import {
 } from "./types";
 
 const OUTCOME_FIELDS = [
-  "outcomeId", "schemaVersion", "title", "summary", "status", "result", "reasonCode", "evidenceRefs",
+  "outcomeId", "taskId", "schemaVersion", "title", "summary", "status", "result", "reasonCode", "evidenceRefs",
   "nextAction", "observedAt", "idempotencyKey", "createdAt", "updatedAt", "metadataOnly", "rawPayloadRetained",
 ] as const;
 const LANE_RUN_FIELDS = [
-  "laneRunId", "outcomeId", "schemaVersion", "laneType", "status", "result", "reasonCode", "evidenceRefs",
+  "laneRunId", "outcomeId", "taskId", "schemaVersion", "laneType", "status", "result", "reasonCode", "evidenceRefs",
   "nextAction", "heartbeatAt", "staleDeadlineAt", "timeoutAt", "retryBudget", "reworkBudget", "evidenceFingerprint",
   "observedAt", "idempotencyKey", "createdAt", "updatedAt", "metadataOnly", "rawPayloadRetained",
 ] as const;
@@ -31,7 +31,7 @@ function isOneOf<T extends string>(value: unknown, values: readonly T[]): value 
 
 export function isHermesOutcomeV1(value: unknown): value is HermesOutcomeV1 {
   return guardFailsClosed(() => {
-    if (!isRecord(value) || !hasExactKeys(value, OUTCOME_FIELDS) || !isHermesOutcomeId(value.outcomeId)) return false;
+    if (!isRecord(value) || !hasExactKeys(value, OUTCOME_FIELDS) || !isHermesOutcomeId(value.outcomeId) || !isSafeText(value.taskId, 160)) return false;
     return isMetadataOnlyRecord(value, HERMES_OUTCOME_SCHEMA_VERSION, ["observedAt", "createdAt", "updatedAt"]) &&
       isSafeText(value.title, 240) && isSafeText(value.summary) && isOneOf(value.status, OUTCOME_STATUSES) &&
       isDecisionFields(value) && isTimestampOrder(value, ["createdAt", "observedAt", "updatedAt"]);
@@ -40,7 +40,7 @@ export function isHermesOutcomeV1(value: unknown): value is HermesOutcomeV1 {
 
 export function isHermesLaneRunV1(value: unknown): value is import("./types").HermesLaneRunV1 {
   return guardFailsClosed(() => {
-    if (!isRecord(value) || !hasExactKeys(value, LANE_RUN_FIELDS) || !isHermesLaneRunId(value.laneRunId) || !isHermesOutcomeId(value.outcomeId)) return false;
+    if (!isRecord(value) || !hasExactKeys(value, LANE_RUN_FIELDS) || !isHermesLaneRunId(value.laneRunId) || !isHermesOutcomeId(value.outcomeId) || !isSafeText(value.taskId, 160)) return false;
     return isMetadataOnlyRecord(value, HERMES_LANE_RUN_SCHEMA_VERSION, ["observedAt", "createdAt", "updatedAt"]) &&
       isSafeText(value.laneType, 120) && isOneOf(value.status, LANE_RUN_STATUSES) && isDecisionFields(value) &&
       ["heartbeatAt", "staleDeadlineAt", "timeoutAt"].every((field) => isUtcIsoTimestamp(value[field])) &&

@@ -97,6 +97,9 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
+    HermesDeliveryActionResultV1,
+    HermesDeliveryAuditRequestV1,
+    HermesReviewThreadAdjudicationRequestV1,
     HermesReviewHandoffRequest,
     HermesRoleCapabilityProvisionRequestV1,
     HermesRoleCapabilityRevocationRequestV1,
@@ -172,7 +175,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, revoke_hermes_role_capability
+from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, record_hermes_delivery_audit, record_hermes_review_thread_adjudication, revoke_hermes_role_capability
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -1681,6 +1684,27 @@ async def ingest_hermes_review_handoff_route(payload: HermesReviewHandoffRequest
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_handoff_conflict").model_dump()) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post("/hermes-control-plane/delivery-audits", response_model=HermesDeliveryActionResultV1)
+async def record_hermes_delivery_audit_route(payload: HermesDeliveryAuditRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    """Admit a bounded delivery action; execution remains in codex-workspace."""
+    await require_memory_proposal_recovery_operator(request, session)
+    try:
+        return await record_hermes_delivery_audit(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_delivery_audit_conflict").model_dump()) from exc
+
+
+@app.post("/hermes-control-plane/review-thread-adjudications")
+async def record_hermes_review_thread_adjudication_route(payload: HermesReviewThreadAdjudicationRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    """Persist Reviewer-authenticated metadata only; never performs a GitHub write."""
+    await require_memory_proposal_recovery_operator(request, session)
+    try:
+        record = await record_hermes_review_thread_adjudication(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_review_thread_adjudication_conflict").model_dump()) from exc
+    return {"reviewThreadAdjudicationId": record.review_thread_adjudication_id, "reviewThreadId": record.review_thread_id, "exactHeadSha": record.exact_head_sha, "metadataOnly": True, "rawPayloadRetained": False}
 
 
 @app.post("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke")
