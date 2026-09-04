@@ -17,6 +17,8 @@ test("Hermes delivery contract has a closed ordinary-action matrix", async () =>
   }
   assert.match(source, /isHermesDeliveryAuditRequestV1/);
   assert.match(source, /isHermesDeliveryActionResultV1/);
+  assert.match(source, /isHermesDeliveryActionResultV1[\s\S]*isTimestampOrder\(value, \["createdAt", "observedAt"\]\)/);
+  assert.match(source, /isHermesDeliveryActionResultV1[\s\S]*timestampMillis\(value\.observedAt\) <= Date\.now\(\)/);
   assert.match(source, /metadataOnly/);
   assert.match(source, /rawPayloadRetained/);
 });

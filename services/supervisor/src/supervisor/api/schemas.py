@@ -8276,6 +8276,7 @@ class HermesReviewDispositionInputV1(BaseModel):
     reviewerWorkspace: str = Field(max_length=240)
     reasonCode: str = Field(max_length=120)
     nextAction: str = Field(max_length=360)
+    reviewedHeadSha: str | None = Field(max_length=40)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32)
     observedAt: datetime
     idempotencyKey: str = Field(max_length=180)
@@ -8300,6 +8301,13 @@ class HermesReviewDispositionInputV1(BaseModel):
     def _refs(cls, value: list[str]) -> list[str]:
         return HermesOutcomeInputV1._refs(value)
 
+    @field_validator("reviewedHeadSha")
+    @classmethod
+    def _reviewed_head(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise ValueError("Reviewer disposition head must be a lowercase exact SHA.")
+        return value
+
     @field_validator("observedAt", "createdAt", mode="before")
     @classmethod
     def _time(cls, value: object, info) -> datetime:
@@ -8307,7 +8315,7 @@ class HermesReviewDispositionInputV1(BaseModel):
 
     @model_validator(mode="after")
     def _binding(self):
-        if self.createdAt > self.observedAt or self.observedAt > datetime.now(timezone.utc) or len({self.reviewerIdentity, self.reviewerHome, self.reviewerWorkspace}) != 3:
+        if self.createdAt > self.observedAt or self.observedAt > datetime.now(timezone.utc) or len({self.reviewerIdentity, self.reviewerHome, self.reviewerWorkspace}) != 3 or (self.disposition == "approve") != (self.reviewedHeadSha is not None):
             raise ValueError("Review disposition has invalid timestamp or Reviewer binding.")
         return self
 
@@ -8405,13 +8413,18 @@ class HermesRoleCapabilityProvisionRequestV1(BaseModel):
     metadataOnly: Literal[True]
     rawPayloadRetained: Literal[False]
 
-    @field_validator("capabilityBindingId", "taskId", "outcomeId", "laneRunId")
+    @field_validator("capabilityBindingId", "outcomeId", "laneRunId")
     @classmethod
     def _opaque(cls, value: str, info) -> str:
         value = _validate_hermes_text(value, info.field_name, 120)
         if not re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value):
             raise ValueError("Role capability identity must be opaque.")
         return value
+
+    @field_validator("taskId")
+    @classmethod
+    def _task_id(cls, value: str) -> str:
+        return _validate_hermes_text(value, "taskId", 160)
 
     @field_validator("identity", "home", "workspace")
     @classmethod
@@ -8531,7 +8544,7 @@ class HermesDeliveryAuditRequestV1(BaseModel):
     deliveryStewardIdentity: str = Field(max_length=120); deliveryHome: str = Field(max_length=240); deliveryWorkspace: str = Field(max_length=240)
     deliveryCapabilityBindingId: str = Field(max_length=120); deliveryCapabilityProof: str = Field(min_length=24, max_length=512)
     schemaVersion: Literal["hermes_delivery_audit_action.v1"]; repository: Literal["slawdawg/Kendall-vnxt"]; baseBranch: Literal["dev"]
-    expectedHeadSha: str = Field(min_length=40, max_length=40); pullRequestNumber: int | None; reviewThreadId: str | None = Field(default=None, max_length=160); reviewThreadAdjudicationId: str | None = Field(default=None, max_length=120)
+    expectedHeadSha: str = Field(min_length=40, max_length=40); pullRequestNumber: int | None = Field(default=None, gt=0); reviewThreadId: str | None = Field(default=None, max_length=160); reviewThreadAdjudicationId: str | None = Field(default=None, max_length=120)
     requestedAction: Literal["finish_pr", "request_review", "resolve_current_thread", "merge"]
     policyEvidenceRef: str = Field(max_length=255); localVerificationRef: str = Field(max_length=255); rollbackRef: str = Field(max_length=255); evidenceRefs: list[str] = Field(min_length=1, max_length=32)
     observedAt: datetime; idempotencyKey: str = Field(max_length=180); createdAt: datetime; expectedOutcomeRevision: int = Field(gt=0); expectedLaneRevision: int = Field(gt=0); metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
@@ -8570,7 +8583,7 @@ class HermesDeliveryAuditRequestV1(BaseModel):
 class HermesDeliveryActionResultV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     deliveryActionResultId: str; taskId: str; outcomeId: str; laneRunId: str; schemaVersion: Literal["hermes_delivery_action_result.v1"]
-    requestedAction: Literal["finish_pr", "request_review", "resolve_current_thread", "merge"]; decision: str; reasonCode: str; repository: Literal["slawdawg/Kendall-vnxt"]; baseBranch: Literal["dev"]; exactHeadSha: str; pullRequestNumber: int | None; reviewThreadId: str | None = None; reviewThreadAdjudicationId: str | None = None; evidenceRefs: list[str]; nextAction: str; rollbackRef: str; observedAt: datetime; idempotencyKey: str; createdAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    requestedAction: Literal["finish_pr", "request_review", "resolve_current_thread", "merge"]; decision: str; reasonCode: str; repository: Literal["slawdawg/Kendall-vnxt"]; baseBranch: Literal["dev"]; exactHeadSha: str; pullRequestNumber: int | None = Field(default=None, gt=0); reviewThreadId: str | None = None; reviewThreadAdjudicationId: str | None = None; evidenceRefs: list[str]; nextAction: str; rollbackRef: str; observedAt: datetime; idempotencyKey: str; createdAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
     @field_validator("reviewThreadId")
     @classmethod
     def _thread(cls, value: str | None) -> str | None:
@@ -8579,8 +8592,13 @@ class HermesDeliveryActionResultV1(BaseModel):
     @classmethod
     def _adjudication(cls, value: str | None) -> str | None:
         return None if value is None else _validate_hermes_text(value, "reviewThreadAdjudicationId", 120)
+    @field_validator("observedAt", "createdAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
     @model_validator(mode="after")
     def _valid(self):
+        if self.createdAt > self.observedAt or self.observedAt > datetime.now(timezone.utc): raise ValueError("Delivery result timestamp is not current and ordered.")
         if self.requestedAction in {"request_review", "resolve_current_thread", "merge"} and self.pullRequestNumber is None: raise ValueError("PR-bound delivery result requires a pull request number.")
         if self.requestedAction == "resolve_current_thread" and (self.reviewThreadId is None or self.reviewThreadAdjudicationId is None): raise ValueError("Current-thread delivery result requires its persisted adjudication.")
         if self.requestedAction != "resolve_current_thread" and (self.reviewThreadId is not None or self.reviewThreadAdjudicationId is not None): raise ValueError("Only current-thread delivery results may include adjudication metadata.")
