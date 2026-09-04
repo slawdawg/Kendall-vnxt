@@ -7854,6 +7854,72 @@ try {
     }
   });
 
+  test("sync-dirty-lane-base rejects hidden whole-index state before publishing a journal", () => {
+    const fixture = createDirtyBaseSyncFixture("hidden-index-state");
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "ordinary staged change\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      runGit(fixture.worktree, ["update-index", "--assume-unchanged", "--", "tracked.txt"]);
+      const result = runFixtureScript(fixture, syncDirtyBaseArgs(fixture, ["--dry-run", "--summary-json"]));
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.allowed === false && packet.blockers.some((entry) => entry.includes("assume-unchanged or skip-worktree")), JSON.stringify(packet));
+      assert(!JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync, "hidden index state published a journal");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
+  test("sync-dirty-lane-base rejects a staged patch incompatible with the exact target index", () => {
+    const fixture = createDirtyBaseSyncFixture("target-index-conflict");
+    try {
+      runGit(fixture.worktree, ["checkout", "-q", "dev"]);
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "target-side change\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture target conflict"]);
+      const advancedTarget = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["push", "-q", "origin", "dev:refs/heads/dev"]);
+      runGit(fixture.worktree, ["update-ref", "refs/remotes/origin/dev", advancedTarget]);
+      runGit(fixture.worktree, ["checkout", "-q", fixture.branch]);
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "source-side staged change\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      const result = runFixtureScript(fixture, syncDirtyBaseArgs(fixture, ["--dry-run", "--summary-json"]));
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.allowed === false && packet.blockers.some((entry) => entry.includes("cannot apply cleanly to the exact target index")), JSON.stringify(packet));
+      assert(!JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync, "incompatible target patch published a journal");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
+  test("sync-dirty-lane-base rejects an ignored directory that collides with a new target descendant", () => {
+    const fixture = createDirtyBaseSyncFixture("ignored-target-directory", { sourceIgnore: "build/\n" });
+    try {
+      mkdirSync(join(fixture.worktree, "build"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "build", "local-only.txt"), "ignored local residue\n");
+      runGit(fixture.worktree, ["checkout", "-q", "dev"]);
+      mkdirSync(join(fixture.worktree, "build"), { recursive: true });
+      writeFileSync(join(fixture.worktree, "build", "target.txt"), "new upstream target path\n");
+      runGit(fixture.worktree, ["add", "-f", "build/target.txt"]);
+      runGit(fixture.worktree, ["commit", "-q", "-m", "fixture target ignored-directory collision"]);
+      const advancedTarget = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      runGit(fixture.worktree, ["push", "-q", "origin", "dev:refs/heads/dev"]);
+      runGit(fixture.worktree, ["update-ref", "refs/remotes/origin/dev", advancedTarget]);
+      runGit(fixture.worktree, ["checkout", "-q", fixture.branch]);
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "ordinary staged change\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      assert(runGit(fixture.worktree, ["diff", "--cached", "--name-only"]).stdout === "tracked.txt", "fixture did not retain the staged source path");
+      const result = runFixtureScript(fixture, syncDirtyBaseArgs(fixture, ["--dry-run", "--summary-json"]));
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.allowed === false && packet.blockers.some((entry) => entry.includes("ignored local path collision")), JSON.stringify(packet));
+      assert(!JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync, "ignored target collision published a journal");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
   test("finish-pr refuses a crash-retained dirty base-sync journal before any delivery route", () => {
     const fixture = createDirtyBaseSyncFixture("delivery-journal-fence");
     try {
@@ -8097,7 +8163,7 @@ try {
       writeFileSync(join(fixture.worktree, "tracked.txt"), "restore retry staged change\n");
       runGit(fixture.worktree, ["add", "tracked.txt"]);
       const source = readFileSync(fixture.script, "utf8");
-      const restore = '      runChecked("git", ["apply", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });';
+      const restore = '      dirtyBaseSyncRunChecked("git", ["apply", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });';
       assert(source.includes(restore), "fixture did not contain restore transition seam");
       writeFileSync(fixture.script, source.replace(
         restore,
@@ -8116,6 +8182,33 @@ try {
       assert(resumed.code === 0, resumed.stderr || resumed.stdout);
       assert(runGit(fixture.worktree, ["diff", "--cached", "--binary", "HEAD"]).stdout === beforePatch, "restore retry changed staged patch semantics");
       assert(JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync?.status === "completed", "restore retry did not complete");
+    } finally {
+      cleanupDirtyBaseSyncFixture(fixture);
+    }
+  });
+
+  test("sync-dirty-lane-base preserves the last resumable phase after a transient reverse failure", () => {
+    const fixture = createDirtyBaseSyncFixture("reverse-retry");
+    try {
+      writeFileSync(join(fixture.worktree, "tracked.txt"), "reverse retry staged change\n");
+      runGit(fixture.worktree, ["add", "tracked.txt"]);
+      const source = readFileSync(fixture.script, "utf8");
+      const reverse = '      dirtyBaseSyncRunChecked("git", ["apply", "--reverse", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });';
+      assert(source.includes(reverse), "fixture did not contain reverse transition seam");
+      writeFileSync(fixture.script, source.replace(
+        reverse,
+        '      if (process.env.CODEX_WORKSPACE_FIXTURE_FAIL_REVERSE_ONCE === "1") throw new Error("fixture reverse conflict");\n' + reverse,
+      ));
+      runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
+      const failed = runFixtureScript(fixture, syncDirtyBaseApplyArgs(fixture), {
+        env: { ...fixture.env, CODEX_WORKSPACE_FIXTURE_FAIL_REVERSE_ONCE: "1" },
+      });
+      assert(failed.code !== 0 && failed.stderr.includes("fixture reverse conflict"), failed.stderr || failed.stdout);
+      const retained = JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync;
+      assert(retained?.status === "prepared" && retained.last_error?.includes("fixture reverse conflict"), JSON.stringify(retained));
+      const resumed = runFixtureScript(fixture, syncDirtyBaseApplyArgs(fixture));
+      assert(resumed.code === 0, resumed.stderr || resumed.stdout);
+      assert(JSON.parse(readFileSync(fixture.manifestPath, "utf8")).dirty_base_sync?.status === "completed", "transient reverse failure did not resume exactly");
     } finally {
       cleanupDirtyBaseSyncFixture(fixture);
     }
@@ -25914,7 +26007,8 @@ function createDirtyBaseSyncFixture(name, options = {}) {
   runGit(root, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(root, ["config", "user.name", "Codex Workspace Test"]);
   writeFileSync(join(root, "tracked.txt"), "base\n");
-  runGit(root, ["add", "tracked.txt", "scripts"]);
+  if (options.sourceIgnore) writeFileSync(join(root, ".gitignore"), options.sourceIgnore);
+  runGit(root, ["add", "tracked.txt", "scripts", ...(options.sourceIgnore ? [".gitignore"] : [])]);
   runGit(root, ["commit", "-q", "-m", "fixture source base"]);
   const sourceHead = runGit(root, ["rev-parse", "HEAD"]).stdout;
   runGit(root, ["checkout", "-q", "-b", "dev"]);

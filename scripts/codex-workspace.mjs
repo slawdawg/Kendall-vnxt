@@ -2984,6 +2984,11 @@ function dirtyBaseSyncPacket(state, target, context) {
   const branch = takeoverBranchEvidence(manifest, worktree);
   const lock = redactTaskLockInspection(inspectTaskLock(state, manifest.task_id));
   const blockers = [];
+  try {
+    assertDirtyBaseSyncGitProofState(worktree.path);
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : String(error));
+  }
   if (context.expectedGeneration) {
     if (lock.status !== "active" || lock.generation !== context.expectedGeneration || lock.owner !== context.currentOwner) blockers.push("the exact active task lease was not retained while applying dirty base sync");
   } else if (!["absent", "released"].includes(lock.status)) {
@@ -3003,11 +3008,12 @@ function dirtyBaseSyncPacket(state, target, context) {
   if (remote.lane_branch_head) blockers.push(`remote lane branch origin/${manifest.branch} is present`);
   const sourceHead = branch.local_sha || null;
   const targetHead = remote.base_head || null;
-  const localTargetHead = branchSha(manifest.base_ref, worktree.path);
+  const localTargetResult = dirtyBaseSyncGit(["rev-parse", manifest.base_ref], { cwd: worktree.path });
+  const localTargetHead = localTargetResult.code === 0 ? exactGitObjectIdOrNull(String(localTargetResult.stdout || "").trim()) : null;
   if (targetHead && localTargetHead !== targetHead) {
     blockers.push("local origin/dev ref does not match the proven live remote target; base sync never fetches");
   }
-  if (targetHead && git(["cat-file", "-e", `${targetHead}^{commit}`], { cwd: worktree.path }).code !== 0) {
+  if (targetHead && dirtyBaseSyncGit(["cat-file", "-e", `${targetHead}^{commit}`], { cwd: worktree.path }).code !== 0) {
     blockers.push("live origin/dev object is not available locally; base sync never fetches");
   }
   if (!targetHead) blockers.push("live origin/dev identity is unavailable from the bounded read-only remote proof");
@@ -3017,14 +3023,17 @@ function dirtyBaseSyncPacket(state, target, context) {
   let snapshot = null;
   let patch = null;
   if (!prior && sourceHead && targetHead && sourceHead === targetHead) blockers.push("source branch already equals local origin/dev; dirty base sync requires an outstanding base transition");
-  if (!prior && sourceHead && targetHead && git(["merge-base", "--is-ancestor", sourceHead, targetHead], { cwd: worktree.path }).code !== 0) blockers.push("source branch is not an ancestor of local origin/dev; no merge or rebase recovery is admissible");
+  if (!prior && sourceHead && targetHead && dirtyBaseSyncGit(["merge-base", "--is-ancestor", sourceHead, targetHead], { cwd: worktree.path }).code !== 0) blockers.push("source branch is not an ancestor of local origin/dev; no merge or rebase recovery is admissible");
   if (!prior && (!status.staged || status.unstaged)) blockers.push("dirty base sync requires an exactly staged-only worktree with no unstaged or untracked input");
   if (!prior && worktree.exists && status.staged && !status.unstaged) {
     try {
       const paths = dirtyBaseSyncObservedPaths(worktree.path);
+      assertDirtyBaseSyncConversionAttributes(worktree.path, sourceHead, targetHead);
+      assertDirtyBaseSyncTargetCheckoutDoesNotCollide(worktree.path, sourceHead, targetHead);
       snapshot = dirtyBaseSyncSnapshot(worktree.path, paths);
       patch = dirtyBaseSyncPatch(worktree.path);
       if (!patch.text) blockers.push("staged patch evidence is empty");
+      else dirtyBaseSyncAssertTargetPatchCompatibility(worktree.path, targetHead, patch.text);
     } catch (error) {
       blockers.push(error instanceof Error ? error.message : String(error));
     }
@@ -3072,7 +3081,7 @@ function dirtyBaseSyncPacket(state, target, context) {
 }
 
 function dirtyBaseSyncRemoteProof(worktreePath, branch) {
-  const remote = git(["ls-remote", "--refs", "origin", `refs/heads/${defaultBaseBranch}`, `refs/heads/${branch}`], {
+  const remote = dirtyBaseSyncGit(["ls-remote", "--refs", "origin", `refs/heads/${defaultBaseBranch}`, `refs/heads/${branch}`], {
     cwd: worktreePath,
     preserveStdout: true,
     timeout: 10_000,
@@ -3102,9 +3111,112 @@ function dirtyBaseSyncRemoteProof(worktreePath, branch) {
   };
 }
 
+function dirtyBaseSyncGit(commandArguments, options = {}) {
+  return git(["--no-replace-objects", ...commandArguments], {
+    ...options,
+    env: { ...process.env, ...(options.env || {}), GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" },
+  });
+}
+
+function dirtyBaseSyncAssertTargetPatchCompatibility(worktreePath, targetHead, patchText) {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "codex-dirty-base-sync-target-index-"));
+  const temporaryIndex = join(temporaryDirectory, "index");
+  const env = { GIT_INDEX_FILE: temporaryIndex };
+  try {
+    dirtyBaseSyncRunChecked("git", ["read-tree", targetHead], { cwd: worktreePath, env });
+    const result = spawnSync("git", ["--no-replace-objects", "apply", "--check", "--cached", "--binary"], {
+      cwd: worktreePath,
+      env: { ...process.env, ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" },
+      input: Buffer.from(patchText, "utf8"),
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: defaultVerificationTimeoutMs,
+      maxBuffer: recoveryPatchCaptureMaxBytes,
+    });
+    // `git apply` reads patch input only through stdin for this proof, never
+    // writes the temporary index because --check is mandatory.
+    if (result.status !== 0) {
+      throw new Error(`staged dirty base-sync patch cannot apply cleanly to the exact target index: ${safeMetadataText(result.stderr || result.stdout || "git apply check failed", 240)}`);
+    }
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+function dirtyBaseSyncTreePaths(worktreePath, revision) {
+  const listed = dirtyBaseSyncGit(["ls-tree", "-r", "-z", "--name-only", revision], { cwd: worktreePath, preserveStdout: true });
+  if (listed.code !== 0) throw new Error("dirty base sync could not inventory an exact tree");
+  const paths = String(listed.stdout || "").split("\0").filter(Boolean);
+  if (paths.some((path) => !path || Buffer.byteLength(path, "utf8") !== Buffer.from(path, "utf8").length)) {
+    throw new Error("dirty base sync refuses non-UTF-8 target tree paths");
+  }
+  return new Set(paths);
+}
+
+function assertDirtyBaseSyncTargetCheckoutDoesNotCollide(worktreePath, sourceHead, targetHead) {
+  if (!sourceHead || !targetHead) return;
+  const ignored = dirtyBaseSyncGit(["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all"], { cwd: worktreePath, preserveStdout: true });
+  if (ignored.code !== 0) throw new Error("dirty base sync could not inspect ignored checkout collisions");
+  const sourcePaths = dirtyBaseSyncTreePaths(worktreePath, sourceHead);
+  const targetPaths = dirtyBaseSyncTreePaths(worktreePath, targetHead);
+  const ignoredPaths = String(ignored.stdout || "").split("\0").filter(Boolean)
+    .filter((record) => record.startsWith("!! "))
+    .map((record) => record.slice(3).replace(/\/+$/, ""))
+    .filter(Boolean);
+  for (const targetPath of targetPaths) {
+    if (sourcePaths.has(targetPath)) continue;
+    if (ignoredPaths.some((ignoredPath) =>
+      targetPath === ignoredPath || targetPath.startsWith(`${ignoredPath}/`) || ignoredPath.startsWith(`${targetPath}/`),
+    )) {
+      throw new Error("dirty base sync refuses ignored local path collision with a newly tracked target path");
+    }
+  }
+}
+
+function assertDirtyBaseSyncConversionAttributes(worktreePath, sourceHead, targetHead) {
+  if (!sourceHead || !targetHead) return;
+  assertNoDirtySupersededConversionAttributesForPaths(
+    worktreePath,
+    dirtySupersededTrackedAttributePaths(worktreePath, sourceHead),
+    { sourceHead },
+  );
+  assertNoDirtySupersededConversionAttributesForPaths(
+    worktreePath,
+    dirtySupersededTrackedAttributePaths(worktreePath, targetHead),
+    { sourceHead: targetHead },
+  );
+  assertNoDirtySupersededConversionAttributesForPaths(
+    worktreePath,
+    dirtySupersededTrackedAttributePaths(worktreePath),
+  );
+}
+
+function dirtyBaseSyncRunChecked(commandName, commandArguments, options = {}) {
+  const result = run(commandName, commandArguments, {
+    ...options,
+    env: { ...process.env, ...(options.env || {}), GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" },
+  });
+  if (result.code !== 0) throw new Error(result.stderr || result.stdout || `${commandName} failed`);
+  return result;
+}
+
+function assertDirtyBaseSyncGitProofState(worktreePath) {
+  const unsafeEnvironment = [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE",
+  ].find((key) => Object.hasOwn(process.env, key) && String(process.env[key] || "") !== "");
+  if (unsafeEnvironment) throw new Error(`dirty base sync rejects ambient ${unsafeEnvironment} Git proof override`);
+  const proofState = inspectRecoveryProofGitState(worktreePath);
+  if (proofState.status !== "clean") {
+    throw new Error(proofState.reason || "dirty base sync could not prove local Git replacement and graft state");
+  }
+}
+
 function assertDirtyBaseSyncCurrentRemote(manifest, journal) {
+  assertDirtyBaseSyncGitProofState(manifest.worktree_path);
   const remote = dirtyBaseSyncRemoteProof(manifest.worktree_path, manifest.branch);
-  const localTargetHead = branchSha(manifest.base_ref, manifest.worktree_path);
+  const localTargetResult = dirtyBaseSyncGit(["rev-parse", manifest.base_ref], { cwd: manifest.worktree_path });
+  const localTargetHead = localTargetResult.code === 0 ? exactGitObjectIdOrNull(String(localTargetResult.stdout || "").trim()) : null;
   if (!remote.allowed || remote.base_head !== journal.target_head || remote.lane_branch_head || localTargetHead !== journal.target_head) {
     throw new Error("live origin/dev or remote lane-branch evidence changed while applying dirty base sync");
   }
@@ -3287,26 +3399,30 @@ function dirtyBaseSyncCurrentDirtyEvidence(worktreePath, journal) {
 }
 
 function dirtyBaseSyncCleanEvidence(worktreePath, expectedHead, options = {}) {
-  const head = branchSha("HEAD", worktreePath);
+  assertDirtyBaseSyncGitProofState(worktreePath);
+  const headResult = dirtyBaseSyncGit(["rev-parse", "HEAD"], { cwd: worktreePath });
+  const head = headResult.code === 0 ? exactGitObjectIdOrNull(String(headResult.stdout || "").trim()) : null;
   const allowedHeads = [expectedHead, ...(options.allowHead ? [options.allowHead] : [])];
   if (!allowedHeads.includes(head)) throw new Error("dirty base-sync phase head changed");
-  const porcelain = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: worktreePath, preserveStdout: true });
+  const porcelain = dirtyBaseSyncGit(["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"], { cwd: worktreePath, preserveStdout: true });
   if (porcelain.code !== 0 || porcelain.stdout) throw new Error("dirty base-sync clean phase has changed working-tree input");
-  const index = git(["write-tree"], { cwd: worktreePath, preserveStdout: true });
+  const index = dirtyBaseSyncGit(["write-tree"], { cwd: worktreePath, preserveStdout: true });
   const indexTree = String(index.stdout || "").trim();
   if (index.code !== 0 || !exactGitObjectIdOrNull(indexTree)) throw new Error("dirty base-sync clean phase index tree is unavailable");
-  const worktree = git(["diff-files", "--quiet"], { cwd: worktreePath, preserveStdout: true });
+  const worktree = dirtyBaseSyncGit(["diff-files", "--quiet"], { cwd: worktreePath, preserveStdout: true });
   if (worktree.code !== 0) throw new Error("dirty base-sync clean phase worktree differs from its index");
   return { head, index_tree: indexTree, porcelain_sha256: createHash("sha256").update(porcelain.stdout).digest("hex"), worktree_clean: true };
 }
 
 function dirtyBaseSyncRefUpdatedEvidence(worktreePath, journal) {
-  const head = branchSha("HEAD", worktreePath);
+  assertDirtyBaseSyncGitProofState(worktreePath);
+  const headResult = dirtyBaseSyncGit(["rev-parse", "HEAD"], { cwd: worktreePath });
+  const head = headResult.code === 0 ? exactGitObjectIdOrNull(String(headResult.stdout || "").trim()) : null;
   if (head !== journal.target_head) throw new Error("target-ref-updated phase head changed");
-  const index = git(["write-tree"], { cwd: worktreePath, preserveStdout: true });
+  const index = dirtyBaseSyncGit(["write-tree"], { cwd: worktreePath, preserveStdout: true });
   const indexTree = String(index.stdout || "").trim();
   if (index.code !== 0 || !exactGitObjectIdOrNull(indexTree)) throw new Error("target-ref-updated phase index tree is unavailable");
-  const worktree = git(["diff-files", "--quiet"], { cwd: worktreePath, preserveStdout: true });
+  const worktree = dirtyBaseSyncGit(["diff-files", "--quiet"], { cwd: worktreePath, preserveStdout: true });
   if (worktree.code !== 0) throw new Error("target-ref-updated phase worktree differs from its source index");
   const sourceIndexTree = journal.source_cleaned?.index_tree;
   if (!exactGitObjectIdOrNull(sourceIndexTree || "") || indexTree !== sourceIndexTree) {
@@ -3326,7 +3442,12 @@ function dirtyBaseSyncSameEvidence(actual, expected) {
 }
 
 function dirtyBaseSyncObservedPaths(worktreePath) {
-  const status = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: worktreePath, preserveStdout: true });
+  const hidden = dirtyBaseSyncGit(["ls-files", "-v", "-z"], { cwd: worktreePath, preserveStdout: true });
+  if (hidden.code !== 0) throw new Error("dirty base sync could not inspect whole-index hidden flags");
+  const hiddenEntries = String(hidden.stdout || "").split("\0").filter(Boolean)
+    .filter((entry) => entry.length >= 3 && entry[1] === " " && (entry[0] === "h" || entry[0] === "s" || entry[0] === "S"));
+  if (hiddenEntries.length > 0) throw new Error("dirty base sync refuses any assume-unchanged or skip-worktree index entry, including paths hidden from porcelain");
+  const status = dirtyBaseSyncGit(["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"], { cwd: worktreePath, preserveStdout: true });
   if (status.code !== 0) throw new Error(status.stderr || "could not inspect dirty base-sync paths");
   const records = status.stdout.split("\0").filter(Boolean);
   if (records.length === 0) throw new Error("dirty base sync requires staged paths");
@@ -3338,7 +3459,7 @@ function dirtyBaseSyncObservedPaths(worktreePath) {
     if (code[0] === " " || code[1] !== " " || /[RC?]/.test(code) || !path) throw new Error("dirty base sync accepts only ordinary staged regular-file paths");
     paths.push(path);
   }
-  return paths.sort((left, right) => left.localeCompare(right));
+  return paths.sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
 }
 
 function dirtyBaseSyncSnapshot(worktreePath, paths) {
@@ -3346,7 +3467,7 @@ function dirtyBaseSyncSnapshot(worktreePath, paths) {
   // The base transition deliberately changes unrelated index entries. Bind
   // only the complete admitted staged path set, whose entries must survive
   // byte-for-byte and with the same modes after the target base is installed.
-  const index = git(["ls-files", "--stage", "-z", "--", ...paths], { cwd: worktreePath, preserveStdout: true });
+  const index = dirtyBaseSyncGit(["ls-files", "--stage", "-z", "--", ...paths], { cwd: worktreePath, preserveStdout: true });
   if (index.code !== 0) throw new Error("could not fingerprint the dirty base-sync index");
   return {
     paths: files.paths,
@@ -3356,7 +3477,7 @@ function dirtyBaseSyncSnapshot(worktreePath, paths) {
 }
 
 function dirtyBaseSyncPatch(worktreePath) {
-  const result = git(["diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "HEAD"], {
+  const result = dirtyBaseSyncGit(["diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "HEAD"], {
     cwd: worktreePath,
     preserveStdout: true,
     maxBuffer: recoveryPatchCaptureMaxBytes,
@@ -3471,10 +3592,20 @@ function applyDirtyBaseSync(state, target, packet, context) {
       writeManifest(target.path, manifest);
       throw error;
     }
-    journal.status = "blocked";
-    journal.error = safeMetadataText(error instanceof Error ? error.message : String(error), 320);
+    // A failed action may still be exactly resumable from the last persisted
+    // phase. Preserve that phase and its private patch evidence; the resume
+    // validator, not a guessed generic retry, decides whether it remains
+    // admissible. Non-resumable malformed state remains explicitly blocked.
+    const message = safeMetadataText(error instanceof Error ? error.message : String(error), 320);
+    if (dirtyBaseSyncJournalIsResumable(journal)) {
+      journal.last_error = message;
+      journal.last_error_at = new Date().toISOString();
+    } else {
+      journal.status = "blocked";
+      journal.error = message;
+    }
     manifest.updated_at = new Date().toISOString();
-    appendTaskEvent(manifest, "dirty_base_sync_blocked", journal.error);
+    appendTaskEvent(manifest, "dirty_base_sync_blocked", message);
     try { writeManifest(target.path, manifest); } catch {}
     throw error;
   }
@@ -3508,7 +3639,7 @@ function continuePreparedDirtyBaseSync(state, manifestPath, manifest, patchPath,
     }
     if (resume.action === "reverse_patch") {
       assertDirtyBaseSyncCurrentRemote(manifest, journal);
-      runChecked("git", ["apply", "--reverse", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });
+      dirtyBaseSyncRunChecked("git", ["apply", "--reverse", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });
       if (process.env.CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_REVERSE_ACTION === "1") process.exit(86);
       journal.status = "source_cleaned";
       journal.source_cleaned_at = new Date().toISOString();
@@ -3533,7 +3664,7 @@ function continuePreparedDirtyBaseSync(state, manifestPath, manifest, patchPath,
     }
     if (resume.action === "update_target_ref") {
       assertDirtyBaseSyncCurrentRemote(manifest, journal);
-      runChecked("git", ["update-ref", `refs/heads/${manifest.branch}`, journal.target_head, journal.source_head], { cwd: manifest.worktree_path });
+      dirtyBaseSyncRunChecked("git", ["update-ref", `refs/heads/${manifest.branch}`, journal.target_head, journal.source_head], { cwd: manifest.worktree_path });
       if (process.env.CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_TARGET_REF_ACTION === "1") process.exit(86);
       journal.status = "target_ref_updated";
       journal.target_ref_updated_at = new Date().toISOString();
@@ -3558,7 +3689,9 @@ function continuePreparedDirtyBaseSync(state, manifestPath, manifest, patchPath,
     }
     if (resume.action === "checkout_target") {
       assertDirtyBaseSyncCurrentRemote(manifest, journal);
-      runChecked("git", ["read-tree", "--reset", "-u", "HEAD"], { cwd: manifest.worktree_path });
+      const liveBranchHead = dirtyBaseSyncGit(["rev-parse", `refs/heads/${manifest.branch}`], { cwd: manifest.worktree_path }).stdout.trim();
+      if (liveBranchHead !== journal.target_head) throw new Error("target checkout branch ref changed after target-ref update");
+      dirtyBaseSyncRunChecked("git", ["read-tree", "--reset", "-u", journal.target_head], { cwd: manifest.worktree_path });
       if (process.env.CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_TARGET_CHECKOUT_ACTION === "1") process.exit(86);
       journal.status = "target_checked_out";
       journal.target_checked_out_at = new Date().toISOString();
@@ -3583,7 +3716,7 @@ function continuePreparedDirtyBaseSync(state, manifestPath, manifest, patchPath,
     }
     if (resume.action === "restore_patch") {
       assertDirtyBaseSyncCurrentRemote(manifest, journal);
-      runChecked("git", ["apply", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });
+      dirtyBaseSyncRunChecked("git", ["apply", "--index", "--binary", patchPath], { cwd: manifest.worktree_path, maxBuffer: recoveryPatchCaptureMaxBytes });
       if (process.env.CODEX_WORKSPACE_TEST_HARD_CRASH_AFTER_DIRTY_BASE_SYNC_RESTORE_ACTION === "1") process.exit(86);
       const restored = dirtyBaseSyncRestoredEvidence(manifest.worktree_path, journal);
       journal.status = "restored";
@@ -4097,6 +4230,9 @@ function finishPr(argv) {
   withManifestLock(state, manifest.task_id, (lock) => {
     const lockedManifest = readManifest(manifestPath);
     validateManifest(lockedManifest, manifestPath);
+    // An incomplete base-sync journal can appear after the initial preflight.
+    // Recheck the lock-protected manifest before staging or verification.
+    assertDirtyBaseSyncDeliveryClear(lockedManifest);
     assertLaneOwner(lockedManifest, options);
     claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
