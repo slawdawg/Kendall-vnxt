@@ -142,6 +142,11 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
+For a managed lane with intentionally staged changes that must be synchronized
+to a newer `dev` baseline, use the governed recovery procedure in the
+[end-to-end lane runner](docs/workflows/end-to-end-lane-runner.md#governed-staged-dirty-lane-base-sync).
+It is local-only and is not a substitute for verification or PR delivery.
+
 For durable evidence around the required unfiltered workspace fixture command,
 including terminal-success proof, bounded process-group recovery, and the
 inconclusive stop line, see the

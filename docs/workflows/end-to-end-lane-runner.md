@@ -889,6 +889,68 @@ timestamps, exact paths, status codes, and SHA-256 fingerprints. This route
 does not perform GitHub actions, commits, resets, cleanup, or source mutation;
 normal verification and delivery gates resume only after the ownership handoff.
 
+### Governed staged dirty-lane base sync
+
+This is a separate, local-only recovery primitive for an exact current-owner
+lane which is still on an older source base and contains only intended staged
+regular-file changes. It is not takeover, verification, settlement, or
+delivery. It proves live `origin/dev` and remote lane-branch absence with an
+exact bounded read-only `git ls-remote` query, then requires that returned
+target object to already exist locally; it never fetches, pushes, or changes
+remote refs. First inspect the bound plan:
+
+```bash
+node ./scripts/codex-workspace.mjs sync-dirty-lane-base <task-id> --dry-run --summary-json
+```
+
+Only the exact owner may apply the same plan after reviewing the source head,
+live proven target, staged path fingerprints, and patch digest:
+
+```bash
+node ./scripts/codex-workspace.mjs sync-dirty-lane-base <task-id> --apply \
+  --approval "operator approved exact local dirty lane base sync" \
+  --reason "incorporate reviewed base without delivery" \
+  --plan-digest "<planDigest from the immediately preceding admissible dry-run>"
+```
+
+The command accepts only an active manifest bound exactly to `dev` and
+`origin/dev`, a registered matching checkout, an absent or released predecessor
+lease, no recorded commit/PR/delivery state, no remote lane branch, and a
+staged-only worktree. It requires the source head to be an ancestor of the
+live proven target; divergent histories remain blocked rather than being merged or
+rebased. It writes a private digest-bound patch journal before the source base
+changes, then records and re-proves each bounded phase: source-cleaned,
+target-ref update, target checkout, and staged restoration. A process loss may
+resume only the exact next phase when its phase-specific head, index tree,
+worktree, patch, owner, lease lineage, and live target evidence still match.
+If an action completed just before its phase record was written, the runner
+reconciles only that exact internal action from the retained evidence; any
+ambiguous or manually altered state remains blocked. It never creates a new
+journal for a retained transaction or treats a repeated apply as a general
+retry.
+
+Hard stop lines: do not use manual `git rebase`, `git merge`, `git reset`,
+`git checkout`, or `git stash`; do not pass `--no-verify`, switch profiles,
+replay an old check packet, fetch, commit, push, open/update a PR, merge, clean
+up, or run verification as part of base sync. A retained incomplete journal,
+lock/owner/base/index drift, or failed restoration is blocked evidence, not
+permission to improvise another Git operation.
+
+After a completed base sync, retain any terminal external-intent evidence.
+Use `recover-inflight-check` only if its separate exact binding rules now pass,
+then run a fresh governed `finish-pr <task-id> --stage-all --verify check`.
+
+### Failed resumable-check diagnostics
+
+For a failed non-preflight resumable `check` leaf, the local task diagnostic
+records schema v3 classification evidence: the allowlisted check stage, outcome,
+elapsed/timeout, exit/signal/error fields, and at most 2 KiB of sanitized
+stdout/stderr tails. These tails stay in the private local diagnostic only.
+The verification packet, CLI error, PR evidence, and every delivery decision
+continue to use `child_output=omitted`; a diagnostic tail never proves a pass
+or authorizes retry, delivery, push, or PR creation. Preflight failures retain
+the existing omission-only diagnostic behavior.
+
 ## Parallel Suitability Report (Read Only)
 
 Before considering more than one independent lane, obtain the manager refill
