@@ -457,6 +457,12 @@ try {
     case "verify-pr-gates":
       verifyPrGates(commandArgs);
       break;
+    case "request-pr-review":
+      requestPrReview(commandArgs);
+      break;
+    case "merge-exact-head":
+      mergeExactHead(commandArgs);
+      break;
     case "refresh-pr-head":
       refreshPrHead(commandArgs);
       break;
@@ -549,6 +555,8 @@ Commands:
   adopt-legacy-recovery  Preview or apply the one governed v1-to-v2 recovery adoption.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
+  request-pr-review [query] Request one GitHub review only after exact-head PR proof.
+  merge-exact-head [query]  Merge only the retained, freshly re-proven exact PR head.
   refresh-pr-head [query]   Explicitly rebind a stale managed PR delivery head after fresh remote proof.
   adjudicate-outdated-thread [query] Record evidence for one satisfied outdated review thread; never resolves it.
   resolve-adjudicated-thread [query] Resolve exactly one freshly revalidated adjudicated thread, then re-audit.
@@ -646,6 +654,8 @@ takeover options:
   --approval <text>         Required with --apply. Operator approval evidence.
   --allow-dirty-in-lane     Opt in to the narrowly gated dirty-worktree takeover path.
   --dirty-paths <path>      Repeat for each exact dirty relative path required by --allow-dirty-in-lane.
+  --allow-released-pr-handoff <number>
+                            Permit only an explicitly approved handoff of a released versioned lease with this exact recorded PR number.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 sync-dirty-lane-base options:
@@ -2869,6 +2879,18 @@ function takeover(argv) {
   if (options.dirtyPaths !== undefined && !options.allowDirtyInLane) {
     throw new Error("--dirty-paths is only valid with --allow-dirty-in-lane.");
   }
+  if (options.allowReleasedPrHandoff === true || options.allowReleasedPrHandoff === "") {
+    throw new Error("--allow-released-pr-handoff requires the exact recorded PR number.");
+  }
+  const releasedPrHandoffPrNumber = options.allowReleasedPrHandoff === undefined
+    ? null
+    : positiveInteger(options.allowReleasedPrHandoff, null);
+  if (releasedPrHandoffPrNumber !== null && !options.allowDirtyInLane) {
+    throw new Error("--allow-released-pr-handoff is only valid with --allow-dirty-in-lane.");
+  }
+  if (releasedPrHandoffPrNumber !== null && !validTakeoverReason(options.approval)) {
+    throw new Error("--allow-released-pr-handoff requires explicit operator approval evidence in --approval.");
+  }
 
   const state = workspaceState(options);
   const currentOwner = currentLaneOwner(options);
@@ -2899,6 +2921,7 @@ function takeover(argv) {
     approval: options.approval ? String(options.approval).trim() : "",
     allowDirtyInLane: options.allowDirtyInLane === true,
     dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
+    releasedPrHandoffPrNumber,
     preflightLockInspection,
     recoveredDirtyTakeoverLease: interruptedRecovery,
   });
@@ -5736,6 +5759,118 @@ function verifyPrGates(argv) {
   });
 
   printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
+}
+
+function exactHeadDeliveryActionState(manifest, expectedHeadSha) {
+  const expectedHead = exactGitObjectIdOrNull(expectedHeadSha);
+  if (!expectedHead) throw new Error("Delivery action requires --expected-head <40 lowercase hex characters>.");
+  const repositoryRef = githubRepository(manifest);
+  const pr = prViewForGates(manifest);
+  const headState = prGateHeadState(manifest);
+  const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : null;
+  const blockers = [];
+  if (repositoryRef.owner !== "slawdawg" || repositoryRef.name !== "Kendall-vnxt") blockers.push("Delivery action only accepts the canonical Kendall_Nxt repository");
+  if (!pr?.number || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("Delivery action requires an open, non-draft PR");
+  if (!pr?.baseRefName || pr.baseRefName !== manifest.base_branch || manifest.base_branch !== "dev") blockers.push("Delivery action requires the managed dev base branch");
+  if (pr?.headRefName !== manifest.branch || pr?.headRefOid !== expectedHead || headState.expectedHeadSha !== expectedHead || !headState.localMatchesExpected) blockers.push("Delivery action exact head no longer matches the managed PR and worktree");
+  if (!reviewThreads?.querySucceeded || reviewThreads.errorCount || reviewThreads.hasNextPage || reviewThreads.reviewRequestHasNextPage) blockers.push("Delivery action requires a complete thread-aware review audit");
+  return { expectedHead, repository: { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` }, pr, headState, reviewThreads, blockers };
+}
+
+function appendHermesDeliveryExecutorEvidence(manifest, action, state, extra = {}) {
+  const expectedHeadSha = state.expectedHead ?? state.expectedHeadSha;
+  if (!/^[0-9a-f]{40}$/.test(expectedHeadSha || "")) throw new Error("Hermes delivery executor evidence requires an exact head SHA.");
+  const record = {
+    schemaVersion: 1,
+    action,
+    expectedHeadSha,
+    repository: state.repository,
+    pullRequestNumber: state.pr?.number || null,
+    observedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...extra,
+  };
+  manifest.hermes_delivery_executor_evidence = [
+    ...(Array.isArray(manifest.hermes_delivery_executor_evidence) ? manifest.hermes_delivery_executor_evidence : []),
+    record,
+  ].slice(-20);
+  appendTaskEvent(manifest, `hermes_delivery_${action}`, `${expectedHeadSha} pr=${state.pr?.number || "missing"}`);
+  return record;
+}
+
+function requestPrReview(argv) {
+  const { positional, options } = parseOptions(argv);
+  const reviewer = safeMetadataText(options.reviewer, 80);
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(reviewer)) throw new Error("request-pr-review requires --reviewer <GitHub login>.");
+  const state = workspaceState(options);
+  const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
+  assertLaneOwner(manifest, options); requireGh("request-pr-review"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  reconcileManifest(manifest, { refreshPr: true });
+  const preview = exactHeadDeliveryActionState(manifest, options.expectedHead);
+  if (preview.blockers.length) throw new Error(`request-pr-review is blocked: ${preview.blockers.join("; ")}`);
+  if (options.dryRun) return printPlan("request-pr-review", [`gh pr edit ${preview.pr.number} --add-reviewer ${reviewer}`, `exact head ${preview.expectedHead}`]);
+  withManifestLock(state, manifest.task_id, () => {
+    const locked = readManifest(manifestPath);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
+    reconcileManifest(locked, { refreshPr: true });
+    const fresh = exactHeadDeliveryActionState(locked, options.expectedHead);
+    if (fresh.blockers.length) throw new Error(`request-pr-review changed under lock: ${fresh.blockers.join("; ")}`);
+    runChecked("gh", ["pr", "edit", String(fresh.pr.number), "--add-reviewer", reviewer], { cwd: locked.worktree_path, externalExecution: true });
+    const post = exactHeadDeliveryActionState(locked, options.expectedHead);
+    if (post.blockers.length) throw new Error(`request-pr-review post-mutation audit is incomplete: ${post.blockers.join("; ")}`);
+    appendHermesDeliveryExecutorEvidence(locked, "request_review", post, { reviewer, decision: "completed", nextAction: "Await the requested review before any merge.", rollbackPath: "Remove the review request through the governed workspace only if a future exact-head policy permits it." });
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
+    writeManifest(manifestPath, locked); Object.assign(manifest, locked);
+  });
+  printApplied("request-pr-review", [`requested ${reviewer} on exact head ${options.expectedHead}`]);
+}
+
+function mergeGateOptionsFromEvidence(gate) {
+  return {
+    deliveryAuditStatus: gate?.deliverySubagentAudit?.status,
+    deliveryAuditAgent: gate?.deliverySubagentAudit?.agent,
+    deliveryAuditSummary: gate?.deliverySubagentAudit?.summary,
+    deliveryAuditHeadSha: gate?.deliverySubagentAudit?.headSha,
+    nonRequiredChecks: (gate?.nonRequiredCheckPolicy?.names || []).join(","),
+    nonRequiredCheckPolicy: gate?.nonRequiredCheckPolicy?.policyRef,
+    mergeMethod: gate?.mergePlan?.plannedMergeMethod,
+    rollbackPath: gate?.mergePlan?.rollbackPath,
+    diffRiskSummary: gate?.diffRiskEvidence?.summary,
+    diffRiskFiles: JSON.stringify(gate?.diffRiskEvidence?.files || []),
+    diffRiskVerification: gate?.diffRiskEvidence?.verification,
+    diffRiskVerificationCommand: gate?.diffRiskEvidence?.verificationCommand,
+    diffRiskVerificationExitCode: gate?.diffRiskEvidence?.verificationExitCode,
+  };
+}
+
+function mergeExactHead(argv) {
+  const { positional, options } = parseOptions(argv);
+  const state = workspaceState(options);
+  const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
+  assertLaneOwner(manifest, options); requireGh("merge-exact-head"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  reconcileManifest(manifest, { refreshPr: true });
+  const retained = manifest.pr_gate_evidence;
+  if (!retained?.lowRiskReady || retained.expectedHeadSha !== options.expectedHead) throw new Error("merge-exact-head requires retained low-risk exact-head gate evidence for --expected-head.");
+  const preview = buildPrGateEvidence(manifest, { options: mergeGateOptionsFromEvidence(retained) });
+  if (!preview.lowRiskReady || preview.expectedHeadSha !== options.expectedHead) throw new Error(`merge-exact-head is blocked: ${preview.blockers.join("; ")}`);
+  if (options.dryRun) return printPlan("merge-exact-head", [`gh pr merge ${preview.pr.number} --merge --match-head-commit ${preview.expectedHeadSha}`, "no cleanup, branch deletion, bypass, or force flags"]);
+  withManifestLock(state, manifest.task_id, () => {
+    const locked = readManifest(manifestPath);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
+    reconcileManifest(locked, { refreshPr: true });
+    const lockedGate = locked.pr_gate_evidence;
+    if (!lockedGate?.lowRiskReady || lockedGate.expectedHeadSha !== options.expectedHead) throw new Error("merge-exact-head retained gate evidence changed under lock.");
+    const fresh = buildPrGateEvidence(locked, { options: mergeGateOptionsFromEvidence(lockedGate) });
+    if (!fresh.lowRiskReady || fresh.expectedHeadSha !== options.expectedHead) throw new Error(`merge-exact-head fresh gate proof failed: ${fresh.blockers.join("; ")}`);
+    runChecked("gh", ["pr", "merge", String(fresh.pr.number), "--merge", "--match-head-commit", fresh.expectedHeadSha], { cwd: locked.worktree_path, externalExecution: true });
+    const post = prViewForGates(locked);
+    if (!post || post.state !== "MERGED" || post.headRefOid !== fresh.expectedHeadSha) throw new Error("merge-exact-head post-mutation PR proof is incomplete; do not retry blindly.");
+    appendHermesDeliveryExecutorEvidence(locked, "merge", fresh, { decision: "completed", nextAction: "Reconcile merged PR metadata before any separately governed cleanup.", rollbackPath: fresh.mergePlan.rollbackPath, mergedAt: post.mergedAt || null });
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
+    writeManifest(manifestPath, locked); Object.assign(manifest, locked);
+  });
+  printApplied("merge-exact-head", [`merged exact head ${options.expectedHead}; no cleanup was performed`]);
 }
 
 function refreshPrHead(argv) {
@@ -21239,7 +21374,8 @@ function takeoverPacket(target, context) {
   const branch = takeoverBranchEvidence(record, worktree);
   const pr = takeoverPrEvidence(record);
   const dirty = takeoverDirtyStateEvidence(worktree);
-  const dirtyInLane = takeoverDirtyInLaneEvidence(target, context, { stale, worktree, branch, pr, dirty });
+  const releasedPrHandoff = releasedPrHandoffEvidence(target, context, { worktree, branch, pr });
+  const dirtyInLane = takeoverDirtyInLaneEvidence(target, context, { stale, worktree, branch, pr, dirty, releasedPrHandoff });
   const blockers = takeoverBlockers(target, context, {
     stale,
     worktree,
@@ -21247,6 +21383,7 @@ function takeoverPacket(target, context) {
     pr,
     dirty,
     dirtyInLane,
+    releasedPrHandoff,
   });
   const allowed = blockers.length === 0;
 
@@ -21263,6 +21400,7 @@ function takeoverPacket(target, context) {
     pr_evidence: pr,
     dirty_state_evidence: dirty,
     dirty_in_lane_evidence: dirtyInLane,
+    released_pr_handoff_evidence: releasedPrHandoff,
     approval_evidence: context.approval || null,
     decision: allowed ? "approved_for_apply" : "blocked",
     allowed,
@@ -21274,7 +21412,7 @@ function takeoverPacket(target, context) {
       allowed,
       requiredGates: [
         "target has a previous owner",
-        "owner heartbeat is stale",
+        context.releasedPrHandoffPrNumber ? "released idle lease and exact current PR handoff evidence are complete" : "owner heartbeat is stale",
         "worktree exists when required",
         context.allowDirtyInLane ? "explicit dirty in-lane takeover evidence is complete" : "worktree is clean",
         "takeover reason is present",
@@ -21283,7 +21421,7 @@ function takeoverPacket(target, context) {
       satisfiedGates: allowed
         ? [
             "target has a previous owner",
-            "owner heartbeat is stale",
+            context.releasedPrHandoffPrNumber ? "released idle lease and exact current PR handoff evidence are complete" : "owner heartbeat is stale",
             "worktree exists when required",
             context.allowDirtyInLane ? "explicit dirty in-lane takeover evidence is complete" : "worktree is clean",
             "takeover reason is present",
@@ -21292,7 +21430,7 @@ function takeoverPacket(target, context) {
         : [],
       blockedReasons: blockers,
       stopLines: [
-        "no automatic takeover without stale-owner evidence",
+        context.releasedPrHandoffPrNumber ? "no released PR handoff without an exact idle lease, current PR, and approval proof" : "no automatic takeover without stale-owner evidence",
         "no takeover apply without explicit operator approval evidence",
         context.allowDirtyInLane ? "dirty path content must remain stable while the exact manifest lock is held" : "no dirty worktree mutation",
         "no provider/model calls",
@@ -21341,6 +21479,7 @@ function buildTakeoverSummary(packet) {
       remoteSha: packet.branch_evidence.remote_sha,
     },
     pr: packet.pr_evidence,
+    releasedPrHandoff: packet.released_pr_handoff_evidence,
     dirtyState: {
       status: packet.dirty_state_evidence.status,
       dirty: packet.dirty_state_evidence.dirty,
@@ -21530,6 +21669,190 @@ function dirtyInLaneRequestedPaths(rawValue) {
   return { paths: unique, invalid };
 }
 
+function releasedPrHandoffEvidence(target, context, evidence) {
+  const expectedPrNumber = context.releasedPrHandoffPrNumber;
+  const requested = Number.isInteger(expectedPrNumber) && expectedPrNumber > 0;
+  const lock = target.kind === "workspace" && context.preflightLockInspection
+    ? redactTaskLockInspection(context.preflightLockInspection)
+    : null;
+  const result = {
+    mode: requested ? "requested" : "not_requested",
+    status: requested ? "pending" : "not_requested",
+    expected_pr_number: requested ? expectedPrNumber : null,
+    lock_evidence: lock,
+    idle_lease_evidence: null,
+    predecessor_binding_evidence: null,
+    live_pr_evidence: null,
+    errors: [],
+  };
+  if (!requested) return result;
+  if (!context.allowDirtyInLane) result.errors.push("released PR handoff requires dirty in-lane takeover mode");
+  if (target.kind !== "workspace") result.errors.push("released PR handoff is limited to workspace manifests");
+  if (!validTakeoverReason(context.approval)) result.errors.push("explicit operator approval evidence is required");
+  if (!validTakeoverReason(context.reason)) result.errors.push("released PR handoff requires a takeover reason");
+  if (!Number.isInteger(target.record.pr_number) || target.record.pr_number !== expectedPrNumber) {
+    result.errors.push("released PR handoff requires the exact recorded manifest PR number");
+  }
+  if (typeof target.record.pr_url !== "string" || !target.record.pr_url.trim()) {
+    result.errors.push("released PR handoff requires the recorded manifest PR URL");
+  }
+  result.idle_lease_evidence = context.lockedPredecessorInspection
+    ? releasedPrHandoffLockedIdleLeaseEvidence(
+      context.preflightLockInspection,
+      context.lockedPredecessorInspection,
+      target.record.owner,
+    )
+    : releasedPrHandoffIdleLeaseEvidence(
+      context.state,
+      target.record.task_id,
+      context.preflightLockInspection,
+      target.record.owner,
+    );
+  if (result.idle_lease_evidence.status !== "matched") {
+    result.errors.push(result.idle_lease_evidence.reason || "released PR handoff requires an exact idle versioned lease");
+  }
+  result.predecessor_binding_evidence = releasedPrHandoffPredecessorBinding(context.preflightLockInspection, context.lockedPredecessorInspection);
+  if (result.predecessor_binding_evidence.status === "mismatch") {
+    result.errors.push(result.predecessor_binding_evidence.reason);
+  }
+  if (evidence.worktree.exists && evidence.branch.status === "matched") {
+    result.live_pr_evidence = releasedPrHandoffLivePrProof({
+      branch: evidence.branch.branch,
+      baseBranch: target.record.base_branch,
+      expectedPrNumber,
+      expectedPrUrl: target.record.pr_url,
+      expectedHeadSha: evidence.branch.local_sha,
+    }, evidence.worktree.path);
+    if (result.live_pr_evidence.status !== "matched") {
+      result.errors.push(result.live_pr_evidence.reason || "live exact PR proof did not match");
+    }
+  } else {
+    result.errors.push("released PR handoff requires an existing exact-branch worktree");
+  }
+  result.status = result.errors.length === 0 ? "matched" : "blocked";
+  return result;
+}
+
+function releasedPrHandoffPredecessorBinding(preflight, lockedPredecessor) {
+  if (!lockedPredecessor) return { status: "not_applicable", metadataOnly: true };
+  const same = preflight?.protocol === "versioned_lease" && lockedPredecessor.protocol === "versioned_lease" &&
+    preflight.status === "released" && lockedPredecessor.status === "released" &&
+    preflight.reason === "owner_released_generation" && lockedPredecessor.reason === "owner_released_generation" &&
+    preflight.generation === lockedPredecessor.generation &&
+    preflight.metadata?.owner === lockedPredecessor.owner &&
+    preflight.metadata?.token && lockedPredecessor.tokenDigest &&
+    taskLeaseTokenDigest(preflight.metadata.token) === lockedPredecessor.tokenDigest &&
+    preflight.release?.released_at === lockedPredecessor.releasedAt;
+  if (!same) {
+    return { status: "mismatch", reason: "released PR handoff predecessor changed before locked takeover admission", metadataOnly: true };
+  }
+  return {
+    status: "matched",
+    generation: preflight.generation,
+    owner: preflight.metadata.owner,
+    releasedAt: preflight.release.released_at,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function releasedPrHandoffLockedIdleLeaseEvidence(preflight, lockedPredecessor, expectedOwner) {
+  if (!lockedPredecessor) {
+    return { status: "blocked", reason: "released PR handoff did not retain locked predecessor idle evidence", metadataOnly: true };
+  }
+  const idle = lockedPredecessor.idleLeaseEvidence;
+  const samePredecessor = preflight?.protocol === "versioned_lease" &&
+    preflight.status === "released" &&
+    preflight.reason === "owner_released_generation" &&
+    preflight.generation === lockedPredecessor.generation &&
+    preflight.metadata?.owner === expectedOwner &&
+    lockedPredecessor.owner === expectedOwner &&
+    preflight.metadata?.token && lockedPredecessor.tokenDigest &&
+    taskLeaseTokenDigest(preflight.metadata.token) === lockedPredecessor.tokenDigest &&
+    preflight.release?.released_at === lockedPredecessor.releasedAt;
+  if (!samePredecessor || !idle || idle.status !== "matched" || idle.fence !== "clear" || idle.process !== "absent") {
+    return { status: "blocked", reason: "released PR handoff actual predecessor idle evidence drifted before locked takeover admission", metadataOnly: true };
+  }
+  return {
+    status: "matched",
+    owner: lockedPredecessor.owner,
+    generation: lockedPredecessor.generation,
+    releasedAt: lockedPredecessor.releasedAt,
+    heartbeatAt: idle.heartbeatAt,
+    fence: idle.fence,
+    process: idle.process,
+    source: "locked_actual_predecessor",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function releasedPrHandoffIdleLeaseEvidence(state, taskId, inspection, expectedOwner) {
+  if (!state || !inspection || inspection.protocol !== "versioned_lease" || inspection.status !== "released" || inspection.reason !== "owner_released_generation") {
+    return { status: "blocked", reason: "released PR handoff requires an exact released versioned lease", metadataOnly: true };
+  }
+  if (inspection.metadata?.owner !== expectedOwner || !inspection.release?.released_at) {
+    return { status: "blocked", reason: "released PR handoff lease owner or release record does not match the manifest", metadataOnly: true };
+  }
+  const tokenDigest = taskLeaseTokenDigest(inspection.metadata.token);
+  let heartbeat;
+  let fence;
+  try {
+    heartbeat = latestLeaseHeartbeat(state, taskId, inspection.generation, tokenDigest);
+    fence = leaseGenerationFence(state, taskId, inspection.metadata, tokenDigest);
+  } catch {
+    return { status: "blocked", reason: "released PR handoff idle lease evidence is unreadable", metadataOnly: true };
+  }
+  if (!heartbeat || !isIsoTimestamp(heartbeat.heartbeat_at) || Date.parse(heartbeat.heartbeat_at) > Date.parse(inspection.release.released_at)) {
+    return { status: "blocked", reason: "released PR handoff found a heartbeat after the release record", metadataOnly: true };
+  }
+  if (fence) {
+    return { status: "blocked", reason: "released PR handoff found a retained execution or manifest intent", metadataOnly: true };
+  }
+  const processAbsence = probeProcessAbsence(inspection.metadata.pid, inspection.metadata.process_start_identity, "released lease owner");
+  if (processAbsence) {
+    return { status: "blocked", reason: processAbsence, metadataOnly: true };
+  }
+  return {
+    status: "matched",
+    owner: inspection.metadata.owner,
+    generation: inspection.generation,
+    releasedAt: inspection.release.released_at,
+    heartbeatAt: heartbeat.heartbeat_at,
+    fence: "clear",
+    process: "absent",
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function releasedPrHandoffLivePrProof({ branch, baseBranch, expectedPrNumber, expectedPrUrl, expectedHeadSha }, cwd) {
+  const result = run("gh", ["pr", "list", "--head", branch, "--state", "open", "--json", "number,state,headRefName,baseRefName,headRefOid,url"], { cwd });
+  if (result.code !== 0) {
+    return { status: "unavailable", reason: `live released PR handoff proof is unavailable: gh pr list exited ${result.code}`, metadataOnly: true, rawPayloadRetained: false };
+  }
+  let pullRequests;
+  try {
+    pullRequests = parseGhJson(result.stdout, "released PR handoff proof");
+  } catch (error) {
+    return { status: "unavailable", reason: `live released PR handoff proof is unavailable: ${error.message}`, metadataOnly: true, rawPayloadRetained: false };
+  }
+  if (!Array.isArray(pullRequests) || pullRequests.length !== 1) {
+    return { status: "mismatch", reason: "live released PR handoff proof requires exactly one open PR for the recorded branch", metadataOnly: true, rawPayloadRetained: false };
+  }
+  const pr = pullRequests[0];
+  if (!pr || typeof pr !== "object" || pr.number !== expectedPrNumber || pr.state !== "OPEN" || pr.headRefName !== branch || pr.baseRefName !== baseBranch || pr.url !== expectedPrUrl || pr.headRefOid !== expectedHeadSha) {
+    return { status: "mismatch", reason: "live released PR handoff proof does not exactly match the recorded PR, branch, base, URL, and head", metadataOnly: true, rawPayloadRetained: false };
+  }
+  return {
+    status: "matched",
+    pr: { number: pr.number, state: pr.state, headRefName: pr.headRefName, baseRefName: pr.baseRefName, headRefOid: pr.headRefOid, url: pr.url },
+    checkedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
 function dirtyInLanePathSnapshot(worktreePath, requestedPaths) {
   const canonicalWorktree = canonicalExistingPath(worktreePath);
   if (!canonicalWorktree) {
@@ -21692,6 +22015,7 @@ function streamingFileSha256(path) {
 
 function takeoverDirtyInLaneEvidence(target, context, evidence) {
   const requested = Boolean(context.allowDirtyInLane);
+  const releasedPrHandoff = evidence.releasedPrHandoff?.status === "matched" && evidence.releasedPrHandoff.errors?.length === 0;
   const lock = target.kind === "workspace" && context.preflightLockInspection
     ? redactTaskLockInspection(context.preflightLockInspection)
     : null;
@@ -21708,14 +22032,14 @@ function takeoverDirtyInLaneEvidence(target, context, evidence) {
   if (!evidence.dirty.dirty) result.errors.push("dirty in-lane takeover requires a dirty workspace worktree");
   if (evidence.worktree.registration?.status !== "matched") result.errors.push(evidence.worktree.registration?.reason || "recorded worktree registration is unavailable");
   if (evidence.branch.status !== "matched") result.errors.push("manifest branch does not exactly match the worktree checkout");
-  if (evidence.pr.status !== "none") result.errors.push("dirty in-lane takeover is forbidden when a PR is recorded");
+  if (evidence.pr.status !== "none" && !releasedPrHandoff) result.errors.push("dirty in-lane takeover is forbidden when a PR is recorded");
   if (!validTakeoverReason(context.approval)) result.errors.push("explicit operator approval evidence is required");
-  if (evidence.worktree.exists && evidence.branch.branch) {
+  if (evidence.worktree.exists && evidence.branch.branch && !releasedPrHandoff) {
     result.live_no_pr_evidence = strictGithubNoPrProof({ branch: evidence.branch.branch }, evidence.worktree.path);
     if (result.live_no_pr_evidence.status !== "matched") {
       result.errors.push(result.live_no_pr_evidence.reason || "live GitHub no-PR proof did not match");
     }
-  } else {
+  } else if (!releasedPrHandoff) {
     result.errors.push("live GitHub no-PR proof requires an existing branch worktree");
   }
   const malformedLockRecovery = malformedZeroByteDirtyLockRecoveryEvidence(target, context, evidence, lock, result.live_no_pr_evidence);
@@ -21817,7 +22141,8 @@ function takeoverBlockers(target, context, evidence) {
   if (record.owner === context.currentOwner) {
     blockers.push("target is already owned by current runner");
   }
-  if (!evidence.stale.is_stale) {
+  const releasedPrHandoff = evidence.releasedPrHandoff?.status === "matched" && evidence.releasedPrHandoff.errors?.length === 0;
+  if (!evidence.stale.is_stale && !releasedPrHandoff) {
     blockers.push("owner heartbeat is not stale");
   }
   if (target.kind === "workspace" && !evidence.worktree.exists) {
@@ -21831,6 +22156,9 @@ function takeoverBlockers(target, context, evidence) {
   }
   if (context.allowDirtyInLane) {
     blockers.push(...(evidence.dirtyInLane?.errors || []));
+  }
+  if (context.releasedPrHandoffPrNumber !== null && context.releasedPrHandoffPrNumber !== undefined) {
+    blockers.push(...(evidence.releasedPrHandoff?.errors || []));
   }
   if (!validTakeoverReason(context.reason)) {
     blockers.push("takeover reason is missing or too short");
@@ -21865,6 +22193,9 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
           approval: String(options.approval || "").trim(),
           allowDirtyInLane: options.allowDirtyInLane === true,
           dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
+          releasedPrHandoffPrNumber: options.allowReleasedPrHandoff === undefined
+            ? null
+            : positiveInteger(options.allowReleasedPrHandoff, null),
           preflightLockInspection: null,
         },
       );
@@ -21882,7 +22213,7 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
     ? recoverInterruptedDirtyTakeover(state, target)
     : null);
   const postRecoveryLockInspection = inspectTaskLock(state, taskId);
-  return withManifestLock(state, taskId, () => {
+  return withManifestLock(state, taskId, (heldLease) => {
     const path = target.path;
     const manifest = readManifest(path);
     validateManifest(manifest, path);
@@ -21901,7 +22232,11 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
           approval: String(options.approval || "").trim(),
           allowDirtyInLane: options.allowDirtyInLane === true,
           dirtyPaths: options.dirtyPaths === undefined ? [] : options.dirtyPaths,
+          releasedPrHandoffPrNumber: options.allowReleasedPrHandoff === undefined
+            ? null
+            : positiveInteger(options.allowReleasedPrHandoff, null),
           preflightLockInspection: postRecoveryLockInspection,
+          lockedPredecessorInspection: heldLease.predecessor,
           recoveredDirtyTakeoverLease,
         },
       );
@@ -21952,7 +22287,11 @@ function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds
       throw error;
     }
     return { path, packet };
-  }, { recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true });
+  }, {
+    recoverStale: recoveredDirtyTakeoverLease?.recovered === true || options.allowDirtyInLane !== true,
+    owner: currentOwner,
+    requireReleasedPrHandoffIdleEvidence: options.allowReleasedPrHandoff !== undefined,
+  });
 }
 
 function canonicalManifestBytes(manifest) {
@@ -24207,6 +24546,31 @@ function redactTaskLockInspection(inspection) {
   };
 }
 
+function taskLeasePredecessorProof(inspection, idleLeaseEvidence = null) {
+  const proof = {
+    protocol: inspection?.protocol || "unknown",
+    status: inspection?.status || "ambiguous",
+    reason: inspection?.reason || "lock_inspection_unavailable",
+    generation: inspection?.generation || null,
+    owner: inspection?.metadata?.owner || null,
+    tokenDigest: inspection?.metadata?.token ? taskLeaseTokenDigest(inspection.metadata.token) : null,
+    releasedAt: inspection?.release?.released_at || null,
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+  if (idleLeaseEvidence) {
+    proof.idleLeaseEvidence = {
+      status: idleLeaseEvidence.status,
+      heartbeatAt: idleLeaseEvidence.heartbeatAt || null,
+      fence: idleLeaseEvidence.fence || null,
+      process: idleLeaseEvidence.process || null,
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+  }
+  return proof;
+}
+
 function assertTaskLeaseAcquisitionCapacity(inspection, taskId, options = {}) {
   const mayRecoverStale = inspection.status === "stale" && options.recoverStale !== false;
   if (inspection.status === "absent") return;
@@ -24279,6 +24643,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
     created_at: new Date().toISOString(),
   };
   let inspection;
+  let predecessorProof = taskLeasePredecessorProof(lockInspection);
   try {
     publishTaskLeaseRoot(state, taskId, rootRecord);
   } catch (error) {
@@ -24287,6 +24652,39 @@ function withManifestLock(state, taskId, fn, options = {}) {
     // A competing immutable handoff can consume the final safe slot after our
     // first inspection.  Re-reserve capacity before linking our successor.
     assertTaskLeaseAcquisitionCapacity(inspection, taskId, options);
+    if (inspection.status === "released" && options.requireReleasedPrHandoffIdleEvidence === true) {
+      const initialIdleLeaseEvidence = releasedPrHandoffIdleLeaseEvidence(state, taskId, inspection, inspection.metadata?.owner);
+      if (initialIdleLeaseEvidence.status !== "matched") {
+        throw new Error(`${initialIdleLeaseEvidence.reason || "released predecessor idle evidence is not provable"}; mutation=none.`);
+      }
+      // Re-read the exact predecessor while the successor is still unpublished.
+      // Any heartbeat, execution intent, manifest intent, or predecessor change
+      // in this admission window fails closed before immutable handoff publication.
+      const revalidatedInspection = inspectTaskLease(state, taskId);
+      const idleLeaseEvidence = releasedPrHandoffIdleLeaseEvidence(
+        state,
+        taskId,
+        revalidatedInspection,
+        inspection.metadata?.owner,
+      );
+      const unchanged = revalidatedInspection.protocol === inspection.protocol &&
+        revalidatedInspection.status === inspection.status &&
+        revalidatedInspection.reason === inspection.reason &&
+        revalidatedInspection.generation === inspection.generation &&
+        revalidatedInspection.metadata?.owner === inspection.metadata?.owner &&
+        revalidatedInspection.metadata?.token === inspection.metadata?.token &&
+        revalidatedInspection.release?.released_at === inspection.release?.released_at &&
+        idleLeaseEvidence.status === "matched" &&
+        idleLeaseEvidence.heartbeatAt === initialIdleLeaseEvidence.heartbeatAt &&
+        idleLeaseEvidence.fence === initialIdleLeaseEvidence.fence &&
+        idleLeaseEvidence.process === initialIdleLeaseEvidence.process;
+      if (!unchanged) {
+        throw new Error(`${idleLeaseEvidence.reason || "released predecessor idle evidence changed during locked takeover admission"}; mutation=none.`);
+      }
+      predecessorProof = taskLeasePredecessorProof(revalidatedInspection, idleLeaseEvidence);
+    } else {
+      predecessorProof = taskLeasePredecessorProof(inspection);
+    }
     const handoff = {
       schema_version: taskLeaseSchemaVersion,
       task_id: taskId,
@@ -24372,7 +24770,7 @@ function withManifestLock(state, taskId, fn, options = {}) {
   };
   try {
     activeTaskLeaseWriteContext = writeContext;
-    return fn({ token: metadata.token, generation: metadata.generation, heartbeat, release });
+    return fn({ token: metadata.token, generation: metadata.generation, heartbeat, release, predecessor: predecessorProof });
   } finally {
     activeTaskLeaseWriteContext = priorWriteContext;
     release();

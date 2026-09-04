@@ -1834,7 +1834,7 @@ try {
 
   test("verify-pr-gates records exact-head check and review-thread evidence without merge mutation", () => {
     const source = readFileSync(scriptPath, "utf8");
-    const gateCommand = source.match(/function verifyPrGates[\s\S]*?function buildPrGateEvidence/);
+    const gateCommand = source.match(/function verifyPrGates[\s\S]*?function exactHeadDeliveryActionState/);
     assert(gateCommand, "verifyPrGates source not found");
     assert(gateCommand[0].includes("manifest.pr_gate_evidence = lockedPacket"), "verify-pr-gates must persist the gate packet");
     assert(gateCommand[0].includes("manifest.pr_review_state_checked_at = lockedPacket.checkedAt"), "review-thread freshness must be recorded");
@@ -7082,6 +7082,230 @@ try {
     } finally {
       cleanupDirtyTakeoverFixture(fixture);
     }
+  });
+
+  test("takeover released PR handoff requires the exact idle lease and current recorded PR", () => {
+    const prepare = (name, { released = true, freshHeartbeatAfterRelease = false, retainedExternalIntent = false } = {}) => {
+      const fixture = createDirtyTakeoverFixture(name);
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "preserve reviewed PR delivery work\n");
+      const manifest = readFixtureDirtyTakeoverManifest(fixture);
+      manifest.pr_number = 916;
+      manifest.pr_url = "https://github.com/example/repo/pull/916";
+      manifest.owner_updated_at = new Date().toISOString();
+      manifest.last_heartbeat_at = new Date().toISOString();
+      writeFileSync(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const lease = writeFixtureTaskLease(fixture, fixtureTaskLeaseMetadata(fixture.taskId, {
+        owner: "runner-b",
+        pid: 999_999_999,
+        process_start_identity: "linux-proc-start-ticks:999999999:1",
+      }));
+      if (released) {
+        const releasePath = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "releases", `${lease.generation}.json`);
+        writeFileSync(releasePath, `${JSON.stringify({
+          schema_version: 1,
+          task_id: fixture.taskId,
+          generation: lease.generation,
+          token_digest: createHash("sha256").update(lease.token).digest("hex"),
+          released_at: new Date().toISOString(),
+        })}\n`);
+        if (freshHeartbeatAfterRelease) {
+          const heartbeatPath = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "heartbeats", lease.generation, "after-release.json");
+          writeFileSync(heartbeatPath, `${JSON.stringify({
+            schema_version: 1,
+            task_id: fixture.taskId,
+            generation: lease.generation,
+            token_digest: createHash("sha256").update(lease.token).digest("hex"),
+            heartbeat_at: new Date(Date.now() + 60_000).toISOString(),
+          })}\n`);
+        }
+        if (retainedExternalIntent) {
+          const intentDirectory = join(fixture.stateRoot, "tasks", ".leases", fixture.taskId, "external-intents");
+          mkdirSync(intentDirectory, { recursive: true });
+          writeFileSync(join(intentDirectory, "retained.json"), `${JSON.stringify({
+            schema_version: 1,
+            task_id: fixture.taskId,
+            generation: lease.generation,
+            token_digest: createHash("sha256").update(lease.token).digest("hex"),
+            intent_id: "88888888-8888-4888-8888-888888888888",
+            runner_pid: 999_999_999,
+            runner_process_start_identity: "linux-proc-start-ticks:999999999:1",
+            command_digest: "a".repeat(64),
+            started_at: new Date().toISOString(),
+          })}\n`);
+        }
+      }
+      const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+      fixture.env = {
+        ...fixture.env,
+        CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: JSON.stringify([{
+          number: 916,
+          state: "OPEN",
+          headRefName: fixture.branch,
+          baseRefName: "main",
+          headRefOid: head,
+          url: "https://github.com/example/repo/pull/916",
+        }]),
+      };
+      return fixture;
+    };
+    const args = (fixture, prNumber) => {
+      const result = dirtyTakeoverArgs(fixture, ["dirty.txt"]);
+      const staleIndex = result.indexOf("--stale-after-seconds");
+      assert(staleIndex >= 0, "dirty takeover fixture is missing its stale-owner threshold");
+      result.splice(staleIndex, 2);
+      return [
+        ...result,
+        "--allow-released-pr-handoff", String(prNumber),
+        "--stale-after-seconds", "999999999",
+      ];
+    };
+
+    const accepted = prepare("released-pr-handoff-accepted");
+    try {
+      const result = runFixtureScript(accepted, args(accepted, 916));
+      assert(result.code === 0, result.stderr || result.stdout);
+      const evidence = readFixtureDirtyTakeoverManifest(accepted).takeover_decisions.at(-1).released_pr_handoff_evidence;
+      assert(evidence.status === "matched" && evidence.live_pr_evidence?.pr?.number === 916, JSON.stringify(evidence));
+    } finally {
+      cleanupDirtyTakeoverFixture(accepted);
+    }
+
+    const mismatched = prepare("released-pr-handoff-mismatched-pr");
+    try {
+      const before = readFileSync(mismatched.manifestPath, "utf8");
+      const result = runFixtureScript(mismatched, args(mismatched, 917));
+      assert(result.code !== 0, "released PR handoff accepted a different PR number");
+      assert(result.stderr.includes("exact recorded manifest PR number"), result.stderr || result.stdout);
+      assert(readFileSync(mismatched.manifestPath, "utf8") === before, "mismatched PR handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(mismatched);
+    }
+
+    const active = prepare("released-pr-handoff-active-lease", { released: false });
+    try {
+      const before = readFileSync(active.manifestPath, "utf8");
+      const result = runFixtureScript(active, args(active, 916));
+      assert(result.code !== 0, "released PR handoff accepted an active lease");
+      assert(result.stderr.includes("exact released versioned lease"), result.stderr || result.stdout);
+      assert(readFileSync(active.manifestPath, "utf8") === before, "active lease handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(active);
+    }
+
+    const heartbeatAfterRelease = prepare("released-pr-handoff-fresh-heartbeat", { freshHeartbeatAfterRelease: true });
+    try {
+      const before = readFileSync(heartbeatAfterRelease.manifestPath, "utf8");
+      const result = runFixtureScript(heartbeatAfterRelease, args(heartbeatAfterRelease, 916));
+      assert(result.code !== 0, "released PR handoff accepted a heartbeat after release");
+      assert(result.stderr.includes("heartbeat after the release record"), result.stderr || result.stdout);
+      assert(readFileSync(heartbeatAfterRelease.manifestPath, "utf8") === before, "post-release heartbeat handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(heartbeatAfterRelease);
+    }
+
+    const retainedIntent = prepare("released-pr-handoff-retained-intent", { retainedExternalIntent: true });
+    try {
+      const before = readFileSync(retainedIntent.manifestPath, "utf8");
+      const result = runFixtureScript(retainedIntent, args(retainedIntent, 916));
+      assert(result.code !== 0, "released PR handoff accepted a retained execution intent");
+      assert(result.stderr.includes("exact released versioned lease"), result.stderr || result.stdout);
+      assert(readFileSync(retainedIntent.manifestPath, "utf8") === before, "retained intent handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(retainedIntent);
+    }
+
+    const predecessorReplacement = prepare("released-pr-handoff-predecessor-replacement");
+    try {
+      const source = readFileSync(predecessorReplacement.script, "utf8");
+      const seam = "  const postRecoveryLockInspection = inspectTaskLock(state, taskId);";
+      assert(source.includes(seam), "fixture did not expose the released predecessor inspection seam");
+      const replacement = [
+        seam,
+        '  if (process.env.CODEX_WORKSPACE_TEST_REPLACE_RELEASED_TAKEOVER_PREDECESSOR === "1") {',
+        "    const successor = { ...postRecoveryLockInspection.metadata, generation: \"99999999-9999-4999-8999-999999999999\", token: \"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\" };",
+        "    writeNewJson(taskLeasePath(state, taskId, \"generations\", successor.generation), successor);",
+        "    appendTaskLeaseHeartbeat(state, taskId, successor);",
+        "    writeNewJson(taskLeasePath(state, taskId, \"releases\", successor.generation), { schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: successor.generation, token_digest: taskLeaseTokenDigest(successor.token), released_at: new Date().toISOString() });",
+        "    writeNewJson(taskLeasePath(state, taskId, \"handoffs\", postRecoveryLockInspection.generation), { schema_version: taskLeaseSchemaVersion, task_id: taskId, from_generation: postRecoveryLockInspection.generation, to_generation: successor.generation, from_token_digest: taskLeaseTokenDigest(postRecoveryLockInspection.metadata.token), reason: \"released\", handed_off_at: new Date().toISOString() });",
+        "  }",
+      ].join("\n");
+      writeFileSync(predecessorReplacement.script, source.replace(seam, replacement));
+      runGit(predecessorReplacement.worktree, ["add", "scripts/codex-workspace.mjs"]);
+      runGit(predecessorReplacement.worktree, ["commit", "-q", "-m", "fixture released predecessor replacement seam"]);
+      const head = runGit(predecessorReplacement.worktree, ["rev-parse", "HEAD"]).stdout;
+      predecessorReplacement.env = {
+        ...predecessorReplacement.env,
+        CODEX_WORKSPACE_TEST_REPLACE_RELEASED_TAKEOVER_PREDECESSOR: "1",
+        CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: JSON.stringify([{
+          number: 916,
+          state: "OPEN",
+          headRefName: predecessorReplacement.branch,
+          baseRefName: "main",
+          headRefOid: head,
+          url: "https://github.com/example/repo/pull/916",
+        }]),
+      };
+      const before = readFileSync(predecessorReplacement.manifestPath, "utf8");
+      const result = runFixtureScript(predecessorReplacement, args(predecessorReplacement, 916));
+      assert(result.code !== 0, "released PR handoff accepted a replaced predecessor lease");
+      assert(result.stderr.includes("predecessor changed before locked takeover admission"), result.stderr || result.stdout);
+      assert(readFileSync(predecessorReplacement.manifestPath, "utf8") === before, "replaced predecessor handoff mutated the manifest");
+    } finally {
+      cleanupDirtyTakeoverFixture(predecessorReplacement);
+    }
+
+    const assertActualPredecessorDriftIsRejected = (name, injectedLines, expectedError) => {
+      const fixture = prepare(name);
+      try {
+        const source = readFileSync(fixture.script, "utf8");
+        const seam = "      // Re-read the exact predecessor while the successor is still unpublished.";
+        assert(source.includes(seam), "fixture did not expose the locked predecessor admission seam");
+        const replacement = [
+          ...injectedLines,
+          seam,
+        ].join("\n");
+        writeFileSync(fixture.script, source.replace(seam, replacement));
+        assert(readFileSync(fixture.script, "utf8").includes(injectedLines[0].trim()), "fixture did not inject the locked predecessor drift trigger");
+        runGit(fixture.worktree, ["add", "scripts/codex-workspace.mjs"]);
+        runGit(fixture.worktree, ["commit", "-q", "-m", "fixture locked predecessor drift seam"]);
+        const head = runGit(fixture.worktree, ["rev-parse", "HEAD"]).stdout;
+        fixture.env = {
+          ...fixture.env,
+          CODEX_WORKSPACE_TEST_DIRTY_GH_PR_LIST_JSON: JSON.stringify([{
+            number: 916,
+            state: "OPEN",
+            headRefName: fixture.branch,
+            baseRefName: "main",
+            headRefOid: head,
+            url: "https://github.com/example/repo/pull/916",
+          }]),
+        };
+        const before = readFileSync(fixture.manifestPath, "utf8");
+        const result = runFixtureScript(fixture, args(fixture, 916));
+        assert(result.code !== 0, "released PR handoff accepted actual predecessor drift after preflight");
+        assert(result.stderr.includes(expectedError), result.stderr || result.stdout);
+        assert(readFileSync(fixture.manifestPath, "utf8") === before, "actual predecessor drift handoff mutated the manifest");
+      } finally {
+        cleanupDirtyTakeoverFixture(fixture);
+      }
+    };
+
+    assertActualPredecessorDriftIsRejected(
+      "released-pr-handoff-locked-predecessor-heartbeat-drift",
+      [
+        "      appendTaskLeaseHeartbeat(state, taskId, inspection.metadata);",
+      ],
+      "heartbeat after the release record",
+    );
+
+    assertActualPredecessorDriftIsRejected(
+      "released-pr-handoff-locked-predecessor-intent-drift",
+      [
+        "      mkdirSync(taskLeasePath(state, taskId, \"external-intents\"), { recursive: true });",
+        "      writeNewJson(taskLeasePath(state, taskId, \"external-intents\", \"after-preflight.json\"), { schema_version: taskLeaseSchemaVersion, task_id: taskId, generation: inspection.generation, token_digest: taskLeaseTokenDigest(inspection.metadata.token), intent_id: \"77777777-7777-4777-8777-777777777777\", runner_pid: 999999999, runner_process_start_identity: \"linux-proc-start-ticks:999999999:1\", command_digest: \"a\".repeat(64), started_at: new Date().toISOString() });",
+      ],
+      "exact released versioned lease",
+    );
   });
 
   test("legacy zero-byte dirty lock remains inspection-only even with approval", () => {
@@ -13867,6 +14091,76 @@ try {
         ),
         "verification authority gate was falsely satisfied",
       );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("request-pr-review permits only a freshly proven exact managed head", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = "dev";
+      manifest.pr_delivery_evidence.baseBranch = "dev";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.baseRefName = "dev";
+      writeFileSync(prStatePath, `${JSON.stringify(pr)}\n`);
+      const denied = runFixtureScript(
+        fixture,
+        ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", "b".repeat(40), "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(denied.code !== 0, "request-pr-review accepted a mismatched exact head");
+      assert(!existsSync(join(fixture.root, "gh-pr-review-called.txt")), "mismatched head reached the review mutation");
+      const allowed = runFixtureScript(
+        fixture,
+        ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(allowed.code === 0, allowed.stderr || allowed.stdout);
+      assert(existsSync(join(fixture.root, "gh-pr-review-called.txt")), "exact-head review request did not invoke the governed GitHub command");
+      const recorded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.action === "request_review", "request-review evidence was not retained");
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.expectedHeadSha === manifest.pr_delivery_head_sha, "request-review evidence lost the exact head binding");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("merge-exact-head re-proves the retained exact head before the governed merge", () => {
+    const fixture = createCanonicalManagedPrFixture({ existingPr: true });
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.base_branch = "dev";
+      manifest.pr_delivery_evidence.baseBranch = "dev";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const prStatePath = join(fixture.root, "pr-state.json");
+      const pr = readJson(prStatePath);
+      pr.baseRefName = "dev";
+      writeFileSync(prStatePath, `${JSON.stringify(pr)}\n`);
+      const gate = runFixtureScript(fixture, [
+        "verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a",
+        "--delivery-audit-agent", "hermes-delivery-adapter", "--delivery-audit-status", "merge-ready",
+        "--delivery-audit-summary", "Exact-head delivery adapter review passed.",
+        "--merge-method", `gh pr merge 456 --merge --match-head-commit ${manifest.pr_delivery_head_sha}`,
+        "--rollback-path", "Revert the exact merge commit with gh pr revert 456.",
+        "--diff-risk-summary", "Bounded exact-head delivery adapter action.", "--diff-risk-files", "feature.txt,scripts/codex-workspace.mjs",
+        "--diff-risk-verification", "node ./scripts/test-codex-workspace.mjs", "--state-root", fixture.stateRoot,
+      ], { cwd: fixture.worktree, env: fixture.env });
+      assert(gate.code === 0, gate.stderr || gate.stdout);
+      const denied = runFixtureScript(fixture, ["merge-exact-head", "resumed-task", "--owner", "runner-a", "--expected-head", "b".repeat(40), "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(denied.code !== 0, "merge-exact-head accepted a mismatched retained head");
+      assert(!existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "mismatched head reached the merge mutation");
+      const allowed = runFixtureScript(fixture, ["merge-exact-head", "resumed-task", "--owner", "runner-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
+      assert(allowed.code === 0, allowed.stderr || allowed.stdout);
+      assert(existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "exact-head merge did not invoke the governed GitHub command");
+      const recorded = readJson(manifestPath);
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.action === "merge", "merge evidence was not retained");
+      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.expectedHeadSha === manifest.pr_delivery_head_sha, "merge evidence lost the exact head binding");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -23543,6 +23837,8 @@ function createFinishPrExistingCommitFixture(options = {}) {
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
+      `if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--add-reviewer')) { fs.writeFileSync(${JSON.stringify(join(fixtureRoot, "gh-pr-review-called.txt"))}, args.join(' ')); process.exit(0); }`,
+      `if (args[0] === 'pr' && args[1] === 'merge' && args.includes('--merge') && args.includes('--match-head-commit')) { const pr = JSON.parse(fs.readFileSync(prStatePath, 'utf8')); pr.state = 'MERGED'; pr.mergedAt = '2026-09-04T00:00:00.000Z'; fs.writeFileSync(prStatePath, JSON.stringify(pr)); fs.writeFileSync(${JSON.stringify(join(fixtureRoot, "gh-pr-merge-called.txt"))}, args.join(' ')); process.exit(0); }`,
       `if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: ${JSON.stringify(repository.owner)} }, name: ${JSON.stringify(repository.name)} })); process.exit(0); }`,
       `if (args[0] === 'api' && args[1] === '--paginate' && args[2] === ${JSON.stringify(`repos/${repository.owner}/${repository.name}/pulls/456/files?per_page=100`)}) { console.log(JSON.stringify(${JSON.stringify(pullFiles)})); process.exit(0); }`,
       "if (args[0] === 'api' && args[1] === 'graphql') {",

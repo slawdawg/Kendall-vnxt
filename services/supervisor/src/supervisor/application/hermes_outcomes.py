@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryAuditRequestV1, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from supervisor.infrastructure.db.models import (
     HermesDeliveryEvidence,
@@ -19,6 +19,7 @@ from supervisor.infrastructure.db.models import (
     HermesLedgerEvent,
     HermesOutcome,
     HermesReviewDisposition,
+    HermesReviewThreadAdjudication,
     HermesRoleCapabilityBinding,
     HermesVerificationRecord,
 )
@@ -29,17 +30,33 @@ async def provision_hermes_role_capability(session: AsyncSession, payload: Herme
     payload = payload.model_copy(update={"home": _canonical_profile_path(payload.home), "workspace": _canonical_profile_path(payload.workspace)})
     if payload.home == payload.workspace:
         raise ValueError("Role capability home and workspace must remain distinct after canonicalization.")
-    outcome = await session.get(HermesOutcome, payload.outcomeId)
-    lane = await session.get(HermesLaneRun, payload.laneRunId)
-    if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
+    outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == payload.outcomeId).with_for_update())
+    lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == payload.laneRunId).with_for_update())
+    if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id or outcome.task_id is None or lane.task_id != outcome.task_id or payload.taskId != outcome.task_id:
         raise ValueError("Role capability must bind the current outcome and lane.")
     existing = await session.get(HermesRoleCapabilityBinding, payload.capabilityBindingId)
     if existing is not None:
         digest = sha256(payload.capabilitySecret.encode("utf-8")).hexdigest()
-        if (existing.outcome_id, existing.lane_run_id, existing.role, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.created_at, existing.expires_at) != (payload.outcomeId, payload.laneRunId, payload.role, payload.identity, payload.home, payload.workspace, digest, payload.createdAt, payload.expiresAt):
+        if (existing.task_id, existing.outcome_id, existing.lane_run_id, existing.role, existing.identity, existing.home, existing.workspace, existing.capability_digest_sha256, existing.created_at, existing.expires_at) != (payload.taskId, payload.outcomeId, payload.laneRunId, payload.role, payload.identity, payload.home, payload.workspace, digest, payload.createdAt, payload.expiresAt):
             raise ValueError("Role capability binding conflicts with persisted metadata.")
         return existing
-    binding = HermesRoleCapabilityBinding(capability_binding_id=payload.capabilityBindingId, outcome_id=payload.outcomeId, lane_run_id=payload.laneRunId, role=payload.role, identity=payload.identity, home=payload.home, workspace=payload.workspace, capability_digest_sha256=sha256(payload.capabilitySecret.encode("utf-8")).hexdigest(), created_at=payload.createdAt, expires_at=payload.expiresAt, metadata_only=True, raw_payload_retained=False)
+    conflicting_roles = ["developer", "reviewer"] if payload.role == "delivery" else ["delivery"]
+    other_bindings = (await session.scalars(select(HermesRoleCapabilityBinding).where(
+        HermesRoleCapabilityBinding.outcome_id == outcome.outcome_id,
+        HermesRoleCapabilityBinding.lane_run_id == lane.lane_run_id,
+        HermesRoleCapabilityBinding.role.in_(conflicting_roles),
+    ).with_for_update())).all()
+    if any(
+        item.identity == payload.identity
+        or any(
+            _profile_paths_overlap(left, right)
+            for left in (payload.home, payload.workspace)
+            for right in (item.home, item.workspace)
+        )
+        for item in other_bindings
+    ):
+        raise ValueError("Delivery profile must remain isolated from Developer and Reviewer profiles.")
+    binding = HermesRoleCapabilityBinding(capability_binding_id=payload.capabilityBindingId, task_id=payload.taskId, outcome_id=payload.outcomeId, lane_run_id=payload.laneRunId, role=payload.role, identity=payload.identity, home=payload.home, workspace=payload.workspace, capability_digest_sha256=sha256(payload.capabilitySecret.encode("utf-8")).hexdigest(), created_at=payload.createdAt, expires_at=payload.expiresAt, metadata_only=True, raw_payload_retained=False)
     session.add(binding)
     try:
         await session.commit()
@@ -66,6 +83,150 @@ async def revoke_hermes_role_capability(session: AsyncSession, payload: HermesRo
         await session.commit()
         await session.refresh(binding)
     return binding
+
+
+async def record_hermes_delivery_audit(session: AsyncSession, payload: HermesDeliveryAuditRequestV1) -> HermesDeliveryActionResultV1:
+    """Persist bounded admission evidence; GitHub writes stay in codex-workspace."""
+    request = HermesDeliveryAuditRequestV1.model_validate(payload.model_dump(by_alias=True))
+    outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcomeId).with_for_update())
+    lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.laneRunId).with_for_update())
+    if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id or outcome.task_id is None or lane.task_id != outcome.task_id or request.taskId != outcome.task_id:
+        raise ValueError("Delivery audit requires the current bound outcome and lane.")
+    if (outcome.revision, lane.revision) != (request.expectedOutcomeRevision, request.expectedLaneRevision):
+        raise ValueError("Delivery audit revision is stale.")
+    delivery_binding = await _require_role_capability(session, binding_id=request.deliveryCapabilityBindingId, proof=request.deliveryCapabilityProof, role="delivery", outcome=outcome, lane=lane, identity=request.deliveryStewardIdentity, home=request.deliveryHome, workspace=request.deliveryWorkspace)
+    other_bindings = (await session.scalars(select(HermesRoleCapabilityBinding).where(
+        HermesRoleCapabilityBinding.outcome_id == outcome.outcome_id,
+        HermesRoleCapabilityBinding.lane_run_id == lane.lane_run_id,
+        HermesRoleCapabilityBinding.role != "delivery",
+    ))).all()
+    if any(
+        item.identity == delivery_binding.identity
+        or any(
+            _profile_paths_overlap(left, right)
+            for left in (delivery_binding.home, delivery_binding.workspace)
+            for right in (item.home, item.workspace)
+        )
+        for item in other_bindings
+    ):
+        raise ValueError("Delivery profile must remain isolated from Developer and Reviewer profiles.")
+    disposition = await session.scalar(select(HermesReviewDisposition).where(HermesReviewDisposition.outcome_id == outcome.outcome_id, HermesReviewDisposition.developer_lane_run_id == lane.lane_run_id).order_by(HermesReviewDisposition.created_at.desc()).limit(1))
+    if outcome.result != "completed" or lane.result != "completed" or disposition is None or disposition.disposition != "approve":
+        raise ValueError("Delivery audit requires persisted passed verification and independent Reviewer approval.")
+    snapshot = await _require_approved_review_snapshot(session, evidence_refs=request.evidenceRefs, outcome=outcome, lane=lane, expected_head_sha=request.expectedHeadSha)
+    if request.observedAt < snapshot.observed_at:
+        raise ValueError("Delivery audit observation cannot predate the approved-review evidence snapshot.")
+    if request.requestedAction == "resolve_current_thread":
+        adjudication = await session.scalar(select(HermesReviewThreadAdjudication).where(
+            HermesReviewThreadAdjudication.review_thread_adjudication_id == request.reviewThreadAdjudicationId
+        ).with_for_update())
+        if adjudication is None or (
+            adjudication.task_id, adjudication.outcome_id, adjudication.lane_run_id,
+            adjudication.review_thread_id, adjudication.exact_head_sha,
+        ) != (
+            request.taskId, outcome.outcome_id, lane.lane_run_id,
+            request.reviewThreadId, request.expectedHeadSha,
+        ):
+            raise ValueError("Current-thread delivery requires the exact persisted Reviewer adjudication.")
+        freshest_adjudication = await session.scalar(select(HermesReviewThreadAdjudication).where(
+            HermesReviewThreadAdjudication.task_id == request.taskId,
+            HermesReviewThreadAdjudication.outcome_id == outcome.outcome_id,
+            HermesReviewThreadAdjudication.lane_run_id == lane.lane_run_id,
+            HermesReviewThreadAdjudication.review_thread_id == request.reviewThreadId,
+            HermesReviewThreadAdjudication.exact_head_sha == request.expectedHeadSha,
+        ).order_by(
+            HermesReviewThreadAdjudication.observed_at.desc(),
+            HermesReviewThreadAdjudication.created_at.desc(),
+            HermesReviewThreadAdjudication.review_thread_adjudication_id.desc(),
+        ).limit(1))
+        if freshest_adjudication is None or freshest_adjudication.review_thread_adjudication_id != adjudication.review_thread_adjudication_id:
+            raise ValueError("Current-thread delivery requires the freshest exact adjudication fingerprint.")
+    record_id = f"delivery-audit:{sha256(request.idempotencyKey.encode('utf-8')).hexdigest()}"
+    replay_metadata = request.model_dump(mode="json", exclude={"deliveryCapabilityProof"})
+    source_ref = f"hermes:delivery-adapter:{sha256(json.dumps(replay_metadata, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()}"
+    summary = f"Hermes delivery action admitted: {request.requestedAction}."
+    existing = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.idempotency_key == request.idempotencyKey).with_for_update())
+    if existing is not None:
+        if (existing.delivery_evidence_id, existing.task_id, existing.outcome_id, existing.lane_run_id, existing.schema_version, existing.evidence_type, existing.summary, existing.source_ref, existing.observed_at, existing.evidence_refs_json, existing.idempotency_key, existing.created_at, existing.metadata_only, existing.raw_payload_retained) != (record_id, request.taskId, outcome.outcome_id, lane.lane_run_id, request.schemaVersion, "governed_delivery_action", summary, source_ref, request.observedAt, request.evidenceRefs, request.idempotencyKey, request.createdAt, True, False):
+            raise ValueError("Delivery audit idempotency conflicts with persisted metadata.")
+    else:
+        session.add(HermesDeliveryEvidence(delivery_evidence_id=record_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id, task_id=request.taskId, schema_version=request.schemaVersion, evidence_type="governed_delivery_action", summary=summary, source_ref=source_ref, observed_at=request.observedAt, evidence_refs_json=request.evidenceRefs, idempotency_key=request.idempotencyKey, created_at=request.createdAt, metadata_only=True, raw_payload_retained=False))
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            replay = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.idempotency_key == request.idempotencyKey))
+            if replay is None or (replay.delivery_evidence_id, replay.task_id, replay.outcome_id, replay.lane_run_id, replay.schema_version, replay.evidence_type, replay.summary, replay.source_ref, replay.observed_at, replay.evidence_refs_json, replay.idempotency_key, replay.created_at, replay.metadata_only, replay.raw_payload_retained) != (record_id, request.taskId, outcome.outcome_id, lane.lane_run_id, request.schemaVersion, "governed_delivery_action", summary, source_ref, request.observedAt, request.evidenceRefs, request.idempotencyKey, request.createdAt, True, False):
+                raise ValueError("Delivery audit persistence conflict.") from exc
+    if request.requestedAction == "resolve_current_thread":
+        next_action = (
+            "Run governed current-thread adjudication, then governed resolution; "
+            "do not use a direct GitHub client."
+        )
+        reason_code = "fresh_workspace_adjudication_required"
+    else:
+        command = "request-pr-review" if request.requestedAction == "request_review" else "merge-exact-head" if request.requestedAction == "merge" else "finish-pr"
+        next_action = f"Run codex-workspace {command} with the exact retained head; do not use a direct GitHub client."
+        reason_code = "governed_workspace_required"
+    return HermesDeliveryActionResultV1(deliveryActionResultId=record_id, taskId=request.taskId, outcomeId=request.outcomeId, laneRunId=request.laneRunId, schemaVersion="hermes_delivery_action_result.v1", requestedAction=request.requestedAction, decision="allowed", reasonCode=reason_code, repository=request.repository, baseBranch=request.baseBranch, exactHeadSha=request.expectedHeadSha, pullRequestNumber=request.pullRequestNumber, reviewThreadId=request.reviewThreadId, reviewThreadAdjudicationId=request.reviewThreadAdjudicationId, evidenceRefs=request.evidenceRefs, nextAction=next_action, rollbackRef=request.rollbackRef, observedAt=request.observedAt, idempotencyKey=request.idempotencyKey, createdAt=request.createdAt, metadataOnly=True, rawPayloadRetained=False)
+
+
+async def record_hermes_review_thread_adjudication(session: AsyncSession, payload: HermesReviewThreadAdjudicationRequestV1) -> HermesReviewThreadAdjudication:
+    """Persist one trusted Reviewer assertion; the workspace re-audits before mutation."""
+    request = HermesReviewThreadAdjudicationRequestV1.model_validate(payload.model_dump(by_alias=True))
+    outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcomeId).with_for_update())
+    lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.laneRunId).with_for_update())
+    if outcome is None or lane is None or outcome.task_id is None or (lane.outcome_id, lane.task_id, outcome.current_event_id, lane.current_event_id) != (outcome.outcome_id, outcome.task_id, lane.current_event_id, lane.current_event_id) or request.taskId != outcome.task_id:
+        raise ValueError("Review-thread adjudication requires the current bound outcome and lane.")
+    if (outcome.revision, lane.revision) != (request.expectedOutcomeRevision, request.expectedLaneRevision):
+        raise ValueError("Review-thread adjudication revision is stale.")
+    binding = await _require_role_capability(session, binding_id=request.reviewerCapabilityBindingId, proof=request.reviewerCapabilityProof, role="reviewer", outcome=outcome, lane=lane, identity=request.reviewerIdentity, home=request.reviewerHome, workspace=request.reviewerWorkspace)
+    disposition = await session.scalar(select(HermesReviewDisposition).where(
+        HermesReviewDisposition.outcome_id == outcome.outcome_id,
+        HermesReviewDisposition.developer_lane_run_id == lane.lane_run_id,
+        HermesReviewDisposition.reviewer_capability_binding_id == binding.capability_binding_id,
+        HermesReviewDisposition.disposition == "approve",
+    ).order_by(HermesReviewDisposition.created_at.desc()).limit(1))
+    if outcome.result != "completed" or lane.result != "completed" or disposition is None:
+        raise ValueError("Review-thread adjudication requires persisted independent Reviewer approval.")
+    snapshot = await _require_approved_review_snapshot(session, evidence_refs=[request.approvedReviewEvidenceId], outcome=outcome, lane=lane, expected_head_sha=request.exactHeadSha)
+    if request.observedAt < snapshot.observed_at:
+        raise ValueError("Review-thread adjudication cannot predate the approved-review evidence snapshot.")
+    existing = await session.scalar(select(HermesReviewThreadAdjudication).where(HermesReviewThreadAdjudication.idempotency_key == request.idempotencyKey).with_for_update())
+    fields = (request.reviewThreadAdjudicationId, request.taskId, request.outcomeId, request.laneRunId, binding.capability_binding_id, request.reviewerIdentity, request.reviewThreadId, request.exactHeadSha, request.reviewAuditFingerprint, request.approvedReviewEvidenceId, request.observedAt, request.createdAt)
+    if existing is not None:
+        if (existing.review_thread_adjudication_id, existing.task_id, existing.outcome_id, existing.lane_run_id, existing.reviewer_capability_binding_id, existing.reviewer_identity, existing.review_thread_id, existing.exact_head_sha, existing.review_audit_fingerprint, existing.approved_review_evidence_id, existing.observed_at, existing.created_at) != fields:
+            raise ValueError("Review-thread adjudication idempotency conflicts with persisted metadata.")
+        return existing
+    latest = await session.scalar(select(HermesReviewThreadAdjudication).where(
+        HermesReviewThreadAdjudication.task_id == request.taskId,
+        HermesReviewThreadAdjudication.outcome_id == outcome.outcome_id,
+        HermesReviewThreadAdjudication.lane_run_id == lane.lane_run_id,
+        HermesReviewThreadAdjudication.review_thread_id == request.reviewThreadId,
+        HermesReviewThreadAdjudication.exact_head_sha == request.exactHeadSha,
+    ).order_by(
+        HermesReviewThreadAdjudication.observed_at.desc(),
+        HermesReviewThreadAdjudication.created_at.desc(),
+    ).with_for_update().limit(1))
+    if latest is not None and (request.observedAt <= latest.observed_at or request.createdAt <= latest.created_at):
+        raise ValueError("Review-thread adjudication must strictly advance the freshest exact audit chronology.")
+    record = HermesReviewThreadAdjudication(
+        review_thread_adjudication_id=request.reviewThreadAdjudicationId, task_id=request.taskId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
+        reviewer_capability_binding_id=binding.capability_binding_id, reviewer_identity=request.reviewerIdentity, review_thread_id=request.reviewThreadId,
+        exact_head_sha=request.exactHeadSha, review_audit_fingerprint=request.reviewAuditFingerprint, approved_review_evidence_id=request.approvedReviewEvidenceId,
+        idempotency_key=request.idempotencyKey, observed_at=request.observedAt, created_at=request.createdAt, metadata_only=True, raw_payload_retained=False,
+    )
+    session.add(record)
+    try:
+        await session.commit()
+        await session.refresh(record)
+    except IntegrityError as exc:
+        await session.rollback()
+        replay = await session.scalar(select(HermesReviewThreadAdjudication).where(HermesReviewThreadAdjudication.idempotency_key == request.idempotencyKey))
+        if replay is not None:
+            return await record_hermes_review_thread_adjudication(session, payload)
+        raise ValueError("Review-thread adjudication persistence conflict.") from exc
+    return record
 
 
 def _request_digest(request: HermesLedgerIngestRequest) -> str:
@@ -200,28 +361,28 @@ async def ingest_hermes_ledger(
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcome.outcomeId).with_for_update())
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.laneRun.laneRunId).with_for_update())
     evidence = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.delivery_evidence_id == request.deliveryEvidence.deliveryEvidenceId).with_for_update())
-    if evidence is not None and not _same_evidence(evidence, request.deliveryEvidence):
+    if evidence is not None and (evidence.task_id != request.deliveryEvidence.taskId or not _same_evidence(evidence, request.deliveryEvidence)):
         raise ValueError("Hermes delivery evidence conflicts with persisted metadata.")
-    if outcome is not None and (outcome.title != request.outcome.title or outcome.summary != request.outcome.summary or outcome.created_at != request.outcome.createdAt or outcome.idempotency_key != request.outcome.idempotencyKey or request.outcome.observedAt < outcome.observed_at or request.outcome.updatedAt <= outcome.updated_at or not can_replace_current_result(previous=outcome.result, next_result=request.outcome.result)):
+    if outcome is not None and (outcome.task_id != request.outcome.taskId or outcome.title != request.outcome.title or outcome.summary != request.outcome.summary or outcome.created_at != request.outcome.createdAt or outcome.idempotency_key != request.outcome.idempotencyKey or request.outcome.observedAt < outcome.observed_at or request.outcome.updatedAt <= outcome.updated_at or not can_replace_current_result(previous=outcome.result, next_result=request.outcome.result)):
         raise ValueError("Hermes outcome transition conflicts with immutable or terminal metadata.")
-    if lane is not None and (lane.outcome_id != request.outcome.outcomeId or lane.created_at != request.laneRun.createdAt or lane.idempotency_key != request.laneRun.idempotencyKey or request.laneRun.observedAt < lane.observed_at or request.laneRun.updatedAt <= lane.updated_at or not can_replace_current_result(previous=lane.result, next_result=request.laneRun.result) or request.laneRun.retryBudget > lane.retry_budget):
+    if lane is not None and (lane.task_id != request.laneRun.taskId or lane.outcome_id != request.outcome.outcomeId or lane.created_at != request.laneRun.createdAt or lane.idempotency_key != request.laneRun.idempotencyKey or request.laneRun.observedAt < lane.observed_at or request.laneRun.updatedAt <= lane.updated_at or not can_replace_current_result(previous=lane.result, next_result=request.laneRun.result) or request.laneRun.retryBudget > lane.retry_budget):
         raise ValueError("Hermes lane-run transition conflicts with terminal or stale evidence metadata.")
 
     if outcome is None:
         value = request.outcome
-        outcome = HermesOutcome(outcome_id=value.outcomeId, schema_version=value.schemaVersion, title=value.title, summary=value.summary, status=value.status, result=value.result, reason_code=value.reasonCode, evidence_refs_json=value.evidenceRefs, next_action=value.nextAction, observed_at=value.observedAt, current_event_id=request.event.eventId, idempotency_key=value.idempotencyKey, created_at=value.createdAt, updated_at=value.updatedAt, revision=1, metadata_only=True, raw_payload_retained=False)
+        outcome = HermesOutcome(outcome_id=value.outcomeId, task_id=value.taskId, schema_version=value.schemaVersion, title=value.title, summary=value.summary, status=value.status, result=value.result, reason_code=value.reasonCode, evidence_refs_json=value.evidenceRefs, next_action=value.nextAction, observed_at=value.observedAt, current_event_id=request.event.eventId, idempotency_key=value.idempotencyKey, created_at=value.createdAt, updated_at=value.updatedAt, revision=1, metadata_only=True, raw_payload_retained=False)
         session.add(outcome)
     else:
         await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, _outcome_values(request))
     if lane is None:
         value = request.laneRun
-        lane = HermesLaneRun(lane_run_id=value.laneRunId, outcome_id=value.outcomeId, schema_version=value.schemaVersion, lane_type=value.laneType, status=value.status, result=value.result, reason_code=value.reasonCode, evidence_refs_json=value.evidenceRefs, next_action=value.nextAction, heartbeat_at=value.heartbeatAt, stale_deadline_at=value.staleDeadlineAt, timeout_at=value.timeoutAt, retry_budget=value.retryBudget, rework_budget=value.reworkBudget, evidence_fingerprint=value.evidenceFingerprint, observed_at=value.observedAt, current_event_id=request.event.eventId, idempotency_key=value.idempotencyKey, created_at=value.createdAt, updated_at=value.updatedAt, revision=1, metadata_only=True, raw_payload_retained=False)
+        lane = HermesLaneRun(lane_run_id=value.laneRunId, outcome_id=value.outcomeId, task_id=value.taskId, schema_version=value.schemaVersion, lane_type=value.laneType, status=value.status, result=value.result, reason_code=value.reasonCode, evidence_refs_json=value.evidenceRefs, next_action=value.nextAction, heartbeat_at=value.heartbeatAt, stale_deadline_at=value.staleDeadlineAt, timeout_at=value.timeoutAt, retry_budget=value.retryBudget, rework_budget=value.reworkBudget, evidence_fingerprint=value.evidenceFingerprint, observed_at=value.observedAt, current_event_id=request.event.eventId, idempotency_key=value.idempotencyKey, created_at=value.createdAt, updated_at=value.updatedAt, revision=1, metadata_only=True, raw_payload_retained=False)
         session.add(lane)
     else:
         await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, _lane_values(request))
     if evidence is None:
         value = request.deliveryEvidence
-        session.add(HermesDeliveryEvidence(delivery_evidence_id=value.deliveryEvidenceId, outcome_id=value.outcomeId, lane_run_id=value.laneRunId, schema_version=value.schemaVersion, evidence_type=value.evidenceType, summary=value.summary, source_ref=value.sourceRef, observed_at=value.observedAt, evidence_refs_json=value.evidenceRefs, idempotency_key=value.idempotencyKey, created_at=value.createdAt, metadata_only=True, raw_payload_retained=False))
+        session.add(HermesDeliveryEvidence(delivery_evidence_id=value.deliveryEvidenceId, outcome_id=value.outcomeId, lane_run_id=value.laneRunId, task_id=value.taskId, schema_version=value.schemaVersion, evidence_type=value.evidenceType, summary=value.summary, source_ref=value.sourceRef, observed_at=value.observedAt, evidence_refs_json=value.evidenceRefs, idempotency_key=value.idempotencyKey, created_at=value.createdAt, metadata_only=True, raw_payload_retained=False))
     value = request.event
     lane_value = request.laneRun
     session.add(HermesLedgerEvent(event_id=value.eventId, outcome_id=value.outcomeId, lane_run_id=value.laneRunId, schema_version=value.schemaVersion, event_name=value.eventName, outcome_status=request.outcome.status, lane_status=lane_value.status, lane_type=lane_value.laneType, result=value.result, reason_code=value.reasonCode, evidence_refs_json=value.evidenceRefs, next_action=value.nextAction, correlation_id=value.correlationId, causation_id=value.causationId, observed_at=value.observedAt, emitted_at=value.emittedAt, heartbeat_at=lane_value.heartbeatAt, stale_deadline_at=lane_value.staleDeadlineAt, timeout_at=lane_value.timeoutAt, retry_budget=lane_value.retryBudget, rework_budget=lane_value.reworkBudget, evidence_fingerprint=lane_value.evidenceFingerprint, idempotency_key=value.idempotencyKey, request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False))
@@ -288,6 +449,24 @@ async def _require_bound_evidence(session: AsyncSession, *, evidence_refs: list[
         raise ValueError("Review evidence must resolve to the current bound outcome and Developer lane revision.")
 
 
+async def _require_approved_review_snapshot(session: AsyncSession, *, evidence_refs: list[str], outcome: HermesOutcome, lane: HermesLaneRun, expected_head_sha: str) -> HermesDeliveryEvidence:
+    """Delivery may cite only the immutable snapshot minted by an approved handoff."""
+    snapshots = (await session.scalars(select(HermesDeliveryEvidence).where(
+        HermesDeliveryEvidence.outcome_id == outcome.outcome_id,
+        HermesDeliveryEvidence.lane_run_id == lane.lane_run_id,
+        HermesDeliveryEvidence.evidence_type == "approved_review_handoff",
+    ))).all()
+    current = [item for item in snapshots if item.observed_at >= max(outcome.updated_at, lane.updated_at) and item.reviewed_head_sha == expected_head_sha]
+    current_ids = {item.delivery_evidence_id for item in current}
+    snapshot_refs = [reference for reference in evidence_refs if reference in current_ids]
+    other_refs = [reference for reference in evidence_refs if reference not in current_ids]
+    if not snapshot_refs:
+        raise ValueError("Delivery audit must reference the current approved-review evidence snapshot directly.")
+    if other_refs:
+        await _require_bound_evidence(session, evidence_refs=other_refs, outcome=outcome, lane=lane)
+    return max((item for item in current if item.delivery_evidence_id in snapshot_refs), key=lambda item: item.observed_at)
+
+
 def _canonical_profile_path(value: str) -> str:
     path = Path(value)
     if not path.is_absolute():
@@ -308,7 +487,7 @@ def _profile_paths_overlap(left: str, right: str) -> bool:
 
 async def _require_role_capability(session: AsyncSession, *, binding_id: str, proof: str, role: str, outcome: HermesOutcome, lane: HermesLaneRun, identity: str, home: str, workspace: str) -> HermesRoleCapabilityBinding:
     binding = await session.scalar(select(HermesRoleCapabilityBinding).where(HermesRoleCapabilityBinding.capability_binding_id == binding_id).with_for_update())
-    if binding is None or (binding.role, binding.outcome_id, binding.lane_run_id) != (role, outcome.outcome_id, lane.lane_run_id):
+    if outcome.task_id is None or lane.task_id != outcome.task_id or binding is None or (binding.role, binding.task_id, binding.outcome_id, binding.lane_run_id) != (role, outcome.task_id, outcome.outcome_id, lane.lane_run_id):
         raise ValueError("Role capability is not bound to this outcome and Developer lane.")
     if binding.revoked_at is not None or binding.expires_at <= datetime.now(UTC):
         raise ValueError("Role capability is revoked or expired.")
@@ -515,7 +694,29 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
             raise ValueError("Review handoff rework budget is exhausted.")
         event_id = f"event:review:{sha256(disposition.reviewDispositionId.encode('utf-8')).hexdigest()}"
         session.add(HermesLedgerEvent(event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id, schema_version="hermes_lifecycle_event.v1", event_name="hermes.review.disposition.recorded", outcome_status=status, lane_status=status, lane_type=lane.lane_type, result=result, reason_code=disposition.reasonCode, evidence_refs_json=disposition.evidenceRefs, next_action=disposition.nextAction, correlation_id=disposition.reviewDispositionId, causation_id=verification.verificationRecordId, observed_at=disposition.observedAt, emitted_at=_emitted_at(disposition.observedAt), heartbeat_at=lane.heartbeat_at, stale_deadline_at=lane.stale_deadline_at, timeout_at=lane.timeout_at, retry_budget=lane.retry_budget, rework_budget=lane.rework_budget - (1 if disposition.disposition == "rework" else 0), evidence_fingerprint=lane.evidence_fingerprint, idempotency_key=f"event:review:{sha256(disposition.idempotencyKey.encode('utf-8')).hexdigest()}", request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False))
-        session.add(HermesReviewDisposition(review_disposition_id=disposition.reviewDispositionId, verification_record_id=verification.verificationRecordId, outcome_id=disposition.outcomeId, developer_lane_run_id=disposition.developerLaneRunId, schema_version=disposition.schemaVersion, disposition=disposition.disposition, reviewer_identity=disposition.reviewerIdentity, reviewer_home=disposition.reviewerHome, reviewer_workspace=disposition.reviewerWorkspace, reviewer_capability_binding_id=reviewer_binding_id, reason_code=disposition.reasonCode, next_action=disposition.nextAction, evidence_refs_json=disposition.evidenceRefs, idempotency_key=disposition.idempotencyKey, expected_outcome_revision=disposition.expectedOutcomeRevision, expected_lane_revision=disposition.expectedLaneRevision, request_digest_sha256=digest, exception_requirement_json=request.unavailableReviewerException.model_dump(mode="json", by_alias=True) if request.unavailableReviewerException else None, observed_at=disposition.observedAt, created_at=disposition.createdAt, metadata_only=True, raw_payload_retained=False))
+        session.add(HermesReviewDisposition(review_disposition_id=disposition.reviewDispositionId, verification_record_id=verification.verificationRecordId, outcome_id=disposition.outcomeId, developer_lane_run_id=disposition.developerLaneRunId, schema_version=disposition.schemaVersion, disposition=disposition.disposition, reviewer_identity=disposition.reviewerIdentity, reviewer_home=disposition.reviewerHome, reviewer_workspace=disposition.reviewerWorkspace, reviewer_capability_binding_id=reviewer_binding_id, reason_code=disposition.reasonCode, next_action=disposition.nextAction, evidence_refs_json=disposition.evidenceRefs, idempotency_key=disposition.idempotencyKey, expected_outcome_revision=disposition.expectedOutcomeRevision, expected_lane_revision=disposition.expectedLaneRevision, request_digest_sha256=digest, exception_requirement_json=request.unavailableReviewerException.model_dump(mode="json", by_alias=True) if request.unavailableReviewerException else None, reviewed_head_sha=disposition.reviewedHeadSha, observed_at=disposition.observedAt, created_at=disposition.createdAt, metadata_only=True, raw_payload_retained=False))
+        if disposition.disposition == "approve":
+            snapshot_digest = sha256(digest.encode("utf-8")).hexdigest()
+            # A 128-bit opaque suffix remains safely metadata-shaped while binding
+            # the snapshot deterministically to the complete handoff request.
+            snapshot_id = f"evidence:approved-review:{snapshot_digest[:32]}"
+            session.add(HermesDeliveryEvidence(
+                delivery_evidence_id=snapshot_id,
+                outcome_id=outcome.outcome_id,
+                lane_run_id=lane.lane_run_id,
+                task_id=outcome.task_id,
+                schema_version="hermes_review_handoff_delivery_evidence.v1",
+                evidence_type="approved_review_handoff",
+                summary="Independent Reviewer approval admitted exact-head delivery evidence.",
+                source_ref=f"hermes:review-handoff:{disposition.reviewDispositionId}",
+                reviewed_head_sha=disposition.reviewedHeadSha,
+                observed_at=disposition.observedAt,
+                evidence_refs_json=list(dict.fromkeys([*verification.evidenceRefs, *disposition.evidenceRefs])),
+                idempotency_key=f"evidence:approved-review:{snapshot_digest[:32]}",
+                created_at=disposition.createdAt,
+                metadata_only=True,
+                raw_payload_retained=False,
+            ))
         await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt, "current_event_id": event_id})
         await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt, "current_event_id": event_id, "rework_budget": lane.rework_budget - 1 if disposition.disposition == "rework" else lane.rework_budget})
     try:

@@ -188,6 +188,8 @@ def _mapped_states(event: HermesBoardLifecycleEventInputV1) -> tuple[str, str]:
 
 def _derived_ledger_request(event: HermesBoardLifecycleEventInputV1, outcome: HermesOutcome, lane: HermesLaneRun) -> HermesLedgerIngestRequest:
     outcome_status, lane_status = _mapped_states(event)
+    if outcome.task_id is None or lane.task_id != outcome.task_id:
+        raise BoardBridgeRejected("task_binding")
     evidence_id = _derived_id("evidence:board", event.eventId)
     source_ref = _derived_id("hermes-board", event.issuerId, event.boardId, event.cardId)
     created = _iso(outcome.created_at)
@@ -195,7 +197,7 @@ def _derived_ledger_request(event: HermesBoardLifecycleEventInputV1, outcome: He
     emitted = _iso(event.emittedAt)
     return HermesLedgerIngestRequest.model_validate({
         "outcome": {
-            "outcomeId": outcome.outcome_id, "schemaVersion": outcome.schema_version,
+            "outcomeId": outcome.outcome_id, "taskId": outcome.task_id, "schemaVersion": outcome.schema_version,
             "title": outcome.title, "summary": outcome.summary, "status": outcome_status,
             "result": event.result, "reasonCode": event.reasonCode, "evidenceRefs": event.evidenceRefs,
             "nextAction": event.nextAction, "observedAt": _iso(event.observedAt),
@@ -203,7 +205,7 @@ def _derived_ledger_request(event: HermesBoardLifecycleEventInputV1, outcome: He
             "metadataOnly": True, "rawPayloadRetained": False,
         },
         "laneRun": {
-            "laneRunId": lane.lane_run_id, "outcomeId": lane.outcome_id, "schemaVersion": lane.schema_version,
+            "laneRunId": lane.lane_run_id, "outcomeId": lane.outcome_id, "taskId": lane.task_id, "schemaVersion": lane.schema_version,
             "laneType": lane.lane_type, "status": lane_status, "result": event.result,
             "reasonCode": event.reasonCode, "evidenceRefs": event.evidenceRefs, "nextAction": event.nextAction,
             "heartbeatAt": _iso(lane.heartbeat_at), "staleDeadlineAt": _iso(lane.stale_deadline_at),
@@ -214,7 +216,7 @@ def _derived_ledger_request(event: HermesBoardLifecycleEventInputV1, outcome: He
             "rawPayloadRetained": False,
         },
         "deliveryEvidence": {
-            "deliveryEvidenceId": evidence_id, "outcomeId": outcome.outcome_id, "laneRunId": lane.lane_run_id,
+            "deliveryEvidenceId": evidence_id, "outcomeId": outcome.outcome_id, "laneRunId": lane.lane_run_id, "taskId": outcome.task_id,
             "schemaVersion": "delivery_evidence.v1", "evidenceType": "board_lifecycle",
             "summary": "Authenticated Hermes board lifecycle observation.", "sourceRef": source_ref,
             "observedAt": _iso(event.observedAt), "evidenceRefs": event.evidenceRefs,

@@ -65,6 +65,30 @@ disabled.
 Only a later explicitly approved story may install/configure Hermes, create a
 profile or board, enable a gateway, mount credentials, or admit work.
 
+## Governed Delivery Commands
+
+Story 4.2's Delivery adapter records metadata-only admission evidence; it never
+contains a GitHub token or a direct GitHub client. A matching accepted delivery
+audit is a required workflow prerequisite, not a credential and not yet an
+input enforced by the existing workspace executor. Do not invoke the commands
+below without separately established governed lane authority:
+
+```bash
+node ./scripts/codex-workspace.mjs request-pr-review <task> --reviewer <login> --expected-head <40-char-sha>
+node ./scripts/codex-workspace.mjs merge-exact-head <task> --expected-head <40-char-sha>
+```
+
+Both commands re-prove the managed task, repository, pull request, and exact
+head before the GitHub operation and again under the manifest lock. They reject
+draft, stale, changed, or non-mergeable PR state. `merge-exact-head` requires
+the retained exact-head merge gate and does not clean up. A failed post-mutation
+audit is a stop line: do not retry blindly; retain the error and inspect the PR
+state before any separately governed recovery.
+
+The adapter contract is selected by `pnpm run test:hermes-delivery-adapter` and
+the `check:fast` local-verification group. It uses fixtures only and does not
+request review, merge, invoke a provider, expose credentials, or alter a PR.
+
 ## Profile Bootstrap Topology
 
 The source-only `hermes-profile-bootstrap` policy renders a plan, never a live
