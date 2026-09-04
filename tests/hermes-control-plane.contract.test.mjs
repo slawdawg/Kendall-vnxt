@@ -9,7 +9,7 @@ import test from "node:test";
 const contractsRoot = new URL("../packages/contracts/src/", import.meta.url);
 const hermesRoot = new URL("../packages/contracts/src/hermes-control-plane/", import.meta.url);
 
-const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "schema-json.ts"];
+const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "delivery.ts", "schema-json.ts"];
 const contractNames = [
   "HermesOutcomeV1",
   "HermesLaneRunV1",
@@ -139,24 +139,24 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     for (const guardName of [
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
       "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
-      "isHermesBoardLifecycleEventV1",
+      "isHermesBoardLifecycleEventV1", "isHermesDeliveryAuditRequestV1", "isHermesDeliveryActionResultV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
     const later = "2026-08-28T01:00:00Z";
     const refs = ["evidence:one"];
     const common = { metadataOnly: true, rawPayloadRetained: false, evidenceRefs: refs, idempotencyKey: "idempotency:one" };
     const outcome = {
-      ...common, outcomeId: "outcome:one", schemaVersion: contracts.HERMES_OUTCOME_SCHEMA_VERSION, title: "Outcome", summary: "Bounded work",
+      ...common, outcomeId: "outcome:one", taskId: "task:hermes-one", schemaVersion: contracts.HERMES_OUTCOME_SCHEMA_VERSION, title: "Outcome", summary: "Bounded work",
       status: "active", result: "allowed", reasonCode: "ready", nextAction: "continue", observedAt, createdAt: observedAt, updatedAt: later,
     };
     const laneRun = {
-      ...common, laneRunId: "lane-run:one", outcomeId: outcome.outcomeId, schemaVersion: contracts.HERMES_LANE_RUN_SCHEMA_VERSION, laneType: "developer",
+      ...common, laneRunId: "lane-run:one", outcomeId: outcome.outcomeId, taskId: outcome.taskId, schemaVersion: contracts.HERMES_LANE_RUN_SCHEMA_VERSION, laneType: "developer",
       status: "running", result: "allowed", reasonCode: "ready", nextAction: "continue", heartbeatAt: observedAt,
       staleDeadlineAt: later, timeoutAt: "2026-08-28T02:00:00Z", retryBudget: 2, reworkBudget: 1, evidenceFingerprint: "sha256:one",
       observedAt, createdAt: observedAt, updatedAt: later,
     };
     const evidence = {
-      ...common, deliveryEvidenceId: "delivery-evidence:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      ...common, deliveryEvidenceId: "delivery-evidence:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, taskId: outcome.taskId,
       schemaVersion: contracts.HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION, evidenceType: "verification", summary: "Checks passed",
       sourceRef: "source:one", observedAt, createdAt: observedAt,
     };
@@ -191,6 +191,23 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       correlationId: "correlation:board-one", causationId: "causation:board-one", observedAt,
       emittedAt: later, expiresAt: "2026-08-28T02:00:00Z", signatureB64: "AA==", authoritative: false,
     };
+    const deliveryAudit = {
+      taskId: "task:delivery-one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      deliveryStewardIdentity: "delivery:one", deliveryHome: "home:delivery", deliveryWorkspace: "workspace:delivery",
+      deliveryCapabilityBindingId: "capability:delivery-one", deliveryCapabilityProof: "delivery-proof-value-123456",
+      schemaVersion: contracts.HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION, repository: "slawdawg/Kendall-vnxt", baseBranch: "dev",
+      expectedHeadSha: "a".repeat(40), pullRequestNumber: 1, reviewThreadId: null, reviewThreadAdjudicationId: null, requestedAction: "request_review",
+      policyEvidenceRef: "evidence:approved-review:one", localVerificationRef: "evidence:approved-review:one", rollbackRef: "evidence:approved-review:one",
+      evidenceRefs: ["evidence:approved-review:one"], observedAt: later, idempotencyKey: "delivery-audit:one", createdAt: observedAt,
+      expectedOutcomeRevision: 2, expectedLaneRevision: 2, metadataOnly: true, rawPayloadRetained: false,
+    };
+    const deliveryResult = {
+      deliveryActionResultId: "delivery-result:one", taskId: deliveryAudit.taskId, outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      schemaVersion: contracts.HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION, requestedAction: "request_review", decision: "allowed",
+      reasonCode: "governed_workspace_required", repository: "slawdawg/Kendall-vnxt", baseBranch: "dev", exactHeadSha: "a".repeat(40),
+      pullRequestNumber: 1, reviewThreadId: null, reviewThreadAdjudicationId: null, evidenceRefs: deliveryAudit.evidenceRefs, nextAction: "Run codex workspace request-pr-review.", rollbackRef: "evidence:approved-review:one",
+      observedAt: later, idempotencyKey: "delivery-result:one", createdAt: observedAt, metadataOnly: true, rawPayloadRetained: false,
+    };
     assert.equal(contracts.isHermesOutcomeV1(outcome), true);
     assert.equal(contracts.isHermesLaneRunV1(laneRun), true);
     assert.equal(contracts.isDeliveryEvidenceV1(evidence), true);
@@ -199,6 +216,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isFollowUpWorkV1(followUp), true);
     assert.equal(contracts.isHermesLifecycleEventV1(event), true);
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
+    assert.equal(contracts.isHermesDeliveryAuditRequestV1(deliveryAudit), true);
+    assert.equal(contracts.isHermesDeliveryActionResultV1(deliveryResult), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
@@ -256,6 +275,14 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["board event unknown field", { ...boardEvent, unknown: true }, contracts.isHermesBoardLifecycleEventV1],
       ["evidence reference", { ...evidence, evidenceRefs: ["bad"] }, contracts.isDeliveryEvidenceV1],
       ["policy decision", { ...decision, decision: "unknown" }, contracts.isPolicyDecisionV1],
+      ["forbidden delivery action", { ...deliveryAudit, requestedAction: "force_push" }, contracts.isHermesDeliveryAuditRequestV1],
+      ["delivery audit unknown field", { ...deliveryAudit, unknown: true }, contracts.isHermesDeliveryAuditRequestV1],
+      ["delivery audit omits required policy evidence", { ...deliveryAudit, policyEvidenceRef: "evidence:policy-one", evidenceRefs: [deliveryAudit.localVerificationRef] }, contracts.isHermesDeliveryAuditRequestV1],
+      ["delivery audit timestamp order", { ...deliveryAudit, createdAt: later, observedAt }, contracts.isHermesDeliveryAuditRequestV1],
+      ["delivery audit future observation", { ...deliveryAudit, observedAt: "2999-01-01T00:00:00Z" }, contracts.isHermesDeliveryAuditRequestV1],
+      ["PR-bound delivery action omits pull request", { ...deliveryAudit, pullRequestNumber: null }, contracts.isHermesDeliveryAuditRequestV1],
+      ["current-thread delivery lacks adjudication", { ...deliveryAudit, requestedAction: "resolve_current_thread" }, contracts.isHermesDeliveryAuditRequestV1],
+      ["PR-bound delivery result omits pull request", { ...deliveryResult, pullRequestNumber: null }, contracts.isHermesDeliveryActionResultV1],
     ];
     for (const [label, value, guard] of invalidCases) assert.equal(guard(value), false, label);
     assert.equal(contracts.isExternalImpactRequestV1({ ...impact, createdAt: "2020-01-01T00:00:00Z", expiresAt: "2020-01-02T00:00:00Z" }), true);

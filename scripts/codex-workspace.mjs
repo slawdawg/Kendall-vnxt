@@ -457,6 +457,12 @@ try {
     case "verify-pr-gates":
       verifyPrGates(commandArgs);
       break;
+    case "request-pr-review":
+      requestPrReview(commandArgs);
+      break;
+    case "merge-exact-head":
+      mergeExactHead(commandArgs);
+      break;
     case "refresh-pr-head":
       refreshPrHead(commandArgs);
       break;
@@ -549,6 +555,8 @@ Commands:
   adopt-legacy-recovery  Preview or apply the one governed v1-to-v2 recovery adoption.
   finish-epic [query]       Plan final epic-batch closeout without delivery mutation.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
+  request-pr-review [query] Request one GitHub review only after exact-head PR proof.
+  merge-exact-head [query]  Merge only the retained, freshly re-proven exact PR head.
   refresh-pr-head [query]   Explicitly rebind a stale managed PR delivery head after fresh remote proof.
   adjudicate-outdated-thread [query] Record evidence for one satisfied outdated review thread; never resolves it.
   resolve-adjudicated-thread [query] Resolve exactly one freshly revalidated adjudicated thread, then re-audit.
@@ -5736,6 +5744,118 @@ function verifyPrGates(argv) {
   });
 
   printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
+}
+
+function exactHeadDeliveryActionState(manifest, expectedHeadSha) {
+  const expectedHead = exactGitObjectIdOrNull(expectedHeadSha);
+  if (!expectedHead) throw new Error("Delivery action requires --expected-head <40 lowercase hex characters>.");
+  const repositoryRef = githubRepository(manifest);
+  const pr = prViewForGates(manifest);
+  const headState = prGateHeadState(manifest);
+  const reviewThreads = pr?.number ? fetchReviewThreadState(manifest, repositoryRef, pr.number) : null;
+  const blockers = [];
+  if (repositoryRef.owner !== "slawdawg" || repositoryRef.name !== "Kendall-vnxt") blockers.push("Delivery action only accepts the canonical Kendall_Nxt repository");
+  if (!pr?.number || pr.state !== "OPEN" || pr.isDraft || pr.mergedAt) blockers.push("Delivery action requires an open, non-draft PR");
+  if (!pr?.baseRefName || pr.baseRefName !== manifest.base_branch || manifest.base_branch !== "dev") blockers.push("Delivery action requires the managed dev base branch");
+  if (pr?.headRefName !== manifest.branch || pr?.headRefOid !== expectedHead || headState.expectedHeadSha !== expectedHead || !headState.localMatchesExpected) blockers.push("Delivery action exact head no longer matches the managed PR and worktree");
+  if (!reviewThreads?.querySucceeded || reviewThreads.errorCount || reviewThreads.hasNextPage || reviewThreads.reviewRequestHasNextPage) blockers.push("Delivery action requires a complete thread-aware review audit");
+  return { expectedHead, repository: { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` }, pr, headState, reviewThreads, blockers };
+}
+
+function appendHermesDeliveryExecutorEvidence(manifest, action, state, extra = {}) {
+  const expectedHeadSha = state.expectedHead ?? state.expectedHeadSha;
+  if (!/^[0-9a-f]{40}$/.test(expectedHeadSha || "")) throw new Error("Hermes delivery executor evidence requires an exact head SHA.");
+  const record = {
+    schemaVersion: 1,
+    action,
+    expectedHeadSha,
+    repository: state.repository,
+    pullRequestNumber: state.pr?.number || null,
+    observedAt: new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+    ...extra,
+  };
+  manifest.hermes_delivery_executor_evidence = [
+    ...(Array.isArray(manifest.hermes_delivery_executor_evidence) ? manifest.hermes_delivery_executor_evidence : []),
+    record,
+  ].slice(-20);
+  appendTaskEvent(manifest, `hermes_delivery_${action}`, `${expectedHeadSha} pr=${state.pr?.number || "missing"}`);
+  return record;
+}
+
+function requestPrReview(argv) {
+  const { positional, options } = parseOptions(argv);
+  const reviewer = safeMetadataText(options.reviewer, 80);
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(reviewer)) throw new Error("request-pr-review requires --reviewer <GitHub login>.");
+  const state = workspaceState(options);
+  const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
+  assertLaneOwner(manifest, options); requireGh("request-pr-review"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  reconcileManifest(manifest, { refreshPr: true });
+  const preview = exactHeadDeliveryActionState(manifest, options.expectedHead);
+  if (preview.blockers.length) throw new Error(`request-pr-review is blocked: ${preview.blockers.join("; ")}`);
+  if (options.dryRun) return printPlan("request-pr-review", [`gh pr edit ${preview.pr.number} --add-reviewer ${reviewer}`, `exact head ${preview.expectedHead}`]);
+  withManifestLock(state, manifest.task_id, () => {
+    const locked = readManifest(manifestPath);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
+    reconcileManifest(locked, { refreshPr: true });
+    const fresh = exactHeadDeliveryActionState(locked, options.expectedHead);
+    if (fresh.blockers.length) throw new Error(`request-pr-review changed under lock: ${fresh.blockers.join("; ")}`);
+    runChecked("gh", ["pr", "edit", String(fresh.pr.number), "--add-reviewer", reviewer], { cwd: locked.worktree_path, externalExecution: true });
+    const post = exactHeadDeliveryActionState(locked, options.expectedHead);
+    if (post.blockers.length) throw new Error(`request-pr-review post-mutation audit is incomplete: ${post.blockers.join("; ")}`);
+    appendHermesDeliveryExecutorEvidence(locked, "request_review", post, { reviewer, decision: "completed", nextAction: "Await the requested review before any merge.", rollbackPath: "Remove the review request through the governed workspace only if a future exact-head policy permits it." });
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
+    writeManifest(manifestPath, locked); Object.assign(manifest, locked);
+  });
+  printApplied("request-pr-review", [`requested ${reviewer} on exact head ${options.expectedHead}`]);
+}
+
+function mergeGateOptionsFromEvidence(gate) {
+  return {
+    deliveryAuditStatus: gate?.deliverySubagentAudit?.status,
+    deliveryAuditAgent: gate?.deliverySubagentAudit?.agent,
+    deliveryAuditSummary: gate?.deliverySubagentAudit?.summary,
+    deliveryAuditHeadSha: gate?.deliverySubagentAudit?.headSha,
+    nonRequiredChecks: (gate?.nonRequiredCheckPolicy?.names || []).join(","),
+    nonRequiredCheckPolicy: gate?.nonRequiredCheckPolicy?.policyRef,
+    mergeMethod: gate?.mergePlan?.plannedMergeMethod,
+    rollbackPath: gate?.mergePlan?.rollbackPath,
+    diffRiskSummary: gate?.diffRiskEvidence?.summary,
+    diffRiskFiles: JSON.stringify(gate?.diffRiskEvidence?.files || []),
+    diffRiskVerification: gate?.diffRiskEvidence?.verification,
+    diffRiskVerificationCommand: gate?.diffRiskEvidence?.verificationCommand,
+    diffRiskVerificationExitCode: gate?.diffRiskEvidence?.verificationExitCode,
+  };
+}
+
+function mergeExactHead(argv) {
+  const { positional, options } = parseOptions(argv);
+  const state = workspaceState(options);
+  const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
+  assertLaneOwner(manifest, options); requireGh("merge-exact-head"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
+  reconcileManifest(manifest, { refreshPr: true });
+  const retained = manifest.pr_gate_evidence;
+  if (!retained?.lowRiskReady || retained.expectedHeadSha !== options.expectedHead) throw new Error("merge-exact-head requires retained low-risk exact-head gate evidence for --expected-head.");
+  const preview = buildPrGateEvidence(manifest, { options: mergeGateOptionsFromEvidence(retained) });
+  if (!preview.lowRiskReady || preview.expectedHeadSha !== options.expectedHead) throw new Error(`merge-exact-head is blocked: ${preview.blockers.join("; ")}`);
+  if (options.dryRun) return printPlan("merge-exact-head", [`gh pr merge ${preview.pr.number} --merge --match-head-commit ${preview.expectedHeadSha}`, "no cleanup, branch deletion, bypass, or force flags"]);
+  withManifestLock(state, manifest.task_id, () => {
+    const locked = readManifest(manifestPath);
+    validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
+    reconcileManifest(locked, { refreshPr: true });
+    const lockedGate = locked.pr_gate_evidence;
+    if (!lockedGate?.lowRiskReady || lockedGate.expectedHeadSha !== options.expectedHead) throw new Error("merge-exact-head retained gate evidence changed under lock.");
+    const fresh = buildPrGateEvidence(locked, { options: mergeGateOptionsFromEvidence(lockedGate) });
+    if (!fresh.lowRiskReady || fresh.expectedHeadSha !== options.expectedHead) throw new Error(`merge-exact-head fresh gate proof failed: ${fresh.blockers.join("; ")}`);
+    runChecked("gh", ["pr", "merge", String(fresh.pr.number), "--merge", "--match-head-commit", fresh.expectedHeadSha], { cwd: locked.worktree_path, externalExecution: true });
+    const post = prViewForGates(locked);
+    if (!post || post.state !== "MERGED" || post.headRefOid !== fresh.expectedHeadSha) throw new Error("merge-exact-head post-mutation PR proof is incomplete; do not retry blindly.");
+    appendHermesDeliveryExecutorEvidence(locked, "merge", fresh, { decision: "completed", nextAction: "Reconcile merged PR metadata before any separately governed cleanup.", rollbackPath: fresh.mergePlan.rollbackPath, mergedAt: post.mergedAt || null });
+    locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
+    writeManifest(manifestPath, locked); Object.assign(manifest, locked);
+  });
+  printApplied("merge-exact-head", [`merged exact head ${options.expectedHead}; no cleanup was performed`]);
 }
 
 function refreshPrHead(argv) {
