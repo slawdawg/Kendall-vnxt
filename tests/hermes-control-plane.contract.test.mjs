@@ -125,6 +125,15 @@ test("Hermes guards are strict, closed, and fail closed", async () => {
   assert.match(combined, /authoritative:\s*false/);
 });
 
+test("Hermes review approvals require an exact reviewed head", async () => {
+  const review = await readFile(new URL("review.ts", hermesRoot), "utf8");
+  const types = await readFile(new URL("types.ts", hermesRoot), "utf8");
+  assert.match(review, /"reviewedHeadSha"/);
+  assert.match(review, /value\.disposition === "approve"/);
+  assert.match(review, /\^\[0-9a-f\]\{40\}\$/);
+  assert.match(types, /readonly reviewedHeadSha: string \| null/);
+});
+
 test("compiled Hermes guards accept valid V1 records and reject unsafe forms", async (t) => {
   const compiled = await compileNamespace();
   if (!compiled) {
@@ -208,6 +217,12 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       pullRequestNumber: 1, reviewThreadId: null, reviewThreadAdjudicationId: null, evidenceRefs: deliveryAudit.evidenceRefs, nextAction: "Run codex workspace request-pr-review.", rollbackRef: "evidence:approved-review:one",
       observedAt: later, idempotencyKey: "delivery-result:one", createdAt: observedAt, metadataOnly: true, rawPayloadRetained: false,
     };
+    const reviewDisposition = {
+      reviewDispositionId: "review:one", verificationRecordId: "verification:one", outcomeId: outcome.outcomeId, developerLaneRunId: laneRun.laneRunId,
+      schemaVersion: contracts.HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION, disposition: "approve", reviewerIdentity: "reviewer:one", reviewerHome: "home:reviewer", reviewerWorkspace: "workspace:reviewer",
+      reasonCode: "reviewed", nextAction: "continue", reviewedHeadSha: "a".repeat(40), evidenceRefs: refs, observedAt: later, idempotencyKey: "review:one", createdAt: observedAt,
+      metadataOnly: true, rawPayloadRetained: false, expectedOutcomeRevision: 2, expectedLaneRevision: 2,
+    };
     assert.equal(contracts.isHermesOutcomeV1(outcome), true);
     assert.equal(contracts.isHermesLaneRunV1(laneRun), true);
     assert.equal(contracts.isDeliveryEvidenceV1(evidence), true);
@@ -218,6 +233,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(contracts.isHermesDeliveryAuditRequestV1(deliveryAudit), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1(deliveryResult), true);
+    assert.equal(contracts.isReviewDispositionV1(reviewDisposition), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
@@ -283,6 +299,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["PR-bound delivery action omits pull request", { ...deliveryAudit, pullRequestNumber: null }, contracts.isHermesDeliveryAuditRequestV1],
       ["current-thread delivery lacks adjudication", { ...deliveryAudit, requestedAction: "resolve_current_thread" }, contracts.isHermesDeliveryAuditRequestV1],
       ["PR-bound delivery result omits pull request", { ...deliveryResult, pullRequestNumber: null }, contracts.isHermesDeliveryActionResultV1],
+      ["non-approval review head must be null", { ...reviewDisposition, disposition: "rework", reviewedHeadSha: 0 }, contracts.isReviewDispositionV1],
     ];
     for (const [label, value, guard] of invalidCases) assert.equal(guard(value), false, label);
     assert.equal(contracts.isExternalImpactRequestV1({ ...impact, createdAt: "2020-01-01T00:00:00Z", expiresAt: "2020-01-02T00:00:00Z" }), true);

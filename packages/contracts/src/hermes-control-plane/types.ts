@@ -241,6 +241,7 @@ export interface ReviewDispositionV1 {
   readonly reviewerWorkspace: string;
   readonly reasonCode: string;
   readonly nextAction: string;
+  readonly reviewedHeadSha: string | null;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];
   readonly observedAt: string;
   readonly idempotencyKey: HermesIdempotencyKey;

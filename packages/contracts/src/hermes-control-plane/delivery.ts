@@ -93,7 +93,7 @@ const includesRequiredEvidence = (value: Record<string, unknown>): boolean => {
 export function isHermesDeliveryAuditRequestV1(value: unknown): value is HermesDeliveryAuditRequestV1 {
   return guardFailsClosed(() => {
     if (!isRecord(value) || !hasExactKeys(value, AUDIT_REQUEST_FIELDS)) return false;
-    return isStewardIdentity(value.taskId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isStewardIdentity(value.deliveryStewardIdentity) &&
+    return isSafeText(value.taskId, 160) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isStewardIdentity(value.deliveryStewardIdentity) &&
       isSafeText(value.deliveryHome, 240) && isSafeText(value.deliveryWorkspace, 240) && value.deliveryHome !== value.deliveryWorkspace && isStewardIdentity(value.deliveryCapabilityBindingId) && isSafeText(value.deliveryCapabilityProof, 512) && value.deliveryCapabilityProof.length >= 24 &&
       value.schemaVersion === HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION && value.repository === HERMES_CANONICAL_DELIVERY_REPOSITORY && value.baseBranch === HERMES_CANONICAL_DELIVERY_BASE &&
       isExactHead(value.expectedHeadSha) && isPullRequestNumber(value.pullRequestNumber) && isAction(value.requestedAction) && (!isPrBoundAction(value.requestedAction) || value.pullRequestNumber !== null) &&
@@ -107,11 +107,11 @@ export function isHermesDeliveryAuditRequestV1(value: unknown): value is HermesD
 export function isHermesDeliveryActionResultV1(value: unknown): value is HermesDeliveryActionResultV1 {
   return guardFailsClosed(() => {
     if (!isRecord(value) || !hasExactKeys(value, ACTION_RESULT_FIELDS)) return false;
-    return isOpaqueId(value.deliveryActionResultId) && isStewardIdentity(value.taskId) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) &&
+    return isOpaqueId(value.deliveryActionResultId) && isSafeText(value.taskId, 160) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) &&
       value.schemaVersion === HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION && isAction(value.requestedAction) && isResult(value.decision) &&
       isSafeText(value.reasonCode, 160) && value.repository === HERMES_CANONICAL_DELIVERY_REPOSITORY && value.baseBranch === HERMES_CANONICAL_DELIVERY_BASE &&
       isExactHead(value.exactHeadSha) && isPullRequestNumber(value.pullRequestNumber) && isAction(value.requestedAction) && (!isPrBoundAction(value.requestedAction) || value.pullRequestNumber !== null) && hasExactAdjudication(value) && isEvidenceRefs(value.evidenceRefs) && isSafeText(value.nextAction, 240) &&
-      isHermesEvidenceRefId(value.rollbackRef) && isUtcIsoTimestamp(value.observedAt) && isHermesIdempotencyKey(value.idempotencyKey) &&
+      isHermesEvidenceRefId(value.rollbackRef) && isUtcIsoTimestamp(value.observedAt) && isTimestampOrder(value, ["createdAt", "observedAt"]) && timestampMillis(value.observedAt) <= Date.now() && isHermesIdempotencyKey(value.idempotencyKey) &&
       isMetadataOnlyRecord(value, HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION, ["observedAt", "createdAt"]);
   });
 }

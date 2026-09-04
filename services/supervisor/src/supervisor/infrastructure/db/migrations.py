@@ -211,6 +211,21 @@ async def _apply_hermes_review_thread_adjudication(connection: AsyncConnection) 
         )
     )
 
+
+async def _apply_hermes_reviewed_head_binding(connection: AsyncConnection) -> None:
+    """Add nullable reviewed-head metadata without inventing legacy identity."""
+    if connection.dialect.name not in {"postgresql", "sqlite"}:
+        raise RuntimeError("Hermes reviewed-head migration supports PostgreSQL and SQLite only.")
+    table_names = await connection.run_sync(lambda sync_connection: set(inspect(sync_connection).get_table_names()))
+    for table in ("hermes_review_dispositions", "hermes_delivery_evidence"):
+        if table not in table_names:
+            continue
+        columns = await connection.run_sync(
+            lambda sync_connection, name=table: {column["name"] for column in inspect(sync_connection).get_columns(name)}
+        )
+        if "reviewed_head_sha" not in columns:
+            await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN reviewed_head_sha VARCHAR(40)"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -249,6 +264,7 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0009_hermes_delivery_capability_role", _apply_hermes_delivery_capability_role),
     SchemaMigration("0010_hermes_task_binding", _apply_hermes_task_binding),
     SchemaMigration("0011_hermes_review_thread_adjudication", _apply_hermes_review_thread_adjudication, clean_install=_apply_hermes_review_thread_adjudication),
+    SchemaMigration("0012_hermes_reviewed_head_binding", _apply_hermes_reviewed_head_binding, clean_install=_apply_hermes_reviewed_head_binding),
 )
 
 

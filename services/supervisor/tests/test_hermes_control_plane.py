@@ -59,6 +59,7 @@ def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadat
         "metadataOnly": True, "rawPayloadRetained": False,
     })
     assert provision.role == "developer"
+    assert HermesRoleCapabilityProvisionRequestV1.model_validate({**provision.model_dump(mode="json"), "taskId": "task:delivery parity"}).taskId == "task:delivery parity"
     with pytest.raises(ValidationError):
         HermesRoleCapabilityProvisionRequestV1.model_validate({**provision.model_dump(mode="json"), "expiresAt": "2026-09-04T00:00:00Z"})
     with pytest.raises(ValidationError):
