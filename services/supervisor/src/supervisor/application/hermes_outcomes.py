@@ -11,10 +11,11 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesFollowUpWorkInputV1, HermesFollowUpWorkProjectionV1, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from supervisor.infrastructure.db.models import (
     HermesDeliveryEvidence,
+    HermesFollowUpWork,
     HermesLaneRun,
     HermesLedgerEvent,
     HermesOutcome,
@@ -22,6 +23,120 @@ from supervisor.infrastructure.db.models import (
     HermesRoleCapabilityBinding,
     HermesVerificationRecord,
 )
+
+
+def _follow_up_digest(request: HermesFollowUpWorkInputV1) -> str:
+    canonical = json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _follow_up_projection(record: HermesFollowUpWork) -> HermesFollowUpWorkProjectionV1:
+    return HermesFollowUpWorkProjectionV1.model_validate({
+        "followUpWorkId": record.follow_up_work_id,
+        "parentOutcomeId": record.parent_outcome_id,
+        "parentLaneRunId": record.parent_lane_run_id,
+        "schemaVersion": record.schema_version,
+        "title": record.title,
+        "summary": record.summary,
+        "dedupeKey": record.dedupe_key,
+        "owner": record.owner,
+        "priorityRationale": record.priority_rationale,
+        "capacityState": record.capacity_state,
+        "reviewAt": record.review_at,
+        "expiresAt": record.expires_at,
+        "status": record.status,
+        "result": record.result,
+        "reasonCode": record.reason_code,
+        "evidenceRefs": record.evidence_refs_json,
+        "nextAction": record.next_action,
+        "observedAt": record.observed_at,
+        "idempotencyKey": record.idempotency_key,
+        "createdAt": record.created_at,
+        "metadataOnly": record.metadata_only,
+        "rawPayloadRetained": record.raw_payload_retained,
+    })
+
+
+async def record_hermes_follow_up_work(
+    session: AsyncSession,
+    payload: HermesFollowUpWorkInputV1,
+    *,
+    commit: bool = True,
+) -> HermesFollowUpWorkProjectionV1:
+    """Append one evidence-bound proposal without mutating outcome, lane, or execution state."""
+    request = HermesFollowUpWorkInputV1.model_validate(payload.model_dump())
+    digest = _follow_up_digest(request)
+    replay = await session.scalar(
+        select(HermesFollowUpWork)
+        .where(HermesFollowUpWork.idempotency_key == request.idempotencyKey)
+        .with_for_update()
+    )
+    if replay is not None:
+        if replay.request_digest_sha256 != digest:
+            raise ValueError("Follow-up idempotency key conflicts with persisted metadata.")
+        return _follow_up_projection(replay)
+    if request.expiresAt <= datetime.now(UTC):
+        raise ValueError("Follow-up proposal is expired.")
+
+    outcome = await session.scalar(
+        select(HermesOutcome).where(HermesOutcome.outcome_id == request.parentOutcomeId).with_for_update()
+    )
+    lane = await session.scalar(
+        select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.parentLaneRunId).with_for_update()
+    )
+    if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
+        raise ValueError("Follow-up proposal must bind the current parent outcome and lane.")
+    await _require_bound_evidence(session, evidence_refs=request.evidenceRefs, outcome=outcome, lane=lane)
+
+    duplicate = await session.scalar(
+        select(HermesFollowUpWork)
+        .where(HermesFollowUpWork.dedupe_key == request.dedupeKey)
+        .with_for_update()
+    )
+    if duplicate is not None:
+        raise ValueError("Follow-up dedupe key conflicts with an existing proposal.")
+
+    record = HermesFollowUpWork(
+        follow_up_work_id=request.followUpWorkId,
+        parent_outcome_id=request.parentOutcomeId,
+        parent_lane_run_id=request.parentLaneRunId,
+        schema_version=request.schemaVersion,
+        title=request.title,
+        summary=request.summary,
+        dedupe_key=request.dedupeKey,
+        owner=request.owner,
+        priority_rationale=request.priorityRationale,
+        capacity_state=request.capacityState,
+        review_at=request.reviewAt,
+        expires_at=request.expiresAt,
+        status=request.status,
+        result=request.result,
+        reason_code=request.reasonCode,
+        evidence_refs_json=request.evidenceRefs,
+        next_action=request.nextAction,
+        observed_at=request.observedAt,
+        idempotency_key=request.idempotencyKey,
+        request_digest_sha256=digest,
+        created_at=request.createdAt,
+        metadata_only=True,
+        raw_payload_retained=False,
+    )
+    session.add(record)
+    try:
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        if not commit:
+            raise
+        replay = await session.scalar(select(HermesFollowUpWork).where(HermesFollowUpWork.idempotency_key == request.idempotencyKey))
+        if replay is not None and replay.request_digest_sha256 == digest:
+            return _follow_up_projection(replay)
+        raise ValueError("Follow-up proposal persistence conflict.") from exc
+    await session.refresh(record)
+    return _follow_up_projection(record)
 
 
 async def provision_hermes_role_capability(session: AsyncSession, payload: HermesRoleCapabilityProvisionRequestV1) -> HermesRoleCapabilityBinding:

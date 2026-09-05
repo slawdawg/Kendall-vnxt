@@ -123,6 +123,17 @@ async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_follow_up_admissions(connection: AsyncConnection) -> None:
+    from supervisor.infrastructure.db.models import HermesFollowUpWork
+
+    await connection.run_sync(
+        lambda sync_connection: HermesFollowUpWork.metadata.create_all(
+            sync_connection, tables=[HermesFollowUpWork.__table__]
+        )
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -158,6 +169,7 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         clean_install=_apply_hermes_board_bridge,
     ),
     SchemaMigration("0008_hermes_review_handoff", _apply_hermes_review_handoff, clean_install=_apply_hermes_review_handoff),
+    SchemaMigration("0009_hermes_follow_up_admissions", _apply_hermes_follow_up_admissions, clean_install=_apply_hermes_follow_up_admissions),
 )
 
 

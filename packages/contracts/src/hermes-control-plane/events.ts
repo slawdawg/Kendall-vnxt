@@ -35,7 +35,7 @@ const BOARD_EVENT_FIELDS = [
 ] as const;
 const BOARD_EVENT_OPAQUE_IDS = ["issuerId", "keyId", "eventId", "boardId", "cardId", "outcomeId", "laneRunId"] as const;
 const FOLLOW_UP_FIELDS = [
-  "followUpWorkId", "parentOutcomeId", "schemaVersion", "title", "summary", "dedupeKey", "owner", "priorityRationale",
+  "followUpWorkId", "parentOutcomeId", "parentLaneRunId", "schemaVersion", "title", "summary", "dedupeKey", "owner", "priorityRationale",
   "capacityState", "reviewAt", "expiresAt", "status", "result", "reasonCode", "evidenceRefs", "nextAction", "observedAt",
   "idempotencyKey", "createdAt", "metadataOnly", "rawPayloadRetained",
 ] as const;
@@ -74,7 +74,7 @@ export function isHermesBoardLifecycleEventV1(value: unknown): value is HermesBo
 export function isFollowUpWorkV1(value: unknown): value is FollowUpWorkV1 {
   return guardFailsClosed(() => {
     if (!isRecord(value) || !hasExactKeys(value, FOLLOW_UP_FIELDS)) return false;
-    return isFollowUpWorkId(value.followUpWorkId) && isHermesOutcomeId(value.parentOutcomeId) &&
+    return isFollowUpWorkId(value.followUpWorkId) && isHermesOutcomeId(value.parentOutcomeId) && isHermesLaneRunId(value.parentLaneRunId) &&
       isMetadataOnlyRecord(value, HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION, ["observedAt", "createdAt", "reviewAt", "expiresAt"]) &&
       isSafeText(value.title, 240) && isSafeText(value.summary) && isOpaqueId(value.dedupeKey) && isSafeText(value.owner, 160) &&
       isSafeText(value.priorityRationale, 500) && isOneOf(value.capacityState, FOLLOW_UP_CAPACITY_STATES) &&

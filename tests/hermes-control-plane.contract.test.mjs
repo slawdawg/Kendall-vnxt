@@ -172,7 +172,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       classificationRationale: "Requires a separate decision", createdAt: observedAt,
     };
     const followUp = {
-      ...common, followUpWorkId: "follow-up:one", parentOutcomeId: outcome.outcomeId, schemaVersion: contracts.HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION,
+      ...common, followUpWorkId: "follow-up:one", parentOutcomeId: outcome.outcomeId, parentLaneRunId: laneRun.laneRunId, schemaVersion: contracts.HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION,
       title: "Follow up", summary: "Bounded follow-up", dedupeKey: "dedupe:one", owner: "coordinator", priorityRationale: "Unblocks delivery",
       capacityState: "available", reviewAt: observedAt, expiresAt: later, status: "proposed", result: "rework", reasonCode: "needs_work",
       nextAction: "review", observedAt, createdAt: observedAt,
@@ -245,6 +245,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["external alternatives missing", { ...impact, alternativesConsidered: [] }, contracts.isExternalImpactRequestV1],
       ["sparse alternatives", { ...impact, alternativesConsidered: Object.assign([], { length: 1 }) }, contracts.isExternalImpactRequestV1],
       ["follow-up dedupe missing", { ...followUp, dedupeKey: "" }, contracts.isFollowUpWorkV1],
+      ["follow-up lane missing", (() => { const { parentLaneRunId, ...withoutLane } = followUp; return withoutLane; })(), contracts.isFollowUpWorkV1],
       ["event authorizes", { ...event, authoritative: true }, contracts.isHermesLifecycleEventV1],
       ["outcome timestamp order", { ...outcome, updatedAt: "2026-08-27T23:00:00Z" }, contracts.isHermesOutcomeV1],
       ["lane recovery timestamp order", { ...laneRun, timeoutAt: "2026-08-28T00:30:00Z" }, contracts.isHermesLaneRunV1],

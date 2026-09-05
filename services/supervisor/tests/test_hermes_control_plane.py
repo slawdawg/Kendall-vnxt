@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesFollowUpWorkInputV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -18,6 +18,18 @@ def payload() -> dict[str, object]:
         "laneRun": {"laneRunId": "lane:1", "outcomeId": "outcome:1", "schemaVersion": "hermes_lane_run.v1", "laneType": "implementation", "status": "running", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "heartbeatAt": iso(now), "staleDeadlineAt": iso(later), "timeoutAt": iso(later + timedelta(minutes=1)), "retryBudget": 1, "reworkBudget": 1, "evidenceFingerprint": "sha256:ledger-proof", "observedAt": iso(later), "idempotencyKey": "lane:1", "createdAt": iso(now), "updatedAt": iso(later), "metadataOnly": True, "rawPayloadRetained": False},
         "deliveryEvidence": {"deliveryEvidenceId": "evidence:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "delivery_evidence.v1", "evidenceType": "verification", "summary": "Focused check passed.", "sourceRef": "test:hermes-ledger", "observedAt": iso(later), "evidenceRefs": refs, "idempotencyKey": "evidence:1", "createdAt": iso(now), "metadataOnly": True, "rawPayloadRetained": False},
         "event": {"eventId": "event:1", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_lifecycle_event.v1", "eventName": "hermes.outcome.created", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "correlationId": "correlation:1", "causationId": "causation:1", "observedAt": iso(later), "idempotencyKey": "event:1", "emittedAt": iso(later), "metadataOnly": True, "rawPayloadRetained": False, "authoritative": False},
+    }
+
+
+def follow_up_payload() -> dict[str, object]:
+    return {
+        "followUpWorkId": "follow-up:one", "parentOutcomeId": "outcome:1", "parentLaneRunId": "lane:1",
+        "schemaVersion": "follow_up_work.v1", "title": "Reduce verification friction", "summary": "Record a bounded improvement proposal.",
+        "dedupeKey": "dedupe:verification-friction", "owner": "hermes-coordinator", "priorityRationale": "Recurring delivery friction blocks outcomes.",
+        "capacityState": "available", "reviewAt": "2099-09-03T12:00:00Z", "expiresAt": "2099-09-04T12:00:00Z",
+        "status": "proposed", "result": "allowed", "reasonCode": "ordinary_friction", "evidenceRefs": ["evidence:1"],
+        "nextAction": "Review the proposal before creating a bounded outcome.", "observedAt": "2026-09-02T12:00:00Z",
+        "idempotencyKey": "follow-up:one", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
     }
 
 
@@ -47,6 +59,23 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert route("/hermes-control-plane/role-capabilities").methods == {"POST"}
     assert route("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke").methods == {"POST"}
     assert route("/hermes-control-plane/review-handoffs").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
+    assert route("/hermes-control-plane/follow-ups").methods == {"POST"}
+    assert route("/hermes-control-plane/follow-ups").response_model.__name__ == "HermesFollowUpWorkProjectionApiEnvelope"
+
+
+def test_follow_up_admission_is_strict_proposal_only_metadata():
+    value = HermesFollowUpWorkInputV1.model_validate(follow_up_payload())
+    assert value.parentLaneRunId == "lane:1" and value.status == "proposed"
+    rework = follow_up_payload(); rework["result"] = "rework"
+    assert HermesFollowUpWorkInputV1.model_validate(rework).result == "rework"
+    missing_lane = follow_up_payload(); missing_lane.pop("parentLaneRunId")
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(missing_lane)
+    active = follow_up_payload(); active["status"] = "active"
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(active)
+    mismatched_capacity = follow_up_payload(); mismatched_capacity["capacityState"] = "atCapacity"
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(mismatched_capacity)
+    expired = follow_up_payload(); expired["expiresAt"] = "2099-09-03T12:00:00Z"
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(expired)
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():

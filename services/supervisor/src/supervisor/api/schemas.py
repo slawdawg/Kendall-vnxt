@@ -8208,6 +8208,72 @@ class HermesLedgerIngestRequest(BaseModel):
         return self
 
 
+class HermesFollowUpWorkInputV1(BaseModel):
+    """A metadata-only follow-up proposal; it cannot start or schedule work."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    followUpWorkId: str = Field(max_length=120)
+    parentOutcomeId: str = Field(max_length=120)
+    parentLaneRunId: str = Field(max_length=120)
+    schemaVersion: Literal["follow_up_work.v1"]
+    title: str = Field(max_length=240)
+    summary: str = Field(max_length=500)
+    dedupeKey: str = Field(max_length=180)
+    owner: str = Field(max_length=160)
+    priorityRationale: str = Field(max_length=500)
+    capacityState: Literal["available", "atCapacity", "admissionBlocked"]
+    reviewAt: datetime
+    expiresAt: datetime
+    status: Literal["proposed", "blocked"]
+    result: Literal["allowed", "rework", "deniedPolicy", "blockedTechnical"]
+    reasonCode: str = Field(max_length=120)
+    evidenceRefs: list[str] = Field(min_length=1, max_length=32)
+    nextAction: str = Field(max_length=360)
+    observedAt: datetime
+    idempotencyKey: str = Field(max_length=180)
+    createdAt: datetime
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("followUpWorkId", "parentOutcomeId", "parentLaneRunId", "dedupeKey", "idempotencyKey")
+    @classmethod
+    def _opaque(cls, value: str, info) -> str:
+        value = _validate_hermes_text(value, info.field_name, 180)
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Follow-up identity must be opaque.")
+        return value
+
+    @field_validator("title", "summary", "owner", "priorityRationale", "reasonCode", "nextAction")
+    @classmethod
+    def _safe(cls, value: str, info) -> str:
+        return _validate_hermes_text(value, info.field_name, 500 if info.field_name in {"summary", "priorityRationale"} else 360)
+
+    @field_validator("evidenceRefs")
+    @classmethod
+    def _refs(cls, value: list[str]) -> list[str]:
+        return HermesOutcomeInputV1._refs(value)
+
+    @field_validator("observedAt", "createdAt", "reviewAt", "expiresAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _admission_only(self):
+        allowed = (self.capacityState, self.status, self.result) in {
+            ("available", "proposed", "allowed"),
+            ("available", "proposed", "rework"),
+        }
+        at_capacity = (self.capacityState, self.status, self.result) == ("atCapacity", "blocked", "deniedPolicy")
+        blocked = (self.capacityState, self.status, self.result) == ("admissionBlocked", "blocked", "blockedTechnical")
+        if not (allowed or at_capacity or blocked):
+            raise ValueError("Follow-up admission must retain its capacity decision and cannot execute work.")
+        if not (self.createdAt <= self.observedAt <= self.reviewAt < self.expiresAt):
+            raise ValueError("Follow-up review and expiry timestamps must be chronological.")
+        return self
+
+
 class HermesVerificationRecordInputV1(BaseModel):
     """Metadata-only verification precondition bound to the original Developer lane."""
 
@@ -8476,6 +8542,15 @@ class HermesOutcomeProjectionV1(BaseModel):
 class HermesOutcomeProjectionApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     data: HermesOutcomeProjectionV1
+
+
+class HermesFollowUpWorkProjectionV1(HermesFollowUpWorkInputV1):
+    pass
+
+
+class HermesFollowUpWorkProjectionApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    data: HermesFollowUpWorkProjectionV1
 
 
 class HermesLaneRunProjectionV1(BaseModel):

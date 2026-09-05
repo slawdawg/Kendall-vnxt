@@ -137,6 +137,7 @@ export interface ExternalImpactRequestV1 {
 export interface FollowUpWorkV1 {
   readonly followUpWorkId: import("./ids").FollowUpWorkId;
   readonly parentOutcomeId: import("./ids").HermesOutcomeId;
+  readonly parentLaneRunId: import("./ids").HermesLaneRunId;
   readonly schemaVersion: typeof HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION;
   readonly title: string;
   readonly summary: string;
