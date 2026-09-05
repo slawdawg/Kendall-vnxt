@@ -123,10 +123,14 @@
     may fail with a read-only `.git` boundary in the Codex sandbox. Do not
     retry with a different fetch shape or mutate the checkout to work around
     it; request approval for the exact read-only fetch outside the sandbox.
-  - Dashboard bridge integration tests that create Unix-domain sockets may
-    fail with `listen EPERM` in the sandbox even when the test uses a private
-    temporary path. Treat that as a sandbox process/socket boundary; request
-    approval to rerun the exact test command outside the sandbox.
+  - The four dashboard socket-runtime modules are preflighted by
+    `node ./scripts/dashboard-socket-runtime-boundary.mjs`. When its private
+    listener probe emits `SANDBOX_DASHBOARD_SOCKET_LISTENER_BLOCKED` with
+    `EPERM` or `EACCES`, treat that structured skip as boundary evidence and
+    rerun exactly the emitted `node --test ...` command outside the sandbox;
+    do not retry the modules inside it. Outside the sandbox and in CI, the
+    probe succeeds and all four modules execute normally; any non-boundary
+    probe or test failure remains a failure.
   - `ss -ltnp '( sport = :3000 )'` may fail with `Cannot open netlink socket:
     Operation not permitted` in the sandbox. Treat this as a socket-table
     visibility boundary; request approval for the exact read-only command
