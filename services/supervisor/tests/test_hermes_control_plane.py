@@ -88,3 +88,11 @@ def test_review_handoff_rejects_secret_shaped_capability_binding_references():
         HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:sk_live_abcdefghijklmnop", "developerCapabilityProof": "d" * 32})
     with pytest.raises(ValidationError, match="Role capability identity"):
         HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:sk_live_abcdefghijklmnop", "reviewerCapabilityProof": "r" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:sk_live", "developerCapabilityProof": "d" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:pk_test", "reviewerCapabilityProof": "r" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:sk_live-abc", "developerCapabilityProof": "d" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:pk_test-abc", "reviewerCapabilityProof": "r" * 32})

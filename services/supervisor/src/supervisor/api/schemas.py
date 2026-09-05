@@ -8367,7 +8367,7 @@ class HermesReviewHandoffRequest(BaseModel):
         value = _validate_hermes_text(value, info.field_name, 120)
         if (
             re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None
-            or re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)_[A-Za-z0-9_-]+", value, re.IGNORECASE)
+            or re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)(?=$|[-_:])", value, re.IGNORECASE)
         ):
             raise ValueError("Role capability identity must be opaque.")
         return value
