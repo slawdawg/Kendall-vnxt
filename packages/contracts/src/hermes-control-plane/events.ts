@@ -1,6 +1,7 @@
 import { isFollowUpWorkId, isOpaqueId } from "./ids";
 import {
   HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION,
+  HERMES_FOLLOW_UP_WORK_V1_SCHEMA_VERSION,
   HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION,
   HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION,
   hasExactKeys,
@@ -11,6 +12,7 @@ import {
   isSafeText,
   isTimestampOrder,
   type FollowUpWorkV1,
+  type FollowUpWorkV2,
   type HermesLifecycleEventName,
   type HermesBoardLifecycleEventV1,
   type HermesLifecycleEventV1,
@@ -34,8 +36,13 @@ const BOARD_EVENT_FIELDS = [
   "emittedAt", "expiresAt", "signatureB64", "metadataOnly", "rawPayloadRetained", "authoritative",
 ] as const;
 const BOARD_EVENT_OPAQUE_IDS = ["issuerId", "keyId", "eventId", "boardId", "cardId", "outcomeId", "laneRunId"] as const;
-const FOLLOW_UP_FIELDS = [
-  "followUpWorkId", "parentOutcomeId", "schemaVersion", "title", "summary", "dedupeKey", "owner", "priorityRationale",
+const FOLLOW_UP_V1_FIELDS = [
+  "followUpWorkId", "parentOutcomeId", "parentLaneRunId", "schemaVersion", "title", "summary", "dedupeKey", "owner", "priorityRationale",
+  "capacityState", "reviewAt", "expiresAt", "status", "result", "reasonCode", "evidenceRefs", "nextAction", "observedAt",
+  "idempotencyKey", "createdAt", "metadataOnly", "rawPayloadRetained",
+] as const;
+const FOLLOW_UP_V2_FIELDS = [
+  "followUpWorkId", "parentOutcomeId", "parentLaneRunId", "schemaVersion", "title", "summary", "dedupeKey", "owner", "priorityRationale",
   "capacityState", "reviewAt", "expiresAt", "status", "result", "reasonCode", "evidenceRefs", "nextAction", "observedAt",
   "idempotencyKey", "createdAt", "metadataOnly", "rawPayloadRetained",
 ] as const;
@@ -44,6 +51,24 @@ const FOLLOW_UP_CAPACITY_STATES = Object.freeze(["available", "atCapacity", "adm
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
   return typeof value === "string" && values.includes(value as T);
+}
+
+function isFollowUpAdmissionDecision(value: Record<string, unknown>): boolean {
+  return (value.capacityState === "available" && value.status === "proposed" && (value.result === "allowed" || value.result === "rework")) ||
+    (value.capacityState === "atCapacity" && value.status === "blocked" && value.result === "deniedPolicy") ||
+    (value.capacityState === "admissionBlocked" && value.status === "blocked" && value.result === "blockedTechnical");
+}
+
+function isFollowUpWork(value: Record<string, unknown>, schemaVersion: string, fields: readonly string[], requiresLane: boolean): boolean {
+  if (!hasExactKeys(value, fields)) return false;
+  if (!isFollowUpWorkId(value.followUpWorkId) || !isHermesOutcomeId(value.parentOutcomeId) ||
+    (requiresLane && !isHermesLaneRunId(value.parentLaneRunId))) return false;
+  return isMetadataOnlyRecord(value, schemaVersion, ["createdAt", "observedAt", "reviewAt", "expiresAt"]) &&
+    isSafeText(value.title, 240) && isSafeText(value.summary) && isOpaqueId(value.dedupeKey) && isSafeText(value.owner, 160) &&
+    isSafeText(value.priorityRationale, 500) && isOneOf(value.capacityState, FOLLOW_UP_CAPACITY_STATES) &&
+    isOneOf(value.status, FOLLOW_UP_STATUSES) && isDecisionFields(value) && isFollowUpAdmissionDecision(value) &&
+    isTimestampOrder(value, ["createdAt", "observedAt", "reviewAt", "expiresAt"]) &&
+    Date.parse(value.reviewAt as string) < Date.parse(value.expiresAt as string);
 }
 
 export function isHermesLifecycleEventV1(value: unknown): value is HermesLifecycleEventV1 {
@@ -73,15 +98,21 @@ export function isHermesBoardLifecycleEventV1(value: unknown): value is HermesBo
 
 export function isFollowUpWorkV1(value: unknown): value is FollowUpWorkV1 {
   return guardFailsClosed(() => {
-    if (!isRecord(value) || !hasExactKeys(value, FOLLOW_UP_FIELDS)) return false;
-    return isFollowUpWorkId(value.followUpWorkId) && isHermesOutcomeId(value.parentOutcomeId) &&
-      isMetadataOnlyRecord(value, HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION, ["observedAt", "createdAt", "reviewAt", "expiresAt"]) &&
+    if (!isRecord(value) || !hasExactKeys(value, FOLLOW_UP_V1_FIELDS)) return false;
+    return isFollowUpWorkId(value.followUpWorkId) && isHermesOutcomeId(value.parentOutcomeId) && isHermesLaneRunId(value.parentLaneRunId) &&
+      isMetadataOnlyRecord(value, HERMES_FOLLOW_UP_WORK_V1_SCHEMA_VERSION, ["observedAt", "createdAt", "reviewAt", "expiresAt"]) &&
       isSafeText(value.title, 240) && isSafeText(value.summary) && isOpaqueId(value.dedupeKey) && isSafeText(value.owner, 160) &&
       isSafeText(value.priorityRationale, 500) && isOneOf(value.capacityState, FOLLOW_UP_CAPACITY_STATES) &&
-      isOneOf(value.status, FOLLOW_UP_STATUSES) && isDecisionFields(value) && Date.parse(value.expiresAt as string) >= Date.parse(value.reviewAt as string);
+      isOneOf(value.status, FOLLOW_UP_STATUSES) && isDecisionFields(value) &&
+      Date.parse(value.reviewAt as string) <= Date.parse(value.expiresAt as string);
   });
+}
+
+export function isFollowUpWorkV2(value: unknown): value is FollowUpWorkV2 {
+  return guardFailsClosed(() => isRecord(value) && isFollowUpWork(value, HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION, FOLLOW_UP_V2_FIELDS, true));
 }
 
 export const hermesLifecycleEventV1Fields = Object.freeze(EVENT_FIELDS);
 export const hermesBoardLifecycleEventV1Fields = Object.freeze(BOARD_EVENT_FIELDS);
-export const followUpWorkV1Fields = Object.freeze(FOLLOW_UP_FIELDS);
+export const followUpWorkV1Fields = Object.freeze(FOLLOW_UP_V1_FIELDS);
+export const followUpWorkV2Fields = Object.freeze(FOLLOW_UP_V2_FIELDS);

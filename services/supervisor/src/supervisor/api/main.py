@@ -97,6 +97,8 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
+    HermesFollowUpWorkInputV2,
+    HermesFollowUpWorkProjectionApiEnvelope,
     HermesReviewHandoffRequest,
     HermesRoleCapabilityProvisionRequestV1,
     HermesRoleCapabilityRevocationRequestV1,
@@ -172,7 +174,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, revoke_hermes_role_capability
+from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, record_hermes_follow_up_work, revoke_hermes_role_capability
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -1660,6 +1662,26 @@ async def ingest_hermes_outcome_ledger(
             detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
         ) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post(
+    "/hermes-control-plane/follow-ups",
+    response_model=HermesFollowUpWorkProjectionApiEnvelope,
+)
+async def record_hermes_follow_up_work_route(
+    payload: HermesFollowUpWorkInputV2,
+    _: None = Depends(require_local_operational_boundary),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record one evidence-bound proposal; this endpoint cannot execute follow-up work."""
+    try:
+        follow_up = await record_hermes_follow_up_work(session, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "hermes_follow_up_conflict").model_dump(),
+        ) from exc
+    return HermesFollowUpWorkProjectionApiEnvelope(data=follow_up)
 
 
 @app.post("/hermes-control-plane/role-capabilities")

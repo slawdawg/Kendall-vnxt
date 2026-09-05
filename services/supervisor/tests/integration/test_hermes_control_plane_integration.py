@@ -2,6 +2,7 @@ import copy
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.hermes_outcomes import (
@@ -9,13 +10,14 @@ from supervisor.application.hermes_outcomes import (
     ingest_hermes_ledger,
     ingest_hermes_review_handoff,
     provision_hermes_role_capability,
+    record_hermes_follow_up_work,
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1
+from supervisor.api.schemas import HermesFollowUpWorkInputV2, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesOutcome
+from supervisor.infrastructure.db.models import HermesFollowUpWork, HermesOutcome
 from test_hermes_control_plane import payload
 
 
@@ -119,7 +121,56 @@ async def test_hermes_ledger_migration_is_ordered_and_clean_install_aware(tmp_pa
         revisions = tuple((await connection.execute(text(f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"))).scalars())
         tables = set((await connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))).scalars())
     assert revisions == tuple(migration.revision for migration in MIGRATIONS)
-    assert {"hermes_outcomes", "hermes_lane_runs", "hermes_delivery_evidence", "hermes_ledger_events"} <= tables
+    assert {"hermes_outcomes", "hermes_lane_runs", "hermes_delivery_evidence", "hermes_ledger_events", "hermes_follow_up_work"} <= tables
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_admission_is_append_only_evidence_bound_and_idempotent(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'follow-up.db'}")
+    async with engine.begin() as connection: await upgrade_database(connection)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    follow_up = {
+        "followUpWorkId": "follow-up:one", "parentOutcomeId": "outcome:1", "parentLaneRunId": "lane:1",
+        "schemaVersion": "follow_up_work.v2", "title": "Reduce verification friction", "summary": "Record a bounded improvement proposal.",
+        "dedupeKey": "dedupe:verification-friction", "owner": "hermes-coordinator", "priorityRationale": "Recurring delivery friction blocks outcomes.",
+        "capacityState": "available", "reviewAt": "2099-09-03T12:00:00Z", "expiresAt": "2099-09-04T12:00:00Z",
+        "status": "proposed", "result": "allowed", "reasonCode": "ordinary_friction", "evidenceRefs": ["evidence:1"],
+        "nextAction": "Review the proposal before creating a bounded outcome.", "observedAt": "2026-09-02T12:01:00Z",
+        "idempotencyKey": "follow-up:one", "createdAt": "2026-09-02T12:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+    }
+    async with sessions() as session:
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(payload()))
+        before = await read_hermes_outcome(session, "outcome:1")
+        admitted = await record_hermes_follow_up_work(session, HermesFollowUpWorkInputV2.model_validate(follow_up))
+        assert admitted.followUpWorkId == "follow-up:one" and admitted.parentLaneRunId == "lane:1"
+        assert await record_hermes_follow_up_work(session, HermesFollowUpWorkInputV2.model_validate(follow_up)) == admitted
+        assert await read_hermes_outcome(session, "outcome:1") == before
+        changed = copy.deepcopy(follow_up); changed["title"] = "Changed title"
+        with pytest.raises(ValueError, match="idempotency"):
+            await record_hermes_follow_up_work(session, HermesFollowUpWorkInputV2.model_validate(changed))
+        duplicate = copy.deepcopy(follow_up); duplicate["followUpWorkId"] = "follow-up:two"; duplicate["idempotencyKey"] = "follow-up:two"
+        with pytest.raises(ValueError, match="dedupe"):
+            await record_hermes_follow_up_work(session, HermesFollowUpWorkInputV2.model_validate(duplicate))
+        unbound = copy.deepcopy(follow_up); unbound["followUpWorkId"] = "follow-up:three"; unbound["idempotencyKey"] = "follow-up:three"; unbound["evidenceRefs"] = ["evidence:missing"]
+        with pytest.raises(ValueError, match="evidence"):
+            await record_hermes_follow_up_work(session, HermesFollowUpWorkInputV2.model_validate(unbound))
+        expired = copy.deepcopy(follow_up); expired["followUpWorkId"] = "follow-up:four"; expired["idempotencyKey"] = "follow-up:four"; expired["dedupeKey"] = "dedupe:expired"; expired["reviewAt"] = "2026-09-03T12:00:00Z"; expired["expiresAt"] = "2026-09-04T12:00:00Z"
+        with pytest.raises(ValueError, match="expired"):
+            await record_hermes_follow_up_work(session, HermesFollowUpWorkInputV2.model_validate(expired))
+    async with engine.begin() as connection:
+        assert await connection.scalar(text("SELECT COUNT(*) FROM hermes_follow_up_work")) == 1
+        assert await connection.scalar(text("SELECT COUNT(*) FROM hermes_ledger_events")) == 1
+    async with engine.connect() as connection:
+        with pytest.raises(IntegrityError, match="append_only"):
+            await connection.execute(text("UPDATE hermes_follow_up_work SET title = 'mutated'"))
+        await connection.rollback()
+        with pytest.raises(IntegrityError, match="append_only"):
+            await connection.execute(text("DELETE FROM hermes_follow_up_work"))
+        await connection.rollback()
+        with pytest.raises(IntegrityError, match="append_only"):
+            await connection.execute(text("INSERT OR REPLACE INTO hermes_follow_up_work SELECT * FROM hermes_follow_up_work"))
+        await connection.rollback()
     await engine.dispose()
 
 

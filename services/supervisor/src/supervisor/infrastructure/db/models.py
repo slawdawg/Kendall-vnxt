@@ -909,6 +909,42 @@ class HermesDeliveryEvidence(Base):
     raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class HermesFollowUpWork(Base):
+    """Append-only proposal metadata; it cannot schedule or execute work."""
+
+    __tablename__ = "hermes_follow_up_work"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_follow_up_idempotency"),
+        UniqueConstraint("dedupe_key", name="uq_hermes_follow_up_dedupe"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_follow_up_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_follow_up_no_raw_payload"),
+    )
+
+    follow_up_work_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    parent_outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    parent_lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(240))
+    summary: Mapped[str] = mapped_column(Text)
+    dedupe_key: Mapped[str] = mapped_column(String(180))
+    owner: Mapped[str] = mapped_column(String(160))
+    priority_rationale: Mapped[str] = mapped_column(String(500))
+    capacity_state: Mapped[str] = mapped_column(String(32))
+    review_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    status: Mapped[str] = mapped_column(String(32))
+    result: Mapped[str] = mapped_column(String(32))
+    reason_code: Mapped[str] = mapped_column(String(120))
+    evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    next_action: Mapped[str] = mapped_column(String(360))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HermesLedgerEvent(Base):
     """Append-only lifecycle observation with exact replay fencing."""
 

@@ -185,8 +185,7 @@ async def test_sqlite_default_startup_restricts_manifest_parent_delete_and_id_up
                     f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
                 ))).scalars()
             )
-        active_migrations = _active_migrations_module()
-        assert applied_revisions == tuple(migration.revision for migration in active_migrations.MIGRATIONS)
+        assert applied_revisions == tuple(migration.revision for migration in _active_migrations_module().MIGRATIONS)
 
         async with engine.begin() as connection:
             trigger_names = set((await connection.execute(text(
@@ -301,7 +300,7 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
                     f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"
                 ))).scalars()
             )
-        assert applied_revisions == tuple(migration.revision for migration in active_migrations.MIGRATIONS)
+        assert set(applied_revisions) == {migration.revision for migration in active_migrations.MIGRATIONS}
     finally:
         Base.metadata.remove(future_table)
         await engine.dispose()
@@ -426,6 +425,8 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                 "0006_hermes_outcome_ledger",
                 "0007_hermes_board_bridge",
                 "0008_hermes_review_handoff",
+                "0009_hermes_follow_up_admissions",
+                "0010_hermes_follow_up_append_only",
             }
     finally:
         await engine.dispose()

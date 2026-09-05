@@ -31,7 +31,7 @@ test("supervisor test runner gives child phases a private temp root", () => {
   writeFileSync(fakeUv, [
     "#!/usr/bin/env node",
     "import { statSync, writeFileSync } from 'node:fs';",
-    "writeFileSync(process.env.SUPERVISOR_TEST_TEMP_OUTPUT, JSON.stringify({ TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP, mode: statSync(process.env.TMPDIR).mode & 0o777 }));",
+    "writeFileSync(process.env.SUPERVISOR_TEST_TEMP_OUTPUT, JSON.stringify({ TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP, databaseUrl: process.env.SUPERVISOR_DATABASE_URL, mode: statSync(process.env.TMPDIR).mode & 0o777 }));",
     "",
   ].join("\n"));
   chmodSync(fakeUv, 0o755);
@@ -51,6 +51,7 @@ test("supervisor test runner gives child phases a private temp root", () => {
     assert.equal(childTemp.TMPDIR, childTemp.TMP);
     assert.equal(childTemp.TMP, childTemp.TEMP);
     assert.equal(childTemp.mode, 0o700);
+    assert.match(childTemp.databaseUrl, /^sqlite\+aiosqlite:\/\/\/\/tmp\/kendall-supervisor-tests-/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

@@ -24,7 +24,10 @@ export const HERMES_LANE_RUN_SCHEMA_VERSION = "hermes_lane_run.v1" as const;
 export const HERMES_DELIVERY_EVIDENCE_SCHEMA_VERSION = "delivery_evidence.v1" as const;
 export const HERMES_POLICY_DECISION_SCHEMA_VERSION = "policy_decision.v1" as const;
 export const HERMES_EXTERNAL_IMPACT_REQUEST_SCHEMA_VERSION = "external_impact_request.v1" as const;
-export const HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION = "follow_up_work.v1" as const;
+/** Legacy unbound proposal shape. Retained for existing V1 producers. */
+export const HERMES_FOLLOW_UP_WORK_V1_SCHEMA_VERSION = "follow_up_work.v1" as const;
+/** Current evidence-bound admission shape. */
+export const HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION = "follow_up_work.v2" as const;
 export const HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1" as const;
 export const HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_board_lifecycle_event.v1" as const;
 export const HERMES_VERIFICATION_RECORD_SCHEMA_VERSION = "hermes_verification_record.v1" as const;
@@ -137,7 +140,8 @@ export interface ExternalImpactRequestV1 {
 export interface FollowUpWorkV1 {
   readonly followUpWorkId: import("./ids").FollowUpWorkId;
   readonly parentOutcomeId: import("./ids").HermesOutcomeId;
-  readonly schemaVersion: typeof HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION;
+  readonly parentLaneRunId: import("./ids").HermesLaneRunId;
+  readonly schemaVersion: typeof HERMES_FOLLOW_UP_WORK_V1_SCHEMA_VERSION;
   readonly title: string;
   readonly summary: string;
   readonly dedupeKey: string;
@@ -156,6 +160,11 @@ export interface FollowUpWorkV1 {
   readonly createdAt: string;
   readonly metadataOnly: true;
   readonly rawPayloadRetained: false;
+}
+
+export interface FollowUpWorkV2 extends Omit<FollowUpWorkV1, "schemaVersion"> {
+  readonly parentLaneRunId: import("./ids").HermesLaneRunId;
+  readonly schemaVersion: typeof HERMES_FOLLOW_UP_WORK_SCHEMA_VERSION;
 }
 
 export interface HermesLifecycleEventV1 {

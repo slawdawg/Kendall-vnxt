@@ -123,6 +123,50 @@ async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_follow_up_admissions(connection: AsyncConnection) -> None:
+    from supervisor.infrastructure.db.models import HermesFollowUpWork
+
+    await connection.run_sync(
+        lambda sync_connection: HermesFollowUpWork.metadata.create_all(
+            sync_connection, tables=[HermesFollowUpWork.__table__]
+        )
+    )
+
+
+async def _apply_hermes_follow_up_append_only(connection: AsyncConnection) -> None:
+    """Reject persistence-layer mutation of admitted follow-up metadata."""
+
+    if connection.dialect.name == "sqlite":
+        await connection.execute(text(
+            "CREATE TRIGGER IF NOT EXISTS trg_hermes_follow_up_work_append_only_insert "
+            "BEFORE INSERT ON hermes_follow_up_work "
+            "WHEN EXISTS (SELECT 1 FROM hermes_follow_up_work WHERE "
+            "follow_up_work_id = NEW.follow_up_work_id OR idempotency_key = NEW.idempotency_key OR dedupe_key = NEW.dedupe_key) "
+            "BEGIN SELECT RAISE(ABORT, 'hermes_follow_up_work_append_only'); END"
+        ))
+        for event in ("UPDATE", "DELETE"):
+            await connection.execute(text(
+                f"CREATE TRIGGER IF NOT EXISTS trg_hermes_follow_up_work_append_only_{event.lower()} "
+                f"BEFORE {event} ON hermes_follow_up_work "
+                "BEGIN SELECT RAISE(ABORT, 'hermes_follow_up_work_append_only'); END"
+            ))
+        return
+    if connection.dialect.name == "postgresql":
+        await connection.execute(text(
+            "CREATE OR REPLACE FUNCTION hermes_follow_up_work_reject_mutation() "
+            "RETURNS trigger LANGUAGE plpgsql AS $$ "
+            "BEGIN RAISE EXCEPTION 'hermes_follow_up_work_append_only'; END; $$"
+        ))
+        for event in ("UPDATE", "DELETE"):
+            trigger_name = f"trg_hermes_follow_up_work_append_only_{event.lower()}"
+            await connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name} ON hermes_follow_up_work"))
+            await connection.execute(text(
+                f"CREATE TRIGGER {trigger_name} BEFORE {event} ON hermes_follow_up_work "
+                "FOR EACH ROW EXECUTE FUNCTION hermes_follow_up_work_reject_mutation()"
+            ))
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -158,6 +202,8 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         clean_install=_apply_hermes_board_bridge,
     ),
     SchemaMigration("0008_hermes_review_handoff", _apply_hermes_review_handoff, clean_install=_apply_hermes_review_handoff),
+    SchemaMigration("0009_hermes_follow_up_admissions", _apply_hermes_follow_up_admissions, clean_install=_apply_hermes_follow_up_admissions),
+    SchemaMigration("0010_hermes_follow_up_append_only", _apply_hermes_follow_up_append_only, clean_install=_apply_hermes_follow_up_append_only),
 )
 
 
