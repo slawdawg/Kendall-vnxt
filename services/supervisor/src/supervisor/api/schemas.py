@@ -8225,8 +8225,8 @@ class HermesFollowUpWorkInputV1(BaseModel):
     capacityState: Literal["available", "atCapacity", "admissionBlocked"]
     reviewAt: datetime
     expiresAt: datetime
-    status: Literal["proposed", "blocked"]
-    result: Literal["allowed", "rework", "deniedPolicy", "blockedTechnical"]
+    status: Literal["proposed", "queued", "active", "completed", "blocked"]
+    result: Literal["allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"]
     reasonCode: str = Field(max_length=120)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32)
     nextAction: str = Field(max_length=360)
@@ -8258,6 +8258,21 @@ class HermesFollowUpWorkInputV1(BaseModel):
     @classmethod
     def _time(cls, value: object, info) -> datetime:
         return _parse_hermes_timestamp(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _legacy_chronology(self):
+        if self.reviewAt > self.expiresAt:
+            raise ValueError("Follow-up review and expiry timestamps must be chronological.")
+        return self
+
+
+class HermesFollowUpWorkInputV2(HermesFollowUpWorkInputV1):
+    """Current lane-bound admission version; V1 remains readable for replay."""
+
+    schemaVersion: Literal["follow_up_work.v2"]
+    status: Literal["proposed", "blocked"]
+    result: Literal["allowed", "rework", "deniedPolicy", "blockedTechnical"]
+    nextAction: str = Field(max_length=240)
 
     @model_validator(mode="after")
     def _admission_only(self):
@@ -8548,9 +8563,13 @@ class HermesFollowUpWorkProjectionV1(HermesFollowUpWorkInputV1):
     pass
 
 
+class HermesFollowUpWorkProjectionV2(HermesFollowUpWorkInputV2):
+    pass
+
+
 class HermesFollowUpWorkProjectionApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    data: HermesFollowUpWorkProjectionV1
+    data: HermesFollowUpWorkProjectionV2
 
 
 class HermesLaneRunProjectionV1(BaseModel):

@@ -17,6 +17,7 @@ const contractNames = [
   "PolicyDecisionV1",
   "ExternalImpactRequestV1",
   "FollowUpWorkV1",
+  "FollowUpWorkV2",
   "HermesLifecycleEventV1",
   "HermesBoardLifecycleEventV1",
 ];
@@ -77,7 +78,7 @@ test("Hermes Control Plane is an additive package namespace with explicit export
   const namespaceIndex = await readFile(new URL("index.ts", hermesRoot), "utf8");
   for (const moduleName of modules.slice(1)) assert.match(namespaceIndex, new RegExp(`export \\* from "\\./${moduleName.replace(".ts", "")}";`));
   const typesSource = await readFile(new URL("types.ts", hermesRoot), "utf8");
-  for (const name of contractNames) assert.match(typesSource, new RegExp(`interface ${name} \\{`), `${name} declaration export`);
+  for (const name of contractNames) assert.match(typesSource, new RegExp(`interface ${name}(?: extends [^{]+)? \\{`), `${name} declaration export`);
 });
 
 test("Hermes source is metadata-only and has no runtime integration imports", async () => {
@@ -102,7 +103,7 @@ test("Hermes schema metadata is camelCase-to-snake_case and keeps required field
   for (const name of contractNames) {
     assert.match(source, new RegExp(`${name}: (?:Object\\.freeze\\()?\\[`), `${name} required metadata`);
     assert.match(source, new RegExp(`${name}: (?:Object\\.freeze\\()?\\[.*_id|${name}: (?:Object\\.freeze\\()?\\[.*schema_version`), `${name} serialized metadata`);
-    assert.match(types, new RegExp(`export interface ${name} \\{`));
+    assert.match(types, new RegExp(`export interface ${name}(?: extends [^{]+)? \\{`));
     assert.match(types, /readonly/);
   }
   assert.match(source, /schemaVersion/);
@@ -138,7 +139,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.ok(contracts, "compiled root namespace exports HermesControlPlane");
     for (const guardName of [
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
-      "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
+      "isExternalImpactRequestV1", "isFollowUpWorkV1", "isFollowUpWorkV2", "isHermesLifecycleEventV1",
       "isHermesBoardLifecycleEventV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
@@ -177,6 +178,10 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       capacityState: "available", reviewAt: observedAt, expiresAt: later, status: "proposed", result: "rework", reasonCode: "needs_work",
       nextAction: "review", observedAt, createdAt: observedAt,
     };
+    const legacyFollowUp = {
+      ...followUp,
+      schemaVersion: contracts.HERMES_FOLLOW_UP_WORK_V1_SCHEMA_VERSION,
+    };
     const event = {
       ...common, eventId: "event:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
       schemaVersion: contracts.HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION, eventName: "hermes.outcome.created", result: "allowed",
@@ -196,7 +201,9 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isDeliveryEvidenceV1(evidence), true);
     assert.equal(contracts.isPolicyDecisionV1(decision), true);
     assert.equal(contracts.isExternalImpactRequestV1(impact), true);
-    assert.equal(contracts.isFollowUpWorkV1(followUp), true);
+    assert.equal(contracts.isFollowUpWorkV1(legacyFollowUp), true);
+    assert.equal(contracts.isFollowUpWorkV2(followUp), true);
+    assert.equal(contracts.isFollowUpWorkV1({ ...legacyFollowUp, status: "active", result: "completed" }), true);
     assert.equal(contracts.isHermesLifecycleEventV1(event), true);
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
@@ -204,6 +211,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT.HermesLaneRunV1), true);
     assert.equal(Object.isFrozen(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.HermesFollowUpWorkV1), true);
+    assert.equal(Object.isFrozen(contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT.HermesFollowUpWorkV2), true);
     for (const fieldMetadata of [
       contracts.hermesOutcomeV1Fields,
       contracts.hermesLaneRunV1Fields,
@@ -211,6 +219,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       contracts.policyDecisionV1Fields,
       contracts.externalImpactRequestV1Fields,
       contracts.followUpWorkV1Fields,
+      contracts.followUpWorkV2Fields,
       contracts.hermesLifecycleEventV1Fields,
       contracts.hermesBoardLifecycleEventV1Fields,
     ]) assert.equal(Object.isFrozen(fieldMetadata), true);
@@ -244,8 +253,11 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["sparse evidence refs", { ...outcome, evidenceRefs: Object.assign([], { length: 1 }) }, contracts.isHermesOutcomeV1],
       ["external alternatives missing", { ...impact, alternativesConsidered: [] }, contracts.isExternalImpactRequestV1],
       ["sparse alternatives", { ...impact, alternativesConsidered: Object.assign([], { length: 1 }) }, contracts.isExternalImpactRequestV1],
-      ["follow-up dedupe missing", { ...followUp, dedupeKey: "" }, contracts.isFollowUpWorkV1],
-      ["follow-up lane missing", (() => { const { parentLaneRunId, ...withoutLane } = followUp; return withoutLane; })(), contracts.isFollowUpWorkV1],
+      ["follow-up dedupe missing", { ...followUp, dedupeKey: "" }, contracts.isFollowUpWorkV2],
+      ["follow-up lane missing", (() => { const { parentLaneRunId, ...withoutLane } = followUp; return withoutLane; })(), contracts.isFollowUpWorkV2],
+      ["follow-up capacity decision", { ...followUp, status: "blocked", result: "allowed" }, contracts.isFollowUpWorkV2],
+      ["follow-up review expiry equality", { ...followUp, expiresAt: observedAt }, contracts.isFollowUpWorkV2],
+      ["follow-up timestamp order", { ...followUp, createdAt: later, observedAt }, contracts.isFollowUpWorkV2],
       ["event authorizes", { ...event, authoritative: true }, contracts.isHermesLifecycleEventV1],
       ["outcome timestamp order", { ...outcome, updatedAt: "2026-08-27T23:00:00Z" }, contracts.isHermesOutcomeV1],
       ["lane recovery timestamp order", { ...laneRun, timeoutAt: "2026-08-28T00:30:00Z" }, contracts.isHermesLaneRunV1],

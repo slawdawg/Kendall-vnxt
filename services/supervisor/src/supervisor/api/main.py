@@ -97,7 +97,7 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
-    HermesFollowUpWorkInputV1,
+    HermesFollowUpWorkInputV2,
     HermesFollowUpWorkProjectionApiEnvelope,
     HermesReviewHandoffRequest,
     HermesRoleCapabilityProvisionRequestV1,
@@ -1669,7 +1669,7 @@ async def ingest_hermes_outcome_ledger(
     response_model=HermesFollowUpWorkProjectionApiEnvelope,
 )
 async def record_hermes_follow_up_work_route(
-    payload: HermesFollowUpWorkInputV1,
+    payload: HermesFollowUpWorkInputV2,
     _: None = Depends(require_local_operational_boundary),
     session: AsyncSession = Depends(get_session),
 ):

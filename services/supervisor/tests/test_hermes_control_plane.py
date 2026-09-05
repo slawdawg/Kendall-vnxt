@@ -3,9 +3,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesFollowUpWorkInputV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesFollowUpWorkInputV1, HermesFollowUpWorkInputV2, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.infrastructure.db.migrations import upgrade_database
 
 
 def payload() -> dict[str, object]:
@@ -24,7 +28,7 @@ def payload() -> dict[str, object]:
 def follow_up_payload() -> dict[str, object]:
     return {
         "followUpWorkId": "follow-up:one", "parentOutcomeId": "outcome:1", "parentLaneRunId": "lane:1",
-        "schemaVersion": "follow_up_work.v1", "title": "Reduce verification friction", "summary": "Record a bounded improvement proposal.",
+        "schemaVersion": "follow_up_work.v2", "title": "Reduce verification friction", "summary": "Record a bounded improvement proposal.",
         "dedupeKey": "dedupe:verification-friction", "owner": "hermes-coordinator", "priorityRationale": "Recurring delivery friction blocks outcomes.",
         "capacityState": "available", "reviewAt": "2099-09-03T12:00:00Z", "expiresAt": "2099-09-04T12:00:00Z",
         "status": "proposed", "result": "allowed", "reasonCode": "ordinary_friction", "evidenceRefs": ["evidence:1"],
@@ -64,18 +68,41 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
 
 
 def test_follow_up_admission_is_strict_proposal_only_metadata():
-    value = HermesFollowUpWorkInputV1.model_validate(follow_up_payload())
+    value = HermesFollowUpWorkInputV2.model_validate(follow_up_payload())
     assert value.parentLaneRunId == "lane:1" and value.status == "proposed"
+    legacy = follow_up_payload(); legacy["schemaVersion"] = "follow_up_work.v1"
+    assert HermesFollowUpWorkInputV1.model_validate(legacy).schemaVersion == "follow_up_work.v1"
+    legacy_active = follow_up_payload(); legacy_active.update({"schemaVersion": "follow_up_work.v1", "status": "active", "result": "completed"})
+    assert HermesFollowUpWorkInputV1.model_validate(legacy_active).status == "active"
     rework = follow_up_payload(); rework["result"] = "rework"
-    assert HermesFollowUpWorkInputV1.model_validate(rework).result == "rework"
+    assert HermesFollowUpWorkInputV2.model_validate(rework).result == "rework"
     missing_lane = follow_up_payload(); missing_lane.pop("parentLaneRunId")
-    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(missing_lane)
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV2.model_validate(missing_lane)
     active = follow_up_payload(); active["status"] = "active"
-    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(active)
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV2.model_validate(active)
     mismatched_capacity = follow_up_payload(); mismatched_capacity["capacityState"] = "atCapacity"
-    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(mismatched_capacity)
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV2.model_validate(mismatched_capacity)
     expired = follow_up_payload(); expired["expiresAt"] = "2099-09-03T12:00:00Z"
-    with pytest.raises(ValidationError): HermesFollowUpWorkInputV1.model_validate(expired)
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV2.model_validate(expired)
+    too_long = follow_up_payload(); too_long["nextAction"] = "x" * 241
+    with pytest.raises(ValidationError): HermesFollowUpWorkInputV2.model_validate(too_long)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_append_only_trigger_rejects_sqlite_replace(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'follow-up-append-only.db'}")
+    try:
+        async with engine.begin() as connection:
+            await upgrade_database(connection)
+            await connection.execute(text("PRAGMA foreign_keys = OFF"))
+            await connection.execute(text(
+                "INSERT INTO hermes_follow_up_work (follow_up_work_id, parent_outcome_id, parent_lane_run_id, schema_version, title, summary, dedupe_key, owner, priority_rationale, capacity_state, review_at, expires_at, status, result, reason_code, evidence_refs_json, next_action, observed_at, idempotency_key, request_digest_sha256, created_at, metadata_only, raw_payload_retained) "
+                "VALUES ('follow-up:replace', 'outcome:replace', 'lane:replace', 'follow_up_work.v2', 'Follow up', 'Metadata only', 'dedupe:replace', 'owner:replace', 'Bounded rationale', 'available', '2026-09-02T12:01:00Z', '2099-09-02T12:02:00Z', 'proposed', 'allowed', 'ready', '[\"evidence:replace\"]', 'Review this proposal.', '2026-09-02T12:00:00Z', 'follow-up:replace', 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a' || 'a', '2026-09-02T12:00:00Z', 1, 0)"
+            ))
+            with pytest.raises(IntegrityError, match="append_only"):
+                await connection.execute(text("INSERT OR REPLACE INTO hermes_follow_up_work SELECT * FROM hermes_follow_up_work"))
+    finally:
+        await engine.dispose()
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():

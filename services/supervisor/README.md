@@ -25,6 +25,10 @@ For database initialization, ordered upgrades, clean-install hooks, and
 rollback/recovery constraints, see the [supervisor schema-migrations
 runbook](../../docs/workflows/supervisor-schema-migrations.md).
 
+For the local-only, metadata-only Hermes follow-up admission route, including
+its V2 binding, recovery, and secret-handling boundaries, see the [Hermes
+follow-up admissions runbook](../../docs/workflows/hermes-follow-up-admissions.md).
+
 For the default-disabled local attestation issuer, observer, and private-socket
 setup, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).
 

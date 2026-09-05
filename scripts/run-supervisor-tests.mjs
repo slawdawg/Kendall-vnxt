@@ -5,12 +5,13 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
-const dataDir = join(rootDir, ".data");
-const uvCacheDir = join(dataDir, "uv-cache");
 const DEFAULT_TIMEOUT_MS = Number(process.env.SUPERVISOR_TEST_TIMEOUT_MS || "0");
+const runTempDir = mkdtempSync(join(tmpdir(), "kendall-supervisor-tests-"));
+const dataDir = join(runTempDir, "data");
+const uvCacheDir = join(runTempDir, "uv-cache");
+const databasePath = join(dataDir, "supervisor.db");
 
 mkdirSync(uvCacheDir, { recursive: true });
-const runTempDir = mkdtempSync(join(tmpdir(), "kendall-supervisor-tests-"));
 
 const uvCommand = process.env.UV_EXE || "uv";
 const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
@@ -22,6 +23,7 @@ const spawnOptions = {
   env: {
     ...process.env,
     UV_CACHE_DIR: uvCacheDir,
+    SUPERVISOR_DATABASE_URL: `sqlite+aiosqlite:///${databasePath}`,
     TMPDIR: runTempDir,
     TMP: runTempDir,
     TEMP: runTempDir,

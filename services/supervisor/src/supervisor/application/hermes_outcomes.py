@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import HermesFollowUpWorkInputV1, HermesFollowUpWorkProjectionV1, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesFollowUpWorkInputV1, HermesFollowUpWorkInputV2, HermesFollowUpWorkProjectionV1, HermesFollowUpWorkProjectionV2, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from supervisor.infrastructure.db.models import (
     HermesDeliveryEvidence,
@@ -25,13 +25,14 @@ from supervisor.infrastructure.db.models import (
 )
 
 
-def _follow_up_digest(request: HermesFollowUpWorkInputV1) -> str:
+def _follow_up_digest(request: HermesFollowUpWorkInputV1 | HermesFollowUpWorkInputV2) -> str:
     canonical = json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _follow_up_projection(record: HermesFollowUpWork) -> HermesFollowUpWorkProjectionV1:
-    return HermesFollowUpWorkProjectionV1.model_validate({
+def _follow_up_projection(record: HermesFollowUpWork) -> HermesFollowUpWorkProjectionV1 | HermesFollowUpWorkProjectionV2:
+    projection_type = HermesFollowUpWorkProjectionV1 if record.schema_version == "follow_up_work.v1" else HermesFollowUpWorkProjectionV2
+    return projection_type.model_validate({
         "followUpWorkId": record.follow_up_work_id,
         "parentOutcomeId": record.parent_outcome_id,
         "parentLaneRunId": record.parent_lane_run_id,
@@ -59,12 +60,13 @@ def _follow_up_projection(record: HermesFollowUpWork) -> HermesFollowUpWorkProje
 
 async def record_hermes_follow_up_work(
     session: AsyncSession,
-    payload: HermesFollowUpWorkInputV1,
+    payload: HermesFollowUpWorkInputV1 | HermesFollowUpWorkInputV2,
     *,
     commit: bool = True,
-) -> HermesFollowUpWorkProjectionV1:
+) -> HermesFollowUpWorkProjectionV1 | HermesFollowUpWorkProjectionV2:
     """Append one evidence-bound proposal without mutating outcome, lane, or execution state."""
-    request = HermesFollowUpWorkInputV1.model_validate(payload.model_dump())
+    request_type = HermesFollowUpWorkInputV1 if payload.schemaVersion == "follow_up_work.v1" else HermesFollowUpWorkInputV2
+    request = request_type.model_validate(payload.model_dump())
     digest = _follow_up_digest(request)
     replay = await session.scalar(
         select(HermesFollowUpWork)
@@ -86,6 +88,8 @@ async def record_hermes_follow_up_work(
     )
     if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
         raise ValueError("Follow-up proposal must bind the current parent outcome and lane.")
+    if request.observedAt < max(outcome.updated_at, lane.updated_at):
+        raise ValueError("Follow-up proposal observation must be fresh for the current parent outcome and lane.")
     await _require_bound_evidence(session, evidence_refs=request.evidenceRefs, outcome=outcome, lane=lane)
 
     duplicate = await session.scalar(
@@ -94,6 +98,8 @@ async def record_hermes_follow_up_work(
         .with_for_update()
     )
     if duplicate is not None:
+        if duplicate.idempotency_key == request.idempotencyKey and duplicate.request_digest_sha256 == digest:
+            return _follow_up_projection(duplicate)
         raise ValueError("Follow-up dedupe key conflicts with an existing proposal.")
 
     record = HermesFollowUpWork(

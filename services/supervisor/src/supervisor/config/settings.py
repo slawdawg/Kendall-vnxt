@@ -152,7 +152,9 @@ class Settings(BaseSettings):
 
     def ensure_data_dir(self) -> None:
         if self.database_url.startswith("sqlite"):
-            Path(".data").mkdir(exist_ok=True)
+            _, _, database_path = self.database_url.partition("///")
+            if database_path and database_path != ":memory:":
+                Path(database_path).parent.mkdir(parents=True, exist_ok=True)
 
     def validate_local_dogfood_attestation_deployment(self) -> None:
         """Fail startup closed; this feature is private-UDS and local-only."""
