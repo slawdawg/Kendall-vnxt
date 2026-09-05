@@ -1025,6 +1025,7 @@ class HermesVerificationRecord(Base):
     result: Mapped[str] = mapped_column(String(32))
     target: Mapped[str] = mapped_column(String(240))
     source_fingerprint: Mapped[str] = mapped_column(String(240))
+    verified_head_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     evidence_refs_json: Mapped[list] = mapped_column(JSON)
     idempotency_key: Mapped[str] = mapped_column(String(180))
     expected_outcome_revision: Mapped[int] = mapped_column(Integer)

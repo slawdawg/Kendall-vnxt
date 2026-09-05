@@ -8220,6 +8220,7 @@ class HermesVerificationRecordInputV1(BaseModel):
     result: Literal["passed", "failed", "inconclusive"]
     target: str = Field(max_length=240)
     sourceFingerprint: str = Field(max_length=240)
+    verifiedHeadSha: str | None = Field(max_length=40)
     developerIdentity: str = Field(max_length=120)
     developerHome: str = Field(max_length=240)
     developerWorkspace: str = Field(max_length=240)
@@ -8244,6 +8245,13 @@ class HermesVerificationRecordInputV1(BaseModel):
             raise ValueError("Verification identity must be opaque.")
         return value
 
+    @field_validator("verifiedHeadSha")
+    @classmethod
+    def _verified_head(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise ValueError("Verification head must be a lowercase exact SHA.")
+        return value
+
     @field_validator("evidenceRefs")
     @classmethod
     def _refs(cls, value: list[str]) -> list[str]:
@@ -8256,7 +8264,7 @@ class HermesVerificationRecordInputV1(BaseModel):
 
     @model_validator(mode="after")
     def _binding(self):
-        if self.createdAt > self.observedAt or self.observedAt > datetime.now(timezone.utc) or len({self.developerIdentity, self.developerHome, self.developerWorkspace}) != 3:
+        if self.createdAt > self.observedAt or self.observedAt > datetime.now(timezone.utc) or len({self.developerIdentity, self.developerHome, self.developerWorkspace}) != 3 or (self.result == "passed") != (self.verifiedHeadSha is not None):
             raise ValueError("Verification has invalid timestamp or Developer binding.")
         return self
 

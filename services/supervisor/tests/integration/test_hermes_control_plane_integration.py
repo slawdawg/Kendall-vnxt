@@ -1,4 +1,5 @@
 import copy
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select, text
@@ -18,7 +19,7 @@ from supervisor.application.hermes_outcomes import (
 from supervisor.api.schemas import HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewDispositionInputV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesOutcome
+from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesOutcome, HermesRoleCapabilityBinding
 from test_hermes_control_plane import payload
 
 
@@ -121,8 +122,10 @@ async def test_hermes_ledger_migration_is_ordered_and_clean_install_aware(tmp_pa
         await upgrade_database(connection)
         revisions = tuple((await connection.execute(text(f"SELECT revision FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY revision"))).scalars())
         tables = set((await connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))).scalars())
+        verification_columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(hermes_verification_records)"))).all()}
     assert revisions == tuple(migration.revision for migration in MIGRATIONS)
     assert {"hermes_outcomes", "hermes_lane_runs", "hermes_delivery_evidence", "hermes_ledger_events"} <= tables
+    assert "verified_head_sha" in verification_columns
     await engine.dispose()
 
 
@@ -196,7 +199,7 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
     verification = {
         "verificationRecordId": "verification:one", "outcomeId": "outcome:1", "laneRunId": "lane:1",
         "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes",
-        "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:one",
+        "sourceFingerprint": "sha256:ledger-proof", "verifiedHeadSha": "a" * 40, "developerIdentity": "developer:one",
         "developerHome": "home:developer", "developerWorkspace": "workspace:developer",
         "evidenceRefs": ["evidence:1"], "observedAt": "2026-09-02T12:01:00Z",
         "idempotencyKey": "verification:one", "createdAt": "2026-09-02T12:01:00Z",
@@ -235,6 +238,10 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         verification_request = HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:developer", "developerCapabilityProof": "d" * 32})
         assert (await ingest_hermes_review_handoff(session, verification_request)).currentResult == "retryable"
         assert await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.evidence_type == "approved_review_handoff")) is None
+        mismatched_disposition = copy.deepcopy(disposition)
+        mismatched_disposition.update({"reviewDispositionId": "review:mismatched-head", "idempotencyKey": "review:mismatched-head", "reviewedHeadSha": "b" * 40})
+        with pytest.raises(ValueError, match="must exactly match the persisted passed verification head"):
+            await ingest_hermes_review_handoff(session, HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": mismatched_disposition, "reviewerCapabilityBindingId": "capability:reviewer", "reviewerCapabilityProof": "r" * 32}))
         review_request = HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:reviewer", "reviewerCapabilityProof": "r" * 32})
         approved = await ingest_hermes_review_handoff(session, review_request)
         assert approved.currentLaneRunId == "lane:1" and approved.currentResult == "completed"
@@ -263,11 +270,15 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
             "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "delivery-audit:one", "createdAt": "2026-09-02T12:02:00Z",
             "expectedOutcomeRevision": outcome.revision, "expectedLaneRevision": lane.revision, "metadataOnly": True, "rawPayloadRetained": False,
         }
-        bound_refs = ("evidence:policy-current", "evidence:verification-current", "evidence:rollback-current")
-        for reference in bound_refs:
+        bound_refs = (
+            ("evidence:policy-current", "policy"),
+            ("evidence:verification-current", "verification"),
+            ("evidence:rollback-current", "rollback"),
+        )
+        for reference, evidence_type in bound_refs:
             session.add(HermesDeliveryEvidence(
                 delivery_evidence_id=reference, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id,
-                task_id=outcome.task_id, schema_version="delivery_evidence.v1", evidence_type="verification",
+                task_id=outcome.task_id, schema_version="delivery_evidence.v1", evidence_type=evidence_type,
                 summary="Current bounded delivery evidence.", source_ref=f"test:{reference}", observed_at=snapshot.observed_at,
                 evidence_refs_json=[reference], idempotency_key=reference, created_at=snapshot.created_at,
                 metadata_only=True, raw_payload_retained=False,
@@ -275,16 +286,24 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         await session.commit()
         distinct_bound = copy.deepcopy(audit)
         distinct_bound.update({
-            "policyEvidenceRef": bound_refs[0], "localVerificationRef": bound_refs[1], "rollbackRef": bound_refs[2],
-            "evidenceRefs": [snapshot.delivery_evidence_id, *bound_refs], "idempotencyKey": "delivery-audit:distinct-bound",
+            "policyEvidenceRef": bound_refs[0][0], "localVerificationRef": bound_refs[1][0], "rollbackRef": bound_refs[2][0],
+            "evidenceRefs": [snapshot.delivery_evidence_id, *(reference for reference, _ in bound_refs)], "idempotencyKey": "delivery-audit:distinct-bound",
         })
         assert (await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(distinct_bound))).decision == "allowed"
+        wrong_role = copy.deepcopy(distinct_bound)
+        wrong_role.update({"policyEvidenceRef": bound_refs[1][0], "idempotencyKey": "delivery-audit:wrong-policy-role"})
+        with pytest.raises(ValueError, match="policy evidence has the wrong persisted role"):
+            await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(wrong_role))
+        missing_role = copy.deepcopy(distinct_bound)
+        missing_role.update({"rollbackRef": "evidence:rollback-missing", "evidenceRefs": [snapshot.delivery_evidence_id, bound_refs[0][0], bound_refs[1][0], "evidence:rollback-missing"], "idempotencyKey": "delivery-audit:missing-rollback"})
+        with pytest.raises(ValueError, match="rollback evidence is missing"):
+            await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(missing_role))
         without_snapshot = copy.deepcopy(distinct_bound)
-        without_snapshot.update({"evidenceRefs": list(bound_refs), "idempotencyKey": "delivery-audit:without-snapshot"})
+        without_snapshot.update({"evidenceRefs": [reference for reference, _ in bound_refs], "idempotencyKey": "delivery-audit:without-snapshot"})
         with pytest.raises(ValueError, match="approved-review evidence"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(without_snapshot))
         unresolved_bound = copy.deepcopy(distinct_bound)
-        unresolved_bound.update({"evidenceRefs": [snapshot.delivery_evidence_id, *bound_refs, "evidence:unresolved"], "idempotencyKey": "delivery-audit:unresolved-bound"})
+        unresolved_bound.update({"evidenceRefs": [snapshot.delivery_evidence_id, *(reference for reference, _ in bound_refs), "evidence:unresolved"], "idempotencyKey": "delivery-audit:unresolved-bound"})
         with pytest.raises(ValueError, match="Review evidence"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(unresolved_bound))
         stale = copy.deepcopy(audit); stale["idempotencyKey"] = "delivery-audit:stale"; stale["policyEvidenceRef"] = stale["localVerificationRef"] = stale["rollbackRef"] = "evidence:1"; stale["evidenceRefs"] = ["evidence:1"]
@@ -293,16 +312,16 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         cross_task = copy.deepcopy(audit); cross_task["taskId"] = "task:other-one"; cross_task["idempotencyKey"] = "delivery-audit:other-task"
         with pytest.raises(ValueError, match="current bound outcome"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(cross_task))
-        predated = copy.deepcopy(audit); predated["idempotencyKey"] = "delivery-audit:predated"; predated["createdAt"] = predated["observedAt"] = "2026-09-02T12:00:00Z"
+        predated = copy.deepcopy(distinct_bound); predated["idempotencyKey"] = "delivery-audit:predated"; predated["createdAt"] = predated["observedAt"] = "2026-09-02T12:00:00Z"
         with pytest.raises(ValueError, match="cannot predate"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(predated))
-        admitted = await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(audit))
+        admitted = await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(distinct_bound))
         assert admitted.decision == "allowed" and admitted.requestedAction == "request_review"
-        assert await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(audit)) == admitted
-        altered_replay = copy.deepcopy(audit); altered_replay["pullRequestNumber"] = 2
+        assert await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(distinct_bound)) == admitted
+        altered_replay = copy.deepcopy(distinct_bound); altered_replay["pullRequestNumber"] = 2
         with pytest.raises(ValueError, match="idempotency conflicts"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(altered_replay))
-        persisted_audit = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.idempotency_key == "delivery-audit:one"))
+        persisted_audit = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.idempotency_key == "delivery-audit:distinct-bound"))
         assert persisted_audit is not None and persisted_audit.task_id == "task:hermes-one"
         with pytest.raises(ValueError, match="profile must remain isolated"):
             await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({
@@ -316,6 +335,43 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
                 "identity": verification["developerIdentity"], "home": str(delivery_home), "workspace": str(delivery_workspace), "capabilitySecret": "z" * 32,
                 "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
             }))
+        other = copy.deepcopy(payload())
+        for section in ("outcome", "laneRun", "deliveryEvidence"):
+            other[section]["taskId"] = "task:hermes-two"  # type: ignore[index]
+        other["outcome"].update({"outcomeId": "outcome:2", "idempotencyKey": "outcome:2"})  # type: ignore[index]
+        other["laneRun"].update({"laneRunId": "lane:2", "outcomeId": "outcome:2", "idempotencyKey": "lane:2"})  # type: ignore[index]
+        other["deliveryEvidence"].update({"deliveryEvidenceId": "evidence:2", "outcomeId": "outcome:2", "laneRunId": "lane:2", "evidenceRefs": ["evidence:2"], "idempotencyKey": "evidence:2"})  # type: ignore[index]
+        other["event"].update({"eventId": "event:2", "outcomeId": "outcome:2", "laneRunId": "lane:2", "evidenceRefs": ["evidence:2"], "idempotencyKey": "event:2", "correlationId": "correlation:2", "causationId": "causation:2"})  # type: ignore[index]
+        await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(other))
+        other_developer_home, other_developer_workspace = tmp_path / "other-developer-home", tmp_path / "other-developer-workspace"
+        other_workspace_child = other_developer_workspace / "child"
+        for directory in (other_developer_home, other_developer_workspace, other_workspace_child): directory.mkdir()
+        await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({
+            "capabilityBindingId": "capability:developer-other", "taskId": "task:hermes-two", "outcomeId": "outcome:2", "laneRunId": "lane:2", "role": "developer",
+            "identity": "developer:other", "home": str(other_developer_home), "workspace": str(other_developer_workspace), "capabilitySecret": "o" * 32,
+            "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        }))
+        for binding_id, identity, home, workspace in (
+            ("capability:delivery-cross-identity", "developer:other", delivery_home, delivery_workspace),
+            ("capability:delivery-cross-home", "delivery:cross-home", other_developer_home, delivery_workspace),
+            ("capability:delivery-cross-workspace", "delivery:cross-workspace", delivery_home, other_workspace_child),
+        ):
+            with pytest.raises(ValueError, match="profile must remain isolated"):
+                await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({
+                    "capabilityBindingId": binding_id, "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "role": "delivery",
+                    "identity": identity, "home": str(home), "workspace": str(workspace), "capabilitySecret": "c" * 32,
+                    "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+                }))
+        expired = await session.get(HermesRoleCapabilityBinding, "capability:developer-other")
+        assert expired is not None
+        expired.expires_at = datetime.now(UTC)
+        await session.commit()
+        accepted_after_expiry = await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({
+            "capabilityBindingId": "capability:delivery-expired-predecessor", "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "role": "delivery",
+            "identity": "developer:other", "home": str(other_developer_home), "workspace": str(other_developer_workspace), "capabilitySecret": "e" * 32,
+            "createdAt": "2026-09-02T12:00:00Z", "expiresAt": "2099-01-01T00:00:00Z", "metadataOnly": True, "rawPayloadRetained": False,
+        }))
+        assert accepted_after_expiry.capability_binding_id == "capability:delivery-expired-predecessor"
         adjudication_payload = {
             "reviewThreadAdjudicationId": "adjudication:one", "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1",
             "reviewerIdentity": disposition["reviewerIdentity"], "reviewerHome": disposition["reviewerHome"], "reviewerWorkspace": disposition["reviewerWorkspace"],
@@ -342,9 +398,9 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         refreshed_adjudication.update({"reviewThreadAdjudicationId": "adjudication:refreshed", "reviewAuditFingerprint": "c" * 64, "observedAt": "2026-09-02T12:03:00Z", "createdAt": "2026-09-02T12:03:00Z", "idempotencyKey": "adjudication:refreshed"})
         current_adjudication = await record_hermes_review_thread_adjudication(session, HermesReviewThreadAdjudicationRequestV1.model_validate(refreshed_adjudication))
         assert current_adjudication.review_audit_fingerprint == "c" * 64
-        resolve = copy.deepcopy(audit)
+        resolve = copy.deepcopy(distinct_bound)
         resolve.update({"requestedAction": "resolve_current_thread", "reviewThreadId": adjudication.review_thread_id, "reviewThreadAdjudicationId": adjudication.review_thread_adjudication_id, "idempotencyKey": "delivery-audit:resolve"})
-        with pytest.raises(ValueError, match="freshest exact adjudication"):
+        with pytest.raises(ValueError, match="latest matching audit fingerprint"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(resolve))
         resolve.update({"reviewThreadAdjudicationId": current_adjudication.review_thread_adjudication_id, "idempotencyKey": "delivery-audit:resolve-current"})
         resolved = await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(resolve))
@@ -375,7 +431,7 @@ async def test_valid_self_review_is_persisted_as_denied_policy_but_unbound_input
     initial = payload(); initial["laneRun"]["status"] = "review"  # type: ignore[index]
     developer_home, developer_workspace, reviewer_home = tmp_path / "developer-home", tmp_path / "developer-workspace", tmp_path / "reviewer-home"
     for directory in (developer_home, developer_workspace, reviewer_home): directory.mkdir()
-    verification = {"verificationRecordId": "verification:denied", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:denied", "developerHome": str(developer_home), "developerWorkspace": str(developer_workspace), "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:denied", "createdAt": "2026-09-02T12:01:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}
+    verification = {"verificationRecordId": "verification:denied", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "verifiedHeadSha": "a" * 40, "developerIdentity": "developer:denied", "developerHome": str(developer_home), "developerWorkspace": str(developer_workspace), "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:denied", "createdAt": "2026-09-02T12:01:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}
     disposition = {"reviewDispositionId": "review:denied", "verificationRecordId": "verification:denied", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "hermes_review_disposition.v1", "disposition": "approve", "reviewerIdentity": "reviewer:denied", "reviewerHome": str(reviewer_home), "reviewerWorkspace": str(developer_workspace), "reasonCode": "reviewed", "nextAction": "Hold for delivery.", "reviewedHeadSha": "a" * 40, "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "review:denied", "createdAt": "2026-09-02T12:02:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1}
     async with sessions() as session:
         await ingest_hermes_ledger(session, HermesLedgerIngestRequest.model_validate(initial))
@@ -397,7 +453,7 @@ async def test_review_handoff_operator_unavailable_exception_is_audited_without_
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     initial = payload(); initial["laneRun"]["status"] = "review"  # type: ignore[index]
     verification = {
-        "verificationRecordId": "verification:exception", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:exception", "developerHome": "home:developer-exception", "developerWorkspace": "workspace:developer-exception", "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:exception", "createdAt": "2026-09-02T12:01:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+        "verificationRecordId": "verification:exception", "outcomeId": "outcome:1", "laneRunId": "lane:1", "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes", "sourceFingerprint": "sha256:ledger-proof", "verifiedHeadSha": "a" * 40, "developerIdentity": "developer:exception", "developerHome": "home:developer-exception", "developerWorkspace": "workspace:developer-exception", "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:exception", "createdAt": "2026-09-02T12:01:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
     }
     disposition = {
         "reviewDispositionId": "review:exception", "verificationRecordId": "verification:exception", "outcomeId": "outcome:1", "developerLaneRunId": "lane:1", "schemaVersion": "hermes_review_disposition.v1", "disposition": "technical_block", "reviewerIdentity": "reviewer:unavailable", "reviewerHome": "home:reviewer-unavailable", "reviewerWorkspace": "workspace:reviewer-unavailable", "reasonCode": "reviewer_unavailable", "nextAction": "Return the original Developer lane after an Operator-recorded technical block.", "reviewedHeadSha": None, "evidenceRefs": ["evidence:hermes-ledger-1"], "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "review:exception", "createdAt": "2026-09-02T12:02:00Z", "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
@@ -436,7 +492,7 @@ async def test_failed_verification_does_not_mint_delivery_admissible_review_evid
     verification = {
         "verificationRecordId": "verification:failed", "outcomeId": "outcome:1", "laneRunId": "lane:1",
         "schemaVersion": "hermes_verification_record.v1", "result": "failed", "target": "test:hermes",
-        "sourceFingerprint": "sha256:ledger-proof", "developerIdentity": "developer:failed",
+        "sourceFingerprint": "sha256:ledger-proof", "verifiedHeadSha": None, "developerIdentity": "developer:failed",
         "developerHome": str(developer_home), "developerWorkspace": str(developer_workspace), "evidenceRefs": ["evidence:1"],
         "observedAt": "2026-09-02T12:01:00Z", "idempotencyKey": "verification:failed", "createdAt": "2026-09-02T12:01:00Z",
         "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,

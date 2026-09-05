@@ -42,9 +42,9 @@ async def provision_hermes_role_capability(session: AsyncSession, payload: Herme
         return existing
     conflicting_roles = ["developer", "reviewer"] if payload.role == "delivery" else ["delivery"]
     other_bindings = (await session.scalars(select(HermesRoleCapabilityBinding).where(
-        HermesRoleCapabilityBinding.outcome_id == outcome.outcome_id,
-        HermesRoleCapabilityBinding.lane_run_id == lane.lane_run_id,
         HermesRoleCapabilityBinding.role.in_(conflicting_roles),
+        HermesRoleCapabilityBinding.revoked_at.is_(None),
+        HermesRoleCapabilityBinding.expires_at > datetime.now(UTC),
     ).with_for_update())).all()
     if any(
         item.identity == payload.identity
@@ -114,6 +114,12 @@ async def record_hermes_delivery_audit(session: AsyncSession, payload: HermesDel
     if outcome.result != "completed" or lane.result != "completed" or disposition is None or disposition.disposition != "approve":
         raise ValueError("Delivery audit requires persisted passed verification and independent Reviewer approval.")
     snapshot = await _require_approved_review_snapshot(session, evidence_refs=request.evidenceRefs, outcome=outcome, lane=lane, expected_head_sha=request.expectedHeadSha)
+    for reference, role in (
+        (request.policyEvidenceRef, "policy"),
+        (request.localVerificationRef, "verification"),
+        (request.rollbackRef, "rollback"),
+    ):
+        await _require_delivery_evidence_role(session, evidence_ref=reference, evidence_type=role, outcome=outcome, lane=lane)
     if request.observedAt < snapshot.observed_at:
         raise ValueError("Delivery audit observation cannot predate the approved-review evidence snapshot.")
     if request.requestedAction == "resolve_current_thread":
@@ -139,8 +145,8 @@ async def record_hermes_delivery_audit(session: AsyncSession, payload: HermesDel
             HermesReviewThreadAdjudication.created_at.desc(),
             HermesReviewThreadAdjudication.review_thread_adjudication_id.desc(),
         ).limit(1))
-        if freshest_adjudication is None or freshest_adjudication.review_thread_adjudication_id != adjudication.review_thread_adjudication_id:
-            raise ValueError("Current-thread delivery requires the freshest exact adjudication fingerprint.")
+        if freshest_adjudication is None or freshest_adjudication.review_audit_fingerprint != adjudication.review_audit_fingerprint:
+            raise ValueError("Current-thread delivery requires the latest matching audit fingerprint.")
     record_id = f"delivery-audit:{sha256(request.idempotencyKey.encode('utf-8')).hexdigest()}"
     replay_metadata = request.model_dump(mode="json", exclude={"deliveryCapabilityProof"})
     source_ref = f"hermes:delivery-adapter:{sha256(json.dumps(replay_metadata, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()}"
@@ -467,6 +473,25 @@ async def _require_approved_review_snapshot(session: AsyncSession, *, evidence_r
     return max((item for item in current if item.delivery_evidence_id in snapshot_refs), key=lambda item: item.observed_at)
 
 
+async def _require_delivery_evidence_role(session: AsyncSession, *, evidence_ref: str, evidence_type: str, outcome: HermesOutcome, lane: HermesLaneRun) -> HermesDeliveryEvidence:
+    """Require one direct, current metadata-only evidence record for a delivery role."""
+    evidence = await session.get(HermesDeliveryEvidence, evidence_ref)
+    if evidence is None:
+        raise ValueError(f"Delivery {evidence_type} evidence is missing.")
+    if (
+        evidence.task_id != outcome.task_id
+        or evidence.outcome_id != outcome.outcome_id
+        or evidence.lane_run_id != lane.lane_run_id
+        or evidence.metadata_only is not True
+        or evidence.raw_payload_retained is not False
+        or evidence.observed_at < max(outcome.updated_at, lane.updated_at)
+    ):
+        raise ValueError(f"Delivery {evidence_type} evidence is not current for the bound task and lane.")
+    if evidence.evidence_type != evidence_type:
+        raise ValueError(f"Delivery {evidence_type} evidence has the wrong persisted role.")
+    return evidence
+
+
 def _canonical_profile_path(value: str) -> str:
     path = Path(value)
     if not path.is_absolute():
@@ -511,12 +536,12 @@ async def _require_persisted_capability(session: AsyncSession, *, binding_id: st
 def _same_verification(record: HermesVerificationRecord, value) -> bool:
     return (
         record.verification_record_id, record.outcome_id, record.lane_run_id, record.schema_version,
-        record.result, record.target, record.source_fingerprint, record.developer_identity,
+        record.result, record.target, record.source_fingerprint, record.verified_head_sha, record.developer_identity,
         record.developer_home, record.developer_workspace, record.evidence_refs_json,
         record.idempotency_key, record.expected_outcome_revision, record.expected_lane_revision, record.observed_at, record.created_at,
     ) == (
         value.verificationRecordId, value.outcomeId, value.laneRunId, value.schemaVersion,
-        value.result, value.target, value.sourceFingerprint, value.developerIdentity,
+        value.result, value.target, value.sourceFingerprint, value.verifiedHeadSha, value.developerIdentity,
         value.developerHome, value.developerWorkspace, value.evidenceRefs,
         value.idempotencyKey, value.expectedOutcomeRevision, value.expectedLaneRevision, value.observedAt, value.createdAt,
     )
@@ -616,7 +641,7 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
             verification_record_id=verification.verificationRecordId, outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId,
             schema_version=verification.schemaVersion, developer_identity=verification.developerIdentity, developer_home=verification.developerHome,
             developer_workspace=verification.developerWorkspace, developer_capability_binding_id=request.developerCapabilityBindingId,
-            result=verification.result, target=verification.target, source_fingerprint=verification.sourceFingerprint,
+            result=verification.result, target=verification.target, source_fingerprint=verification.sourceFingerprint, verified_head_sha=verification.verifiedHeadSha,
             evidence_refs_json=verification.evidenceRefs, idempotency_key=verification.idempotencyKey,
             expected_outcome_revision=verification.expectedOutcomeRevision, expected_lane_revision=verification.expectedLaneRevision,
             observed_at=verification.observedAt, created_at=verification.createdAt, metadata_only=True, raw_payload_retained=False,
@@ -672,6 +697,8 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
         record = await session.get(HermesVerificationRecord, verification.verificationRecordId)
         if record is None or not _same_verification(record, verification) or record.result != "passed":
             raise ValueError("Reviewer disposition requires a previously recorded passed verification.")
+        if disposition.disposition == "approve" and disposition.reviewedHeadSha != record.verified_head_sha:
+            raise ValueError("Reviewer approval head must exactly match the persisted passed verification head.")
         if record.developer_capability_binding_id == reviewer_binding_id or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Independent review binding or verification fingerprint is stale.")
         await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)

@@ -72,7 +72,7 @@ def test_review_handoff_rejects_secret_shaped_capability_binding_references():
     verification = {
         "verificationRecordId": "verification:one", "outcomeId": "outcome:one", "laneRunId": "lane:one",
         "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes",
-        "sourceFingerprint": "sha256:proof", "developerIdentity": "developer:one",
+        "sourceFingerprint": "sha256:proof", "verifiedHeadSha": "a" * 40, "developerIdentity": "developer:one",
         "developerHome": "home:developer", "developerWorkspace": "workspace:developer",
         "evidenceRefs": ["evidence:one"], "observedAt": "2026-09-04T00:01:00Z",
         "idempotencyKey": "verification:one", "createdAt": "2026-09-04T00:01:00Z",

@@ -226,6 +226,20 @@ async def _apply_hermes_reviewed_head_binding(connection: AsyncConnection) -> No
         if "reviewed_head_sha" not in columns:
             await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN reviewed_head_sha VARCHAR(40)"))
 
+
+async def _apply_hermes_verified_head_binding(connection: AsyncConnection) -> None:
+    """Add nullable verified-head metadata without inventing legacy verification identity."""
+    if connection.dialect.name not in {"postgresql", "sqlite"}:
+        raise RuntimeError("Hermes verified-head migration supports PostgreSQL and SQLite only.")
+    table_names = await connection.run_sync(lambda sync_connection: set(inspect(sync_connection).get_table_names()))
+    if "hermes_verification_records" not in table_names:
+        return
+    columns = await connection.run_sync(
+        lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_verification_records")}
+    )
+    if "verified_head_sha" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN verified_head_sha VARCHAR(40)"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -265,6 +279,7 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0010_hermes_task_binding", _apply_hermes_task_binding),
     SchemaMigration("0011_hermes_review_thread_adjudication", _apply_hermes_review_thread_adjudication, clean_install=_apply_hermes_review_thread_adjudication),
     SchemaMigration("0012_hermes_reviewed_head_binding", _apply_hermes_reviewed_head_binding, clean_install=_apply_hermes_reviewed_head_binding),
+    SchemaMigration("0013_hermes_verified_head_binding", _apply_hermes_verified_head_binding, clean_install=_apply_hermes_verified_head_binding),
 )
 
 

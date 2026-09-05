@@ -216,6 +216,7 @@ export interface VerificationRecordV1 {
   readonly result: "passed" | "failed" | "inconclusive";
   readonly target: string;
   readonly sourceFingerprint: string;
+  readonly verifiedHeadSha: string | null;
   readonly developerIdentity: string;
   readonly developerHome: string;
   readonly developerWorkspace: string;

@@ -128,10 +128,13 @@ test("Hermes guards are strict, closed, and fail closed", async () => {
 test("Hermes review approvals require an exact reviewed head", async () => {
   const review = await readFile(new URL("review.ts", hermesRoot), "utf8");
   const types = await readFile(new URL("types.ts", hermesRoot), "utf8");
+  assert.match(review, /"verifiedHeadSha"/);
+  assert.match(review, /value\.result === "passed"/);
   assert.match(review, /"reviewedHeadSha"/);
   assert.match(review, /value\.disposition === "approve"/);
   assert.match(review, /\^\[0-9a-f\]\{40\}\$/);
   assert.match(types, /readonly reviewedHeadSha: string \| null/);
+  assert.match(types, /readonly verifiedHeadSha: string \| null/);
 });
 
 test("compiled Hermes guards accept valid V1 records and reject unsafe forms", async (t) => {
