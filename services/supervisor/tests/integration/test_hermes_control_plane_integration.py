@@ -181,7 +181,9 @@ async def test_cited_sources_are_metadata_only_idempotent_correctable_and_fail_c
         revoked = await record_hermes_cited_source(session, cited_source("source:revoked"))
         assert revoked.state == "current"
         revoke = HermesCitedSourceRevocationRequestV1.model_validate({"sourceRecordId": "source:revoked", "revokedAt": "2026-09-02T12:02:00Z", "reasonCode": "source_retracted", "idempotencyKey": "revoke:source-revoked", "metadataOnly": True, "rawPayloadRetained": False})
-        assert (await revoke_hermes_cited_source(session, revoke)).state == "revoked"
+        revoked_projection = await revoke_hermes_cited_source(session, revoke)
+        assert revoked_projection.state == "revoked"
+        assert revoked_projection.revokedAt == revoke.revokedAt and revoked_projection.revocationReason == revoke.reasonCode
         assert (await revoke_hermes_cited_source(session, revoke)).state == "revoked"
         another = await record_hermes_cited_source(session, cited_source("source:another"))
         assert another.state == "current"

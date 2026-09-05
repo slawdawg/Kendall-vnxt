@@ -217,6 +217,9 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(contracts.isHermesCitedSourceRecordV1(citedSource), true);
     assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, fingerprint: "0".repeat(64) }), true);
+    assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, sourceRecordId: `source:${"a".repeat(114)}` }), false, "cited source ID uses the API's 120-character bound");
+    assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, locator: "docs/secret" }), false, "cited source locator rejects secret-shaped metadata");
+    assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, locator: `docs/${"a".repeat(296)}` }), false, "cited source locator uses the API's 300-character bound");
     assert.equal(contracts.isHermesCitedSourceConfirmationReceiptV1(confirmationReceipt), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);

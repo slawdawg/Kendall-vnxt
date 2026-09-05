@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesCitedSourceRecordRequestV1, HermesCitedSourceRevocationRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesCitedSourceRecordRequestV1, HermesCitedSourceRevocationRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1, HermesVerificationRecordInputV1
 
 
 def payload() -> dict[str, object]:
@@ -80,6 +80,18 @@ def test_cited_source_request_is_strict_local_metadata_only_and_non_authoritativ
             HermesCitedSourceRecordRequestV1.model_validate({**value.model_dump(mode="json"), **changed})
     with pytest.raises(ValidationError, match="future"):
         HermesCitedSourceRevocationRequestV1.model_validate({"sourceRecordId": "source:one", "revokedAt": "2099-01-01T00:00:00Z", "reasonCode": "source_retracted", "idempotencyKey": "revoke:one", "metadataOnly": True, "rawPayloadRetained": False})
+
+
+def test_legacy_v1_verification_can_be_parsed_for_idempotent_replay_only():
+    legacy = HermesVerificationRecordInputV1.model_validate({
+        "verificationRecordId": "verification:legacy", "outcomeId": "outcome:one", "laneRunId": "lane:one",
+        "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:legacy",
+        "sourceFingerprint": "sha256:legacy", "developerIdentity": "developer:legacy",
+        "developerHome": "home:legacy", "developerWorkspace": "workspace:legacy", "evidenceRefs": ["evidence:legacy"],
+        "observedAt": "2026-09-04T00:00:00Z", "idempotencyKey": "verification:legacy", "createdAt": "2026-09-04T00:00:00Z",
+        "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    })
+    assert legacy.citedSourceRecordIds == []
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():

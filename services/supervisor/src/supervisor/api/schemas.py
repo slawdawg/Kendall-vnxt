@@ -8376,7 +8376,7 @@ class HermesVerificationRecordInputV1(BaseModel):
     developerHome: str = Field(max_length=240)
     developerWorkspace: str = Field(max_length=240)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32)
-    citedSourceRecordIds: list[str] = Field(min_length=1, max_length=16)
+    citedSourceRecordIds: list[str] = Field(default_factory=list, max_length=16)
     observedAt: datetime
     idempotencyKey: str = Field(max_length=180)
     createdAt: datetime
@@ -8437,7 +8437,7 @@ class HermesReviewDispositionInputV1(BaseModel):
     reasonCode: str = Field(max_length=120)
     nextAction: str = Field(max_length=360)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32)
-    citedSourceRecordIds: list[str] = Field(min_length=1, max_length=16)
+    citedSourceRecordIds: list[str] = Field(default_factory=list, max_length=16)
     observedAt: datetime
     idempotencyKey: str = Field(max_length=180)
     createdAt: datetime
@@ -8673,6 +8673,8 @@ class HermesCitedSourceProjectionV1(BaseModel):
     expiresAt: datetime
     supersedesSourceRecordId: str | None
     state: Literal["current", "stale", "revoked", "superseded"]
+    revokedAt: datetime | None
+    revocationReason: str | None
     metadataOnly: Literal[True]
     rawPayloadRetained: Literal[False]
 

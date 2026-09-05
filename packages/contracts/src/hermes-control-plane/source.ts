@@ -5,7 +5,7 @@ const FIELDS = ["sourceRecordId", "outcomeId", "laneRunId", "schemaVersion", "so
 const RECEIPT_FIELDS = ["receiptId", "consumerType", "consumerId", "outcomeId", "laneRunId", "citedSourceRecordIds", "sourceSetFingerprintSha256", "expectedOutcomeRevision", "expectedLaneRevision", "confirmedAt", "metadataOnly", "rawPayloadRetained"] as const;
 
 function isAllowlistedLocator(value: unknown): boolean {
-  return typeof value === "string" && !value.includes("..") && /^(?:docs\/[a-z0-9][a-z0-9._/#-]*|delivery-evidence:[a-z0-9][a-z0-9:_-]*)$/i.test(value);
+  return isSafeText(value, 300) && !value.includes("..") && /^(?:docs\/[a-z0-9][a-z0-9._/#-]*|delivery-evidence:[a-z0-9][a-z0-9:_-]*)$/i.test(value);
 }
 
 export function isHermesCitedSourceRecordV1(value: unknown): value is HermesCitedSourceRecordV1 {

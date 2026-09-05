@@ -218,7 +218,8 @@ export interface VerificationRecordV1 {
   readonly developerHome: string;
   readonly developerWorkspace: string;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];
-  readonly citedSourceRecordIds: readonly import("./ids").HermesCitedSourceRecordId[];
+  /** Absent only on a persisted pre-Project-Brain V1 replay. New source claims require citations. */
+  readonly citedSourceRecordIds?: readonly import("./ids").HermesCitedSourceRecordId[];
   readonly observedAt: string;
   readonly idempotencyKey: HermesIdempotencyKey;
   readonly createdAt: string;
@@ -241,7 +242,8 @@ export interface ReviewDispositionV1 {
   readonly reasonCode: string;
   readonly nextAction: string;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];
-  readonly citedSourceRecordIds: readonly import("./ids").HermesCitedSourceRecordId[];
+  /** Absent only on a persisted pre-Project-Brain V1 replay. New source claims require citations. */
+  readonly citedSourceRecordIds?: readonly import("./ids").HermesCitedSourceRecordId[];
   readonly observedAt: string;
   readonly idempotencyKey: HermesIdempotencyKey;
   readonly createdAt: string;

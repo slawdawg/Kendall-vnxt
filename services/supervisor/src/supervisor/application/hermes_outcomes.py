@@ -92,6 +92,7 @@ def _cited_source_projection(record: HermesCitedSourceRecord, state: str) -> Her
         "citationRefs": record.citation_refs_json, "accessScope": record.access_scope, "confidence": record.confidence,
         "observedAt": record.observed_at, "reviewAt": record.review_at, "expiresAt": record.expires_at,
         "supersedesSourceRecordId": record.supersedes_source_record_id, "state": state,
+        "revokedAt": record.revoked_at, "revocationReason": record.revocation_reason,
         "metadataOnly": True, "rawPayloadRetained": False,
     })
 
@@ -451,7 +452,14 @@ async def read_hermes_lane_run(session: AsyncSession, lane_run_id: str) -> Herme
 
 
 def _handoff_digest(request: HermesReviewHandoffRequest) -> str:
-    return sha256(json.dumps(request.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    payload = request.model_dump(mode="json", by_alias=True)
+    # Story 5.2 added citations after V1 had already been persisted. Omit only
+    # an empty default while deriving an old V1 replay digest; new handoffs are
+    # rejected before persistence unless they carry current cited sources.
+    for key in ("verification", "disposition"):
+        if isinstance(payload.get(key), dict) and payload[key].get("citedSourceRecordIds") == []:
+            payload[key].pop("citedSourceRecordIds")
+    return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _emitted_at(observed_at: datetime) -> datetime:
@@ -541,11 +549,12 @@ async def _replay_verification(session: AsyncSession, value) -> HermesOutcomePro
     lane = await _current_lane(session, outcome)
     if lane is None:
         raise ValueError("Persisted verification record lacks its current ledger lane.")
-    await _require_cited_source_confirmation_receipt(
-        session, consumer_type="verification", consumer_id=existing.verification_record_id,
-        source_record_ids=existing.cited_source_record_ids_json, outcome_id=existing.outcome_id, lane_run_id=existing.lane_run_id,
-        expected_outcome_revision=existing.expected_outcome_revision, expected_lane_revision=existing.expected_lane_revision,
-    )
+    if existing.cited_source_record_ids_json:
+        await _require_cited_source_confirmation_receipt(
+            session, consumer_type="verification", consumer_id=existing.verification_record_id,
+            source_record_ids=existing.cited_source_record_ids_json, outcome_id=existing.outcome_id, lane_run_id=existing.lane_run_id,
+            expected_outcome_revision=existing.expected_outcome_revision, expected_lane_revision=existing.expected_lane_revision,
+        )
     return _projection(outcome, lane, await _latest_evidence(session, lane))
 
 
@@ -564,12 +573,13 @@ async def _replay_disposition(session: AsyncSession, disposition, digest: str) -
     verification = await session.get(HermesVerificationRecord, prior.verification_record_id)
     if verification is None:
         raise ValueError("Persisted review disposition lacks its verification record.")
-    await _require_cited_source_confirmation_receipt(
-        session, consumer_type="review", consumer_id=prior.review_disposition_id,
-        source_record_ids=[*verification.cited_source_record_ids_json, *prior.cited_source_record_ids_json],
-        outcome_id=prior.outcome_id, lane_run_id=prior.developer_lane_run_id,
-        expected_outcome_revision=prior.expected_outcome_revision, expected_lane_revision=prior.expected_lane_revision,
-    )
+    source_ids = [*verification.cited_source_record_ids_json, *prior.cited_source_record_ids_json]
+    if source_ids:
+        await _require_cited_source_confirmation_receipt(
+            session, consumer_type="review", consumer_id=prior.review_disposition_id,
+            source_record_ids=source_ids, outcome_id=prior.outcome_id, lane_run_id=prior.developer_lane_run_id,
+            expected_outcome_revision=prior.expected_outcome_revision, expected_lane_revision=prior.expected_lane_revision,
+        )
     return _projection(outcome, lane, await _latest_evidence(session, lane))
 
 
@@ -617,6 +627,8 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
         replay = await _replay_verification(session, verification)
         if replay is not None:
             return replay
+        if not verification.citedSourceRecordIds:
+            raise ValueError("Legacy source-less verification is replay-only; new verification requires cited sources.")
         outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
         lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
         if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
@@ -673,6 +685,8 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
         replay = await _replay_disposition(session, disposition, digest)
         if replay is not None:
             return replay
+        if not verification.citedSourceRecordIds or not disposition.citedSourceRecordIds:
+            raise ValueError("Legacy source-less review is replay-only; new review requires cited sources.")
         outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == verification.outcomeId).with_for_update())
         lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == verification.laneRunId).with_for_update())
         if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id or outcome.status != "active" or lane.status != "review":
