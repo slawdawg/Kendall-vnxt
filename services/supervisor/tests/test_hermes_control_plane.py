@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesCitedSourceRecordRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesCitedSourceRecordRequestV1, HermesCitedSourceRevocationRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -65,6 +65,7 @@ def test_cited_source_request_is_strict_local_metadata_only_and_non_authoritativ
         "metadataOnly": True, "rawPayloadRetained": False,
     })
     assert value.sourceKind == "source_owned_document"
+    assert HermesCitedSourceRecordRequestV1.model_validate({**value.model_dump(mode="json"), "fingerprint": "0" * 64}).fingerprint == "0" * 64
     for changed in (
         {"locator": "https://external.example/context"},
         {"locator": "docs/../secret"},
@@ -77,6 +78,8 @@ def test_cited_source_request_is_strict_local_metadata_only_and_non_authoritativ
     ):
         with pytest.raises(ValidationError):
             HermesCitedSourceRecordRequestV1.model_validate({**value.model_dump(mode="json"), **changed})
+    with pytest.raises(ValidationError, match="future"):
+        HermesCitedSourceRevocationRequestV1.model_validate({"sourceRecordId": "source:one", "revokedAt": "2099-01-01T00:00:00Z", "reasonCode": "source_retracted", "idempotencyKey": "revoke:one", "metadataOnly": True, "rawPayloadRetained": False})
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():

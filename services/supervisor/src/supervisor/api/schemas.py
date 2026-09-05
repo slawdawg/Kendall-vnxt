@@ -8233,7 +8233,7 @@ class HermesCitedSourceRecordRequestV1(BaseModel):
     metadataOnly: Literal[True]
     rawPayloadRetained: Literal[False]
 
-    @field_validator("sourceRecordId", "outcomeId", "laneRunId", "fingerprint", "idempotencyKey", "supersedesSourceRecordId")
+    @field_validator("sourceRecordId", "outcomeId", "laneRunId", "idempotencyKey", "supersedesSourceRecordId")
     @classmethod
     def _opaque(cls, value: str | None, info) -> str | None:
         if value is None:
@@ -8242,6 +8242,13 @@ class HermesCitedSourceRecordRequestV1(BaseModel):
         if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
             raise ValueError("Cited source identity must be opaque.")
         return value
+
+    @field_validator("fingerprint")
+    @classmethod
+    def _fingerprint(cls, value: str) -> str:
+        if re.fullmatch(r"(?:sha256:)?[a-f0-9]{64}", value):
+            return value
+        return _validate_hermes_text(value, "fingerprint", 240)
 
     @field_validator("locator")
     @classmethod
@@ -8301,6 +8308,12 @@ class HermesCitedSourceRevocationRequestV1(BaseModel):
     @classmethod
     def _time(cls, value: object, info) -> datetime:
         return _parse_hermes_timestamp(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _timing(self):
+        if self.revokedAt > datetime.now(timezone.utc):
+            raise ValueError("Cited source revocation cannot be in the future.")
+        return self
 
 
 class HermesCitedSourceConfirmationReceiptV1(BaseModel):

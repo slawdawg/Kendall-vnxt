@@ -192,6 +192,10 @@ async def test_cited_sources_are_metadata_only_idempotent_correctable_and_fail_c
             await record_hermes_cited_source(session, cited_source("source:wrong-revision").model_copy(update={"expectedOutcomeRevision": 2}))
         listed = await list_hermes_cited_sources(session, outcome_id="outcome:1", lane_run_id="lane:1", limit=2)
         assert len(listed) == 2 and all(item.metadataOnly and item.rawPayloadRetained is False for item in listed)
+        await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"reason_code": "source_revision_advanced"})
+        await session.commit()
+        stale = await read_hermes_cited_source(session, "source:another", outcome_id="outcome:1", lane_run_id="lane:1")
+        assert stale is not None and stale.state == "stale"
     await engine.dispose()
 
 

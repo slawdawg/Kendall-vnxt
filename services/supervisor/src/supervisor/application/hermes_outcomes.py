@@ -75,6 +75,10 @@ async def _cited_source_state(session: AsyncSession, record: HermesCitedSourceRe
     replacement = await session.scalar(select(HermesCitedSourceRecord.source_record_id).where(HermesCitedSourceRecord.supersedes_source_record_id == record.source_record_id).limit(1))
     if replacement is not None:
         return "superseded"
+    outcome = await session.get(HermesOutcome, record.outcome_id)
+    lane = await session.get(HermesLaneRun, record.lane_run_id)
+    if outcome is None or lane is None or (outcome.revision, lane.revision) != (record.expected_outcome_revision, record.expected_lane_revision):
+        return "stale"
     current = now or datetime.now(UTC)
     if record.review_at <= current or record.expires_at <= current:
         return "stale"
@@ -112,7 +116,7 @@ async def record_hermes_cited_source(session: AsyncSession, payload: HermesCited
     if request.sourceKind == "validated_delivery_evidence":
         evidence_id = request.locator.removeprefix("delivery-evidence:")
         evidence = await session.get(HermesDeliveryEvidence, evidence_id)
-        if evidence is None or (evidence.outcome_id, evidence.lane_run_id) != (outcome.outcome_id, lane.lane_run_id) or not set(request.citationRefs) <= {evidence.delivery_evidence_id, *evidence.evidence_refs_json}:
+        if evidence is None or (evidence.outcome_id, evidence.lane_run_id) != (outcome.outcome_id, lane.lane_run_id) or evidence.observed_at < max(outcome.updated_at, lane.updated_at) or not set(request.citationRefs) <= {evidence.delivery_evidence_id, *evidence.evidence_refs_json}:
             raise ValueError("Validated delivery evidence must resolve to current same-lineage persisted evidence.")
     if request.supersedesSourceRecordId is not None:
         superseded = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.source_record_id == request.supersedesSourceRecordId).with_for_update())
@@ -158,8 +162,15 @@ async def revoke_hermes_cited_source(session: AsyncSession, payload: HermesCited
             raise ValueError("Cited source revocation conflicts with persisted metadata.")
         return _cited_source_projection(record, "revoked")
     record.revoked_at, record.revocation_reason, record.revocation_idempotency_key = payload.revokedAt, payload.reasonCode, payload.idempotencyKey
-    await session.commit()
-    await session.refresh(record)
+    try:
+        await session.commit()
+        await session.refresh(record)
+    except IntegrityError as exc:
+        await session.rollback()
+        replay = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.revocation_idempotency_key == payload.idempotencyKey))
+        if replay is not None and (replay.source_record_id, replay.revoked_at, replay.revocation_reason) == (payload.sourceRecordId, payload.revokedAt, payload.reasonCode):
+            return _cited_source_projection(replay, "revoked")
+        raise ValueError("Cited source revocation idempotency key conflicts with persisted metadata.") from exc
     return _cited_source_projection(record, "revoked")
 
 
@@ -181,7 +192,7 @@ async def list_hermes_cited_sources(session: AsyncSession, *, outcome_id: str, l
 async def _require_current_cited_sources(session: AsyncSession, *, source_record_ids: list[str], outcome: HermesOutcome, lane: HermesLaneRun, scope: str, confirmed_at: datetime | None = None) -> None:
     if not source_record_ids:
         raise ValueError("Source confirmation is unavailable.")
-    records = (await session.scalars(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.source_record_id.in_(source_record_ids)))).all()
+    records = (await session.scalars(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.source_record_id.in_(source_record_ids)).with_for_update())).all()
     if len(records) != len(source_record_ids):
         raise ValueError("Source confirmation is unavailable.")
     for record in records:

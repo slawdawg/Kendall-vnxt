@@ -216,6 +216,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesLifecycleEventV1(event), true);
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(contracts.isHermesCitedSourceRecordV1(citedSource), true);
+    assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, fingerprint: "0".repeat(64) }), true);
     assert.equal(contracts.isHermesCitedSourceConfirmationReceiptV1(confirmationReceipt), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
@@ -282,6 +283,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["cited source raw field", { ...citedSource, rawPayload: "forbidden" }, contracts.isHermesCitedSourceRecordV1],
       ["cited source unsafe fingerprint", { ...citedSource, fingerprint: "api key=do-not-retain" }, contracts.isHermesCitedSourceRecordV1],
       ["cited source chronology", { ...citedSource, reviewAt: "2026-08-27T23:00:00Z" }, contracts.isHermesCitedSourceRecordV1],
+      ["cited source self-supersession", { ...citedSource, supersedesSourceRecordId: citedSource.sourceRecordId }, contracts.isHermesCitedSourceRecordV1],
     ];
     for (const [label, value, guard] of invalidCases) assert.equal(guard(value), false, label);
     assert.equal(contracts.isExternalImpactRequestV1({ ...impact, createdAt: "2020-01-01T00:00:00Z", expiresAt: "2020-01-02T00:00:00Z" }), true);
