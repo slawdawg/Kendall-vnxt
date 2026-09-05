@@ -123,6 +123,54 @@ async def _apply_hermes_review_handoff(connection: AsyncConnection) -> None:
         )
     )
 
+
+async def _apply_hermes_cited_sources(connection: AsyncConnection) -> None:
+    from supervisor.infrastructure.db.models import HermesCitedSourceRecord
+
+    await connection.run_sync(
+        lambda sync_connection: HermesCitedSourceRecord.metadata.create_all(
+            sync_connection, tables=[HermesCitedSourceRecord.__table__]
+        )
+    )
+    await connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_hermes_cited_source_single_replacement ON hermes_cited_source_records(supersedes_source_record_id) WHERE supersedes_source_record_id IS NOT NULL"))
+    await connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_hermes_cited_source_revocation_idempotency ON hermes_cited_source_records(revocation_idempotency_key) WHERE revocation_idempotency_key IS NOT NULL"))
+
+
+async def _apply_hermes_source_confirmation_columns(connection: AsyncConnection) -> None:
+    for table_name in ("hermes_verification_records", "hermes_review_dispositions"):
+        columns = await connection.run_sync(
+            lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns(table_name)}
+        )
+        if "cited_source_record_ids_json" not in columns:
+            default = "'[]'" if connection.dialect.name == "sqlite" else "'[]'::json"
+            await connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN cited_source_record_ids_json JSON NOT NULL DEFAULT {default}"))
+
+
+async def _apply_hermes_cited_source_revision_fence(connection: AsyncConnection) -> None:
+    """Add fail-closed revision and revocation replay fences to earlier local records."""
+
+    columns = await connection.run_sync(
+        lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_cited_source_records")}
+    )
+    if "expected_outcome_revision" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_cited_source_records ADD COLUMN expected_outcome_revision INTEGER NOT NULL DEFAULT 0"))
+    if "expected_lane_revision" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_cited_source_records ADD COLUMN expected_lane_revision INTEGER NOT NULL DEFAULT 0"))
+    if "revocation_idempotency_key" not in columns:
+        await connection.execute(text("ALTER TABLE hermes_cited_source_records ADD COLUMN revocation_idempotency_key VARCHAR(180)"))
+    await connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_hermes_cited_source_single_replacement ON hermes_cited_source_records(supersedes_source_record_id) WHERE supersedes_source_record_id IS NOT NULL"))
+    await connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_hermes_cited_source_revocation_idempotency ON hermes_cited_source_records(revocation_idempotency_key) WHERE revocation_idempotency_key IS NOT NULL"))
+
+
+async def _apply_hermes_cited_source_confirmation_receipts(connection: AsyncConnection) -> None:
+    from supervisor.infrastructure.db.models import HermesCitedSourceConfirmationReceipt
+
+    await connection.run_sync(
+        lambda sync_connection: HermesCitedSourceConfirmationReceipt.metadata.create_all(
+            sync_connection, tables=[HermesCitedSourceConfirmationReceipt.__table__]
+        )
+    )
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -158,6 +206,10 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         clean_install=_apply_hermes_board_bridge,
     ),
     SchemaMigration("0008_hermes_review_handoff", _apply_hermes_review_handoff, clean_install=_apply_hermes_review_handoff),
+    SchemaMigration("0009_hermes_cited_sources", _apply_hermes_cited_sources, clean_install=_apply_hermes_cited_sources),
+    SchemaMigration("0010_hermes_source_confirmation_columns", _apply_hermes_source_confirmation_columns, clean_install=_apply_hermes_source_confirmation_columns),
+    SchemaMigration("0011_hermes_cited_source_revision_fence", _apply_hermes_cited_source_revision_fence, clean_install=_apply_hermes_cited_source_revision_fence),
+    SchemaMigration("0012_hermes_cited_source_confirmation_receipts", _apply_hermes_cited_source_confirmation_receipts, clean_install=_apply_hermes_cited_source_confirmation_receipts),
 )
 
 

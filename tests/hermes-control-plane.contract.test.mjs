@@ -9,7 +9,7 @@ import test from "node:test";
 const contractsRoot = new URL("../packages/contracts/src/", import.meta.url);
 const hermesRoot = new URL("../packages/contracts/src/hermes-control-plane/", import.meta.url);
 
-const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "schema-json.ts"];
+const modules = ["index.ts", "ids.ts", "types.ts", "outcome.ts", "evidence.ts", "policy.ts", "events.ts", "review.ts", "source.ts", "schema-json.ts"];
 const contractNames = [
   "HermesOutcomeV1",
   "HermesLaneRunV1",
@@ -19,6 +19,7 @@ const contractNames = [
   "FollowUpWorkV1",
   "HermesLifecycleEventV1",
   "HermesBoardLifecycleEventV1",
+  "HermesCitedSourceRecordV1",
 ];
 const resultValues = ["allowed", "deniedPolicy", "deniedExternalImpact", "staleFacts", "retryable", "rework", "blockedTechnical", "completed"];
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -139,7 +140,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     for (const guardName of [
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
       "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
-      "isHermesBoardLifecycleEventV1",
+      "isHermesBoardLifecycleEventV1", "isHermesCitedSourceRecordV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
     const later = "2026-08-28T01:00:00Z";
@@ -191,6 +192,21 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       correlationId: "correlation:board-one", causationId: "causation:board-one", observedAt,
       emittedAt: later, expiresAt: "2026-08-28T02:00:00Z", signatureB64: "AA==", authoritative: false,
     };
+    const citedSource = {
+      sourceRecordId: "source:one", outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      schemaVersion: contracts.HERMES_CITED_SOURCE_RECORD_SCHEMA_VERSION, sourceKind: "source_owned_document",
+      locator: "docs/workflows/hermes-autonomous-delivery.md", fingerprint: "sha256:cited-source", citationRefs: refs,
+      accessScope: "verification_and_review", confidence: "high", observedAt, reviewAt: later,
+      expiresAt: "2026-08-28T02:00:00Z", supersedesSourceRecordId: null, idempotencyKey: "idempotency:source-one",
+      expectedOutcomeRevision: 1, expectedLaneRevision: 1,
+      metadataOnly: true, rawPayloadRetained: false,
+    };
+    const confirmationReceipt = {
+      receiptId: "source-confirmation:verification-one", consumerType: "verification", consumerId: "verification:one",
+      outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId, citedSourceRecordIds: [citedSource.sourceRecordId],
+      sourceSetFingerprintSha256: `sha256:${"a".repeat(64)}`, expectedOutcomeRevision: 1, expectedLaneRevision: 1,
+      confirmedAt: observedAt, metadataOnly: true, rawPayloadRetained: false,
+    };
     assert.equal(contracts.isHermesOutcomeV1(outcome), true);
     assert.equal(contracts.isHermesLaneRunV1(laneRun), true);
     assert.equal(contracts.isDeliveryEvidenceV1(evidence), true);
@@ -199,6 +215,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isFollowUpWorkV1(followUp), true);
     assert.equal(contracts.isHermesLifecycleEventV1(event), true);
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
+    assert.equal(contracts.isHermesCitedSourceRecordV1(citedSource), true);
+    assert.equal(contracts.isHermesCitedSourceConfirmationReceiptV1(confirmationReceipt), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT), true);
@@ -213,6 +231,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       contracts.followUpWorkV1Fields,
       contracts.hermesLifecycleEventV1Fields,
       contracts.hermesBoardLifecycleEventV1Fields,
+      contracts.hermesCitedSourceRecordV1Fields,
+      contracts.hermesCitedSourceConfirmationReceiptV1Fields,
     ]) assert.equal(Object.isFrozen(fieldMetadata), true);
     for (const name of contractNames) {
       assert.equal(contracts.HERMES_REQUIRED_FIELDS_BY_CONTRACT[name].length, contracts.HERMES_SERIALIZED_FIELDS_BY_CONTRACT[name].length);
@@ -231,6 +251,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["malformed timestamp", { ...outcome, observedAt: "2026-02-30T00:00:00Z" }, contracts.isHermesOutcomeV1],
       ["missing evidence", { ...outcome, evidenceRefs: [] }, contracts.isHermesOutcomeV1],
       ["invalid idempotency", { ...outcome, idempotencyKey: "" }, contracts.isHermesOutcomeV1],
+      ["unsafe confirmation receipt", { ...confirmationReceipt, citedSourceRecordIds: [] }, contracts.isHermesCitedSourceConfirmationReceiptV1],
+      ["unsorted confirmation receipt", { ...confirmationReceipt, citedSourceRecordIds: ["source:z", "source:one"] }, contracts.isHermesCitedSourceConfirmationReceiptV1],
       ["raw retention", { ...outcome, rawPayloadRetained: true }, contracts.isHermesOutcomeV1],
       ["unsafe metadata text", { ...outcome, summary: "api key=do-not-retain" }, contracts.isHermesOutcomeV1],
       ["provider token text", { ...outcome, summary: "sk_live_123456" }, contracts.isHermesOutcomeV1],
@@ -256,6 +278,10 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["board event unknown field", { ...boardEvent, unknown: true }, contracts.isHermesBoardLifecycleEventV1],
       ["evidence reference", { ...evidence, evidenceRefs: ["bad"] }, contracts.isDeliveryEvidenceV1],
       ["policy decision", { ...decision, decision: "unknown" }, contracts.isPolicyDecisionV1],
+      ["cited source path traversal", { ...citedSource, locator: "docs/../secret" }, contracts.isHermesCitedSourceRecordV1],
+      ["cited source raw field", { ...citedSource, rawPayload: "forbidden" }, contracts.isHermesCitedSourceRecordV1],
+      ["cited source unsafe fingerprint", { ...citedSource, fingerprint: "api key=do-not-retain" }, contracts.isHermesCitedSourceRecordV1],
+      ["cited source chronology", { ...citedSource, reviewAt: "2026-08-27T23:00:00Z" }, contracts.isHermesCitedSourceRecordV1],
     ];
     for (const [label, value, guard] of invalidCases) assert.equal(guard(value), false, label);
     assert.equal(contracts.isExternalImpactRequestV1({ ...impact, createdAt: "2020-01-01T00:00:00Z", expiresAt: "2020-01-02T00:00:00Z" }), true);
