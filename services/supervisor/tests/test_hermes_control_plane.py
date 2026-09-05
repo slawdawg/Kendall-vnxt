@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesLedgerIngestRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -64,3 +64,35 @@ def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadat
         HermesRoleCapabilityProvisionRequestV1.model_validate({**provision.model_dump(mode="json"), "createdAt": "2099-01-01T00:00:00Z", "expiresAt": "2099-01-02T00:00:00Z"})
     revoked = HermesRoleCapabilityRevocationRequestV1.model_validate({"capabilityBindingId": provision.capabilityBindingId, "revokedBy": "operator:one", "revokedAt": "2026-09-04T00:30:00Z", "metadataOnly": True, "rawPayloadRetained": False})
     assert revoked.revokedBy == "operator:one"
+
+
+def test_review_handoff_rejects_secret_shaped_capability_binding_references():
+    verification = {
+        "verificationRecordId": "verification:one", "outcomeId": "outcome:one", "laneRunId": "lane:one",
+        "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes",
+        "sourceFingerprint": "sha256:proof", "developerIdentity": "developer:one",
+        "developerHome": "home:developer", "developerWorkspace": "workspace:developer",
+        "evidenceRefs": ["evidence:one"], "observedAt": "2026-09-04T00:01:00Z",
+        "idempotencyKey": "verification:one", "createdAt": "2026-09-04T00:01:00Z",
+        "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    }
+    disposition = {
+        "reviewDispositionId": "review:one", "verificationRecordId": "verification:one", "outcomeId": "outcome:one",
+        "developerLaneRunId": "lane:one", "schemaVersion": "hermes_review_disposition.v1", "disposition": "approve",
+        "reviewerIdentity": "reviewer:one", "reviewerHome": "home:reviewer", "reviewerWorkspace": "workspace:reviewer",
+        "reasonCode": "reviewed", "nextAction": "Hold for delivery.", "evidenceRefs": ["evidence:one"],
+        "observedAt": "2026-09-04T00:02:00Z", "idempotencyKey": "review:one", "createdAt": "2026-09-04T00:02:00Z",
+        "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+    }
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:sk_live_abcdefghijklmnop", "developerCapabilityProof": "d" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:sk_live_abcdefghijklmnop", "reviewerCapabilityProof": "r" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:sk_live", "developerCapabilityProof": "d" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:pk_test", "reviewerCapabilityProof": "r" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "developerCapabilityBindingId": "capability:sk_live-abc", "developerCapabilityProof": "d" * 32})
+    with pytest.raises(ValidationError, match="Role capability identity"):
+        HermesReviewHandoffRequest.model_validate({"verification": verification, "disposition": disposition, "reviewerCapabilityBindingId": "capability:pk_test-abc", "reviewerCapabilityProof": "r" * 32})
