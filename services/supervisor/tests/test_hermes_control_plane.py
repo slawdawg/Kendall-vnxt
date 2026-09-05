@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesCitedSourceRecordRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -40,6 +40,7 @@ def test_hermes_ledger_boundary_is_strict_and_metadata_only():
 
 def test_hermes_routes_are_local_typed_projection_boundaries():
     route = lambda path: next(item for item in app.routes if isinstance(item, APIRoute) and item.path == path)
+    route_method = lambda path, method: next(item for item in app.routes if isinstance(item, APIRoute) and item.path == path and method in item.methods)
     assert route("/hermes-control-plane/ledger").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/board-events").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/outcomes/{outcome_id}").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
@@ -47,6 +48,35 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert route("/hermes-control-plane/role-capabilities").methods == {"POST"}
     assert route("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke").methods == {"POST"}
     assert route("/hermes-control-plane/review-handoffs").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
+    assert route_method("/hermes-control-plane/cited-sources", "GET").response_model.__name__ == "HermesCitedSourceListApiEnvelope"
+    assert route("/hermes-control-plane/cited-sources/correct").methods == {"POST"}
+    assert route("/hermes-control-plane/cited-sources/{source_record_id}/revoke").methods == {"POST"}
+    assert route("/hermes-control-plane/cited-sources/{source_record_id}").response_model.__name__ == "HermesCitedSourceApiEnvelope"
+
+
+def test_cited_source_request_is_strict_local_metadata_only_and_non_authoritative():
+    value = HermesCitedSourceRecordRequestV1.model_validate({
+        "sourceRecordId": "source:one", "outcomeId": "outcome:one", "laneRunId": "lane:one",
+        "schemaVersion": "hermes_cited_source_record.v1", "sourceKind": "source_owned_document",
+        "locator": "docs/workflows/hermes-autonomous-delivery.md", "fingerprint": "sha256:one",
+        "citationRefs": ["evidence:one"], "accessScope": "verification_and_review", "confidence": "high",
+        "observedAt": "2026-09-04T00:00:00Z", "reviewAt": "2026-09-05T00:00:00Z", "expiresAt": "2099-01-01T00:00:00Z",
+        "supersedesSourceRecordId": None, "idempotencyKey": "source:one", "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
+        "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    assert value.sourceKind == "source_owned_document"
+    for changed in (
+        {"locator": "https://external.example/context"},
+        {"locator": "docs/../secret"},
+        {"fingerprint": "raw transcript content"},
+        {"rawPayloadRetained": True},
+        {"rawPayload": "forbidden"},
+        {"reviewAt": "2026-09-03T00:00:00Z"},
+        {"sourceKind": "validated_delivery_evidence"},
+        {"observedAt": "2099-01-01T00:00:00Z", "reviewAt": "2099-01-02T00:00:00Z", "expiresAt": "2099-01-03T00:00:00Z"},
+    ):
+        with pytest.raises(ValidationError):
+            HermesCitedSourceRecordRequestV1.model_validate({**value.model_dump(mode="json"), **changed})
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():
@@ -72,7 +102,7 @@ def test_review_handoff_rejects_secret_shaped_capability_binding_references():
         "schemaVersion": "hermes_verification_record.v1", "result": "passed", "target": "test:hermes",
         "sourceFingerprint": "sha256:proof", "developerIdentity": "developer:one",
         "developerHome": "home:developer", "developerWorkspace": "workspace:developer",
-        "evidenceRefs": ["evidence:one"], "observedAt": "2026-09-04T00:01:00Z",
+        "evidenceRefs": ["evidence:one"], "citedSourceRecordIds": ["source:one"], "observedAt": "2026-09-04T00:01:00Z",
         "idempotencyKey": "verification:one", "createdAt": "2026-09-04T00:01:00Z",
         "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
     }
@@ -80,7 +110,7 @@ def test_review_handoff_rejects_secret_shaped_capability_binding_references():
         "reviewDispositionId": "review:one", "verificationRecordId": "verification:one", "outcomeId": "outcome:one",
         "developerLaneRunId": "lane:one", "schemaVersion": "hermes_review_disposition.v1", "disposition": "approve",
         "reviewerIdentity": "reviewer:one", "reviewerHome": "home:reviewer", "reviewerWorkspace": "workspace:reviewer",
-        "reasonCode": "reviewed", "nextAction": "Hold for delivery.", "evidenceRefs": ["evidence:one"],
+        "reasonCode": "reviewed", "nextAction": "Hold for delivery.", "evidenceRefs": ["evidence:one"], "citedSourceRecordIds": ["source:one"],
         "observedAt": "2026-09-04T00:02:00Z", "idempotencyKey": "review:one", "createdAt": "2026-09-04T00:02:00Z",
         "metadataOnly": True, "rawPayloadRetained": False, "expectedOutcomeRevision": 1, "expectedLaneRevision": 1,
     }

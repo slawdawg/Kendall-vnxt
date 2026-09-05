@@ -282,7 +282,7 @@ async def test_clean_install_stamps_later_metadata_backed_non_idempotent_migrati
 
     active_migrations = _active_migrations_module()
     later_migration = active_migrations.SchemaMigration(
-        "0009_non_idempotent_model_table",
+        "9999_non_idempotent_model_table",
         non_idempotent_later_upgrade,
         clean_install=clean_install_future_table,
     )
@@ -426,6 +426,10 @@ async def test_memory_proposal_revision_is_forward_migrated_after_recorded_legac
                 "0006_hermes_outcome_ledger",
                 "0007_hermes_board_bridge",
                 "0008_hermes_review_handoff",
+                "0009_hermes_cited_sources",
+                "0010_hermes_source_confirmation_columns",
+                "0011_hermes_cited_source_revision_fence",
+                "0012_hermes_cited_source_confirmation_receipts",
             }
     finally:
         await engine.dispose()

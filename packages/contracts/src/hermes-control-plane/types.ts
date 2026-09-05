@@ -29,6 +29,7 @@ export const HERMES_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_lifecycle_event.v1"
 export const HERMES_BOARD_LIFECYCLE_EVENT_SCHEMA_VERSION = "hermes_board_lifecycle_event.v1" as const;
 export const HERMES_VERIFICATION_RECORD_SCHEMA_VERSION = "hermes_verification_record.v1" as const;
 export const HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION = "hermes_review_disposition.v1" as const;
+export const HERMES_CITED_SOURCE_RECORD_SCHEMA_VERSION = "hermes_cited_source_record.v1" as const;
 
 export type HermesOutcomeStatus = "proposed" | "active" | "completed" | "blocked" | "rework";
 export type HermesLaneRunStatus = "queued" | "running" | "review" | "rework" | "completed" | "blocked";
@@ -217,6 +218,7 @@ export interface VerificationRecordV1 {
   readonly developerHome: string;
   readonly developerWorkspace: string;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];
+  readonly citedSourceRecordIds: readonly import("./ids").HermesCitedSourceRecordId[];
   readonly observedAt: string;
   readonly idempotencyKey: HermesIdempotencyKey;
   readonly createdAt: string;
@@ -239,6 +241,7 @@ export interface ReviewDispositionV1 {
   readonly reasonCode: string;
   readonly nextAction: string;
   readonly evidenceRefs: readonly HermesEvidenceRefId[];
+  readonly citedSourceRecordIds: readonly import("./ids").HermesCitedSourceRecordId[];
   readonly observedAt: string;
   readonly idempotencyKey: HermesIdempotencyKey;
   readonly createdAt: string;
@@ -246,6 +249,45 @@ export interface ReviewDispositionV1 {
   readonly rawPayloadRetained: false;
   readonly expectedOutcomeRevision: number;
   readonly expectedLaneRevision: number;
+}
+
+/** Curated local citation metadata. This is context only, never an authority. */
+export interface HermesCitedSourceRecordV1 {
+  readonly sourceRecordId: import("./ids").HermesCitedSourceRecordId;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly schemaVersion: typeof HERMES_CITED_SOURCE_RECORD_SCHEMA_VERSION;
+  readonly sourceKind: "source_owned_document" | "validated_delivery_evidence";
+  readonly locator: string;
+  readonly fingerprint: string;
+  readonly citationRefs: readonly HermesEvidenceRefId[];
+  readonly accessScope: "implementation_verification" | "independent_review" | "verification_and_review";
+  readonly confidence: "high" | "medium";
+  readonly observedAt: string;
+  readonly reviewAt: string;
+  readonly expiresAt: string;
+  readonly supersedesSourceRecordId: import("./ids").HermesCitedSourceRecordId | null;
+  readonly idempotencyKey: HermesIdempotencyKey;
+  readonly expectedOutcomeRevision: number;
+  readonly expectedLaneRevision: number;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+}
+
+/** Immutable proof of local source currentness at one initial handoff. */
+export interface HermesCitedSourceConfirmationReceiptV1 {
+  readonly receiptId: import("./ids").HermesCitedSourceConfirmationReceiptId;
+  readonly consumerType: "verification" | "review";
+  readonly consumerId: string;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly citedSourceRecordIds: readonly import("./ids").HermesCitedSourceRecordId[];
+  readonly sourceSetFingerprintSha256: string;
+  readonly expectedOutcomeRevision: number;
+  readonly expectedLaneRevision: number;
+  readonly confirmedAt: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
 }
 
 export interface HermesReviewerUnavailableExceptionV1 {

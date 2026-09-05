@@ -28,6 +28,10 @@ runbook](../../docs/workflows/supervisor-schema-migrations.md).
 For the default-disabled local attestation issuer, observer, and private-socket
 setup, see the [Epic 25 local dogfood attestation setup](../../docs/workflows/epic-25-local-dogfood-attestation-setup.md).
 
+For the metadata-only local Project Brain allowlist, citation freshness,
+correction/revocation recovery, and non-authority boundary, see the
+[Hermes autonomous delivery runbook](../../docs/workflows/hermes-autonomous-delivery.md#cited-local-project-brain).
+
 The Memory Inbox proposal reader is a separate default-disabled,
 content-bearing capability; its enablement, recovery, and handling constraints
 are in the [Memory Inbox lifecycle runbook](../../docs/workflows/memory-inbox-lifecycle-migration.md#proposal-reader-capability).

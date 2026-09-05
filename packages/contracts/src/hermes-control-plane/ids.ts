@@ -17,6 +17,8 @@ export type HermesIdempotencyKey = Brand<"HermesIdempotencyKey">;
 export type HermesEvidenceRefId = Brand<"HermesEvidenceRefId">;
 export type VerificationRecordId = Brand<"VerificationRecordId">;
 export type ReviewDispositionId = Brand<"ReviewDispositionId">;
+export type HermesCitedSourceRecordId = Brand<"HermesCitedSourceRecordId">;
+export type HermesCitedSourceConfirmationReceiptId = Brand<"HermesCitedSourceConfirmationReceiptId">;
 
 /** Opaque lower-case identifiers have no path, branch, or execution meaning. */
 const HERMES_OPAQUE_ID_PATTERN = /^[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+$/;
@@ -45,6 +47,9 @@ export function isHermesOutcomeId(value: unknown): value is HermesOutcomeId {
   return isOpaqueId(value);
 }
 export function isHermesLaneRunId(value: unknown): value is HermesLaneRunId {
+  return isOpaqueId(value);
+}
+export function isHermesCitedSourceConfirmationReceiptId(value: unknown): value is HermesCitedSourceConfirmationReceiptId {
   return isOpaqueId(value);
 }
 export function isDeliveryEvidenceId(value: unknown): value is DeliveryEvidenceId {
@@ -82,5 +87,8 @@ export function isVerificationRecordId(value: unknown): value is VerificationRec
   return isOpaqueId(value);
 }
 export function isReviewDispositionId(value: unknown): value is ReviewDispositionId {
+  return isOpaqueId(value);
+}
+export function isHermesCitedSourceRecordId(value: unknown): value is HermesCitedSourceRecordId {
   return isOpaqueId(value);
 }

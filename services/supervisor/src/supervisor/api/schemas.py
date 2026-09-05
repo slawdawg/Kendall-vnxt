@@ -8015,6 +8015,7 @@ HERMES_LANE_RUN_STATUSES = frozenset({"queued", "running", "review", "rework", "
 HERMES_EVENT_NAMES = frozenset({"hermes.outcome.created", "hermes.lane.recovered", "hermes.delivery.denied", "hermes.external-impact.requested"})
 HERMES_VERIFICATION_RECORD_SCHEMA_VERSION = "hermes_verification_record.v1"
 HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION = "hermes_review_disposition.v1"
+HERMES_CITED_SOURCE_RECORD_SCHEMA_VERSION = "hermes_cited_source_record.v1"
 
 
 def _validate_hermes_text(value: str, field_name: str, maximum: int = 500) -> str:
@@ -8208,6 +8209,145 @@ class HermesLedgerIngestRequest(BaseModel):
         return self
 
 
+class HermesCitedSourceRecordRequestV1(BaseModel):
+    """Metadata-only local context; it cannot authorize delivery or policy."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sourceRecordId: str = Field(max_length=120)
+    outcomeId: str = Field(max_length=120)
+    laneRunId: str = Field(max_length=120)
+    schemaVersion: Literal[HERMES_CITED_SOURCE_RECORD_SCHEMA_VERSION]
+    sourceKind: Literal["source_owned_document", "validated_delivery_evidence"]
+    locator: str = Field(max_length=300)
+    fingerprint: str = Field(max_length=240)
+    citationRefs: list[str] = Field(min_length=1, max_length=32)
+    accessScope: Literal["implementation_verification", "independent_review", "verification_and_review"]
+    confidence: Literal["high", "medium"]
+    observedAt: datetime
+    reviewAt: datetime
+    expiresAt: datetime
+    supersedesSourceRecordId: str | None = Field(default=None, max_length=120)
+    idempotencyKey: str = Field(max_length=180)
+    expectedOutcomeRevision: int = Field(ge=1)
+    expectedLaneRevision: int = Field(ge=1)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("sourceRecordId", "outcomeId", "laneRunId", "fingerprint", "idempotencyKey", "supersedesSourceRecordId")
+    @classmethod
+    def _opaque(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        value = _validate_hermes_text(value, info.field_name, 240)
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Cited source identity must be opaque.")
+        return value
+
+    @field_validator("locator")
+    @classmethod
+    def _locator(cls, value: str) -> str:
+        value = _validate_hermes_text(value, "locator", 300)
+        if ".." in value or re.fullmatch(r"(?:docs/[a-z0-9][a-z0-9._/#-]*|delivery-evidence:[a-z0-9][a-z0-9:_-]*)", value, re.IGNORECASE) is None:
+            raise ValueError("Cited source locator is not local-first allowlisted metadata.")
+        return value
+
+    @field_validator("citationRefs")
+    @classmethod
+    def _citation_refs(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value) or any(
+            len(item) > 200 or re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", item) is None
+            or _validate_hermes_text(item, "citationRefs", 200) != item
+            for item in value
+        ):
+            raise ValueError("Cited source references must be unique opaque identifiers.")
+        return value
+
+    @field_validator("observedAt", "reviewAt", "expiresAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _timing(self):
+        if not self.observedAt <= self.reviewAt < self.expiresAt:
+            raise ValueError("Cited source requires an ordered review and expiry point.")
+        if self.observedAt > datetime.now(timezone.utc):
+            raise ValueError("Cited source observation cannot be in the future.")
+        if (self.sourceKind == "source_owned_document") != self.locator.startswith("docs/"):
+            raise ValueError("Cited source kind and allowlisted locator must agree.")
+        if self.supersedesSourceRecordId == self.sourceRecordId:
+            raise ValueError("Cited source correction cannot supersede itself.")
+        return self
+
+
+class HermesCitedSourceRevocationRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sourceRecordId: str = Field(max_length=120)
+    revokedAt: datetime
+    reasonCode: str = Field(max_length=120)
+    idempotencyKey: str = Field(max_length=180)
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("sourceRecordId", "reasonCode", "idempotencyKey")
+    @classmethod
+    def _safe(cls, value: str, info) -> str:
+        value = _validate_hermes_text(value, info.field_name, 180)
+        if info.field_name in {"sourceRecordId", "idempotencyKey"} and re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Cited source identity must be opaque.")
+        return value
+
+    @field_validator("revokedAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+
+
+class HermesCitedSourceConfirmationReceiptV1(BaseModel):
+    """Internal immutable proof of current local-source confirmation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    receiptId: str = Field(max_length=120)
+    consumerType: Literal["verification", "review"]
+    consumerId: str = Field(max_length=120)
+    outcomeId: str = Field(max_length=120)
+    laneRunId: str = Field(max_length=120)
+    citedSourceRecordIds: list[str] = Field(min_length=1, max_length=64)
+    sourceSetFingerprintSha256: str = Field(max_length=71)
+    expectedOutcomeRevision: int = Field(ge=1)
+    expectedLaneRevision: int = Field(ge=1)
+    confirmedAt: datetime
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+    @field_validator("receiptId", "consumerId", "outcomeId", "laneRunId")
+    @classmethod
+    def _opaque(cls, value: str, info) -> str:
+        value = _validate_hermes_text(value, info.field_name, 120)
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None:
+            raise ValueError("Cited source confirmation identity must be opaque.")
+        return value
+
+    @field_validator("citedSourceRecordIds")
+    @classmethod
+    def _source_ids(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)) or any(re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", item) is None for item in value):
+            raise ValueError("Cited source confirmation IDs must be sorted unique opaque identifiers.")
+        return value
+
+    @field_validator("sourceSetFingerprintSha256")
+    @classmethod
+    def _fingerprint(cls, value: str) -> str:
+        if re.fullmatch(r"sha256:[a-f0-9]{64}", value) is None:
+            raise ValueError("Cited source confirmation fingerprint must be SHA-256 metadata.")
+        return value
+
+    @field_validator("confirmedAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime:
+        return _parse_hermes_timestamp(value, info.field_name)
+
+
 class HermesVerificationRecordInputV1(BaseModel):
     """Metadata-only verification precondition bound to the original Developer lane."""
 
@@ -8223,6 +8363,7 @@ class HermesVerificationRecordInputV1(BaseModel):
     developerHome: str = Field(max_length=240)
     developerWorkspace: str = Field(max_length=240)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32)
+    citedSourceRecordIds: list[str] = Field(min_length=1, max_length=16)
     observedAt: datetime
     idempotencyKey: str = Field(max_length=180)
     createdAt: datetime
@@ -8247,6 +8388,13 @@ class HermesVerificationRecordInputV1(BaseModel):
     @classmethod
     def _refs(cls, value: list[str]) -> list[str]:
         return HermesOutcomeInputV1._refs(value)
+
+    @field_validator("citedSourceRecordIds")
+    @classmethod
+    def _sources(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value) or any(re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", item) is None or _validate_hermes_text(item, "citedSourceRecordIds", 120) != item for item in value):
+            raise ValueError("Cited source references must be unique opaque identifiers.")
+        return value
 
     @field_validator("observedAt", "createdAt", mode="before")
     @classmethod
@@ -8276,6 +8424,7 @@ class HermesReviewDispositionInputV1(BaseModel):
     reasonCode: str = Field(max_length=120)
     nextAction: str = Field(max_length=360)
     evidenceRefs: list[str] = Field(min_length=1, max_length=32)
+    citedSourceRecordIds: list[str] = Field(min_length=1, max_length=16)
     observedAt: datetime
     idempotencyKey: str = Field(max_length=180)
     createdAt: datetime
@@ -8298,6 +8447,11 @@ class HermesReviewDispositionInputV1(BaseModel):
     @classmethod
     def _refs(cls, value: list[str]) -> list[str]:
         return HermesOutcomeInputV1._refs(value)
+
+    @field_validator("citedSourceRecordIds")
+    @classmethod
+    def _sources(cls, value: list[str]) -> list[str]:
+        return HermesVerificationRecordInputV1._sources(value)
 
     @field_validator("observedAt", "createdAt", mode="before")
     @classmethod
@@ -8488,6 +8642,36 @@ class HermesLaneRunProjectionV1(BaseModel):
 class HermesLaneRunProjectionApiEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     data: HermesLaneRunProjectionV1
+
+
+class HermesCitedSourceProjectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sourceRecordId: str
+    outcomeId: str
+    laneRunId: str
+    sourceKind: Literal["source_owned_document", "validated_delivery_evidence"]
+    locator: str
+    fingerprint: str
+    citationRefs: list[str]
+    accessScope: Literal["implementation_verification", "independent_review", "verification_and_review"]
+    confidence: Literal["high", "medium"]
+    observedAt: datetime
+    reviewAt: datetime
+    expiresAt: datetime
+    supersedesSourceRecordId: str | None
+    state: Literal["current", "stale", "revoked", "superseded"]
+    metadataOnly: Literal[True]
+    rawPayloadRetained: Literal[False]
+
+
+class HermesCitedSourceApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    data: HermesCitedSourceProjectionV1
+
+
+class HermesCitedSourceListApiEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    data: list[HermesCitedSourceProjectionV1]
 
 
 class ManagerTerminalEventRequest(BaseModel):

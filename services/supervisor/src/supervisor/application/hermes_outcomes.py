@@ -11,10 +11,12 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesCitedSourceConfirmationReceiptV1, HermesCitedSourceProjectionV1, HermesCitedSourceRecordRequestV1, HermesCitedSourceRevocationRequestV1, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from supervisor.infrastructure.db.models import (
     HermesDeliveryEvidence,
+    HermesCitedSourceConfirmationReceipt,
+    HermesCitedSourceRecord,
     HermesLaneRun,
     HermesLedgerEvent,
     HermesOutcome,
@@ -22,6 +24,175 @@ from supervisor.infrastructure.db.models import (
     HermesRoleCapabilityBinding,
     HermesVerificationRecord,
 )
+
+
+def _cited_source_digest(request: HermesCitedSourceRecordRequestV1) -> str:
+    return sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _confirmation_source_ids(source_record_ids: list[str]) -> list[str]:
+    return sorted(set(source_record_ids))
+
+
+def _confirmation_fingerprint(source_record_ids: list[str]) -> str:
+    return f"sha256:{sha256(json.dumps(_confirmation_source_ids(source_record_ids), separators=(",", ":")).encode('utf-8')).hexdigest()}"
+
+
+def _confirmation_receipt_id(consumer_type: str, consumer_id: str) -> str:
+    digest = sha256(consumer_id.encode("utf-8")).hexdigest()[:24]
+    return f"source-confirmation:{consumer_type}-{digest[:8]}-{digest[8:16]}-{digest[16:]}"
+
+
+def _add_cited_source_confirmation_receipt(session: AsyncSession, *, consumer_type: str, consumer_id: str, source_record_ids: list[str], outcome: HermesOutcome, lane: HermesLaneRun, confirmed_at: datetime) -> None:
+    source_ids = _confirmation_source_ids(source_record_ids)
+    payload = HermesCitedSourceConfirmationReceiptV1.model_validate({
+        "receiptId": _confirmation_receipt_id(consumer_type, consumer_id), "consumerType": consumer_type, "consumerId": consumer_id,
+        "outcomeId": outcome.outcome_id, "laneRunId": lane.lane_run_id, "citedSourceRecordIds": source_ids,
+        "sourceSetFingerprintSha256": _confirmation_fingerprint(source_ids), "expectedOutcomeRevision": outcome.revision,
+        "expectedLaneRevision": lane.revision, "confirmedAt": confirmed_at, "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    session.add(HermesCitedSourceConfirmationReceipt(
+        receipt_id=payload.receiptId, consumer_type=payload.consumerType, consumer_id=payload.consumerId,
+        outcome_id=payload.outcomeId, lane_run_id=payload.laneRunId, cited_source_record_ids_json=payload.citedSourceRecordIds,
+        source_set_fingerprint_sha256=payload.sourceSetFingerprintSha256, expected_outcome_revision=payload.expectedOutcomeRevision,
+        expected_lane_revision=payload.expectedLaneRevision, confirmed_at=payload.confirmedAt, metadata_only=True, raw_payload_retained=False,
+    ))
+
+
+async def _require_cited_source_confirmation_receipt(session: AsyncSession, *, consumer_type: str, consumer_id: str, source_record_ids: list[str], outcome_id: str, lane_run_id: str, expected_outcome_revision: int, expected_lane_revision: int) -> None:
+    receipt = await session.scalar(select(HermesCitedSourceConfirmationReceipt).where(
+        HermesCitedSourceConfirmationReceipt.consumer_type == consumer_type,
+        HermesCitedSourceConfirmationReceipt.consumer_id == consumer_id,
+    ))
+    source_ids = _confirmation_source_ids(source_record_ids)
+    if receipt is None or (receipt.consumer_type, receipt.consumer_id, receipt.outcome_id, receipt.lane_run_id, receipt.expected_outcome_revision, receipt.expected_lane_revision) != (consumer_type, consumer_id, outcome_id, lane_run_id, expected_outcome_revision, expected_lane_revision) or receipt.cited_source_record_ids_json != source_ids or receipt.source_set_fingerprint_sha256 != _confirmation_fingerprint(source_ids):
+        raise ValueError("Idempotent replay lacks its immutable cited-source confirmation receipt.")
+
+
+async def _cited_source_state(session: AsyncSession, record: HermesCitedSourceRecord, *, now: datetime | None = None) -> str:
+    if record.revoked_at is not None:
+        return "revoked"
+    replacement = await session.scalar(select(HermesCitedSourceRecord.source_record_id).where(HermesCitedSourceRecord.supersedes_source_record_id == record.source_record_id).limit(1))
+    if replacement is not None:
+        return "superseded"
+    current = now or datetime.now(UTC)
+    if record.review_at <= current or record.expires_at <= current:
+        return "stale"
+    return "current"
+
+
+def _cited_source_projection(record: HermesCitedSourceRecord, state: str) -> HermesCitedSourceProjectionV1:
+    return HermesCitedSourceProjectionV1.model_validate({
+        "sourceRecordId": record.source_record_id, "outcomeId": record.outcome_id, "laneRunId": record.lane_run_id,
+        "sourceKind": record.source_kind, "locator": record.locator, "fingerprint": record.fingerprint,
+        "citationRefs": record.citation_refs_json, "accessScope": record.access_scope, "confidence": record.confidence,
+        "observedAt": record.observed_at, "reviewAt": record.review_at, "expiresAt": record.expires_at,
+        "supersedesSourceRecordId": record.supersedes_source_record_id, "state": state,
+        "metadataOnly": True, "rawPayloadRetained": False,
+    })
+
+
+async def record_hermes_cited_source(session: AsyncSession, payload: HermesCitedSourceRecordRequestV1) -> HermesCitedSourceProjectionV1:
+    """Persist one immutable, allowlisted local citation metadata record."""
+    request = HermesCitedSourceRecordRequestV1.model_validate(payload.model_dump(mode="json"))
+    digest = _cited_source_digest(request)
+    replay = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.idempotency_key == request.idempotencyKey).with_for_update())
+    if replay is not None:
+        if replay.request_digest_sha256 != digest:
+            raise ValueError("Cited source idempotency key conflicts with persisted metadata.")
+        return _cited_source_projection(replay, await _cited_source_state(session, replay))
+    if await session.get(HermesCitedSourceRecord, request.sourceRecordId):
+        raise ValueError("Cited source record ID conflicts with persisted metadata.")
+    outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcomeId).with_for_update())
+    lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.laneRunId).with_for_update())
+    if outcome is None or lane is None or lane.outcome_id != outcome.outcome_id or outcome.current_event_id != lane.current_event_id:
+        raise ValueError("Cited source must bind the current outcome and lane lineage.")
+    if (outcome.revision, lane.revision) != (request.expectedOutcomeRevision, request.expectedLaneRevision):
+        raise ValueError("Cited source must bind the current outcome and lane revisions.")
+    if request.sourceKind == "validated_delivery_evidence":
+        evidence_id = request.locator.removeprefix("delivery-evidence:")
+        evidence = await session.get(HermesDeliveryEvidence, evidence_id)
+        if evidence is None or (evidence.outcome_id, evidence.lane_run_id) != (outcome.outcome_id, lane.lane_run_id) or not set(request.citationRefs) <= {evidence.delivery_evidence_id, *evidence.evidence_refs_json}:
+            raise ValueError("Validated delivery evidence must resolve to current same-lineage persisted evidence.")
+    if request.supersedesSourceRecordId is not None:
+        superseded = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.source_record_id == request.supersedesSourceRecordId).with_for_update())
+        if superseded is None or (superseded.outcome_id, superseded.lane_run_id) != (outcome.outcome_id, lane.lane_run_id):
+            raise ValueError("Cited source correction must name a same-lineage existing record.")
+        if await session.scalar(select(HermesCitedSourceRecord.source_record_id).where(HermesCitedSourceRecord.supersedes_source_record_id == superseded.source_record_id).limit(1)) is not None:
+            raise ValueError("Cited source correction conflicts with an existing replacement.")
+    record = HermesCitedSourceRecord(
+        source_record_id=request.sourceRecordId, outcome_id=request.outcomeId, lane_run_id=request.laneRunId,
+        schema_version=request.schemaVersion, source_kind=request.sourceKind, locator=request.locator,
+        fingerprint=request.fingerprint, citation_refs_json=request.citationRefs, access_scope=request.accessScope,
+        confidence=request.confidence, observed_at=request.observedAt, review_at=request.reviewAt, expires_at=request.expiresAt,
+        supersedes_source_record_id=request.supersedesSourceRecordId, idempotency_key=request.idempotencyKey,
+        expected_outcome_revision=request.expectedOutcomeRevision, expected_lane_revision=request.expectedLaneRevision,
+        request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False,
+    )
+    session.add(record)
+    try:
+        await session.commit()
+        await session.refresh(record)
+    except IntegrityError as exc:
+        await session.rollback()
+        replay = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.idempotency_key == request.idempotencyKey))
+        if replay is not None and replay.request_digest_sha256 == digest:
+            return _cited_source_projection(replay, await _cited_source_state(session, replay))
+        raise ValueError("Cited source persistence conflicts with persisted metadata.") from exc
+    return _cited_source_projection(record, await _cited_source_state(session, record))
+
+
+async def revoke_hermes_cited_source(session: AsyncSession, payload: HermesCitedSourceRevocationRequestV1) -> HermesCitedSourceProjectionV1:
+    replay = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.revocation_idempotency_key == payload.idempotencyKey).with_for_update())
+    if replay is not None:
+        if (replay.source_record_id, replay.revoked_at, replay.revocation_reason) != (payload.sourceRecordId, payload.revokedAt, payload.reasonCode):
+            raise ValueError("Cited source revocation idempotency key conflicts with persisted metadata.")
+        return _cited_source_projection(replay, "revoked")
+    record = await session.scalar(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.source_record_id == payload.sourceRecordId).with_for_update())
+    if record is None:
+        raise ValueError("Cited source record not found.")
+    if payload.revokedAt < record.observed_at:
+        raise ValueError("Cited source revocation cannot precede observation.")
+    if record.revoked_at is not None:
+        if (record.revoked_at, record.revocation_reason, record.revocation_idempotency_key) != (payload.revokedAt, payload.reasonCode, payload.idempotencyKey):
+            raise ValueError("Cited source revocation conflicts with persisted metadata.")
+        return _cited_source_projection(record, "revoked")
+    record.revoked_at, record.revocation_reason, record.revocation_idempotency_key = payload.revokedAt, payload.reasonCode, payload.idempotencyKey
+    await session.commit()
+    await session.refresh(record)
+    return _cited_source_projection(record, "revoked")
+
+
+async def read_hermes_cited_source(session: AsyncSession, source_record_id: str, *, outcome_id: str, lane_run_id: str) -> HermesCitedSourceProjectionV1 | None:
+    record = await session.get(HermesCitedSourceRecord, source_record_id)
+    if record is None or (record.outcome_id, record.lane_run_id) != (outcome_id, lane_run_id):
+        return None
+    return _cited_source_projection(record, await _cited_source_state(session, record))
+
+
+async def list_hermes_cited_sources(session: AsyncSession, *, outcome_id: str, lane_run_id: str, limit: int = 50) -> list[HermesCitedSourceProjectionV1]:
+    records = (await session.scalars(select(HermesCitedSourceRecord).where(
+        HermesCitedSourceRecord.outcome_id == outcome_id,
+        HermesCitedSourceRecord.lane_run_id == lane_run_id,
+    ).order_by(HermesCitedSourceRecord.observed_at.desc()).limit(min(max(limit, 1), 100)))).all()
+    return [_cited_source_projection(record, await _cited_source_state(session, record)) for record in records]
+
+
+async def _require_current_cited_sources(session: AsyncSession, *, source_record_ids: list[str], outcome: HermesOutcome, lane: HermesLaneRun, scope: str, confirmed_at: datetime | None = None) -> None:
+    if not source_record_ids:
+        raise ValueError("Source confirmation is unavailable.")
+    records = (await session.scalars(select(HermesCitedSourceRecord).where(HermesCitedSourceRecord.source_record_id.in_(source_record_ids)))).all()
+    if len(records) != len(source_record_ids):
+        raise ValueError("Source confirmation is unavailable.")
+    for record in records:
+        if (record.outcome_id, record.lane_run_id) != (outcome.outcome_id, lane.lane_run_id):
+            raise ValueError("Source confirmation is cross-lineage.")
+        if (record.expected_outcome_revision, record.expected_lane_revision) != (outcome.revision, lane.revision):
+            raise ValueError("Source confirmation is stale, revoked, superseded, or out of scope.")
+        if confirmed_at is not None and record.observed_at > confirmed_at:
+            raise ValueError("Source confirmation predates observation.")
+        if record.access_scope not in {scope, "verification_and_review"} or await _cited_source_state(session, record) != "current":
+            raise ValueError("Source confirmation is stale, revoked, superseded, or out of scope.")
 
 
 async def provision_hermes_role_capability(session: AsyncSession, payload: HermesRoleCapabilityProvisionRequestV1) -> HermesRoleCapabilityBinding:
@@ -333,12 +504,12 @@ def _same_verification(record: HermesVerificationRecord, value) -> bool:
     return (
         record.verification_record_id, record.outcome_id, record.lane_run_id, record.schema_version,
         record.result, record.target, record.source_fingerprint, record.developer_identity,
-        record.developer_home, record.developer_workspace, record.evidence_refs_json,
+        record.developer_home, record.developer_workspace, record.evidence_refs_json, record.cited_source_record_ids_json,
         record.idempotency_key, record.expected_outcome_revision, record.expected_lane_revision, record.observed_at, record.created_at,
     ) == (
         value.verificationRecordId, value.outcomeId, value.laneRunId, value.schemaVersion,
         value.result, value.target, value.sourceFingerprint, value.developerIdentity,
-        value.developerHome, value.developerWorkspace, value.evidenceRefs,
+        value.developerHome, value.developerWorkspace, value.evidenceRefs, value.citedSourceRecordIds,
         value.idempotencyKey, value.expectedOutcomeRevision, value.expectedLaneRevision, value.observedAt, value.createdAt,
     )
 
@@ -359,6 +530,11 @@ async def _replay_verification(session: AsyncSession, value) -> HermesOutcomePro
     lane = await _current_lane(session, outcome)
     if lane is None:
         raise ValueError("Persisted verification record lacks its current ledger lane.")
+    await _require_cited_source_confirmation_receipt(
+        session, consumer_type="verification", consumer_id=existing.verification_record_id,
+        source_record_ids=existing.cited_source_record_ids_json, outcome_id=existing.outcome_id, lane_run_id=existing.lane_run_id,
+        expected_outcome_revision=existing.expected_outcome_revision, expected_lane_revision=existing.expected_lane_revision,
+    )
     return _projection(outcome, lane, await _latest_evidence(session, lane))
 
 
@@ -374,6 +550,15 @@ async def _replay_disposition(session: AsyncSession, disposition, digest: str) -
     lane = await _current_lane(session, outcome)
     if lane is None:
         raise ValueError("Persisted review disposition lacks its current ledger lane.")
+    verification = await session.get(HermesVerificationRecord, prior.verification_record_id)
+    if verification is None:
+        raise ValueError("Persisted review disposition lacks its verification record.")
+    await _require_cited_source_confirmation_receipt(
+        session, consumer_type="review", consumer_id=prior.review_disposition_id,
+        source_record_ids=[*verification.cited_source_record_ids_json, *prior.cited_source_record_ids_json],
+        outcome_id=prior.outcome_id, lane_run_id=prior.developer_lane_run_id,
+        expected_outcome_revision=prior.expected_outcome_revision, expected_lane_revision=prior.expected_lane_revision,
+    )
     return _projection(outcome, lane, await _latest_evidence(session, lane))
 
 
@@ -433,12 +618,14 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
         if verification.observedAt < max(outcome.updated_at, lane.updated_at):
             raise ValueError("Verification evidence predates the current ledger projection.")
         await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
+        await _require_current_cited_sources(session, source_record_ids=verification.citedSourceRecordIds, outcome=outcome, lane=lane, scope="implementation_verification", confirmed_at=verification.observedAt)
+        _add_cited_source_confirmation_receipt(session, consumer_type="verification", consumer_id=verification.verificationRecordId, source_record_ids=verification.citedSourceRecordIds, outcome=outcome, lane=lane, confirmed_at=verification.observedAt)
         session.add(HermesVerificationRecord(
             verification_record_id=verification.verificationRecordId, outcome_id=verification.outcomeId, lane_run_id=verification.laneRunId,
             schema_version=verification.schemaVersion, developer_identity=verification.developerIdentity, developer_home=verification.developerHome,
             developer_workspace=verification.developerWorkspace, developer_capability_binding_id=request.developerCapabilityBindingId,
             result=verification.result, target=verification.target, source_fingerprint=verification.sourceFingerprint,
-            evidence_refs_json=verification.evidenceRefs, idempotency_key=verification.idempotencyKey,
+            evidence_refs_json=verification.evidenceRefs, cited_source_record_ids_json=verification.citedSourceRecordIds, idempotency_key=verification.idempotencyKey,
             expected_outcome_revision=verification.expectedOutcomeRevision, expected_lane_revision=verification.expectedLaneRevision,
             observed_at=verification.observedAt, created_at=verification.createdAt, metadata_only=True, raw_payload_retained=False,
         ))
@@ -493,6 +680,9 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
         record = await session.get(HermesVerificationRecord, verification.verificationRecordId)
         if record is None or not _same_verification(record, verification) or record.result != "passed":
             raise ValueError("Reviewer disposition requires a previously recorded passed verification.")
+        await _require_current_cited_sources(session, source_record_ids=record.cited_source_record_ids_json, outcome=outcome, lane=lane, scope="implementation_verification", confirmed_at=disposition.observedAt)
+        await _require_current_cited_sources(session, source_record_ids=disposition.citedSourceRecordIds, outcome=outcome, lane=lane, scope="independent_review", confirmed_at=disposition.observedAt)
+        _add_cited_source_confirmation_receipt(session, consumer_type="review", consumer_id=disposition.reviewDispositionId, source_record_ids=[*record.cited_source_record_ids_json, *disposition.citedSourceRecordIds], outcome=outcome, lane=lane, confirmed_at=disposition.observedAt)
         if record.developer_capability_binding_id == reviewer_binding_id or lane.evidence_fingerprint != verification.sourceFingerprint:
             raise ValueError("Independent review binding or verification fingerprint is stale.")
         await _require_bound_evidence(session, evidence_refs=verification.evidenceRefs, outcome=outcome, lane=lane)
@@ -515,7 +705,7 @@ async def ingest_hermes_review_handoff(session: AsyncSession, payload: HermesRev
             raise ValueError("Review handoff rework budget is exhausted.")
         event_id = f"event:review:{sha256(disposition.reviewDispositionId.encode('utf-8')).hexdigest()}"
         session.add(HermesLedgerEvent(event_id=event_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id, schema_version="hermes_lifecycle_event.v1", event_name="hermes.review.disposition.recorded", outcome_status=status, lane_status=status, lane_type=lane.lane_type, result=result, reason_code=disposition.reasonCode, evidence_refs_json=disposition.evidenceRefs, next_action=disposition.nextAction, correlation_id=disposition.reviewDispositionId, causation_id=verification.verificationRecordId, observed_at=disposition.observedAt, emitted_at=_emitted_at(disposition.observedAt), heartbeat_at=lane.heartbeat_at, stale_deadline_at=lane.stale_deadline_at, timeout_at=lane.timeout_at, retry_budget=lane.retry_budget, rework_budget=lane.rework_budget - (1 if disposition.disposition == "rework" else 0), evidence_fingerprint=lane.evidence_fingerprint, idempotency_key=f"event:review:{sha256(disposition.idempotencyKey.encode('utf-8')).hexdigest()}", request_digest_sha256=digest, metadata_only=True, raw_payload_retained=False, authoritative=False))
-        session.add(HermesReviewDisposition(review_disposition_id=disposition.reviewDispositionId, verification_record_id=verification.verificationRecordId, outcome_id=disposition.outcomeId, developer_lane_run_id=disposition.developerLaneRunId, schema_version=disposition.schemaVersion, disposition=disposition.disposition, reviewer_identity=disposition.reviewerIdentity, reviewer_home=disposition.reviewerHome, reviewer_workspace=disposition.reviewerWorkspace, reviewer_capability_binding_id=reviewer_binding_id, reason_code=disposition.reasonCode, next_action=disposition.nextAction, evidence_refs_json=disposition.evidenceRefs, idempotency_key=disposition.idempotencyKey, expected_outcome_revision=disposition.expectedOutcomeRevision, expected_lane_revision=disposition.expectedLaneRevision, request_digest_sha256=digest, exception_requirement_json=request.unavailableReviewerException.model_dump(mode="json", by_alias=True) if request.unavailableReviewerException else None, observed_at=disposition.observedAt, created_at=disposition.createdAt, metadata_only=True, raw_payload_retained=False))
+        session.add(HermesReviewDisposition(review_disposition_id=disposition.reviewDispositionId, verification_record_id=verification.verificationRecordId, outcome_id=disposition.outcomeId, developer_lane_run_id=disposition.developerLaneRunId, schema_version=disposition.schemaVersion, disposition=disposition.disposition, reviewer_identity=disposition.reviewerIdentity, reviewer_home=disposition.reviewerHome, reviewer_workspace=disposition.reviewerWorkspace, reviewer_capability_binding_id=reviewer_binding_id, reason_code=disposition.reasonCode, next_action=disposition.nextAction, evidence_refs_json=disposition.evidenceRefs, cited_source_record_ids_json=disposition.citedSourceRecordIds, idempotency_key=disposition.idempotencyKey, expected_outcome_revision=disposition.expectedOutcomeRevision, expected_lane_revision=disposition.expectedLaneRevision, request_digest_sha256=digest, exception_requirement_json=request.unavailableReviewerException.model_dump(mode="json", by_alias=True) if request.unavailableReviewerException else None, observed_at=disposition.observedAt, created_at=disposition.createdAt, metadata_only=True, raw_payload_retained=False))
         await _update_if_current(session, HermesOutcome, outcome.outcome_id, outcome.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt, "current_event_id": event_id})
         await _update_if_current(session, HermesLaneRun, lane.lane_run_id, lane.revision, {"status": status, "result": result, "reason_code": disposition.reasonCode, "evidence_refs_json": disposition.evidenceRefs, "next_action": disposition.nextAction, "observed_at": disposition.observedAt, "updated_at": disposition.observedAt, "current_event_id": event_id, "rework_budget": lane.rework_budget - 1 if disposition.disposition == "rework" else lane.rework_budget})
     try:
