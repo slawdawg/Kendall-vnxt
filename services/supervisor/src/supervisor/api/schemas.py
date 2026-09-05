@@ -8359,6 +8359,19 @@ class HermesReviewHandoffRequest(BaseModel):
     reviewerCapabilityBindingId: str | None = Field(default=None, max_length=120)
     reviewerCapabilityProof: str | None = Field(default=None, min_length=24, max_length=512)
 
+    @field_validator("developerCapabilityBindingId", "reviewerCapabilityBindingId")
+    @classmethod
+    def _capability_binding(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return value
+        value = _validate_hermes_text(value, info.field_name, 120)
+        if (
+            re.fullmatch(r"[a-z][a-z0-9]*(?:[-_:][a-z0-9]+)+", value) is None
+            or re.search(r"(?:^|[:_-])(?:sk|pk)_(?:test|live)_[A-Za-z0-9_-]+", value, re.IGNORECASE)
+        ):
+            raise ValueError("Role capability identity must be opaque.")
+        return value
+
     @model_validator(mode="after")
     def _bind(self):
         verification, disposition = self.verification, self.disposition
