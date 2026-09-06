@@ -96,6 +96,10 @@ from supervisor.api.schemas import (
     LlmWikiDisposableRebuildWriteRequest,
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
+    HermesCitedSourceApiEnvelope,
+    HermesCitedSourceListApiEnvelope,
+    HermesCitedSourceRecordRequestV1,
+    HermesCitedSourceRevocationRequestV1,
     HermesLedgerIngestRequest,
     HermesReviewHandoffRequest,
     HermesRoleCapabilityProvisionRequestV1,
@@ -172,7 +176,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, revoke_hermes_role_capability
+from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, list_hermes_cited_sources, provision_hermes_role_capability, read_hermes_cited_source, read_hermes_lane_run, read_hermes_outcome, record_hermes_cited_source, revoke_hermes_cited_source, revoke_hermes_role_capability
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -1660,6 +1664,55 @@ async def ingest_hermes_outcome_ledger(
             detail=error_response(str(exc), "hermes_ledger_conflict").model_dump(),
         ) from exc
     return HermesOutcomeProjectionApiEnvelope(data=projection)
+
+
+@app.post("/hermes-control-plane/cited-sources", response_model=HermesCitedSourceApiEnvelope)
+async def record_hermes_cited_source_route(payload: HermesCitedSourceRecordRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    await require_memory_proposal_recovery_operator(request, session)
+    try:
+        record = await record_hermes_cited_source(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_cited_source_conflict").model_dump()) from exc
+    return HermesCitedSourceApiEnvelope(data=record)
+
+
+@app.post("/hermes-control-plane/cited-sources/correct", response_model=HermesCitedSourceApiEnvelope)
+async def correct_hermes_cited_source_route(payload: HermesCitedSourceRecordRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    await require_memory_proposal_recovery_operator(request, session)
+    if payload.supersedesSourceRecordId is None:
+        raise HTTPException(status_code=409, detail=error_response("Cited source correction requires a superseded record.", "hermes_cited_source_conflict").model_dump())
+    try:
+        record = await record_hermes_cited_source(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_cited_source_conflict").model_dump()) from exc
+    return HermesCitedSourceApiEnvelope(data=record)
+
+
+@app.post("/hermes-control-plane/cited-sources/{source_record_id}/revoke", response_model=HermesCitedSourceApiEnvelope)
+async def revoke_hermes_cited_source_route(source_record_id: str, payload: HermesCitedSourceRevocationRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    await require_memory_proposal_recovery_operator(request, session)
+    if source_record_id != payload.sourceRecordId:
+        raise HTTPException(status_code=409, detail=error_response("Cited source path and payload mismatch.", "hermes_cited_source_conflict").model_dump())
+    try:
+        record = await revoke_hermes_cited_source(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_cited_source_conflict").model_dump()) from exc
+    return HermesCitedSourceApiEnvelope(data=record)
+
+
+@app.get("/hermes-control-plane/cited-sources", response_model=HermesCitedSourceListApiEnvelope)
+async def list_hermes_cited_sources_route(request: Request, outcomeId: str, laneRunId: str, limit: int = 50, session: AsyncSession = Depends(get_session)):
+    await require_memory_proposal_recovery_operator(request, session)
+    return HermesCitedSourceListApiEnvelope(data=await list_hermes_cited_sources(session, outcome_id=outcomeId, lane_run_id=laneRunId, limit=limit))
+
+
+@app.get("/hermes-control-plane/cited-sources/{source_record_id}", response_model=HermesCitedSourceApiEnvelope)
+async def read_hermes_cited_source_route(source_record_id: str, outcomeId: str, laneRunId: str, request: Request, session: AsyncSession = Depends(get_session)):
+    await require_memory_proposal_recovery_operator(request, session)
+    record = await read_hermes_cited_source(session, source_record_id, outcome_id=outcomeId, lane_run_id=laneRunId)
+    if record is None:
+        raise HTTPException(status_code=404, detail=error_response("Cited source record is unavailable for this outcome and lane.", "hermes_cited_source_not_found").model_dump())
+    return HermesCitedSourceApiEnvelope(data=record)
 
 
 @app.post("/hermes-control-plane/role-capabilities")

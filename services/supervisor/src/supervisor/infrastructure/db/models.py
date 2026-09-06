@@ -909,6 +909,69 @@ class HermesDeliveryEvidence(Base):
     raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class HermesCitedSourceRecord(Base):
+    """Immutable local citation metadata; it is context, never an authority."""
+
+    __tablename__ = "hermes_cited_source_records"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_hermes_cited_source_idempotency"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_cited_source_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_cited_source_no_raw_payload"),
+        CheckConstraint("review_at >= observed_at", name="ck_hermes_cited_source_review_order"),
+        CheckConstraint("expires_at > review_at", name="ck_hermes_cited_source_expiry_order"),
+        CheckConstraint("(revoked_at IS NULL) = (revocation_reason IS NULL)", name="ck_hermes_cited_source_revocation_pair"),
+        UniqueConstraint("supersedes_source_record_id", name="uq_hermes_cited_source_single_replacement"),
+    )
+
+    source_record_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    source_kind: Mapped[str] = mapped_column(String(48))
+    locator: Mapped[str] = mapped_column(String(300))
+    fingerprint: Mapped[str] = mapped_column(String(240))
+    citation_refs_json: Mapped[list] = mapped_column(JSON)
+    access_scope: Mapped[str] = mapped_column(String(48))
+    confidence: Mapped[str] = mapped_column(String(16))
+    observed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    review_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    supersedes_source_record_id: Mapped[str | None] = mapped_column(ForeignKey("hermes_cited_source_records.source_record_id"), nullable=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    request_digest_sha256: Mapped[str] = mapped_column(String(64))
+    expected_outcome_revision: Mapped[int] = mapped_column(Integer)
+    expected_lane_revision: Mapped[int] = mapped_column(Integer)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    revocation_idempotency_key: Mapped[str | None] = mapped_column(String(180), nullable=True, unique=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HermesCitedSourceConfirmationReceipt(Base):
+    """Immutable proof that a new handoff consumed current cited metadata."""
+
+    __tablename__ = "hermes_cited_source_confirmation_receipts"
+    __table_args__ = (
+        UniqueConstraint("consumer_type", "consumer_id", name="uq_hermes_cited_source_confirmation_consumer"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_cited_source_confirmation_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_cited_source_confirmation_no_raw_payload"),
+    )
+
+    receipt_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    consumer_type: Mapped[str] = mapped_column(String(24))
+    consumer_id: Mapped[str] = mapped_column(String(120))
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    cited_source_record_ids_json: Mapped[list] = mapped_column(JSON)
+    source_set_fingerprint_sha256: Mapped[str] = mapped_column(String(71))
+    expected_outcome_revision: Mapped[int] = mapped_column(Integer)
+    expected_lane_revision: Mapped[int] = mapped_column(Integer)
+    confirmed_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HermesLedgerEvent(Base):
     """Append-only lifecycle observation with exact replay fencing."""
 
@@ -1021,6 +1084,7 @@ class HermesVerificationRecord(Base):
     target: Mapped[str] = mapped_column(String(240))
     source_fingerprint: Mapped[str] = mapped_column(String(240))
     evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    cited_source_record_ids_json: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     idempotency_key: Mapped[str] = mapped_column(String(180))
     expected_outcome_revision: Mapped[int] = mapped_column(Integer)
     expected_lane_revision: Mapped[int] = mapped_column(Integer)
@@ -1054,6 +1118,7 @@ class HermesReviewDisposition(Base):
     reason_code: Mapped[str] = mapped_column(String(120))
     next_action: Mapped[str] = mapped_column(String(360))
     evidence_refs_json: Mapped[list] = mapped_column(JSON)
+    cited_source_record_ids_json: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     idempotency_key: Mapped[str] = mapped_column(String(180))
     expected_outcome_revision: Mapped[int] = mapped_column(Integer)
     expected_lane_revision: Mapped[int] = mapped_column(Integer)

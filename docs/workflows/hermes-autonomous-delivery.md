@@ -102,3 +102,44 @@ An unavailable independent Reviewer produces a metadata-only exception
 requirement with the outcome/lane-run identifiers, reason, risk class,
 compensating-review reference, recorder/time, and review-or-expiry point. It is
 not approval and is not persisted by this workflow.
+
+## Cited Local Project Brain
+
+Project Brain is a Supervisor-owned, metadata-only local context ledger. It
+accepts only two source classes: a source-owned document locator below `docs/`
+and a validated delivery-evidence locator with the `delivery-evidence:` prefix.
+Each record retains an opaque record/outcome/lane identity, locator,
+fingerprint, citation references, scope, confidence, observation/review/expiry
+times, and optional superseded-record identity. It never retains document
+bodies, prompts, transcripts, provider payloads, tokens, credentials, secrets,
+or raw source content. External research and any external memory service remain
+deferred pending a separate cost and retention decision.
+
+Use only the authenticated local `/hermes-control-plane/cited-sources` routes.
+Those routes query only Supervisor-owned persistence; they never query or ingest
+an external Hermes runtime database.
+Reads require an exact outcome and lane scope, are bounded to 100 records, and
+return metadata with a `current`, `stale`, `revoked`, or `superseded` label.
+They never read Hermes SQLite, GitHub, dashboard fixtures, or source content at
+request time. A missing or cross-lineage record returns unavailable/not-found;
+callers must not guess or substitute context.
+
+Records are immutable. To correct one, create a new cited record through
+`/hermes-control-plane/cited-sources/correct` naming the original in
+`supersedesSourceRecordId`; the original is then unusable. Revocation is the
+sole bounded update, is idempotent, and records only a safe reason/time. A
+review point or expiry in the past also makes a record stale. Recover by
+creating a new, independently cited local record after the source is reviewed;
+never reactivate, rewrite, or copy source contents into the ledger.
+
+Implementation verification requires current records scoped to
+`implementation_verification`; independent review requires current records
+scoped to `independent_review` and to the active outcome/lane revisions. Each
+successful initial verification or review records an immutable metadata-only
+confirmation receipt. An exact idempotent replay may return only when that same
+receipt matches; every new verification or review revalidates source
+currentness, scope, lineage, and revision fencing before it can act.
+Cross-outcome, cross-lane, expired, review-due, revoked, superseded, unknown,
+or out-of-scope records fail closed. Project Brain is context—not authority: it
+cannot authorize a policy decision, lifecycle mutation, GitHub action, delivery,
+merge, credential, spend, deployment, or External-Impact action.
