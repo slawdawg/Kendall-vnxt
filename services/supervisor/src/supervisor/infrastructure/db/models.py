@@ -913,6 +913,43 @@ class HermesDeliveryEvidence(Base):
     raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class HermesDeliveryAdmission(Base):
+    """One exact, metadata-only delivery admission; a private UDS claim consumes it."""
+
+    __tablename__ = "hermes_delivery_admissions"
+    __table_args__ = (
+        CheckConstraint("requested_action IN ('request_review', 'merge')", name="ck_hermes_delivery_admission_action"),
+        CheckConstraint("repository = 'slawdawg/Kendall-vnxt'", name="ck_hermes_delivery_admission_repository"),
+        CheckConstraint("base_branch = 'dev'", name="ck_hermes_delivery_admission_base"),
+        CheckConstraint("expires_at > issued_at", name="ck_hermes_delivery_admission_expiry"),
+        CheckConstraint("(claim_id IS NULL) = (claimed_at IS NULL)", name="ck_hermes_delivery_admission_claim_pair"),
+        CheckConstraint("allowed IS TRUE", name="ck_hermes_delivery_admission_allowed"),
+        CheckConstraint("metadata_only IS TRUE", name="ck_hermes_delivery_admission_metadata_only"),
+        CheckConstraint("raw_payload_retained IS FALSE", name="ck_hermes_delivery_admission_no_raw_payload"),
+        UniqueConstraint("delivery_action_result_id", name="uq_hermes_delivery_admission_audit"),
+        UniqueConstraint("claim_id", name="uq_hermes_delivery_admission_claim"),
+    )
+
+    admission_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    delivery_action_result_id: Mapped[str] = mapped_column(String(120))
+    task_id: Mapped[str] = mapped_column(String(160), index=True)
+    outcome_id: Mapped[str] = mapped_column(ForeignKey("hermes_outcomes.outcome_id"), index=True)
+    lane_run_id: Mapped[str] = mapped_column(ForeignKey("hermes_lane_runs.lane_run_id"), index=True)
+    requested_action: Mapped[str] = mapped_column(String(64))
+    repository: Mapped[str] = mapped_column(String(160))
+    base_branch: Mapped[str] = mapped_column(String(250))
+    pull_request_number: Mapped[int] = mapped_column(Integer)
+    exact_head_sha: Mapped[str] = mapped_column(String(40))
+    audit_fingerprint: Mapped[str] = mapped_column(String(300))
+    issued_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    claim_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    metadata_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_retained: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HermesLedgerEvent(Base):
     """Append-only lifecycle observation with exact replay fencing."""
 

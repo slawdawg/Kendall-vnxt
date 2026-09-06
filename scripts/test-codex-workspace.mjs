@@ -14096,7 +14096,7 @@ try {
     }
   });
 
-  test("request-pr-review permits only a freshly proven exact managed head", () => {
+  test("request-pr-review rejects local admission records without private Supervisor consumption", () => {
     const fixture = createCanonicalManagedPrFixture({ existingPr: true });
     try {
       const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
@@ -14120,7 +14120,7 @@ try {
         ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(missingAdmission.code !== 0 && (missingAdmission.stderr || missingAdmission.stdout).includes("delivery-admission"), missingAdmission.stderr || missingAdmission.stdout);
+      assert(missingAdmission.code !== 0 && (missingAdmission.stderr || missingAdmission.stdout).includes("private Supervisor"), missingAdmission.stderr || missingAdmission.stdout);
       manifest.hermes_delivery_admissions = [fixtureHermesDeliveryAdmission(manifest, "merge")];
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const mismatchedAdmission = runFixtureScript(
@@ -14128,7 +14128,7 @@ try {
         ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(mismatchedAdmission.code !== 0 && (mismatchedAdmission.stderr || mismatchedAdmission.stdout).includes("delivery-admission"), mismatchedAdmission.stderr || mismatchedAdmission.stdout);
+      assert(mismatchedAdmission.code !== 0 && (mismatchedAdmission.stderr || mismatchedAdmission.stdout).includes("private Supervisor"), mismatchedAdmission.stderr || mismatchedAdmission.stdout);
       const indeterminateAdmission = fixtureHermesDeliveryAdmission(manifest, "request_review");
       manifest.hermes_delivery_admissions = [indeterminateAdmission];
       manifest.hermes_delivery_executor_evidence = [{
@@ -14145,7 +14145,7 @@ try {
         ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(indeterminateReplay.code !== 0 && (indeterminateReplay.stderr || indeterminateReplay.stdout).includes("already consumed"), indeterminateReplay.stderr || indeterminateReplay.stdout);
+      assert(indeterminateReplay.code !== 0 && (indeterminateReplay.stderr || indeterminateReplay.stdout).includes("private Supervisor"), indeterminateReplay.stderr || indeterminateReplay.stdout);
       manifest.hermes_delivery_admissions = [fixtureHermesDeliveryAdmission(manifest, "request_review")];
       manifest.hermes_delivery_executor_evidence = [];
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -14154,20 +14154,15 @@ try {
         ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(allowed.code === 0, allowed.stderr || allowed.stdout);
-      assert(existsSync(join(fixture.root, "gh-pr-review-called.txt")), "exact-head review request did not invoke the governed GitHub command");
-      const recorded = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
-      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.action === "request_review", "request-review evidence was not retained");
-      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.expectedHeadSha === manifest.pr_delivery_head_sha, "request-review evidence lost the exact head binding");
-      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.decision === "completed", "request-review mutation was not finalized only after post-proof");
-      rmSync(join(fixture.root, "gh-pr-review-called.txt"), { force: true });
+      assert(allowed.code !== 0 && (allowed.stderr || allowed.stdout).includes("private Supervisor"), allowed.stderr || allowed.stdout);
+      assert(!existsSync(join(fixture.root, "gh-pr-review-called.txt")), "a local admission record reached the GitHub review mutation");
       const replay = runFixtureScript(
         fixture,
         ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
         { cwd: fixture.worktree, env: fixture.env },
       );
-      assert(replay.code !== 0 && (replay.stderr || replay.stdout).includes("delivery-admission"), replay.stderr || replay.stdout);
-      assert(!existsSync(join(fixture.root, "gh-pr-review-called.txt")), "consumed admission reached a second review mutation");
+      assert(replay.code !== 0 && (replay.stderr || replay.stdout).includes("private Supervisor"), replay.stderr || replay.stdout);
+      assert(!existsSync(join(fixture.root, "gh-pr-review-called.txt")), "a local admission record reached a GitHub review mutation");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -14200,7 +14195,7 @@ try {
       assert(denied.code !== 0, "merge-exact-head accepted a mismatched retained head");
       assert(!existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "mismatched head reached the merge mutation");
       const missingAdmission = runFixtureScript(fixture, ["merge-exact-head", "resumed-task", "--owner", "runner-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-      assert(missingAdmission.code !== 0 && (missingAdmission.stderr || missingAdmission.stdout).includes("delivery-admission"), missingAdmission.stderr || missingAdmission.stdout);
+      assert(missingAdmission.code !== 0 && (missingAdmission.stderr || missingAdmission.stdout).includes("private Supervisor"), missingAdmission.stderr || missingAdmission.stdout);
       manifest.status = "active";
       manifest.hermes_delivery_admissions = [fixtureHermesDeliveryAdmission(manifest, "merge")];
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -14210,12 +14205,8 @@ try {
       manifest.hermes_delivery_admissions = [fixtureHermesDeliveryAdmission(manifest, "merge")];
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const allowed = runFixtureScript(fixture, ["merge-exact-head", "resumed-task", "--owner", "runner-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot], { cwd: fixture.worktree, env: fixture.env });
-      assert(allowed.code === 0, allowed.stderr || allowed.stdout);
-      assert(existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "exact-head merge did not invoke the governed GitHub command");
-      const recorded = readJson(manifestPath);
-      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.action === "merge", "merge evidence was not retained");
-      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.expectedHeadSha === manifest.pr_delivery_head_sha, "merge evidence lost the exact head binding");
-      assert(recorded.hermes_delivery_executor_evidence?.at(-1)?.decision === "completed", "merge mutation was not finalized only after post-proof");
+      assert(allowed.code !== 0 && (allowed.stderr || allowed.stdout).includes("private Supervisor"), allowed.stderr || allowed.stdout);
+      assert(!existsSync(join(fixture.root, "gh-pr-merge-called.txt")), "a local admission record reached the GitHub merge mutation");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -24043,6 +24034,13 @@ function fixtureHermesDeliveryAdmission(manifest, action) {
     admissionId: `fixture-admission-${action}`,
     recordedAt: recordedAt.toISOString(),
     expiresAt: new Date(recordedAt.getTime() + 60_000).toISOString(),
+    outcomeId: "outcome:fixture",
+    laneRunId: "lane:fixture",
+    claimId: `claim:fixture-${action}`,
+    claimedAt: recordedAt.toISOString(),
+    auditFingerprint: "a".repeat(64),
+    metadataOnly: true,
+    rawPayloadRetained: false,
   };
 }
 

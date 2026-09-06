@@ -152,6 +152,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       "isHermesOutcomeV1", "isHermesLaneRunV1", "isDeliveryEvidenceV1", "isPolicyDecisionV1",
       "isExternalImpactRequestV1", "isFollowUpWorkV1", "isHermesLifecycleEventV1",
       "isHermesBoardLifecycleEventV1", "isHermesDeliveryAuditRequestV1", "isHermesDeliveryActionResultV1",
+      "isHermesDeliveryAdmissionClaimRequestV1", "isHermesDeliveryAdmissionReceiptV1",
     ]) assert.equal(typeof contracts[guardName], "function", `${guardName} is exported at runtime`);
     const observedAt = "2026-08-28T00:00:00Z";
     const later = "2026-08-28T01:00:00Z";
@@ -220,6 +221,17 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       pullRequestNumber: 1, reviewThreadId: null, reviewThreadAdjudicationId: null, evidenceRefs: deliveryAudit.evidenceRefs, nextAction: "Run codex workspace request-pr-review.", rollbackRef: "evidence:approved-review:one",
       observedAt: later, idempotencyKey: "delivery-result:one", createdAt: observedAt, metadataOnly: true, rawPayloadRetained: false,
     };
+    const admissionClaim = {
+      claimId: "delivery-claim:one", taskId: deliveryAudit.taskId, outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      deliveryStewardIdentity: "delivery:one", deliveryHome: "home:delivery", deliveryWorkspace: "workspace:delivery", deliveryCapabilityBindingId: "capability:delivery-one", deliveryCapabilityProof: "delivery-proof-value-123456", requestedAction: "request_review",
+      pullRequestNumber: 1, exactHeadSha: "a".repeat(40), metadataOnly: true, rawPayloadRetained: false,
+    };
+    const admissionReceipt = {
+      admissionId: "delivery-admission:one", consumptionResultId: "delivery-admission-consumed:one", taskId: deliveryAudit.taskId, outcomeId: outcome.outcomeId, laneRunId: laneRun.laneRunId,
+      requestedAction: "request_review", decision: "allowed", repository: "slawdawg/Kendall-vnxt", baseBranch: "dev",
+      pullRequestNumber: 1, exactHeadSha: "a".repeat(40), auditFingerprint: "b".repeat(64), issuedAt: observedAt,
+      expiresAt: "2026-08-28T02:00:00Z", claimId: admissionClaim.claimId, claimedAt: later, metadataOnly: true, rawPayloadRetained: false,
+    };
     const reviewDisposition = {
       reviewDispositionId: "review:one", verificationRecordId: "verification:one", outcomeId: outcome.outcomeId, developerLaneRunId: laneRun.laneRunId,
       schemaVersion: contracts.HERMES_REVIEW_DISPOSITION_SCHEMA_VERSION, disposition: "approve", reviewerIdentity: "reviewer:one", reviewerHome: "home:reviewer", reviewerWorkspace: "workspace:reviewer",
@@ -236,9 +248,14 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesBoardLifecycleEventV1(boardEvent), true);
     assert.equal(contracts.isHermesDeliveryAuditRequestV1(deliveryAudit), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1(deliveryResult), true);
+    assert.equal(contracts.isHermesDeliveryAdmissionClaimRequestV1(admissionClaim), true);
+    assert.equal(contracts.isHermesDeliveryAdmissionReceiptV1(admissionReceipt), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, decision: "deniedExternalImpact" }), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, decision: "rework" }), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, evidenceRefs: ["evidence:other"] }), false);
+    assert.equal(contracts.isHermesDeliveryAdmissionClaimRequestV1({ ...admissionClaim, requestedAction: "finish_pr" }), false);
+    assert.equal(contracts.isHermesDeliveryAdmissionReceiptV1({ ...admissionReceipt, auditFingerprint: "not-a-fingerprint" }), false);
+    assert.equal(contracts.isHermesDeliveryAdmissionReceiptV1({ ...admissionReceipt, unknown: true }), false);
     assert.equal(contracts.isReviewDispositionV1(reviewDisposition), true);
     assert.equal(Object.isFrozen(contracts.HERMES_RESULT_VALUES), true);
     assert.equal(Object.isFrozen(contracts.HERMES_LIFECYCLE_EVENT_NAMES), true);

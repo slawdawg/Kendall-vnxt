@@ -5,13 +5,13 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAdmissionReceiptV1, HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
     now = datetime(2026, 9, 2, 12, tzinfo=UTC)
     later = now + timedelta(minutes=1)
-    iso = lambda value: value.isoformat().replace("+00:00", "Z")
+    iso = lambda value: value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     refs = ["evidence:hermes-ledger-1"]
     return {
         "outcome": {"outcomeId": "outcome:1", "taskId": "task:hermes-one", "schemaVersion": "hermes_outcome.v1", "title": "Persist Hermes outcome", "summary": "Metadata-only ledger proof.", "status": "active", "result": "retryable", "reasonCode": "verification_pending", "evidenceRefs": refs, "nextAction": "Run focused verification.", "observedAt": iso(later), "idempotencyKey": "outcome:1", "createdAt": iso(now), "updatedAt": iso(later), "metadataOnly": True, "rawPayloadRetained": False},
@@ -48,6 +48,7 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert route("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke").methods == {"POST"}
     assert route("/hermes-control-plane/review-handoffs").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
     assert route("/hermes-control-plane/delivery-audits").response_model.__name__ == "HermesDeliveryActionResultV1"
+    assert route("/internal/hermes-control-plane/delivery-admissions/consume").response_model.__name__ == "HermesDeliveryAdmissionReceiptV1"
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():
@@ -140,3 +141,27 @@ def test_delivery_audit_request_is_exact_head_bound_and_has_a_closed_action_matr
     assert result.reviewThreadAdjudicationId == "adjudication:one"
     with pytest.raises(ValidationError, match="opaque"):
         HermesDeliveryActionResultV1.model_validate({**result.model_dump(mode="json"), "reviewThreadAdjudicationId": "Adjudication_1"})
+
+
+def test_delivery_admission_claim_and_receipt_are_exact_and_metadata_only():
+    claim = HermesDeliveryAdmissionClaimRequestV1.model_validate({
+        "claimId": "delivery-claim:one", "taskId": "task:delivery-one", "outcomeId": "outcome:one", "laneRunId": "lane:one", "deliveryStewardIdentity": "delivery:one", "deliveryHome": "home:delivery", "deliveryWorkspace": "workspace:delivery", "deliveryCapabilityBindingId": "capability:delivery-one", "deliveryCapabilityProof": "d" * 32, "requestedAction": "merge",
+        "pullRequestNumber": 916, "exactHeadSha": "a" * 40, "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    now = datetime.now(UTC)
+    iso = lambda value: value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    receipt = HermesDeliveryAdmissionReceiptV1.model_validate({
+        "admissionId": "delivery-admission:one", "consumptionResultId": "delivery-admission-consumed:one", "taskId": claim.taskId, "outcomeId": "outcome:one", "laneRunId": "lane:one",
+        "requestedAction": claim.requestedAction, "decision": "allowed", "repository": "slawdawg/Kendall-vnxt", "baseBranch": "dev",
+        "pullRequestNumber": claim.pullRequestNumber, "exactHeadSha": claim.exactHeadSha, "auditFingerprint": "b" * 64,
+        "issuedAt": iso(now), "expiresAt": iso(now + timedelta(minutes=1)), "claimId": claim.claimId,
+        "claimedAt": iso(now), "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    assert receipt.claimId == claim.claimId
+    assert receipt.consumptionResultId == "delivery-admission-consumed:one"
+    with pytest.raises(ValidationError):
+        HermesDeliveryAdmissionClaimRequestV1.model_validate({**claim.model_dump(mode="json"), "requestedAction": "finish_pr"})
+    with pytest.raises(ValidationError, match="SHA-256"):
+        HermesDeliveryAdmissionReceiptV1.model_validate({**receipt.model_dump(mode="json"), "auditFingerprint": "z" * 64})
+    with pytest.raises(ValidationError, match="ordered"):
+        HermesDeliveryAdmissionReceiptV1.model_validate({**receipt.model_dump(mode="json"), "expiresAt": iso(now)})

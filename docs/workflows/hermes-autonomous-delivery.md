@@ -68,22 +68,45 @@ profile or board, enable a gateway, mount credentials, or admit work.
 ## Governed Delivery Commands
 
 Story 4.2's Delivery adapter records metadata-only admission evidence; it never
-contains a GitHub token or a direct GitHub client. A matching accepted delivery
-audit is a required workflow prerequisite, not a credential and not yet an
-input enforced by the existing workspace executor. Do not invoke the commands
-below without separately established governed lane authority:
+contains a GitHub token or a direct GitHub client. An accepted `request_review`
+or `merge` audit mints one short-lived exact action/head admission. The local,
+private-UDS-only `/internal/hermes-control-plane/delivery-admissions/consume`
+operation atomically revalidates and consumes that admission using the existing
+task-scoped Delivery capability proof. It returns the same metadata-only result
+only for an exact current replay. The proof is read only from the protected
+local process environment (`KENDALL_HERMES_DELIVERY_CAPABILITY_PROOF`); it is
+never accepted on the command line or persisted. A conflicting, expired,
+revoked, already-claimed, stale, or changed task/action/PR/head request is a
+stop line: create a fresh audit after proving current verification/review state,
+rather than retrying a GitHub mutation.
+
+The runner resolves the private endpoint only at the source-owned local
+operating-system account home `kendall-lan-auth/supervisor.sock`; delivery-time
+`HOME`, socket, and LAN-auth-directory environment overrides are deliberately
+ignored. Test fixtures may inject a private socket through their in-process test
+context only.
+
+The server-owned consumption result is evidence, not a credential or direct
+GitHub input. The governed workspace executor invokes the private UDS operation
+under its manifest lock immediately before the GitHub write, retains only the
+returned metadata identifiers, and independently re-audits the managed task,
+repository, PR, and exact head. Do not invoke the commands below without
+separately established governed lane authority and the already-provisioned
+Delivery capability binding/profile arguments:
 
 ```bash
-node ./scripts/codex-workspace.mjs request-pr-review <task> --reviewer <login> --expected-head <40-char-sha>
-node ./scripts/codex-workspace.mjs merge-exact-head <task> --expected-head <40-char-sha>
+node ./scripts/codex-workspace.mjs request-pr-review <task> --reviewer <login> --expected-head <40-char-sha> --hermes-outcome-id <id> --hermes-lane-run-id <id> --hermes-delivery-steward-identity <id> --hermes-delivery-home <path> --hermes-delivery-workspace <path> --hermes-delivery-capability-binding-id <id>
+node ./scripts/codex-workspace.mjs merge-exact-head <task> --expected-head <40-char-sha> --hermes-outcome-id <id> --hermes-lane-run-id <id> --hermes-delivery-steward-identity <id> --hermes-delivery-home <path> --hermes-delivery-workspace <path> --hermes-delivery-capability-binding-id <id>
 ```
 
-Both commands re-prove the managed task, repository, pull request, and exact
-head before the GitHub operation and again under the manifest lock. They reject
-draft, stale, changed, or non-mergeable PR state. `merge-exact-head` requires
-the retained exact-head merge gate and does not clean up. A failed post-mutation
+Both commands reject a missing private-UDS transport, Delivery proof, expired,
+revoked, duplicate, stale, or mismatched admission, then re-prove the managed
+task, repository, pull request, and exact head before the GitHub operation and
+again under the manifest lock. They reject draft,
+stale, changed, or non-mergeable PR state. `merge-exact-head` requires the
+retained exact-head merge gate and does not clean up. A failed post-mutation
 audit is a stop line: do not retry blindly; retain the error and inspect the PR
-state before any separately governed recovery.
+state before any separately governed recovery or revert decision.
 
 The adapter contract is selected by `pnpm run test:hermes-delivery-adapter` and
 the `check:fast` local-verification group. It uses fixtures only and does not

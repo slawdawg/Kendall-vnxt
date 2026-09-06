@@ -240,6 +240,11 @@ async def _apply_hermes_verified_head_binding(connection: AsyncConnection) -> No
     if "verified_head_sha" not in columns:
         await connection.execute(text("ALTER TABLE hermes_verification_records ADD COLUMN verified_head_sha VARCHAR(40)"))
 
+
+async def _apply_hermes_delivery_admissions(connection: AsyncConnection) -> None:
+    from supervisor.infrastructure.db.models import HermesDeliveryAdmission
+    await connection.run_sync(lambda sync_connection: HermesDeliveryAdmission.metadata.create_all(sync_connection, tables=[HermesDeliveryAdmission.__table__]))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -280,6 +285,7 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0011_hermes_review_thread_adjudication", _apply_hermes_review_thread_adjudication, clean_install=_apply_hermes_review_thread_adjudication),
     SchemaMigration("0012_hermes_reviewed_head_binding", _apply_hermes_reviewed_head_binding, clean_install=_apply_hermes_reviewed_head_binding),
     SchemaMigration("0013_hermes_verified_head_binding", _apply_hermes_verified_head_binding, clean_install=_apply_hermes_verified_head_binding),
+    SchemaMigration("0014_hermes_delivery_admissions", _apply_hermes_delivery_admissions, clean_install=_apply_hermes_delivery_admissions),
 )
 
 

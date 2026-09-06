@@ -8638,6 +8638,65 @@ class HermesDeliveryActionResultV1(BaseModel):
         return self
 
 
+class HermesDeliveryAdmissionClaimRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    claimId: str = Field(max_length=120); taskId: str = Field(max_length=160); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120); deliveryStewardIdentity: str = Field(max_length=120); deliveryHome: str = Field(max_length=240); deliveryWorkspace: str = Field(max_length=240); deliveryCapabilityBindingId: str = Field(max_length=120); deliveryCapabilityProof: str = Field(min_length=24, max_length=512); requestedAction: Literal["request_review", "merge"]
+    pullRequestNumber: int = Field(gt=0); exactHeadSha: str = Field(min_length=40, max_length=40); metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("claimId")
+    @classmethod
+    def _claim_id(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 120)
+    @field_validator("taskId", "outcomeId", "laneRunId", "deliveryStewardIdentity", "deliveryCapabilityBindingId")
+    @classmethod
+    def _identity(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 160)
+    @field_validator("deliveryHome", "deliveryWorkspace")
+    @classmethod
+    def _profile(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 240)
+    @field_validator("exactHeadSha")
+    @classmethod
+    def _head(cls, value: str) -> str: return HermesDeliveryAuditRequestV1._head(value)
+    @model_validator(mode="after")
+    def _bound(self):
+        if self.deliveryHome == self.deliveryWorkspace:
+            raise ValueError("Delivery admission claim requires distinct Delivery profile paths.")
+        return self
+
+
+class HermesDeliveryAdmissionReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    admissionId: str = Field(max_length=120); consumptionResultId: str = Field(max_length=120); taskId: str = Field(max_length=160); outcomeId: str = Field(max_length=120); laneRunId: str = Field(max_length=120); requestedAction: Literal["request_review", "merge"]; decision: Literal["allowed"]
+    repository: Literal["slawdawg/Kendall-vnxt"]; baseBranch: Literal["dev"]; pullRequestNumber: int = Field(gt=0); exactHeadSha: str
+    auditFingerprint: str = Field(min_length=64, max_length=64); issuedAt: datetime; expiresAt: datetime; claimId: str = Field(max_length=120); claimedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]
+    @field_validator("admissionId", "consumptionResultId", "outcomeId", "laneRunId", "claimId")
+    @classmethod
+    def _opaque(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 120)
+    @field_validator("taskId")
+    @classmethod
+    def _task_id(cls, value: str, info) -> str: return _validate_hermes_text(value, info.field_name, 160)
+    @field_validator("exactHeadSha")
+    @classmethod
+    def _head(cls, value: str) -> str: return HermesDeliveryAuditRequestV1._head(value)
+    @field_validator("auditFingerprint")
+    @classmethod
+    def _fingerprint(cls, value: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{64}", value): raise ValueError("Delivery admission requires a SHA-256 audit fingerprint.")
+        return value
+    @field_validator("issuedAt", "expiresAt", "claimedAt", mode="before")
+    @classmethod
+    def _time(cls, value: object, info) -> datetime: return _parse_hermes_timestamp(value, info.field_name)
+    @model_validator(mode="after")
+    def _valid(self):
+        now = datetime.now(timezone.utc)
+        if not self.issuedAt < self.expiresAt or not self.issuedAt <= self.claimedAt <= self.expiresAt or self.claimedAt > now:
+            raise ValueError("Delivery admission receipt timestamps are not current and ordered.")
+        return self
+    @model_serializer(mode="wrap")
+    def _canonical_timestamps(self, handler):
+        serialized = handler(self)
+        for field_name in ("issuedAt", "expiresAt", "claimedAt"):
+            serialized[field_name] = getattr(self, field_name).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return serialized
+
+
 class HermesOutcomeProjectionV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     outcomeId: str; title: str; lifecycle: str; currentLaneRunId: str | None; currentResult: str; reasonCode: str; evidenceRefs: list[str]; latestEvidenceAt: datetime; nextAction: str; recoveryState: str; freshness: Literal["fresh", "stale", "unknown", "unavailable"]; observedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]

@@ -97,6 +97,8 @@ from supervisor.api.schemas import (
     ManagerTerminalEventApiEnvelope,
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
+    HermesDeliveryAdmissionClaimRequestV1,
+    HermesDeliveryAdmissionReceiptV1,
     HermesDeliveryActionResultV1,
     HermesDeliveryAuditRequestV1,
     HermesReviewThreadAdjudicationRequestV1,
@@ -175,7 +177,7 @@ from supervisor.application.manager_terminal_events import (
     get_latest_manager_terminal_event,
     persist_manager_terminal_event,
 )
-from supervisor.application.hermes_outcomes import ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, record_hermes_delivery_audit, record_hermes_review_thread_adjudication, revoke_hermes_role_capability
+from supervisor.application.hermes_outcomes import claim_hermes_delivery_admission, ingest_hermes_ledger, ingest_hermes_review_handoff, provision_hermes_role_capability, read_hermes_lane_run, read_hermes_outcome, record_hermes_delivery_audit, record_hermes_review_thread_adjudication, revoke_hermes_role_capability
 from supervisor.application import hermes_board_bridge
 from supervisor.application.manager_lane_clarity_handoffs import (
     get_manager_lane_clarity_handoff,
@@ -624,6 +626,17 @@ def _private_test_viewer_lifecycle_request(request: Request) -> None:
         or any(request.headers.get(name) for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port"))
     ):
         raise HTTPException(status_code=404, detail="Not found.")
+
+
+def require_private_uds_operational_transport(request: Request) -> None:
+    """Accept an operational actor only on the configured same-user UDS."""
+    if (
+        not settings.lan_auth_enabled
+        or settings.supervisor_transport != "private_uds"
+        or request.client is not None
+        or any(request.headers.get(name) for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port"))
+    ):
+        raise HTTPException(status_code=403, detail=error_response("Private Supervisor UDS transport is required.", "private_uds_required").model_dump())
 
 
 PACKET_DETAIL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
@@ -1694,6 +1707,16 @@ async def record_hermes_delivery_audit_route(payload: HermesDeliveryAuditRequest
         return await record_hermes_delivery_audit(session, payload)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_delivery_audit_conflict").model_dump()) from exc
+
+
+@app.post("/internal/hermes-control-plane/delivery-admissions/consume", response_model=HermesDeliveryAdmissionReceiptV1)
+async def claim_hermes_delivery_admission_route(payload: HermesDeliveryAdmissionClaimRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+    """Consume one exact admission through private UDS plus the Delivery capability proof."""
+    require_private_uds_operational_transport(request)
+    try:
+        return await claim_hermes_delivery_admission(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_delivery_admission_conflict").model_dump()) from exc
 
 
 @app.post("/hermes-control-plane/review-thread-adjudications")

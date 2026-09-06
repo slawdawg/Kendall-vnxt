@@ -29,6 +29,7 @@ import { protectedBranches as branchFoundationProtectedBranches } from "./lib/br
 import { buildAssignmentInventory } from "./lib/codex-workspace-assignment-inventory.mjs";
 import { inspectBaseCheckoutRecovery } from "./lib/base-checkout-recovery.mjs";
 import { assertWorkspaceStateStorage, currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
+import { consumePrivateHermesDeliveryAdmission } from "./lib/hermes-delivery-admission.mjs";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 import {
   evaluateEpicBatchAdmission,
@@ -458,10 +459,10 @@ try {
       verifyPrGates(commandArgs);
       break;
     case "request-pr-review":
-      requestPrReview(commandArgs);
+      await requestPrReview(commandArgs);
       break;
     case "merge-exact-head":
-      mergeExactHead(commandArgs);
+      await mergeExactHead(commandArgs);
       break;
     case "refresh-pr-head":
       refreshPrHead(commandArgs);
@@ -5777,62 +5778,6 @@ function exactHeadDeliveryActionState(manifest, expectedHeadSha) {
   return { expectedHead, repository: { owner: repositoryRef.owner, name: repositoryRef.name, fullName: `${repositoryRef.owner}/${repositoryRef.name}` }, pr, headState, reviewThreads, blockers };
 }
 
-function currentHermesDeliveryAdmission(manifest, action, state) {
-  if (!Array.isArray(manifest.hermes_delivery_admissions)) {
-    throw new Error("Delivery action requires a persisted Hermes delivery-admission result.");
-  }
-  if (manifest.status !== "pr_open") {
-    throw new Error("Delivery action only accepts a managed PR lane in pr_open mode.");
-  }
-  const now = Date.now();
-  const matching = manifest.hermes_delivery_admissions.filter((record) => (
-    record && typeof record === "object" && !Array.isArray(record) &&
-    record.taskId === manifest.task_id &&
-    record.action === action &&
-    record.pullRequestNumber === state.pr?.number &&
-    exactGitObjectIdOrNull(record.expectedHeadSha) === state.expectedHead &&
-    Number.isFinite(Date.parse(record.expiresAt)) && Date.parse(record.expiresAt) > now
-  ));
-  if (matching.length !== 1) {
-    throw new Error("Delivery action requires exactly one current Hermes delivery-admission result bound to this task, action, PR, and exact head.");
-  }
-  const admission = matching[0];
-  const allowedKeys = new Set([
-    "taskId",
-    "action",
-    "pullRequestNumber",
-    "expectedHeadSha",
-    "allowed",
-    "admissionId",
-    "recordedAt",
-    "expiresAt",
-  ]);
-  if (
-    Object.keys(admission).some((key) => !allowedKeys.has(key)) ||
-    admission.allowed !== true ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,255}$/.test(String(admission.admissionId || "")) ||
-    !Number.isFinite(Date.parse(admission.recordedAt)) ||
-    Date.parse(admission.recordedAt) > now ||
-    Date.parse(admission.recordedAt) > Date.parse(admission.expiresAt)
-  ) {
-    throw new Error("Hermes delivery-admission result is malformed or not currently allowed.");
-  }
-  const unresolvedAttempt = (Array.isArray(manifest.hermes_delivery_executor_evidence)
-    ? manifest.hermes_delivery_executor_evidence
-    : []).some((record) => (
-    record?.taskId === manifest.task_id &&
-    record.action === action &&
-    record.pullRequestNumber === state.pr?.number &&
-    record.expectedHeadSha === state.expectedHead &&
-    record.admissionId === admission.admissionId &&
-    ["indeterminate", "completed"].includes(record.decision)
-  ));
-  if (unresolvedAttempt) {
-    throw new Error("Hermes delivery-admission result was already consumed by a mutation attempt; do not retry blindly.");
-  }
-  return admission;
-}
-
 function assertPrMutationPreflight(manifest, state, commandName) {
   assertNoActiveEmergencyStop(state, commandName);
   assertBaseCheckoutRecoveryClearForDelivery(state);
@@ -5843,23 +5788,62 @@ function assertPrMutationPreflight(manifest, state, commandName) {
   }
 }
 
-function assertGovernedPrMutationAdmission(manifest, state, action, commandName, expectedHeadSha) {
+function assertGovernedPrMutationAdmission(manifest, state, commandName, expectedHeadSha) {
   assertPrMutationPreflight(manifest, state, commandName);
   const deliveryState = exactHeadDeliveryActionState(manifest, expectedHeadSha);
   if (deliveryState.blockers.length) {
     throw new Error(`${commandName} is blocked: ${deliveryState.blockers.join("; ")}`);
   }
-  return { ...deliveryState, admission: currentHermesDeliveryAdmission(manifest, action, deliveryState) };
+  return deliveryState;
 }
 
-function consumeHermesDeliveryAdmission(manifest, admission) {
-  const index = Array.isArray(manifest.hermes_delivery_admissions)
-    ? manifest.hermes_delivery_admissions.indexOf(admission)
-    : -1;
-  if (index < 0) {
-    throw new Error("Hermes delivery-admission result changed before mutation-attempt recording.");
+async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, state, options) {
+  const priorAttempt = (Array.isArray(manifest.hermes_delivery_executor_evidence) ? manifest.hermes_delivery_executor_evidence : []).some((record) => (
+    record?.taskId === manifest.task_id && record?.action === action && record?.pullRequestNumber === state.pr?.number &&
+    record?.expectedHeadSha === state.expectedHead && ["indeterminate", "completed"].includes(record?.decision)
+  ));
+  if (priorAttempt) throw new Error("Hermes delivery action already has immutable mutation-attempt evidence; do not retry blindly.");
+  const claims = Array.isArray(manifest.hermes_delivery_admission_claims) ? manifest.hermes_delivery_admission_claims : [];
+  const matching = claims.filter((claim) => claim?.taskId === manifest.task_id && claim?.action === action && claim?.pullRequestNumber === state.pr.number && claim?.expectedHeadSha === state.expectedHead);
+  if (matching.length > 1) throw new Error("Hermes delivery admission has ambiguous persisted claim intent; do not retry blindly.");
+  let claim = matching[0];
+  const binding = {
+    outcomeId: options.hermesOutcomeId,
+    laneRunId: options.hermesLaneRunId,
+    deliveryStewardIdentity: options.hermesDeliveryStewardIdentity,
+    deliveryHome: options.hermesDeliveryHome,
+    deliveryWorkspace: options.hermesDeliveryWorkspace,
+    deliveryCapabilityBindingId: options.hermesDeliveryCapabilityBindingId,
+  };
+  if (claim && Object.entries(binding).some(([key, value]) => claim[key] !== value)) {
+    throw new Error("Hermes delivery admission claim intent no longer matches the Delivery binding; do not retry blindly.");
   }
-  manifest.hermes_delivery_admissions.splice(index, 1);
+  if (!claim) {
+    claim = {
+      claimId: `delivery-claim:${randomUUID()}`,
+      taskId: manifest.task_id,
+      action,
+      pullRequestNumber: state.pr.number,
+      expectedHeadSha: state.expectedHead,
+      ...binding,
+      recordedAt: new Date().toISOString(),
+      metadataOnly: true,
+      rawPayloadRetained: false,
+    };
+    manifest.hermes_delivery_admission_claims = [...claims, claim].slice(-20);
+    writeManifest(manifestPath, manifest);
+  }
+  return await consumePrivateHermesDeliveryAdmission({
+    claimId: claim.claimId,
+    taskId: manifest.task_id,
+    ...binding,
+    // The existing task-scoped proof is transient process input only. Never
+    // accept, print, or persist it through a command-line flag or manifest.
+    deliveryCapabilityProof: process.env.KENDALL_HERMES_DELIVERY_CAPABILITY_PROOF,
+    requestedAction: action,
+    pullRequestNumber: state.pr.number,
+    exactHeadSha: state.expectedHead,
+  });
 }
 
 function appendHermesDeliveryExecutorEvidence(manifest, action, state, extra = {}) {
@@ -5915,7 +5899,7 @@ function finalizeHermesDeliveryExecutorAttempt(manifest, attempt, state, extra =
   return record;
 }
 
-function requestPrReview(argv) {
+async function requestPrReview(argv) {
   const { positional, options } = parseOptions(argv);
   const reviewer = safeMetadataText(options.reviewer, 80);
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(reviewer)) throw new Error("request-pr-review requires --reviewer <GitHub login>.");
@@ -5924,16 +5908,16 @@ function requestPrReview(argv) {
   assertLaneOwner(manifest, options); requireGh("request-pr-review"); assertSafeBranch(manifest.branch); assertWorktreeExists(manifest); assertCurrentBranch(manifest);
   assertPrMutationPreflight(manifest, state, "request-pr-review");
   reconcileManifest(manifest, { refreshPr: true });
-  const preview = assertGovernedPrMutationAdmission(manifest, state, "request_review", "request-pr-review", options.expectedHead);
+  const preview = assertGovernedPrMutationAdmission(manifest, state, "request-pr-review", options.expectedHead);
   if (options.dryRun) return printPlan("request-pr-review", [`gh pr edit ${preview.pr.number} --add-reviewer ${reviewer}`, `exact head ${preview.expectedHead}`]);
-  withManifestLock(state, manifest.task_id, (lock) => {
+  await withManifestLock(state, manifest.task_id, async (lock) => {
     const locked = readManifest(manifestPath);
     validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
     assertPrMutationPreflight(locked, state, "request-pr-review");
     reconcileManifest(locked, { refreshPr: true });
-    const fresh = assertGovernedPrMutationAdmission(locked, state, "request_review", "request-pr-review", options.expectedHead);
-    consumeHermesDeliveryAdmission(locked, fresh.admission);
-    const attempt = recordHermesDeliveryExecutorAttempt(locked, "request_review", fresh, { admissionId: fresh.admission.admissionId, reviewer, nextAction: "Await the requested review before any merge.", rollbackPath: "Remove the review request through the governed workspace only if a future exact-head policy permits it." });
+    const fresh = assertGovernedPrMutationAdmission(locked, state, "request-pr-review", options.expectedHead);
+    const admission = await consumeHermesDeliveryAdmission(locked, manifestPath, "request_review", fresh, options);
+    const attempt = recordHermesDeliveryExecutorAttempt(locked, "request_review", fresh, { admissionId: admission.admissionId, admissionClaimId: admission.claimId, admissionConsumptionResultId: admission.consumptionResultId, auditFingerprint: admission.auditFingerprint, reviewer, nextAction: "Await the requested review before any merge.", rollbackPath: "Remove the review request through the governed workspace only if a future exact-head policy permits it." });
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     writeManifest(manifestPath, locked);
     lock.heartbeat();
@@ -5965,7 +5949,7 @@ function mergeGateOptionsFromEvidence(gate) {
   };
 }
 
-function mergeExactHead(argv) {
+async function mergeExactHead(argv) {
   const { positional, options } = parseOptions(argv);
   const state = workspaceState(options);
   const { manifest, path: manifestPath } = findManifest(state, positional.join(" "), { preferCurrentWorktree: true });
@@ -5974,22 +5958,22 @@ function mergeExactHead(argv) {
   reconcileManifest(manifest, { refreshPr: true });
   const retained = manifest.pr_gate_evidence;
   if (!retained?.lowRiskReady || retained.expectedHeadSha !== options.expectedHead) throw new Error("merge-exact-head requires retained low-risk exact-head gate evidence for --expected-head.");
-  const preview = assertGovernedPrMutationAdmission(manifest, state, "merge", "merge-exact-head", options.expectedHead);
+  const preview = assertGovernedPrMutationAdmission(manifest, state, "merge-exact-head", options.expectedHead);
   const previewGate = buildPrGateEvidence(manifest, { options: mergeGateOptionsFromEvidence(retained) });
   if (!previewGate.lowRiskReady || previewGate.expectedHeadSha !== options.expectedHead) throw new Error(`merge-exact-head is blocked: ${previewGate.blockers.join("; ")}`);
   if (options.dryRun) return printPlan("merge-exact-head", [`gh pr merge ${preview.pr.number} --merge --match-head-commit ${preview.expectedHeadSha}`, "no cleanup, branch deletion, bypass, or force flags"]);
-  withManifestLock(state, manifest.task_id, (lock) => {
+  await withManifestLock(state, manifest.task_id, async (lock) => {
     const locked = readManifest(manifestPath);
     validateManifest(locked, manifestPath); assertLaneOwner(locked, options); claimLaneOwner(locked, options); assertCurrentBranch(locked);
     assertPrMutationPreflight(locked, state, "merge-exact-head");
     reconcileManifest(locked, { refreshPr: true });
     const lockedGate = locked.pr_gate_evidence;
     if (!lockedGate?.lowRiskReady || lockedGate.expectedHeadSha !== options.expectedHead) throw new Error("merge-exact-head retained gate evidence changed under lock.");
-    const admission = assertGovernedPrMutationAdmission(locked, state, "merge", "merge-exact-head", options.expectedHead);
+    const admission = assertGovernedPrMutationAdmission(locked, state, "merge-exact-head", options.expectedHead);
     const fresh = buildPrGateEvidence(locked, { options: mergeGateOptionsFromEvidence(lockedGate) });
     if (!fresh.lowRiskReady || fresh.expectedHeadSha !== options.expectedHead) throw new Error(`merge-exact-head fresh gate proof failed: ${fresh.blockers.join("; ")}`);
-    consumeHermesDeliveryAdmission(locked, admission.admission);
-    const attempt = recordHermesDeliveryExecutorAttempt(locked, "merge", admission, { admissionId: admission.admission.admissionId, nextAction: "Reconcile merged PR metadata before any separately governed cleanup.", rollbackPath: fresh.mergePlan.rollbackPath });
+    const consumed = await consumeHermesDeliveryAdmission(locked, manifestPath, "merge", admission, options);
+    const attempt = recordHermesDeliveryExecutorAttempt(locked, "merge", admission, { admissionId: consumed.admissionId, admissionClaimId: consumed.claimId, admissionConsumptionResultId: consumed.consumptionResultId, auditFingerprint: consumed.auditFingerprint, nextAction: "Reconcile merged PR metadata before any separately governed cleanup.", rollbackPath: fresh.mergePlan.rollbackPath });
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     writeManifest(manifestPath, locked);
     lock.heartbeat();
@@ -24898,13 +24882,32 @@ function withManifestLock(state, taskId, fn, options = {}) {
     token: metadata.token,
     processStart,
   };
+  activeTaskLeaseWriteContext = writeContext;
+  let result;
   try {
-    activeTaskLeaseWriteContext = writeContext;
-    return fn({ token: metadata.token, generation: metadata.generation, heartbeat, release, predecessor: predecessorProof });
-  } finally {
+    result = fn({ token: metadata.token, generation: metadata.generation, heartbeat, release, predecessor: predecessorProof });
+  } catch (error) {
     activeTaskLeaseWriteContext = priorWriteContext;
     release();
+    throw error;
   }
+  if (result && typeof result.then === "function") {
+    return result.then(
+      (value) => {
+        activeTaskLeaseWriteContext = priorWriteContext;
+        release();
+        return value;
+      },
+      (error) => {
+        activeTaskLeaseWriteContext = priorWriteContext;
+        release();
+        throw error;
+      },
+    );
+  }
+  activeTaskLeaseWriteContext = priorWriteContext;
+  release();
+  return result;
 }
 
 function assertActiveTaskLeaseWriteOwnership(context) {

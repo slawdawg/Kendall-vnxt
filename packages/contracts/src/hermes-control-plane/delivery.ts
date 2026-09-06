@@ -66,11 +66,55 @@ export interface HermesDeliveryActionResultV1 {
   readonly rawPayloadRetained: false;
 }
 
+export interface HermesDeliveryAdmissionClaimRequestV1 {
+  readonly claimId: string;
+  readonly taskId: string;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly deliveryStewardIdentity: string;
+  readonly deliveryHome: string;
+  readonly deliveryWorkspace: string;
+  readonly deliveryCapabilityBindingId: string;
+  readonly deliveryCapabilityProof: string;
+  readonly requestedAction: Extract<HermesOrdinaryDeliveryAction, "request_review" | "merge">;
+  readonly pullRequestNumber: number;
+  readonly exactHeadSha: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+}
+
+export interface HermesDeliveryAdmissionReceiptV1 {
+  readonly admissionId: string;
+  readonly consumptionResultId: string;
+  readonly taskId: string;
+  readonly outcomeId: import("./ids").HermesOutcomeId;
+  readonly laneRunId: import("./ids").HermesLaneRunId;
+  readonly requestedAction: Extract<HermesOrdinaryDeliveryAction, "request_review" | "merge">;
+  readonly decision: "allowed";
+  readonly repository: typeof HERMES_CANONICAL_DELIVERY_REPOSITORY;
+  readonly baseBranch: typeof HERMES_CANONICAL_DELIVERY_BASE;
+  readonly pullRequestNumber: number;
+  readonly exactHeadSha: string;
+  readonly auditFingerprint: string;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+  readonly claimId: string;
+  readonly claimedAt: string;
+  readonly metadataOnly: true;
+  readonly rawPayloadRetained: false;
+}
+
 const AUDIT_REQUEST_FIELDS = [
   "taskId", "outcomeId", "laneRunId", "deliveryStewardIdentity", "deliveryHome", "deliveryWorkspace", "deliveryCapabilityBindingId", "deliveryCapabilityProof", "schemaVersion", "repository", "baseBranch", "expectedHeadSha", "pullRequestNumber", "reviewThreadId", "reviewThreadAdjudicationId", "requestedAction", "policyEvidenceRef", "localVerificationRef", "rollbackRef", "evidenceRefs", "observedAt", "idempotencyKey", "createdAt", "expectedOutcomeRevision", "expectedLaneRevision", "metadataOnly", "rawPayloadRetained",
 ] as const;
 const ACTION_RESULT_FIELDS = [
   "deliveryActionResultId", "taskId", "outcomeId", "laneRunId", "schemaVersion", "requestedAction", "decision", "reasonCode", "repository", "baseBranch", "exactHeadSha", "pullRequestNumber", "reviewThreadId", "reviewThreadAdjudicationId", "evidenceRefs", "nextAction", "rollbackRef", "observedAt", "idempotencyKey", "createdAt", "metadataOnly", "rawPayloadRetained",
+] as const;
+const ADMISSION_CLAIM_REQUEST_FIELDS = [
+  "claimId", "taskId", "outcomeId", "laneRunId", "deliveryStewardIdentity", "deliveryHome", "deliveryWorkspace", "deliveryCapabilityBindingId", "deliveryCapabilityProof", "requestedAction", "pullRequestNumber", "exactHeadSha", "metadataOnly", "rawPayloadRetained",
+] as const;
+const ADMISSION_RECEIPT_FIELDS = [
+  "admissionId", "consumptionResultId", "taskId", "outcomeId", "laneRunId", "requestedAction", "decision", "repository", "baseBranch", "pullRequestNumber", "exactHeadSha", "auditFingerprint", "issuedAt", "expiresAt", "claimId", "claimedAt", "metadataOnly", "rawPayloadRetained",
 ] as const;
 
 const isExactHead = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
@@ -117,5 +161,24 @@ export function isHermesDeliveryActionResultV1(value: unknown): value is HermesD
   });
 }
 
+export function isHermesDeliveryAdmissionClaimRequestV1(value: unknown): value is HermesDeliveryAdmissionClaimRequestV1 {
+  return guardFailsClosed(() => isRecord(value) && hasExactKeys(value, ADMISSION_CLAIM_REQUEST_FIELDS) &&
+    isSafeText(value.claimId, 120) && isSafeText(value.taskId, 160) && isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && isStewardIdentity(value.deliveryStewardIdentity) && isSafeText(value.deliveryHome, 240) && isSafeText(value.deliveryWorkspace, 240) && value.deliveryHome !== value.deliveryWorkspace && isStewardIdentity(value.deliveryCapabilityBindingId) && isSafeText(value.deliveryCapabilityProof, 512) && value.deliveryCapabilityProof.length >= 24 && ["request_review", "merge"].includes(value.requestedAction as string) &&
+    isPullRequestNumber(value.pullRequestNumber) && value.pullRequestNumber !== null && isExactHead(value.exactHeadSha) &&
+    value.metadataOnly === true && value.rawPayloadRetained === false);
+}
+
+export function isHermesDeliveryAdmissionReceiptV1(value: unknown): value is HermesDeliveryAdmissionReceiptV1 {
+  return guardFailsClosed(() => isRecord(value) && hasExactKeys(value, ADMISSION_RECEIPT_FIELDS) && isSafeText(value.admissionId, 120) && isOpaqueId(value.consumptionResultId) && isSafeText(value.taskId, 160) &&
+    isHermesOutcomeId(value.outcomeId) && isHermesLaneRunId(value.laneRunId) && ["request_review", "merge"].includes(value.requestedAction as string) && value.decision === "allowed" &&
+    value.repository === HERMES_CANONICAL_DELIVERY_REPOSITORY && value.baseBranch === HERMES_CANONICAL_DELIVERY_BASE && isPullRequestNumber(value.pullRequestNumber) && value.pullRequestNumber !== null &&
+    isExactHead(value.exactHeadSha) && typeof value.auditFingerprint === "string" && /^[0-9a-f]{64}$/.test(value.auditFingerprint) && isUtcIsoTimestamp(value.issuedAt) && isUtcIsoTimestamp(value.expiresAt) &&
+    timestampMillis(value.issuedAt) < timestampMillis(value.expiresAt) && isSafeText(value.claimId, 120) && isUtcIsoTimestamp(value.claimedAt) &&
+    timestampMillis(value.issuedAt) <= timestampMillis(value.claimedAt) && timestampMillis(value.claimedAt) <= timestampMillis(value.expiresAt) && timestampMillis(value.claimedAt) <= Date.now() &&
+    value.metadataOnly === true && value.rawPayloadRetained === false);
+}
+
 export const hermesDeliveryAuditRequestV1Fields = Object.freeze(AUDIT_REQUEST_FIELDS);
 export const hermesDeliveryActionResultV1Fields = Object.freeze(ACTION_RESULT_FIELDS);
+export const hermesDeliveryAdmissionClaimRequestV1Fields = Object.freeze(ADMISSION_CLAIM_REQUEST_FIELDS);
+export const hermesDeliveryAdmissionReceiptV1Fields = Object.freeze(ADMISSION_RECEIPT_FIELDS);

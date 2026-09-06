@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from supervisor.application.hermes_outcomes import (
     _update_if_current,
+    claim_hermes_delivery_admission,
     ingest_hermes_ledger,
     ingest_hermes_review_handoff,
     provision_hermes_role_capability,
@@ -16,10 +17,10 @@ from supervisor.application.hermes_outcomes import (
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewDispositionInputV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1
+from supervisor.api.schemas import HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewDispositionInputV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
-from supervisor.infrastructure.db.models import HermesDeliveryEvidence, HermesLaneRun, HermesOutcome, HermesRoleCapabilityBinding
+from supervisor.infrastructure.db.models import HermesDeliveryAdmission, HermesDeliveryEvidence, HermesLaneRun, HermesOutcome, HermesRoleCapabilityBinding
 from test_hermes_control_plane import payload
 
 
@@ -294,6 +295,17 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         wrong_role.update({"policyEvidenceRef": bound_refs[1][0], "idempotencyKey": "delivery-audit:wrong-policy-role"})
         with pytest.raises(ValueError, match="policy evidence has the wrong persisted role"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(wrong_role))
+        repeated_denial = copy.deepcopy(wrong_role)
+        repeated_denial["idempotencyKey"] = "delivery-audit:repeated-denial-one"
+        with pytest.raises(ValueError, match="policy evidence has the wrong persisted role"):
+            await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(repeated_denial))
+        repeated_denial["idempotencyKey"] = "delivery-audit:repeated-denial-two"
+        with pytest.raises(ValueError, match="policy evidence has the wrong persisted role"):
+            await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(repeated_denial))
+        denial_records = (await session.scalars(select(HermesDeliveryEvidence).where(
+            HermesDeliveryEvidence.evidence_type == "governed_delivery_action_denied",
+        ))).all()
+        assert len({record.delivery_evidence_id for record in denial_records}) >= 2
         missing_role = copy.deepcopy(distinct_bound)
         missing_role.update({"rollbackRef": "evidence:rollback-missing", "evidenceRefs": [snapshot.delivery_evidence_id, bound_refs[0][0], bound_refs[1][0], "evidence:rollback-missing"], "idempotencyKey": "delivery-audit:missing-rollback"})
         with pytest.raises(ValueError, match="rollback evidence is missing"):
@@ -323,6 +335,25 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(altered_replay))
         persisted_audit = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.idempotency_key == "delivery-audit:distinct-bound"))
         assert persisted_audit is not None and persisted_audit.task_id == "task:hermes-one"
+        persisted_admission = await session.scalar(select(HermesDeliveryAdmission).where(HermesDeliveryAdmission.delivery_action_result_id == admitted.deliveryActionResultId))
+        assert persisted_admission is not None and persisted_admission.claim_id is None and persisted_admission.audit_fingerprint == persisted_audit.source_ref.rsplit(":", 1)[-1]
+        claim_payload = HermesDeliveryAdmissionClaimRequestV1.model_validate({
+            "claimId": "delivery-claim:one", "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "deliveryStewardIdentity": "delivery:one", "deliveryHome": str(delivery_home), "deliveryWorkspace": str(delivery_workspace), "deliveryCapabilityBindingId": "capability:delivery", "deliveryCapabilityProof": "x" * 32, "requestedAction": "request_review",
+            "pullRequestNumber": 1, "exactHeadSha": "a" * 40, "metadataOnly": True, "rawPayloadRetained": False,
+        })
+        receipt = await claim_hermes_delivery_admission(session, claim_payload)
+        assert receipt.admissionId == persisted_admission.admission_id and receipt.claimId == claim_payload.claimId
+        consumption = await session.get(HermesDeliveryEvidence, receipt.consumptionResultId)
+        assert receipt.expiresAt > receipt.claimedAt and receipt.rawPayloadRetained is False
+        assert consumption is not None and consumption.evidence_type == "governed_delivery_admission_consumed"
+        assert consumption.evidence_refs_json == [admitted.deliveryActionResultId] and consumption.metadata_only is True and consumption.raw_payload_retained is False
+        assert await claim_hermes_delivery_admission(session, claim_payload) == receipt
+        conflicting_claim = claim_payload.model_copy(update={"exactHeadSha": "b" * 40})
+        with pytest.raises(ValueError, match="conflicts"):
+            await claim_hermes_delivery_admission(session, conflicting_claim)
+        second_claim = claim_payload.model_copy(update={"claimId": "delivery-claim:two"})
+        with pytest.raises(ValueError, match="exactly one current unclaimed exact action binding"):
+            await claim_hermes_delivery_admission(session, second_claim)
         with pytest.raises(ValueError, match="profile must remain isolated"):
             await provision_hermes_role_capability(session, HermesRoleCapabilityProvisionRequestV1.model_validate({
                 "capabilityBindingId": "capability:delivery-overlap", "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "role": "delivery",
