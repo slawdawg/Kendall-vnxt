@@ -111,12 +111,15 @@ export function buildConsumptionRequest(input) {
   if (!input || typeof input !== "object") throw new TypeError("Hermes delivery admission input is required.");
   const requestedAction = input.requestedAction;
   if (!["request_review", "merge"].includes(requestedAction)) throw new TypeError("Hermes delivery admission action is not permitted.");
+  const requestedReviewer = input.requestedReviewer ?? null;
   if (!safeText(input.taskId, 160) || !opaqueId(input.outcomeId) || !opaqueId(input.laneRunId) || !safeText(input.deliveryStewardIdentity, 120) || !safeText(input.deliveryHome, 240) || !safeText(input.deliveryWorkspace, 240) || input.deliveryHome === input.deliveryWorkspace || !opaqueId(input.deliveryCapabilityBindingId) || !safeText(input.deliveryCapabilityProof, 512) || input.deliveryCapabilityProof.length < 24 || !Number.isSafeInteger(input.pullRequestNumber) || input.pullRequestNumber <= 0 || !exactHead(input.exactHeadSha)) {
     throw new TypeError("Hermes delivery admission requires one exact Delivery capability-bound task, lane, PR, and head.");
   }
   const claimId = input.claimId ?? `delivery-claim:${randomUUID()}`;
   if (!opaqueId(claimId)) throw new TypeError("Hermes delivery admission claim identity is invalid.");
+  if ((requestedAction === "request_review") !== (typeof requestedReviewer === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(requestedReviewer))) throw new TypeError("Hermes request-review admission requires one exact reviewer.");
   return {
+    schemaVersion: "hermes_delivery_admission_claim.v2",
     claimId,
     taskId: input.taskId,
     outcomeId: input.outcomeId,
@@ -127,6 +130,7 @@ export function buildConsumptionRequest(input) {
     deliveryCapabilityBindingId: input.deliveryCapabilityBindingId,
     deliveryCapabilityProof: input.deliveryCapabilityProof,
     requestedAction,
+    requestedReviewer,
     pullRequestNumber: input.pullRequestNumber,
     exactHeadSha: input.exactHeadSha,
     metadataOnly: true,
@@ -135,8 +139,8 @@ export function buildConsumptionRequest(input) {
 }
 
 function validateConsumptionReceipt(receipt, request) {
-  const fields = ["admissionId", "consumptionResultId", "taskId", "outcomeId", "laneRunId", "requestedAction", "decision", "repository", "baseBranch", "pullRequestNumber", "exactHeadSha", "auditFingerprint", "issuedAt", "expiresAt", "claimId", "claimedAt", "metadataOnly", "rawPayloadRetained"];
-  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) || !exactKeys(receipt, fields) || !opaqueId(receipt.admissionId) || !opaqueId(receipt.consumptionResultId) || receipt.taskId !== request.taskId || receipt.outcomeId !== request.outcomeId || receipt.laneRunId !== request.laneRunId || receipt.requestedAction !== request.requestedAction || receipt.decision !== "allowed" || receipt.repository !== CANONICAL_REPOSITORY || receipt.baseBranch !== CANONICAL_BASE_BRANCH || receipt.pullRequestNumber !== request.pullRequestNumber || receipt.exactHeadSha !== request.exactHeadSha || receipt.claimId !== request.claimId || !/^[0-9a-f]{64}$/.test(receipt.auditFingerprint) || !Number.isFinite(Date.parse(receipt.issuedAt)) || !Number.isFinite(Date.parse(receipt.claimedAt)) || !Number.isFinite(Date.parse(receipt.expiresAt)) || Date.parse(receipt.issuedAt) > Date.parse(receipt.claimedAt) || Date.parse(receipt.claimedAt) > Date.parse(receipt.expiresAt) || Date.parse(receipt.expiresAt) <= Date.now() || receipt.metadataOnly !== true || receipt.rawPayloadRetained !== false) {
+  const fields = ["admissionId", "consumptionResultId", "taskId", "outcomeId", "laneRunId", "schemaVersion", "requestedAction", "requestedReviewer", "decision", "repository", "baseBranch", "pullRequestNumber", "exactHeadSha", "auditFingerprint", "issuedAt", "expiresAt", "claimId", "claimedAt", "metadataOnly", "rawPayloadRetained"];
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) || !exactKeys(receipt, fields) || receipt.schemaVersion !== "hermes_delivery_admission_receipt.v2" || !opaqueId(receipt.admissionId) || !opaqueId(receipt.consumptionResultId) || receipt.taskId !== request.taskId || receipt.outcomeId !== request.outcomeId || receipt.laneRunId !== request.laneRunId || receipt.requestedAction !== request.requestedAction || receipt.requestedReviewer !== request.requestedReviewer || receipt.decision !== "allowed" || receipt.repository !== CANONICAL_REPOSITORY || receipt.baseBranch !== CANONICAL_BASE_BRANCH || receipt.pullRequestNumber !== request.pullRequestNumber || receipt.exactHeadSha !== request.exactHeadSha || receipt.claimId !== request.claimId || !/^[0-9a-f]{64}$/.test(receipt.auditFingerprint) || !Number.isFinite(Date.parse(receipt.issuedAt)) || !Number.isFinite(Date.parse(receipt.claimedAt)) || !Number.isFinite(Date.parse(receipt.expiresAt)) || Date.parse(receipt.issuedAt) > Date.parse(receipt.claimedAt) || Date.parse(receipt.claimedAt) > Date.parse(receipt.expiresAt) || Date.parse(receipt.expiresAt) <= Date.now() || receipt.metadataOnly !== true || receipt.rawPayloadRetained !== false) {
     throw new Error("Hermes delivery admission returned an untrusted or stale receipt.");
   }
 }

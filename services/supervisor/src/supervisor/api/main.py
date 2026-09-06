@@ -98,9 +98,13 @@ from supervisor.api.schemas import (
     ManagerTerminalEventRequest,
     HermesLedgerIngestRequest,
     HermesDeliveryAdmissionClaimRequestV1,
+    HermesDeliveryAdmissionClaimRequestV2,
     HermesDeliveryAdmissionReceiptV1,
+    HermesDeliveryAdmissionReceiptV2,
     HermesDeliveryActionResultV1,
+    HermesDeliveryActionResultV2,
     HermesDeliveryAuditRequestV1,
+    HermesDeliveryAuditRequestV2,
     HermesReviewThreadAdjudicationRequestV1,
     HermesReviewHandoffRequest,
     HermesRoleCapabilityProvisionRequestV1,
@@ -1699,8 +1703,8 @@ async def ingest_hermes_review_handoff_route(payload: HermesReviewHandoffRequest
     return HermesOutcomeProjectionApiEnvelope(data=projection)
 
 
-@app.post("/hermes-control-plane/delivery-audits", response_model=HermesDeliveryActionResultV1)
-async def record_hermes_delivery_audit_route(payload: HermesDeliveryAuditRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+@app.post("/hermes-control-plane/delivery-audits", response_model=HermesDeliveryActionResultV1 | HermesDeliveryActionResultV2)
+async def record_hermes_delivery_audit_route(payload: HermesDeliveryAuditRequestV1 | HermesDeliveryAuditRequestV2, request: Request, session: AsyncSession = Depends(get_session)):
     """Admit a bounded delivery action; execution remains in codex-workspace."""
     await require_memory_proposal_recovery_operator(request, session)
     try:
@@ -1709,8 +1713,8 @@ async def record_hermes_delivery_audit_route(payload: HermesDeliveryAuditRequest
         raise HTTPException(status_code=409, detail=error_response(str(exc), "hermes_delivery_audit_conflict").model_dump()) from exc
 
 
-@app.post("/internal/hermes-control-plane/delivery-admissions/consume", response_model=HermesDeliveryAdmissionReceiptV1)
-async def claim_hermes_delivery_admission_route(payload: HermesDeliveryAdmissionClaimRequestV1, request: Request, session: AsyncSession = Depends(get_session)):
+@app.post("/internal/hermes-control-plane/delivery-admissions/consume", response_model=HermesDeliveryAdmissionReceiptV1 | HermesDeliveryAdmissionReceiptV2)
+async def claim_hermes_delivery_admission_route(payload: HermesDeliveryAdmissionClaimRequestV1 | HermesDeliveryAdmissionClaimRequestV2, request: Request, session: AsyncSession = Depends(get_session)):
     """Consume one exact admission through private UDS plus the Delivery capability proof."""
     require_private_uds_operational_transport(request)
     try:

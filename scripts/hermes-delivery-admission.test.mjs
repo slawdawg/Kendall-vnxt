@@ -12,7 +12,7 @@ const input = Object.freeze({
   taskId: "task:delivery-one", outcomeId: "outcome:one", laneRunId: "lane:one",
   deliveryStewardIdentity: "delivery:one", deliveryHome: "/tmp/delivery-home", deliveryWorkspace: "/tmp/delivery-workspace",
   deliveryCapabilityBindingId: "capability:delivery-one", deliveryCapabilityProof: "d".repeat(32),
-  requestedAction: "request_review", pullRequestNumber: 920, exactHeadSha: head,
+  requestedAction: "request_review", requestedReviewer: "reviewer-one", pullRequestNumber: 920, exactHeadSha: head,
 });
 
 function receipt(request, extra = {}) {
@@ -20,8 +20,8 @@ function receipt(request, extra = {}) {
   const later = new Date(now.getTime() + 60_000);
   return {
     admissionId: "delivery-admission:one", consumptionResultId: "delivery-admission-consumed:one",
-    taskId: request.taskId, outcomeId: request.outcomeId, laneRunId: request.laneRunId,
-    requestedAction: request.requestedAction, decision: "allowed", repository: "slawdawg/Kendall-vnxt", baseBranch: "dev",
+    taskId: request.taskId, outcomeId: request.outcomeId, laneRunId: request.laneRunId, schemaVersion: "hermes_delivery_admission_receipt.v2",
+    requestedAction: request.requestedAction, requestedReviewer: request.requestedReviewer, decision: "allowed", repository: "slawdawg/Kendall-vnxt", baseBranch: "dev",
     pullRequestNumber: request.pullRequestNumber, exactHeadSha: request.exactHeadSha, auditFingerprint: "b".repeat(64),
     issuedAt: now.toISOString(), expiresAt: later.toISOString(), claimId: request.claimId, claimedAt: now.toISOString(),
     metadataOnly: true, rawPayloadRetained: false, ...extra,
@@ -56,6 +56,8 @@ test("private delivery admission consumes exact capability-bound metadata before
     assert.equal(consumed.consumptionResultId, "delivery-admission-consumed:one");
   });
   assert.equal(observed.requestedAction, input.requestedAction);
+  assert.equal(observed.requestedReviewer, input.requestedReviewer);
+  assert.equal(observed.schemaVersion, "hermes_delivery_admission_claim.v2");
   assert.equal(observed.exactHeadSha, input.exactHeadSha);
   assert.equal(observed.deliveryCapabilityProof, input.deliveryCapabilityProof);
   assert.match(observed.claimId, /^delivery-claim:/);
@@ -68,6 +70,21 @@ test("private delivery admission rejects a response not bound to the generated e
     const requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(receipt(requestBody, { exactHeadSha: "b".repeat(40) })));
+  }, async (socketPath) => {
+    await assert.rejects(
+      consumePrivateHermesDeliveryAdmission(input, { supervisorTransport: "private_uds", supervisorUdsPath: socketPath, lanAuthDir: dirname(socketPath) }),
+      /untrusted or stale receipt/,
+    );
+  });
+});
+
+test("private delivery admission rejects a response bound to another reviewer", async () => {
+  await withPrivateServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(receipt(requestBody, { requestedReviewer: "reviewer-two" })));
   }, async (socketPath) => {
     await assert.rejects(
       consumePrivateHermesDeliveryAdmission(input, { supervisorTransport: "private_uds", supervisorUdsPath: socketPath, lanAuthDir: dirname(socketPath) }),
@@ -130,4 +147,8 @@ test("private delivery admission reuses only the persisted exact claim identity"
   const request = buildConsumptionRequest({ ...input, claimId: "delivery-claim:replay-one" });
   assert.equal(request.claimId, "delivery-claim:replay-one");
   assert.throws(() => buildConsumptionRequest({ ...input, claimId: "bad claim" }), /claim identity/);
+});
+
+test("private delivery admission rejects an unbound request-review recipient", () => {
+  assert.throws(() => buildConsumptionRequest({ ...input, requestedReviewer: null }), /exact reviewer/);
 });

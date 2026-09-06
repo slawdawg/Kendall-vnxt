@@ -3,6 +3,10 @@ import { HERMES_RESULT_VALUES, guardFailsClosed, hasExactKeys, isEvidenceRefs, i
 
 export const HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION = "hermes_delivery_audit_action.v1" as const;
 export const HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION = "hermes_delivery_action_result.v1" as const;
+export const HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION_V2 = "hermes_delivery_audit_action.v2" as const;
+export const HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION_V2 = "hermes_delivery_action_result.v2" as const;
+export const HERMES_DELIVERY_ADMISSION_CLAIM_SCHEMA_VERSION_V2 = "hermes_delivery_admission_claim.v2" as const;
+export const HERMES_DELIVERY_ADMISSION_RECEIPT_SCHEMA_VERSION_V2 = "hermes_delivery_admission_receipt.v2" as const;
 export const HERMES_CANONICAL_DELIVERY_REPOSITORY = "slawdawg/Kendall-vnxt" as const;
 export const HERMES_CANONICAL_DELIVERY_BASE = "dev" as const;
 
@@ -182,3 +186,41 @@ export const hermesDeliveryAuditRequestV1Fields = Object.freeze(AUDIT_REQUEST_FI
 export const hermesDeliveryActionResultV1Fields = Object.freeze(ACTION_RESULT_FIELDS);
 export const hermesDeliveryAdmissionClaimRequestV1Fields = Object.freeze(ADMISSION_CLAIM_REQUEST_FIELDS);
 export const hermesDeliveryAdmissionReceiptV1Fields = Object.freeze(ADMISSION_RECEIPT_FIELDS);
+
+type HermesDeliveryReviewerBound<T> = Omit<T, "schemaVersion"> & { readonly schemaVersion: string; readonly requestedReviewer: string | null };
+export type HermesDeliveryAuditRequestV2 = HermesDeliveryReviewerBound<HermesDeliveryAuditRequestV1> & { readonly schemaVersion: typeof HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION_V2 };
+export type HermesDeliveryActionResultV2 = HermesDeliveryReviewerBound<HermesDeliveryActionResultV1> & { readonly schemaVersion: typeof HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION_V2 };
+export type HermesDeliveryAdmissionClaimRequestV2 = HermesDeliveryReviewerBound<HermesDeliveryAdmissionClaimRequestV1> & { readonly schemaVersion: typeof HERMES_DELIVERY_ADMISSION_CLAIM_SCHEMA_VERSION_V2 };
+export type HermesDeliveryAdmissionReceiptV2 = HermesDeliveryReviewerBound<HermesDeliveryAdmissionReceiptV1> & { readonly schemaVersion: typeof HERMES_DELIVERY_ADMISSION_RECEIPT_SCHEMA_VERSION_V2 };
+
+const AUDIT_REQUEST_V2_FIELDS = [...AUDIT_REQUEST_FIELDS, "requestedReviewer"] as const;
+const ACTION_RESULT_V2_FIELDS = [...ACTION_RESULT_FIELDS, "requestedReviewer"] as const;
+const ADMISSION_CLAIM_REQUEST_V2_FIELDS = [...ADMISSION_CLAIM_REQUEST_FIELDS, "schemaVersion", "requestedReviewer"] as const;
+const ADMISSION_RECEIPT_V2_FIELDS = [...ADMISSION_RECEIPT_FIELDS, "schemaVersion", "requestedReviewer"] as const;
+const isReviewer = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(value);
+const hasExactReviewer = (value: Record<string, unknown>): boolean => value.requestedAction === "request_review" ? isReviewer(value.requestedReviewer) : value.requestedReviewer === null;
+const withoutReviewer = (value: Record<string, unknown>): Record<string, unknown> => {
+  const { requestedReviewer: _requestedReviewer, ...legacy } = value;
+  return legacy;
+};
+const withoutV2SchemaAndReviewer = (value: Record<string, unknown>): Record<string, unknown> => {
+  const { schemaVersion: _schemaVersion, requestedReviewer: _requestedReviewer, ...legacy } = value;
+  return legacy;
+};
+
+export function isHermesDeliveryAuditRequestV2(value: unknown): value is HermesDeliveryAuditRequestV2 {
+  return guardFailsClosed(() => isRecord(value) && hasExactKeys(value, AUDIT_REQUEST_V2_FIELDS) && value.schemaVersion === HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION_V2 && hasExactReviewer(value) && isHermesDeliveryAuditRequestV1({ ...withoutReviewer(value), schemaVersion: HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION }));
+}
+export function isHermesDeliveryActionResultV2(value: unknown): value is HermesDeliveryActionResultV2 {
+  return guardFailsClosed(() => isRecord(value) && hasExactKeys(value, ACTION_RESULT_V2_FIELDS) && value.schemaVersion === HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION_V2 && hasExactReviewer(value) && isHermesDeliveryActionResultV1({ ...withoutReviewer(value), schemaVersion: HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION }));
+}
+export function isHermesDeliveryAdmissionClaimRequestV2(value: unknown): value is HermesDeliveryAdmissionClaimRequestV2 {
+  return guardFailsClosed(() => isRecord(value) && hasExactKeys(value, ADMISSION_CLAIM_REQUEST_V2_FIELDS) && value.schemaVersion === HERMES_DELIVERY_ADMISSION_CLAIM_SCHEMA_VERSION_V2 && hasExactReviewer(value) && isHermesDeliveryAdmissionClaimRequestV1(withoutV2SchemaAndReviewer(value)));
+}
+export function isHermesDeliveryAdmissionReceiptV2(value: unknown): value is HermesDeliveryAdmissionReceiptV2 {
+  return guardFailsClosed(() => isRecord(value) && hasExactKeys(value, ADMISSION_RECEIPT_V2_FIELDS) && value.schemaVersion === HERMES_DELIVERY_ADMISSION_RECEIPT_SCHEMA_VERSION_V2 && hasExactReviewer(value) && isHermesDeliveryAdmissionReceiptV1(withoutV2SchemaAndReviewer(value)));
+}
+export const hermesDeliveryAuditRequestV2Fields = Object.freeze(AUDIT_REQUEST_V2_FIELDS);
+export const hermesDeliveryActionResultV2Fields = Object.freeze(ACTION_RESULT_V2_FIELDS);
+export const hermesDeliveryAdmissionClaimRequestV2Fields = Object.freeze(ADMISSION_CLAIM_REQUEST_V2_FIELDS);
+export const hermesDeliveryAdmissionReceiptV2Fields = Object.freeze(ADMISSION_RECEIPT_V2_FIELDS);

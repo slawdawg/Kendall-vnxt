@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAdmissionReceiptV1, HermesDeliveryAuditRequestV1, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryActionResultV2, HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAdmissionClaimRequestV2, HermesDeliveryAdmissionReceiptV1, HermesDeliveryAdmissionReceiptV2, HermesDeliveryAuditRequestV1, HermesDeliveryAuditRequestV2, HermesLaneRunProjectionV1, HermesLedgerIngestRequest, HermesOutcomeProjectionV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 from supervisor.domain.hermes_control_plane import can_replace_current_result
 from supervisor.infrastructure.db.models import (
     HermesDeliveryEvidence,
@@ -88,9 +88,11 @@ async def revoke_hermes_role_capability(session: AsyncSession, payload: HermesRo
     return binding
 
 
-async def record_hermes_delivery_audit(session: AsyncSession, payload: HermesDeliveryAuditRequestV1) -> HermesDeliveryActionResultV1:
+async def record_hermes_delivery_audit(session: AsyncSession, payload: HermesDeliveryAuditRequestV1 | HermesDeliveryAuditRequestV2) -> HermesDeliveryActionResultV1 | HermesDeliveryActionResultV2:
     """Persist bounded admission evidence; GitHub writes stay in codex-workspace."""
-    request = HermesDeliveryAuditRequestV1.model_validate(payload.model_dump(by_alias=True))
+    if not isinstance(payload, HermesDeliveryAuditRequestV2):
+        return await _replay_legacy_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(payload.model_dump(by_alias=True)))
+    request = HermesDeliveryAuditRequestV2.model_validate(payload.model_dump(by_alias=True))
     try:
         return await _record_allowed_hermes_delivery_audit(session, request)
     except ValueError as exc:
@@ -98,7 +100,37 @@ async def record_hermes_delivery_audit(session: AsyncSession, payload: HermesDel
         raise
 
 
-async def _record_allowed_hermes_delivery_audit(session: AsyncSession, request: HermesDeliveryAuditRequestV1) -> HermesDeliveryActionResultV1:
+async def _replay_legacy_hermes_delivery_audit(session: AsyncSession, request: HermesDeliveryAuditRequestV1) -> HermesDeliveryActionResultV1:
+    """Read an exact V1 record only; V1 can never create a fresh delivery admission."""
+    record_id = f"delivery-audit:{sha256(request.idempotencyKey.encode('utf-8')).hexdigest()}"
+    replay_metadata = request.model_dump(mode="json", exclude={"deliveryCapabilityProof"})
+    fingerprint = sha256(json.dumps(replay_metadata, sort_keys=True, separators=(',', ':')).encode("utf-8")).hexdigest()
+    record = await session.scalar(select(HermesDeliveryEvidence).where(HermesDeliveryEvidence.idempotency_key == request.idempotencyKey))
+    summary = f"Hermes delivery action admitted: {request.requestedAction}."
+    if record is None or (
+        record.delivery_evidence_id, record.task_id, record.outcome_id, record.lane_run_id, record.schema_version,
+        record.evidence_type, record.summary, record.source_ref, record.observed_at, record.evidence_refs_json,
+        record.created_at, record.metadata_only, record.raw_payload_retained,
+    ) != (
+        record_id, request.taskId, request.outcomeId, request.laneRunId, request.schemaVersion,
+        "governed_delivery_action", summary, f"hermes:delivery-adapter:{fingerprint}", request.observedAt,
+        request.evidenceRefs, request.createdAt, True, False,
+    ):
+        raise ValueError("Legacy V1 delivery audit is replay-only and has no exact persisted result.")
+    command = "request-pr-review" if request.requestedAction == "request_review" else "merge-exact-head" if request.requestedAction == "merge" else "finish-pr"
+    return HermesDeliveryActionResultV1(
+        deliveryActionResultId=record_id, taskId=request.taskId, outcomeId=request.outcomeId, laneRunId=request.laneRunId,
+        schemaVersion="hermes_delivery_action_result.v1", requestedAction=request.requestedAction, decision="allowed",
+        reasonCode="legacy_replay_only", repository=request.repository, baseBranch=request.baseBranch,
+        exactHeadSha=request.expectedHeadSha, pullRequestNumber=request.pullRequestNumber,
+        reviewThreadId=request.reviewThreadId, reviewThreadAdjudicationId=request.reviewThreadAdjudicationId,
+        evidenceRefs=request.evidenceRefs, nextAction=f"Legacy replay recorded; do not run {command} from V1 metadata.",
+        rollbackRef=request.rollbackRef, observedAt=request.observedAt, idempotencyKey=request.idempotencyKey,
+        createdAt=request.createdAt, metadataOnly=True, rawPayloadRetained=False,
+    )
+
+
+async def _record_allowed_hermes_delivery_audit(session: AsyncSession, request: HermesDeliveryAuditRequestV2) -> HermesDeliveryActionResultV2:
     """Validate and persist the only allowed delivery path."""
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == request.outcomeId).with_for_update())
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == request.laneRunId).with_for_update())
@@ -200,10 +232,10 @@ async def _record_allowed_hermes_delivery_audit(session: AsyncSession, request: 
         command = "request-pr-review" if request.requestedAction == "request_review" else "merge-exact-head" if request.requestedAction == "merge" else "finish-pr"
         next_action = f"Run codex-workspace {command} with the exact retained head; do not use a direct GitHub client."
         reason_code = "governed_workspace_required"
-    return HermesDeliveryActionResultV1(deliveryActionResultId=record_id, taskId=request.taskId, outcomeId=request.outcomeId, laneRunId=request.laneRunId, schemaVersion="hermes_delivery_action_result.v1", requestedAction=request.requestedAction, decision="allowed", reasonCode=reason_code, repository=request.repository, baseBranch=request.baseBranch, exactHeadSha=request.expectedHeadSha, pullRequestNumber=request.pullRequestNumber, reviewThreadId=request.reviewThreadId, reviewThreadAdjudicationId=request.reviewThreadAdjudicationId, evidenceRefs=request.evidenceRefs, nextAction=next_action, rollbackRef=request.rollbackRef, observedAt=request.observedAt, idempotencyKey=request.idempotencyKey, createdAt=request.createdAt, metadataOnly=True, rawPayloadRetained=False)
+    return HermesDeliveryActionResultV2(deliveryActionResultId=record_id, taskId=request.taskId, outcomeId=request.outcomeId, laneRunId=request.laneRunId, schemaVersion="hermes_delivery_action_result.v2", requestedAction=request.requestedAction, decision="allowed", reasonCode=reason_code, repository=request.repository, baseBranch=request.baseBranch, exactHeadSha=request.expectedHeadSha, pullRequestNumber=request.pullRequestNumber, requestedReviewer=request.requestedReviewer, reviewThreadId=request.reviewThreadId, reviewThreadAdjudicationId=request.reviewThreadAdjudicationId, evidenceRefs=request.evidenceRefs, nextAction=next_action, rollbackRef=request.rollbackRef, observedAt=request.observedAt, idempotencyKey=request.idempotencyKey, createdAt=request.createdAt, metadataOnly=True, rawPayloadRetained=False)
 
 
-async def _record_denied_hermes_delivery_audit(session: AsyncSession, request: HermesDeliveryAuditRequestV1, reason: str) -> None:
+async def _record_denied_hermes_delivery_audit(session: AsyncSession, request: HermesDeliveryAuditRequestV2, reason: str) -> None:
     """Retain a bounded denial result whenever the referenced current lane is known."""
     outcome = await session.get(HermesOutcome, request.outcomeId)
     lane = await session.get(HermesLaneRun, request.laneRunId)
@@ -218,7 +250,7 @@ async def _record_denied_hermes_delivery_audit(session: AsyncSession, request: H
     session.add(HermesDeliveryEvidence(
         delivery_evidence_id=f"delivery-audit-denied:{record_digest[:32]}-{record_digest[32:]}",
         outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id, task_id=request.taskId,
-        schema_version="hermes_delivery_action_result.v1", evidence_type="governed_delivery_action_denied",
+        schema_version="hermes_delivery_action_result.v2", evidence_type="governed_delivery_action_denied",
         summary="Hermes delivery action denied by a fail-closed validation fence.",
         source_ref=f"hermes:delivery-adapter-denied:{reason_digest}", observed_at=request.observedAt,
         evidence_refs_json=request.evidenceRefs, idempotency_key=key, created_at=request.createdAt,
@@ -230,9 +262,11 @@ async def _record_denied_hermes_delivery_audit(session: AsyncSession, request: H
         await session.rollback()
 
 
-async def claim_hermes_delivery_admission(session: AsyncSession, payload: HermesDeliveryAdmissionClaimRequestV1) -> HermesDeliveryAdmissionReceiptV1:
+async def claim_hermes_delivery_admission(session: AsyncSession, payload: HermesDeliveryAdmissionClaimRequestV1 | HermesDeliveryAdmissionClaimRequestV2) -> HermesDeliveryAdmissionReceiptV1 | HermesDeliveryAdmissionReceiptV2:
     """Bind one unexpired, persisted delivery admission to an opaque claim exactly once."""
-    request = HermesDeliveryAdmissionClaimRequestV1.model_validate(payload.model_dump(by_alias=True))
+    if not isinstance(payload, HermesDeliveryAdmissionClaimRequestV2):
+        return await _replay_legacy_hermes_delivery_admission_claim(session, HermesDeliveryAdmissionClaimRequestV1.model_validate(payload.model_dump(by_alias=True)))
+    request = HermesDeliveryAdmissionClaimRequestV2.model_validate(payload.model_dump(by_alias=True))
     existing = await session.scalar(select(HermesDeliveryAdmission).where(
         HermesDeliveryAdmission.claim_id == request.claimId,
     ).with_for_update())
@@ -250,6 +284,7 @@ async def claim_hermes_delivery_admission(session: AsyncSession, payload: Hermes
         HermesDeliveryAdmission.requested_action == request.requestedAction,
         HermesDeliveryAdmission.pull_request_number == request.pullRequestNumber,
         HermesDeliveryAdmission.exact_head_sha == request.exactHeadSha,
+        HermesDeliveryAdmission.requested_reviewer == request.requestedReviewer,
         HermesDeliveryAdmission.allowed.is_(True),
         HermesDeliveryAdmission.claim_id.is_(None),
         HermesDeliveryAdmission.expires_at > now,
@@ -291,10 +326,48 @@ async def claim_hermes_delivery_admission(session: AsyncSession, payload: Hermes
     return _delivery_admission_receipt(admission)
 
 
+async def _replay_legacy_hermes_delivery_admission_claim(session: AsyncSession, request: HermesDeliveryAdmissionClaimRequestV1) -> HermesDeliveryAdmissionReceiptV1:
+    """Return only an already-consumed exact V1 claim; never claim an admission."""
+    admission = await session.scalar(select(HermesDeliveryAdmission).where(
+        HermesDeliveryAdmission.claim_id == request.claimId,
+    ))
+    if admission is None or (
+        admission.task_id, admission.outcome_id, admission.lane_run_id, admission.requested_action,
+        admission.pull_request_number, admission.exact_head_sha,
+    ) != (
+        request.taskId, request.outcomeId, request.laneRunId, request.requestedAction,
+        request.pullRequestNumber, request.exactHeadSha,
+    ):
+        raise ValueError("Legacy V1 delivery admission is replay-only and has no exact consumed receipt.")
+    action_record = await session.get(HermesDeliveryEvidence, admission.delivery_action_result_id)
+    persisted_binding = (
+        admission.delivery_steward_identity, admission.delivery_home, admission.delivery_workspace,
+        admission.delivery_capability_binding_id,
+    )
+    requested_binding = (
+        request.deliveryStewardIdentity, request.deliveryHome, request.deliveryWorkspace,
+        request.deliveryCapabilityBindingId,
+    )
+    if action_record is None or action_record.schema_version != "hermes_delivery_audit_action.v1" or admission.requested_reviewer is not None or (any(value is not None for value in persisted_binding) and persisted_binding != requested_binding):
+        raise ValueError("Legacy V1 delivery admission cannot replay a reviewer-bound or mismatched capability claim.")
+    await _require_delivery_admission_consumption_result(session, admission=admission)
+    if admission.claimed_at is None:
+        raise ValueError("Legacy V1 delivery admission is replay-only and remains unclaimed.")
+    return HermesDeliveryAdmissionReceiptV1(
+        admissionId=admission.admission_id, consumptionResultId=_delivery_admission_consumption_result_id(admission.claim_id),
+        taskId=admission.task_id, outcomeId=admission.outcome_id, laneRunId=admission.lane_run_id,
+        requestedAction=admission.requested_action, decision="allowed", repository=admission.repository,
+        baseBranch=admission.base_branch, pullRequestNumber=admission.pull_request_number,
+        exactHeadSha=admission.exact_head_sha, auditFingerprint=admission.audit_fingerprint,
+        issuedAt=admission.issued_at, expiresAt=admission.expires_at, claimId=admission.claim_id,
+        claimedAt=admission.claimed_at, metadataOnly=True, rawPayloadRetained=False,
+    )
+
+
 async def _persist_hermes_delivery_admission(
     session: AsyncSession,
     *,
-    request: HermesDeliveryAuditRequestV1,
+    request: HermesDeliveryAuditRequestV2,
     outcome: HermesOutcome,
     lane: HermesLaneRun,
     delivery_action_result_id: str,
@@ -308,13 +381,17 @@ async def _persist_hermes_delivery_admission(
         expected = (
             delivery_action_result_id, request.taskId, outcome.outcome_id, lane.lane_run_id,
             request.requestedAction, request.repository, request.baseBranch,
-            request.pullRequestNumber, request.expectedHeadSha, audit_fingerprint,
+            request.pullRequestNumber, request.expectedHeadSha, request.deliveryStewardIdentity,
+            request.deliveryHome, request.deliveryWorkspace, request.deliveryCapabilityBindingId,
+            request.requestedReviewer, audit_fingerprint,
             True, True, True, False,
         )
         actual = (
             existing.delivery_action_result_id, existing.task_id, existing.outcome_id, existing.lane_run_id,
             existing.requested_action, existing.repository, existing.base_branch,
-            existing.pull_request_number, existing.exact_head_sha, existing.audit_fingerprint,
+            existing.pull_request_number, existing.exact_head_sha, existing.delivery_steward_identity,
+            existing.delivery_home, existing.delivery_workspace, existing.delivery_capability_binding_id,
+            existing.requested_reviewer, existing.audit_fingerprint,
             existing.expires_at > existing.issued_at, existing.allowed, existing.metadata_only, existing.raw_payload_retained,
         )
         if actual != expected:
@@ -333,6 +410,11 @@ async def _persist_hermes_delivery_admission(
         base_branch=request.baseBranch,
         pull_request_number=request.pullRequestNumber,
         exact_head_sha=request.expectedHeadSha,
+        delivery_steward_identity=request.deliveryStewardIdentity,
+        delivery_home=request.deliveryHome,
+        delivery_workspace=request.deliveryWorkspace,
+        delivery_capability_binding_id=request.deliveryCapabilityBindingId,
+        requested_reviewer=request.requestedReviewer,
         audit_fingerprint=audit_fingerprint,
         issued_at=now,
         expires_at=now + HERMES_DELIVERY_ADMISSION_TTL,
@@ -358,18 +440,22 @@ async def _persist_hermes_delivery_admission(
     return admission
 
 
-def _same_delivery_admission_claim(record: HermesDeliveryAdmission, value: HermesDeliveryAdmissionClaimRequestV1) -> bool:
+def _same_delivery_admission_claim(record: HermesDeliveryAdmission, value: HermesDeliveryAdmissionClaimRequestV2) -> bool:
     return (
         record.claim_id, record.task_id, record.outcome_id, record.lane_run_id, record.requested_action,
-        record.pull_request_number, record.exact_head_sha, record.allowed,
+        record.pull_request_number, record.exact_head_sha, record.delivery_steward_identity,
+        record.delivery_home, record.delivery_workspace, record.delivery_capability_binding_id,
+        record.requested_reviewer, record.allowed,
         record.metadata_only, record.raw_payload_retained,
     ) == (
         value.claimId, value.taskId, value.outcomeId, value.laneRunId, value.requestedAction,
-        value.pullRequestNumber, value.exactHeadSha, True, True, False,
+        value.pullRequestNumber, value.exactHeadSha, value.deliveryStewardIdentity,
+        value.deliveryHome, value.deliveryWorkspace, value.deliveryCapabilityBindingId,
+        value.requestedReviewer, True, True, False,
     )
 
 
-async def _require_current_delivery_admission_claim(session: AsyncSession, *, admission: HermesDeliveryAdmission, request: HermesDeliveryAdmissionClaimRequestV1) -> None:
+async def _require_current_delivery_admission_claim(session: AsyncSession, *, admission: HermesDeliveryAdmission, request: HermesDeliveryAdmissionClaimRequestV2) -> None:
     """Reprove the Delivery capability and review snapshot before consuming an audit admission."""
     outcome = await session.scalar(select(HermesOutcome).where(HermesOutcome.outcome_id == admission.outcome_id).with_for_update())
     lane = await session.scalar(select(HermesLaneRun).where(HermesLaneRun.lane_run_id == admission.lane_run_id).with_for_update())
@@ -377,6 +463,12 @@ async def _require_current_delivery_admission_claim(session: AsyncSession, *, ad
         outcome.task_id, lane.task_id, lane.outcome_id, outcome.current_event_id, lane.current_event_id,
     ) != (request.taskId, request.taskId, outcome.outcome_id, lane.current_event_id, lane.current_event_id):
         raise ValueError("Delivery admission claim requires the current bound outcome and lane.")
+    if (admission.delivery_steward_identity, admission.delivery_home, admission.delivery_workspace,
+        admission.delivery_capability_binding_id, admission.requested_reviewer) != (
+            request.deliveryStewardIdentity, request.deliveryHome, request.deliveryWorkspace,
+            request.deliveryCapabilityBindingId, request.requestedReviewer,
+        ):
+        raise ValueError("Delivery admission claim must exactly match the audited Delivery capability, profile, and reviewer.")
     await _require_role_capability(
         session, binding_id=request.deliveryCapabilityBindingId, proof=request.deliveryCapabilityProof,
         role="delivery", outcome=outcome, lane=lane, identity=request.deliveryStewardIdentity,
@@ -403,7 +495,7 @@ def _delivery_admission_consumption_result_id(claim_id: str) -> str:
     return f"delivery-admission-consumed:{digest[:32]}-{digest[32:]}"
 
 
-def _persist_delivery_admission_consumption_result(session: AsyncSession, *, admission: HermesDeliveryAdmission, request: HermesDeliveryAdmissionClaimRequestV1) -> None:
+def _persist_delivery_admission_consumption_result(session: AsyncSession, *, admission: HermesDeliveryAdmission, request: HermesDeliveryAdmissionClaimRequestV2) -> None:
     """Append the server-owned metadata-only consume evidence in the claim transaction."""
     result_id = _delivery_admission_consumption_result_id(request.claimId)
     session.add(HermesDeliveryEvidence(
@@ -439,14 +531,15 @@ async def _require_delivery_admission_consumption_result(session: AsyncSession, 
         raise ValueError("Delivery admission consumption evidence is missing or conflicts.")
 
 
-def _delivery_admission_receipt(record: HermesDeliveryAdmission) -> HermesDeliveryAdmissionReceiptV1:
+def _delivery_admission_receipt(record: HermesDeliveryAdmission) -> HermesDeliveryAdmissionReceiptV2:
     if record.claim_id is None or record.claimed_at is None:
         raise ValueError("Delivery admission has not been claimed.")
-    return HermesDeliveryAdmissionReceiptV1(
+    return HermesDeliveryAdmissionReceiptV2(
         admissionId=record.admission_id, consumptionResultId=_delivery_admission_consumption_result_id(record.claim_id), taskId=record.task_id, outcomeId=record.outcome_id,
-        laneRunId=record.lane_run_id, requestedAction=record.requested_action, decision="allowed",
+        laneRunId=record.lane_run_id, schemaVersion="hermes_delivery_admission_receipt.v2", requestedAction=record.requested_action, decision="allowed",
         repository=record.repository, baseBranch=record.base_branch,
         pullRequestNumber=record.pull_request_number, exactHeadSha=record.exact_head_sha,
+        requestedReviewer=record.requested_reviewer,
         auditFingerprint=record.audit_fingerprint, issuedAt=record.issued_at,
         expiresAt=record.expires_at, claimId=record.claim_id, claimedAt=record.claimed_at,
         metadataOnly=True, rawPayloadRetained=False,

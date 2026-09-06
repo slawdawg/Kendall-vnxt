@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from supervisor.api.main import app
-from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAdmissionReceiptV1, HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
+from supervisor.api.schemas import HermesDeliveryActionResultV1, HermesDeliveryActionResultV2, HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAdmissionClaimRequestV2, HermesDeliveryAdmissionReceiptV1, HermesDeliveryAdmissionReceiptV2, HermesDeliveryAuditRequestV1, HermesDeliveryAuditRequestV2, HermesLedgerIngestRequest, HermesReviewHandoffRequest, HermesRoleCapabilityProvisionRequestV1, HermesRoleCapabilityRevocationRequestV1
 
 
 def payload() -> dict[str, object]:
@@ -47,8 +47,8 @@ def test_hermes_routes_are_local_typed_projection_boundaries():
     assert route("/hermes-control-plane/role-capabilities").methods == {"POST"}
     assert route("/hermes-control-plane/role-capabilities/{capability_binding_id}/revoke").methods == {"POST"}
     assert route("/hermes-control-plane/review-handoffs").response_model.__name__ == "HermesOutcomeProjectionApiEnvelope"
-    assert route("/hermes-control-plane/delivery-audits").response_model.__name__ == "HermesDeliveryActionResultV1"
-    assert route("/internal/hermes-control-plane/delivery-admissions/consume").response_model.__name__ == "HermesDeliveryAdmissionReceiptV1"
+    assert {model.__name__ for model in route("/hermes-control-plane/delivery-audits").response_model.__args__} == {"HermesDeliveryActionResultV1", "HermesDeliveryActionResultV2"}
+    assert {model.__name__ for model in route("/internal/hermes-control-plane/delivery-admissions/consume").response_model.__args__} == {"HermesDeliveryAdmissionReceiptV1", "HermesDeliveryAdmissionReceiptV2"}
 
 
 def test_role_capability_requests_keep_only_a_transient_secret_and_bound_metadata():
@@ -165,3 +165,15 @@ def test_delivery_admission_claim_and_receipt_are_exact_and_metadata_only():
         HermesDeliveryAdmissionReceiptV1.model_validate({**receipt.model_dump(mode="json"), "auditFingerprint": "z" * 64})
     with pytest.raises(ValidationError, match="ordered"):
         HermesDeliveryAdmissionReceiptV1.model_validate({**receipt.model_dump(mode="json"), "expiresAt": iso(now)})
+
+
+def test_reviewer_bound_delivery_payloads_are_versioned_without_rejecting_v1_replays():
+    legacy = HermesDeliveryAuditRequestV1.model_validate({
+        "taskId": "task:delivery-one", "outcomeId": "outcome:one", "laneRunId": "lane:one", "deliveryStewardIdentity": "delivery:one", "deliveryHome": "home:delivery", "deliveryWorkspace": "workspace:delivery", "deliveryCapabilityBindingId": "capability:delivery-one", "deliveryCapabilityProof": "d" * 32,
+        "schemaVersion": "hermes_delivery_audit_action.v1", "repository": "slawdawg/Kendall-vnxt", "baseBranch": "dev", "expectedHeadSha": "a" * 40, "pullRequestNumber": 915, "requestedAction": "request_review", "policyEvidenceRef": "evidence:policy-one", "localVerificationRef": "evidence:verification-one", "rollbackRef": "evidence:rollback-one", "evidenceRefs": ["evidence:policy-one", "evidence:verification-one", "evidence:rollback-one"], "observedAt": "2026-09-04T00:00:01Z", "idempotencyKey": "delivery-audit:v1", "createdAt": "2026-09-04T00:00:00Z", "expectedOutcomeRevision": 2, "expectedLaneRevision": 2, "metadataOnly": True, "rawPayloadRetained": False,
+    })
+    assert legacy.schemaVersion.endswith(".v1")
+    bound = HermesDeliveryAuditRequestV2.model_validate({**legacy.model_dump(mode="json"), "schemaVersion": "hermes_delivery_audit_action.v2", "requestedReviewer": "reviewer-one"})
+    assert bound.requestedReviewer == "reviewer-one"
+    with pytest.raises(ValidationError, match="bound reviewer"):
+        HermesDeliveryAuditRequestV2.model_validate({**bound.model_dump(mode="json"), "requestedReviewer": None})

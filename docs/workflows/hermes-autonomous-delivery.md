@@ -80,6 +80,18 @@ revoked, already-claimed, stale, or changed task/action/PR/head request is a
 stop line: create a fresh audit after proving current verification/review state,
 rather than retrying a GitHub mutation.
 
+An admission also binds the audited Delivery identity, profile, capability
+binding, and—only for `request_review`—the exact reviewer login. The executor
+rejects any mismatch before GitHub. If a pre-mutation claim ages beyond the
+short admission TTL without an immutable mutation-attempt result, it retains a
+metadata-only supersession record and can make one fresh private-UDS claim; the
+Supervisor still requires a new current unclaimed audit admission.
+
+Historical delivery payloads remain strict, readable V1 records. New
+reviewer-bound audit, result, claim, and receipt payloads use their explicit V2
+schema markers; do not add reviewer fields to a V1 replay or downgrade a V2
+operation to bypass reviewer binding.
+
 The runner resolves the private endpoint only at the source-owned local
 operating-system account home `kendall-lan-auth/supervisor.sock`; delivery-time
 `HOME`, socket, and LAN-auth-directory environment overrides are deliberately

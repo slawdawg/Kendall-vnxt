@@ -8697,6 +8697,60 @@ class HermesDeliveryAdmissionReceiptV1(BaseModel):
         return serialized
 
 
+class HermesDeliveryAuditRequestV2(HermesDeliveryAuditRequestV1):
+    schemaVersion: Literal["hermes_delivery_audit_action.v2"]
+    requestedReviewer: str | None = Field(default=None, max_length=39)
+    @field_validator("requestedReviewer")
+    @classmethod
+    def _reviewer(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})", value): raise ValueError("Delivery audit reviewer must be a GitHub login.")
+        return value
+    @model_validator(mode="after")
+    def _v2_reviewer_bound(self):
+        if (self.requestedAction == "request_review") != (self.requestedReviewer is not None):
+            raise ValueError("Request-review delivery requires exactly one bound reviewer.")
+        return self
+
+
+class HermesDeliveryActionResultV2(HermesDeliveryActionResultV1):
+    schemaVersion: Literal["hermes_delivery_action_result.v2"]
+    requestedReviewer: str | None = Field(default=None, max_length=39)
+    @field_validator("requestedReviewer")
+    @classmethod
+    def _reviewer(cls, value: str | None) -> str | None: return HermesDeliveryAuditRequestV2._reviewer(value)
+    @model_validator(mode="after")
+    def _v2_reviewer_bound(self):
+        if (self.requestedAction == "request_review") != (self.requestedReviewer is not None):
+            raise ValueError("Request-review delivery result requires exactly one bound reviewer.")
+        return self
+
+
+class HermesDeliveryAdmissionClaimRequestV2(HermesDeliveryAdmissionClaimRequestV1):
+    schemaVersion: Literal["hermes_delivery_admission_claim.v2"]
+    requestedReviewer: str | None = Field(default=None, max_length=39)
+    @field_validator("requestedReviewer")
+    @classmethod
+    def _reviewer(cls, value: str | None) -> str | None: return HermesDeliveryAuditRequestV2._reviewer(value)
+    @model_validator(mode="after")
+    def _v2_reviewer_bound(self):
+        if (self.requestedAction == "request_review") != (self.requestedReviewer is not None):
+            raise ValueError("Request-review admission claim requires exactly one bound reviewer.")
+        return self
+
+
+class HermesDeliveryAdmissionReceiptV2(HermesDeliveryAdmissionReceiptV1):
+    schemaVersion: Literal["hermes_delivery_admission_receipt.v2"]
+    requestedReviewer: str | None = Field(default=None, max_length=39)
+    @field_validator("requestedReviewer")
+    @classmethod
+    def _reviewer(cls, value: str | None) -> str | None: return HermesDeliveryAuditRequestV2._reviewer(value)
+    @model_validator(mode="after")
+    def _v2_reviewer_bound(self):
+        if (self.requestedAction == "request_review") != (self.requestedReviewer is not None):
+            raise ValueError("Request-review admission receipt requires exactly one bound reviewer.")
+        return self
+
+
 class HermesOutcomeProjectionV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     outcomeId: str; title: str; lifecycle: str; currentLaneRunId: str | None; currentResult: str; reasonCode: str; evidenceRefs: list[str]; latestEvidenceAt: datetime; nextAction: str; recoveryState: str; freshness: Literal["fresh", "stale", "unknown", "unavailable"]; observedAt: datetime; metadataOnly: Literal[True]; rawPayloadRetained: Literal[False]

@@ -14163,6 +14163,22 @@ try {
       );
       assert(replay.code !== 0 && (replay.stderr || replay.stdout).includes("private Supervisor"), replay.stderr || replay.stdout);
       assert(!existsSync(join(fixture.root, "gh-pr-review-called.txt")), "a local admission record reached a GitHub review mutation");
+      manifest.hermes_delivery_admission_claims = [{
+        claimId: "delivery-claim:expired", taskId: manifest.task_id, action: "request_review",
+        pullRequestNumber: manifest.pr_number, expectedHeadSha: manifest.pr_delivery_head_sha,
+        requestedReviewer: "reviewer-a", recordedAt: new Date(Date.now() - (16 * 60 * 1000)).toISOString(),
+        metadataOnly: true, rawPayloadRetained: false,
+      }];
+      manifest.hermes_delivery_executor_evidence = [];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expiredClaim = runFixtureScript(
+        fixture,
+        ["request-pr-review", "resumed-task", "--owner", "runner-a", "--reviewer", "reviewer-a", "--expected-head", manifest.pr_delivery_head_sha, "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+      assert(expiredClaim.code !== 0 && (expiredClaim.stderr || expiredClaim.stdout).includes("private Supervisor"), expiredClaim.stderr || expiredClaim.stdout);
+      const rotated = readJson(manifestPath).hermes_delivery_admission_claims;
+      assert(rotated.length === 2 && rotated[0].supersededReason === "claim_ttl_elapsed_reaudit_required" && rotated[1].supersedesClaimId === "delivery-claim:expired", "expired claim did not retain bounded supersession evidence");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -24031,7 +24047,7 @@ function fixtureHermesDeliveryAdmission(manifest, action) {
     pullRequestNumber: manifest.pr_number,
     expectedHeadSha: manifest.pr_delivery_head_sha,
     allowed: true,
-    admissionId: `fixture-admission-${action}`,
+    admissionId: `fixture-admission-${action}`, schemaVersion: "hermes_delivery_admission_receipt.v2",
     recordedAt: recordedAt.toISOString(),
     expiresAt: new Date(recordedAt.getTime() + 60_000).toISOString(),
     outcomeId: "outcome:fixture",

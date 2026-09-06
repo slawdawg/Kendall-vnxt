@@ -238,6 +238,10 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       reasonCode: "reviewed", nextAction: "continue", reviewedHeadSha: "a".repeat(40), evidenceRefs: refs, observedAt: later, idempotencyKey: "review:one", createdAt: observedAt,
       metadataOnly: true, rawPayloadRetained: false, expectedOutcomeRevision: 2, expectedLaneRevision: 2,
     };
+    const deliveryAuditV2 = { ...deliveryAudit, schemaVersion: contracts.HERMES_DELIVERY_AUDIT_ACTION_SCHEMA_VERSION_V2, requestedReviewer: "reviewer-one" };
+    const deliveryResultV2 = { ...deliveryResult, schemaVersion: contracts.HERMES_DELIVERY_ACTION_RESULT_SCHEMA_VERSION_V2, requestedReviewer: "reviewer-one" };
+    const admissionClaimV2 = { ...admissionClaim, schemaVersion: contracts.HERMES_DELIVERY_ADMISSION_CLAIM_SCHEMA_VERSION_V2, requestedReviewer: "reviewer-one" };
+    const admissionReceiptV2 = { ...admissionReceipt, schemaVersion: contracts.HERMES_DELIVERY_ADMISSION_RECEIPT_SCHEMA_VERSION_V2, requestedReviewer: "reviewer-one" };
     assert.equal(contracts.isHermesOutcomeV1(outcome), true);
     assert.equal(contracts.isHermesLaneRunV1(laneRun), true);
     assert.equal(contracts.isDeliveryEvidenceV1(evidence), true);
@@ -250,6 +254,10 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesDeliveryActionResultV1(deliveryResult), true);
     assert.equal(contracts.isHermesDeliveryAdmissionClaimRequestV1(admissionClaim), true);
     assert.equal(contracts.isHermesDeliveryAdmissionReceiptV1(admissionReceipt), true);
+    assert.equal(contracts.isHermesDeliveryAuditRequestV2(deliveryAuditV2), true);
+    assert.equal(contracts.isHermesDeliveryActionResultV2(deliveryResultV2), true);
+    assert.equal(contracts.isHermesDeliveryAdmissionClaimRequestV2(admissionClaimV2), true);
+    assert.equal(contracts.isHermesDeliveryAdmissionReceiptV2(admissionReceiptV2), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, decision: "deniedExternalImpact" }), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, decision: "rework" }), true);
     assert.equal(contracts.isHermesDeliveryActionResultV1({ ...deliveryResult, evidenceRefs: ["evidence:other"] }), false);
@@ -320,6 +328,7 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
       ["delivery audit timestamp order", { ...deliveryAudit, createdAt: later, observedAt }, contracts.isHermesDeliveryAuditRequestV1],
       ["delivery audit future observation", { ...deliveryAudit, observedAt: "2999-01-01T00:00:00Z" }, contracts.isHermesDeliveryAuditRequestV1],
       ["PR-bound delivery action omits pull request", { ...deliveryAudit, pullRequestNumber: null }, contracts.isHermesDeliveryAuditRequestV1],
+      ["reviewer-bound request review omits its reviewer", { ...deliveryAuditV2, requestedReviewer: null }, contracts.isHermesDeliveryAuditRequestV2],
       ["current-thread delivery lacks adjudication", { ...deliveryAudit, requestedAction: "resolve_current_thread" }, contracts.isHermesDeliveryAuditRequestV1],
       ["PR-bound delivery result omits pull request", { ...deliveryResult, pullRequestNumber: null }, contracts.isHermesDeliveryActionResultV1],
       ["non-approval review head must be null", { ...reviewDisposition, disposition: "rework", reviewedHeadSha: 0 }, contracts.isReviewDispositionV1],

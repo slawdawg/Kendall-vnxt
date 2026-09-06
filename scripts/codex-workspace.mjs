@@ -5797,7 +5797,9 @@ function assertGovernedPrMutationAdmission(manifest, state, commandName, expecte
   return deliveryState;
 }
 
-async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, state, options) {
+const hermesDeliveryAdmissionClaimTtlMs = 15 * 60 * 1000;
+
+async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, state, options, requestedReviewer = null) {
   const priorAttempt = (Array.isArray(manifest.hermes_delivery_executor_evidence) ? manifest.hermes_delivery_executor_evidence : []).some((record) => (
     record?.taskId === manifest.task_id && record?.action === action && record?.pullRequestNumber === state.pr?.number &&
     record?.expectedHeadSha === state.expectedHead && ["indeterminate", "completed"].includes(record?.decision)
@@ -5805,8 +5807,9 @@ async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, st
   if (priorAttempt) throw new Error("Hermes delivery action already has immutable mutation-attempt evidence; do not retry blindly.");
   const claims = Array.isArray(manifest.hermes_delivery_admission_claims) ? manifest.hermes_delivery_admission_claims : [];
   const matching = claims.filter((claim) => claim?.taskId === manifest.task_id && claim?.action === action && claim?.pullRequestNumber === state.pr.number && claim?.expectedHeadSha === state.expectedHead);
-  if (matching.length > 1) throw new Error("Hermes delivery admission has ambiguous persisted claim intent; do not retry blindly.");
-  let claim = matching[0];
+  const activeClaims = matching.filter((claim) => !claim?.supersededAt);
+  if (activeClaims.length > 1) throw new Error("Hermes delivery admission has ambiguous persisted claim intent; do not retry blindly.");
+  let claim = activeClaims[0];
   const binding = {
     outcomeId: options.hermesOutcomeId,
     laneRunId: options.hermesLaneRunId,
@@ -5814,7 +5817,13 @@ async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, st
     deliveryHome: options.hermesDeliveryHome,
     deliveryWorkspace: options.hermesDeliveryWorkspace,
     deliveryCapabilityBindingId: options.hermesDeliveryCapabilityBindingId,
+    requestedReviewer,
   };
+  if (claim && (!Number.isFinite(Date.parse(claim.recordedAt)) || Date.now() - Date.parse(claim.recordedAt) >= hermesDeliveryAdmissionClaimTtlMs)) {
+    claim.supersededAt = new Date().toISOString();
+    claim.supersededReason = "claim_ttl_elapsed_reaudit_required";
+    claim = null;
+  }
   if (claim && Object.entries(binding).some(([key, value]) => claim[key] !== value)) {
     throw new Error("Hermes delivery admission claim intent no longer matches the Delivery binding; do not retry blindly.");
   }
@@ -5827,6 +5836,7 @@ async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, st
       expectedHeadSha: state.expectedHead,
       ...binding,
       recordedAt: new Date().toISOString(),
+      supersedesClaimId: matching.findLast((candidate) => candidate?.supersededAt)?.claimId ?? null,
       metadataOnly: true,
       rawPayloadRetained: false,
     };
@@ -5840,7 +5850,7 @@ async function consumeHermesDeliveryAdmission(manifest, manifestPath, action, st
     // The existing task-scoped proof is transient process input only. Never
     // accept, print, or persist it through a command-line flag or manifest.
     deliveryCapabilityProof: process.env.KENDALL_HERMES_DELIVERY_CAPABILITY_PROOF,
-    requestedAction: action,
+    requestedAction: action, requestedReviewer,
     pullRequestNumber: state.pr.number,
     exactHeadSha: state.expectedHead,
   });
@@ -5916,7 +5926,7 @@ async function requestPrReview(argv) {
     assertPrMutationPreflight(locked, state, "request-pr-review");
     reconcileManifest(locked, { refreshPr: true });
     const fresh = assertGovernedPrMutationAdmission(locked, state, "request-pr-review", options.expectedHead);
-    const admission = await consumeHermesDeliveryAdmission(locked, manifestPath, "request_review", fresh, options);
+    const admission = await consumeHermesDeliveryAdmission(locked, manifestPath, "request_review", fresh, options, reviewer);
     const attempt = recordHermesDeliveryExecutorAttempt(locked, "request_review", fresh, { admissionId: admission.admissionId, admissionClaimId: admission.claimId, admissionConsumptionResultId: admission.consumptionResultId, auditFingerprint: admission.auditFingerprint, reviewer, nextAction: "Await the requested review before any merge.", rollbackPath: "Remove the review request through the governed workspace only if a future exact-head policy permits it." });
     locked.lane_evidence_packet = buildLaneEvidencePacket(locked, locked.anti_churn_finalization || {});
     writeManifest(manifestPath, locked);

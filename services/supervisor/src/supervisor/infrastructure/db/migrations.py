@@ -245,6 +245,22 @@ async def _apply_hermes_delivery_admissions(connection: AsyncConnection) -> None
     from supervisor.infrastructure.db.models import HermesDeliveryAdmission
     await connection.run_sync(lambda sync_connection: HermesDeliveryAdmission.metadata.create_all(sync_connection, tables=[HermesDeliveryAdmission.__table__]))
 
+
+async def _apply_hermes_delivery_admission_bindings(connection: AsyncConnection) -> None:
+    """Add nullable audited actor and reviewer bindings without inventing legacy identity."""
+    if connection.dialect.name not in {"postgresql", "sqlite"}:
+        raise RuntimeError("Hermes delivery-admission binding migration supports PostgreSQL and SQLite only.")
+    columns = await connection.run_sync(
+        lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("hermes_delivery_admissions")}
+    )
+    for name, sql_type in (
+        ("delivery_steward_identity", "VARCHAR(120)"), ("delivery_home", "VARCHAR(240)"),
+        ("delivery_workspace", "VARCHAR(240)"), ("delivery_capability_binding_id", "VARCHAR(120)"),
+        ("requested_reviewer", "VARCHAR(39)"),
+    ):
+        if name not in columns:
+            await connection.execute(text(f"ALTER TABLE hermes_delivery_admissions ADD COLUMN {name} {sql_type}"))
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(MODEL_BASELINE_REVISION, _create_model_baseline),
     # The compatibility revision creates durable SQLite triggers and seeds
@@ -286,6 +302,7 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0012_hermes_reviewed_head_binding", _apply_hermes_reviewed_head_binding, clean_install=_apply_hermes_reviewed_head_binding),
     SchemaMigration("0013_hermes_verified_head_binding", _apply_hermes_verified_head_binding, clean_install=_apply_hermes_verified_head_binding),
     SchemaMigration("0014_hermes_delivery_admissions", _apply_hermes_delivery_admissions, clean_install=_apply_hermes_delivery_admissions),
+    SchemaMigration("0015_hermes_delivery_admission_bindings", _apply_hermes_delivery_admission_bindings, clean_install=_apply_hermes_delivery_admission_bindings),
 )
 
 

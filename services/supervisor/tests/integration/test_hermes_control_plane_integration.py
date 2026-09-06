@@ -1,5 +1,7 @@
 import copy
 from datetime import UTC, datetime
+from hashlib import sha256
+import json
 
 import pytest
 from sqlalchemy import select, text
@@ -17,7 +19,7 @@ from supervisor.application.hermes_outcomes import (
     read_hermes_lane_run,
     read_hermes_outcome,
 )
-from supervisor.api.schemas import HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewDispositionInputV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1
+from supervisor.api.schemas import HermesDeliveryAdmissionClaimRequestV1 as LegacyHermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAdmissionClaimRequestV2 as HermesDeliveryAdmissionClaimRequestV1, HermesDeliveryAuditRequestV1 as LegacyHermesDeliveryAuditRequestV1, HermesDeliveryAuditRequestV2 as HermesDeliveryAuditRequestV1, HermesLedgerIngestRequest, HermesReviewDispositionInputV1, HermesReviewHandoffRequest, HermesReviewThreadAdjudicationRequestV1, HermesRoleCapabilityProvisionRequestV1
 from supervisor.infrastructure.db.database import Base
 from supervisor.infrastructure.db.migrations import MIGRATIONS, SCHEMA_MIGRATIONS_TABLE, upgrade_database
 from supervisor.infrastructure.db.models import HermesDeliveryAdmission, HermesDeliveryEvidence, HermesLaneRun, HermesOutcome, HermesRoleCapabilityBinding
@@ -265,8 +267,8 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         audit = {
             "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "deliveryStewardIdentity": "delivery:one",
             "deliveryHome": str(delivery_home), "deliveryWorkspace": str(delivery_workspace), "deliveryCapabilityBindingId": "capability:delivery", "deliveryCapabilityProof": "x" * 32,
-            "schemaVersion": "hermes_delivery_audit_action.v1", "repository": "slawdawg/Kendall-vnxt", "baseBranch": "dev", "expectedHeadSha": "a" * 40,
-            "pullRequestNumber": 1, "requestedAction": "request_review", "policyEvidenceRef": snapshot.delivery_evidence_id,
+            "schemaVersion": "hermes_delivery_audit_action.v2", "repository": "slawdawg/Kendall-vnxt", "baseBranch": "dev", "expectedHeadSha": "a" * 40,
+            "pullRequestNumber": 1, "requestedAction": "request_review", "requestedReviewer": "reviewer-one", "policyEvidenceRef": snapshot.delivery_evidence_id,
             "localVerificationRef": snapshot.delivery_evidence_id, "rollbackRef": snapshot.delivery_evidence_id, "evidenceRefs": [snapshot.delivery_evidence_id],
             "observedAt": "2026-09-02T12:02:00Z", "idempotencyKey": "delivery-audit:one", "createdAt": "2026-09-02T12:02:00Z",
             "expectedOutcomeRevision": outcome.revision, "expectedLaneRevision": lane.revision, "metadataOnly": True, "rawPayloadRetained": False,
@@ -330,6 +332,21 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         admitted = await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(distinct_bound))
         assert admitted.decision == "allowed" and admitted.requestedAction == "request_review"
         assert await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(distinct_bound)) == admitted
+        legacy_replay = copy.deepcopy(audit)
+        legacy_replay.pop("requestedReviewer")
+        legacy_replay.update({"schemaVersion": "hermes_delivery_audit_action.v1", "idempotencyKey": "delivery-audit:legacy-replay"})
+        legacy_request = LegacyHermesDeliveryAuditRequestV1.model_validate(legacy_replay)
+        legacy_fingerprint = sha256(json.dumps(legacy_request.model_dump(mode="json", exclude={"deliveryCapabilityProof"}), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        legacy_id = f"delivery-audit:{sha256(legacy_replay['idempotencyKey'].encode('utf-8')).hexdigest()}"
+        session.add(HermesDeliveryEvidence(
+            delivery_evidence_id=legacy_id, outcome_id=outcome.outcome_id, lane_run_id=lane.lane_run_id, task_id=outcome.task_id,
+            schema_version="hermes_delivery_audit_action.v1", evidence_type="governed_delivery_action", summary="Hermes delivery action admitted: request_review.", source_ref=f"hermes:delivery-adapter:{legacy_fingerprint}", observed_at=datetime.fromisoformat(legacy_replay["observedAt"].replace("Z", "+00:00")), evidence_refs_json=legacy_replay["evidenceRefs"], idempotency_key=legacy_replay["idempotencyKey"], created_at=datetime.fromisoformat(legacy_replay["createdAt"].replace("Z", "+00:00")), metadata_only=True, raw_payload_retained=False,
+        ))
+        await session.commit()
+        replayed_legacy = await record_hermes_delivery_audit(session, legacy_request)
+        assert replayed_legacy.reasonCode == "legacy_replay_only" and replayed_legacy.schemaVersion == "hermes_delivery_action_result.v1"
+        with pytest.raises(ValueError, match="replay-only"):
+            await record_hermes_delivery_audit(session, LegacyHermesDeliveryAuditRequestV1.model_validate({**legacy_replay, "idempotencyKey": "delivery-audit:legacy-missing"}))
         altered_replay = copy.deepcopy(distinct_bound); altered_replay["pullRequestNumber"] = 2
         with pytest.raises(ValueError, match="idempotency conflicts"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(altered_replay))
@@ -337,10 +354,13 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         assert persisted_audit is not None and persisted_audit.task_id == "task:hermes-one"
         persisted_admission = await session.scalar(select(HermesDeliveryAdmission).where(HermesDeliveryAdmission.delivery_action_result_id == admitted.deliveryActionResultId))
         assert persisted_admission is not None and persisted_admission.claim_id is None and persisted_admission.audit_fingerprint == persisted_audit.source_ref.rsplit(":", 1)[-1]
+        assert (persisted_admission.delivery_steward_identity, persisted_admission.delivery_capability_binding_id, persisted_admission.requested_reviewer) == ("delivery:one", "capability:delivery", "reviewer-one")
         claim_payload = HermesDeliveryAdmissionClaimRequestV1.model_validate({
-            "claimId": "delivery-claim:one", "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "deliveryStewardIdentity": "delivery:one", "deliveryHome": str(delivery_home), "deliveryWorkspace": str(delivery_workspace), "deliveryCapabilityBindingId": "capability:delivery", "deliveryCapabilityProof": "x" * 32, "requestedAction": "request_review",
+            "claimId": "delivery-claim:one", "schemaVersion": "hermes_delivery_admission_claim.v2", "taskId": "task:hermes-one", "outcomeId": "outcome:1", "laneRunId": "lane:1", "deliveryStewardIdentity": "delivery:one", "deliveryHome": str(delivery_home), "deliveryWorkspace": str(delivery_workspace), "deliveryCapabilityBindingId": "capability:delivery", "deliveryCapabilityProof": "x" * 32, "requestedAction": "request_review", "requestedReviewer": "reviewer-one",
             "pullRequestNumber": 1, "exactHeadSha": "a" * 40, "metadataOnly": True, "rawPayloadRetained": False,
         })
+        with pytest.raises(ValueError, match="audited Delivery capability, profile, and reviewer"):
+            await claim_hermes_delivery_admission(session, claim_payload.model_copy(update={"claimId": "delivery-claim:other", "deliveryStewardIdentity": "delivery:other"}))
         receipt = await claim_hermes_delivery_admission(session, claim_payload)
         assert receipt.admissionId == persisted_admission.admission_id and receipt.claimId == claim_payload.claimId
         consumption = await session.get(HermesDeliveryEvidence, receipt.consumptionResultId)
@@ -348,6 +368,11 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         assert consumption is not None and consumption.evidence_type == "governed_delivery_admission_consumed"
         assert consumption.evidence_refs_json == [admitted.deliveryActionResultId] and consumption.metadata_only is True and consumption.raw_payload_retained is False
         assert await claim_hermes_delivery_admission(session, claim_payload) == receipt
+        legacy_v1_claim = LegacyHermesDeliveryAdmissionClaimRequestV1.model_validate({key: value for key, value in claim_payload.model_dump(mode="json").items() if key not in {"schemaVersion", "requestedReviewer"}})
+        with pytest.raises(ValueError, match="cannot replay a reviewer-bound"):
+            await claim_hermes_delivery_admission(session, legacy_v1_claim)
+        with pytest.raises(ValueError, match="exactly one current unclaimed exact action binding"):
+            await claim_hermes_delivery_admission(session, claim_payload.model_copy(update={"claimId": "delivery-claim:reviewer", "requestedReviewer": "reviewer-two"}))
         conflicting_claim = claim_payload.model_copy(update={"exactHeadSha": "b" * 40})
         with pytest.raises(ValueError, match="conflicts"):
             await claim_hermes_delivery_admission(session, conflicting_claim)
@@ -416,7 +441,7 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         with pytest.raises(ValueError, match="opaque"):
             HermesReviewThreadAdjudicationRequestV1.model_validate(malformed_adjudication)
         malformed_delivery = copy.deepcopy(audit)
-        malformed_delivery.update({"requestedAction": "resolve_current_thread", "reviewThreadId": "PRRT_hermes_one", "reviewThreadAdjudicationId": "Adjudication_1", "idempotencyKey": "delivery-audit:malformed-adjudication"})
+        malformed_delivery.update({"requestedAction": "resolve_current_thread", "requestedReviewer": None, "reviewThreadId": "PRRT_hermes_one", "reviewThreadAdjudicationId": "Adjudication_1", "idempotencyKey": "delivery-audit:malformed-adjudication"})
         with pytest.raises(ValueError, match="opaque"):
             HermesDeliveryAuditRequestV1.model_validate(malformed_delivery)
         adjudication = await record_hermes_review_thread_adjudication(session, HermesReviewThreadAdjudicationRequestV1.model_validate(adjudication_payload))
@@ -430,7 +455,7 @@ async def test_review_handoff_persists_verified_independent_disposition_and_exac
         current_adjudication = await record_hermes_review_thread_adjudication(session, HermesReviewThreadAdjudicationRequestV1.model_validate(refreshed_adjudication))
         assert current_adjudication.review_audit_fingerprint == "c" * 64
         resolve = copy.deepcopy(distinct_bound)
-        resolve.update({"requestedAction": "resolve_current_thread", "reviewThreadId": adjudication.review_thread_id, "reviewThreadAdjudicationId": adjudication.review_thread_adjudication_id, "idempotencyKey": "delivery-audit:resolve"})
+        resolve.update({"requestedAction": "resolve_current_thread", "requestedReviewer": None, "reviewThreadId": adjudication.review_thread_id, "reviewThreadAdjudicationId": adjudication.review_thread_adjudication_id, "idempotencyKey": "delivery-audit:resolve"})
         with pytest.raises(ValueError, match="latest matching audit fingerprint"):
             await record_hermes_delivery_audit(session, HermesDeliveryAuditRequestV1.model_validate(resolve))
         resolve.update({"reviewThreadAdjudicationId": current_adjudication.review_thread_adjudication_id, "idempotencyKey": "delivery-audit:resolve-current"})
