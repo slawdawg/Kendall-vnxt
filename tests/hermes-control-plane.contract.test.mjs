@@ -218,6 +218,8 @@ test("compiled Hermes guards accept valid V1 records and reject unsafe forms", a
     assert.equal(contracts.isHermesCitedSourceRecordV1(citedSource), true);
     assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, fingerprint: "0".repeat(64) }), true);
     assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, sourceRecordId: `source:${"a".repeat(114)}` }), false, "cited source ID uses the API's 120-character bound");
+    assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, outcomeId: `outcome:${"a".repeat(113)}` }), false, "cited source outcome ID uses the API's 120-character bound");
+    assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, laneRunId: `lane:${"a".repeat(116)}` }), false, "cited source lane ID uses the API's 120-character bound");
     assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, locator: "docs/secret" }), false, "cited source locator rejects secret-shaped metadata");
     assert.equal(contracts.isHermesCitedSourceRecordV1({ ...citedSource, locator: `docs/${"a".repeat(296)}` }), false, "cited source locator uses the API's 300-character bound");
     assert.equal(contracts.isHermesCitedSourceConfirmationReceiptV1(confirmationReceipt), true);
